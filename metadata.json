@@ -1,0 +1,5 @@
+{
+  "name": "SeeNote",
+  "description": "Audio event annotation with simultaneous video playback",
+  "requestFramePermissions": []
+}
