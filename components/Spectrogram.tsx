@@ -2,11 +2,13 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Label, SpectrogramSettings, LabelConfig } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateLabelLayers } from '../utils/helpers';
+import { SpectrogramChunkCache } from '../SpectrogramChunkCache';
 import { X } from 'lucide-react';
 
 interface SpectrogramProps {
-  audioBuffer: AudioBuffer | null;
-  specData: { data: Uint8Array; width: number; height: number; sampleRate: number } | null;
+  chunkCache: SpectrogramChunkCache | null;
+  sampleRate: number;
+  cacheVersion: number;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
@@ -15,11 +17,11 @@ interface SpectrogramProps {
   labels: Label[];
   selectedLabelId: string | null;
   activeLabelConfig: LabelConfig;
-  labelConfigs: LabelConfig[]; // Added to check for name collisions
+  labelConfigs: LabelConfig[];
   onSeek: (time: number) => void;
   onLabelsChange: (labels: Label[]) => void;
   onSelectLabel: (id: string | null) => void;
-  onZoomChange: (newWindowSize: number) => void; 
+  onZoomChange: (newWindowSize: number) => void;
 }
 
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
@@ -27,7 +29,9 @@ const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
 const fromMel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
 
 const Spectrogram: React.FC<SpectrogramProps> = ({
-  specData,
+  chunkCache,
+  sampleRate,
+  cacheVersion,
   currentTime,
   duration,
   isPlaying,
@@ -98,48 +102,72 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
     const endTime = startTime + (width * timePerPixel);
 
     // 1. Draw Spectrogram Data if Available
-    if (specData) {
-        drawSpectrogramChunk(
-          ctx,
-          specData.data,
-          specData.width,
-          specData.height,
-          startTime,
-          timePerPixel,
-          duration,
-          width,
-          height,
-          settings.intensity,
-          settings.contrast,
-          settings.minFreq,
-          settings.maxFreq,
-          specData.sampleRate,
-          settings.frequencyScale
-        );
-    } else {
-        // Draw Placeholder Grid if no data (but duration exists)
-        if (duration > 0 && !isProcessing) {
-            ctx.fillStyle = '#0f172a'; // Match background
-            ctx.fillRect(0, 0, width, height);
-            
-            // Draw subtle grid lines
-            ctx.strokeStyle = '#1e293b';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            for(let i=0; i<width; i+=50) {
-                ctx.moveTo(i, 0); ctx.lineTo(i, height);
-            }
-            ctx.stroke();
+    // Trigger prefetch around current viewport center (non-blocking)
+    if (chunkCache) {
+        chunkCache.prefetchAround(startTime + (endTime - startTime) / 2);
+    }
 
-            // Center Text
-            ctx.fillStyle = '#334155';
-            ctx.font = 'bold 24px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText("Spectrogram Unavailable", width/2, height/2);
-            ctx.font = '14px sans-serif';
-            ctx.fillText("Audio decoding failed for this format", width/2, height/2 + 25);
+    if (chunkCache && duration > 0) {
+        // Assemble a viewport-width specData from cached chunks.
+        // We pick the n_freq_bins from any available chunk; fallback to settings-derived value.
+        let nFreqBins = settings.fftSize / 2;
+        // Try to find any loaded chunk to get the real bin count
+        for (let px = 0; px < width; px++) {
+            const t = startTime + px * timePerPixel;
+            const chunk = chunkCache.getChunkForTime(t);
+            if (chunk) { nFreqBins = chunk.nFreqBins; break; }
         }
+
+        const viewportData = new Uint8Array(width * nFreqBins);
+
+        for (let px = 0; px < width; px++) {
+            const t = startTime + px * timePerPixel;
+            const chunk = chunkCache.getChunkForTime(t);
+            if (!chunk || chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+
+            const colInChunk = Math.floor(
+                ((t - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols
+            );
+            if (colInChunk < 0 || colInChunk >= chunk.nCols) continue;
+
+            const srcOffset = colInChunk * chunk.nFreqBins;
+            const dstOffset = px * nFreqBins;
+            const bins = Math.min(nFreqBins, chunk.nFreqBins);
+            viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
+        }
+
+        drawSpectrogramChunk(
+            ctx,
+            viewportData,
+            width,         // specWidth = viewport width (1 col per pixel)
+            nFreqBins,
+            startTime,
+            timePerPixel,
+            duration,
+            width,
+            height,
+            settings.intensity,
+            settings.contrast,
+            settings.minFreq,
+            settings.maxFreq,
+            sampleRate,
+            settings.frequencyScale
+        );
+    } else if (!chunkCache && duration > 0 && !isProcessing) {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, width, height);
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 0; i < width; i += 50) {
+            ctx.moveTo(i, 0); ctx.lineTo(i, height);
+        }
+        ctx.stroke();
+        ctx.fillStyle = '#334155';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Spectrogram Unavailable', width / 2, height / 2);
     }
 
     // 2. Draw Playhead Line
@@ -275,7 +303,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         }
     }
 
-  }, [specData, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, currentTime, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, currentTime, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(draw);

@@ -1,4 +1,5 @@
 import { Label } from '../types';
+import { saveFileDialog, writeTextFile } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60);
@@ -42,72 +43,59 @@ const getBaseName = (filename: string) => {
     return filename.replace(/\.[^/.]+$/, "");
 };
 
-// Helper for file saving logic
-const saveFile = async (content: string, suggestedName: string, mimeType: string, extension: string) => {
-    try {
-        // @ts-ignore
-        if (window.showSaveFilePicker) {
-            // @ts-ignore
-            const handle = await window.showSaveFilePicker({
-                suggestedName,
-                types: [{
-                    description: 'Annotation File',
-                    accept: { [mimeType]: [extension] },
-                }],
-            });
-            const writable = await handle.createWritable();
-            await writable.write(content);
-            await writable.close();
-            return;
-        }
-    } catch (err) {
-        console.warn("File System Access API failed or cancelled, falling back to download link.", err);
+// Helper for file saving via Tauri native dialog
+const saveFile = async (
+    content: string,
+    defaultPath: string,
+    extension: string,
+) => {
+    const chosenPath = await saveFileDialog(defaultPath, [
+        { name: 'Annotation File', extensions: [extension.replace('.', '')] },
+    ]);
+    if (chosenPath) {
+        await writeTextFile(chosenPath, content);
     }
+};
 
-    // Fallback
-    const encodedUri = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", suggestedName);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+// Derives the default save path next to the source file.
+// currentFilePath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
+const defaultSavePath = (currentFilePath: string | null, filename: string, suffix: string, ext: string): string => {
+    const base = getBaseName(filename);
+    const outName = `${base}${suffix}${ext}`;
+    if (currentFilePath) {
+        const dir = currentFilePath.substring(0, currentFilePath.lastIndexOf('/'));
+        return `${dir}/${outName}`;
+    }
+    return outName;
 };
 
 // Export to CSV
-export const exportToCSV = async (labels: Label[], filename: string) => {
-    const base = getBaseName(filename);
-    const outName = `${base}_annotations.csv`;
-    
-    // Header: Label, Start, End
+export const exportToCSV = async (labels: Label[], filename: string, currentFilePath: string | null) => {
+    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.csv');
+
     let csvContent = "Label,Start,End\n";
     labels.forEach(l => {
-        // Escape quotes
         const safeText = `"${l.text.replace(/"/g, '""')}"`;
         csvContent += `${safeText},${l.start.toFixed(4)},${l.end.toFixed(4)}\n`;
     });
-    
-    await saveFile(csvContent, outName, 'text/csv', '.csv');
+
+    await saveFile(csvContent, path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (labels: Label[], filename: string) => {
-    const base = getBaseName(filename);
-    const outName = `${base}_labels.txt`;
+export const exportToAudacity = async (labels: Label[], filename: string, currentFilePath: string | null) => {
+    const path = defaultSavePath(currentFilePath, filename, '_labels', '.txt');
 
-    // No header. Start \t End \t Label
     let txtContent = "";
     labels.forEach(l => {
         txtContent += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
     });
-    
-    await saveFile(txtContent, outName, 'text/plain', '.txt');
+
+    await saveFile(txtContent, path, '.txt');
 };
 
-export const exportToJSON = async (labels: Label[], filename: string) => {
-    const base = getBaseName(filename);
-    const outName = `${base}_annotations.json`;
-    
+export const exportToJSON = async (labels: Label[], filename: string, currentFilePath: string | null) => {
+    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.json');
     const jsonContent = JSON.stringify(labels, null, 2);
-    await saveFile(jsonContent, outName, 'application/json', '.json');
+    await saveFile(jsonContent, path, '.json');
 };

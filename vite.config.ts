@@ -7,12 +7,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig({
-  base: '/SeeNote/',
+  base: '/',
+  clearScreen: false,
   server: {
     port: 3000,
     host: '0.0.0.0',
+    strictPort: true,
   },
   plugins: [react()],
+  envPrefix: ['VITE_', 'TAURI_'],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),

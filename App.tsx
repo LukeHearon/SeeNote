@@ -1,24 +1,31 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Play, Pause, Download, Settings, Loader2, Volume2, VolumeX, Keyboard, ChevronDown, Plus, X, AlertCircle, HelpCircle, AudioWaveform, Bug, Pencil } from 'lucide-react';
+import { FolderOpen, Play, Pause, Download, Settings, Loader2, Volume2, VolumeX, Keyboard, ChevronDown, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import Spectrogram from './components/Spectrogram';
+import FileBrowser from './components/FileBrowser';
 import { Label, SpectrogramSettings, LabelConfig, FrequencyScale } from './types';
-import { generateSpectrogramData } from './utils/audioProcessing';
 import { DEFAULT_ZOOM_SEC, MAX_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON } from './utils/helpers';
+import { getFileInfo, openFileDialog, toAssetUrl } from './utils/tauriCommands';
+import { SpectrogramChunkCache } from './SpectrogramChunkCache';
 
 export default function App() {
   // Media State
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoFileName, setVideoFileName] = useState<string>("video");
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
   const [isAudioFile, setIsAudioFile] = useState(false);
-  const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
-  const [specData, setSpecData] = useState<{ data: Uint8Array; width: number; height: number; sampleRate: number } | null>(null);
-  const [spectrogramError, setSpectrogramError] = useState<string | null>(null);
+  const [sampleRate, setSampleRate] = useState(44100);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+
+  // Chunk cache ref — not state, to avoid re-renders on every chunk load
+  const chunkCacheRef = useRef<SpectrogramChunkCache | null>(null);
+  const [cacheVersion, setCacheVersion] = useState(0);
   
   // Volume: 0 to 4 (400% or +12dB approx)
   const [volume, setVolume] = useState(1);
@@ -81,57 +88,63 @@ export default function App() {
     };
   }, [isPlaying]);
 
-  // Handle File Upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (videoSrc) URL.revokeObjectURL(videoSrc);
+  // Open a file by absolute path (called from button or FileBrowser)
+  const handleOpenFile = useCallback(async (absolutePath: string) => {
     setLabels([]);
-    setAudioBuffer(null);
-    setSpecData(null);
-    setSpectrogramError(null);
     setIsPlaying(false);
     setSelectedLabelId(null);
-    setDebugLogs([]); // Clear logs on new file
+    setDebugLogs([]);
+    setCurrentFilePath(absolutePath);
 
-    const isAudio = file.type.startsWith('audio/');
-    setIsAudioFile(isAudio);
-    setVideoFileName(file.name);
-    addLog(`Loading file: ${file.name} (${file.type})`);
+    const fileName = absolutePath.split('/').pop() ?? absolutePath;
+    const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    setIsAudioFile(audioExts.includes(ext));
+    setVideoFileName(fileName);
 
-    const url = URL.createObjectURL(file);
-    setVideoSrc(url);
+    const assetUrl = toAssetUrl(absolutePath);
+    setVideoSrc(assetUrl);
+
+    addLog(`Opening: ${fileName}`);
     setIsProcessing(true);
 
     try {
-        const arrayBuffer = await file.arrayBuffer();
-        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-        const audioContext = new AudioContext();
-        
-        // Use promise-based decode if available, fallback for older safety
-        const decodedBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
-            audioContext.decodeAudioData(arrayBuffer, resolve, reject);
-        });
+        const info = await getFileInfo(absolutePath);
+        addLog(`File info: ${info.duration_secs.toFixed(2)}s, ${info.sample_rate}Hz, ${info.channels}ch`);
 
-        setAudioBuffer(decodedBuffer);
-        addLog(`Audio decoded. Duration: ${decodedBuffer.duration.toFixed(2)}s, SampleRate: ${decodedBuffer.sampleRate}`);
-        
-        // Update maxFreq to Nyquist
-        setSettings(s => ({ ...s, maxFreq: decodedBuffer.sampleRate / 2 }));
-        
-        // Generate Spectrogram
-        addLog("Generating Spectrogram...");
-        const data = await generateSpectrogramData(decodedBuffer, settings.fftSize);
-        setSpecData(data);
-        addLog("Spectrogram generated successfully.");
+        setSampleRate(info.sample_rate);
+        if (info.duration_secs > 0) setDuration(info.duration_secs);
+        setSettings(s => ({ ...s, maxFreq: info.sample_rate / 2 }));
+
+        // Create new chunk cache for this file
+        const cache = new SpectrogramChunkCache(
+            absolutePath,
+            settings.fftSize,
+            settings.fftSize / 2,
+            30,
+            12,
+            () => setCacheVersion(v => v + 1),
+        );
+        chunkCacheRef.current = cache;
+        setCacheVersion(0);
+
+        // Kick off first chunk immediately
+        cache.prefetchAround(0);
+        addLog('Spectrogram loading...');
     } catch (err) {
-        console.warn("Audio decoding failed.", err);
         const errMsg = err instanceof Error ? err.message : String(err);
-        addLog(`Spectrogram failed: ${errMsg}`, 'error');
-        setSpectrogramError("Spectrogram unavailable for this format");
+        addLog(`Error opening file: ${errMsg}`, 'error');
     } finally {
         setIsProcessing(false);
+    }
+  }, [settings.fftSize]);
+
+  const handleOpenFileDialog = async () => {
+    const path = await openFileDialog();
+    if (path) {
+        const dir = path.substring(0, path.lastIndexOf('/'));
+        setCurrentDirectory(dir);
+        handleOpenFile(path);
     }
   };
 
@@ -188,11 +201,11 @@ export default function App() {
   const performExport = async () => {
       if (labels.length === 0) return;
       if (exportFormat === 'json') {
-          await exportToJSON(labels, videoFileName);
+          await exportToJSON(labels, videoFileName, currentFilePath);
       } else if (exportFormat === 'csv') {
-          await exportToCSV(labels, videoFileName);
+          await exportToCSV(labels, videoFileName, currentFilePath);
       } else if (exportFormat === 'txt') {
-          await exportToAudacity(labels, videoFileName);
+          await exportToAudacity(labels, videoFileName, currentFilePath);
       }
       addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
   };
@@ -353,17 +366,21 @@ export default function App() {
                 SeeNote
             </h1>
             <div className="h-6 w-px bg-slate-600 mx-2" />
-            <label className="flex items-center space-x-2 cursor-pointer hover:bg-slate-700 px-3 py-1.5 rounded transition-colors">
-                <Upload size={18} />
-                <span className="text-sm">Open Media</span>
-                <input 
-                    type="file" 
-                    // Support Video AND Audio
-                    accept="video/*,audio/*,.mkv" 
-                    onChange={handleFileUpload} 
-                    className="hidden" 
-                />
-            </label>
+            <button
+                onClick={handleOpenFileDialog}
+                className="flex items-center space-x-2 cursor-pointer hover:bg-slate-700 px-3 py-1.5 rounded transition-colors"
+            >
+                <FolderOpen size={18} />
+                <span className="text-sm">Open File</span>
+            </button>
+            <button
+                onClick={() => setShowFileBrowser(v => !v)}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded transition-colors ${showFileBrowser ? 'bg-slate-700 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+                title="Browse folder"
+            >
+                <FolderOpen size={18} />
+                <span className="text-sm">Browse</span>
+            </button>
         </div>
 
         <div className="flex items-center space-x-4">
@@ -580,7 +597,23 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative overflow-hidden">
+      <div className="flex-1 flex relative overflow-hidden">
+        {/* File Browser Sidebar */}
+        {showFileBrowser && (
+            <FileBrowser
+                currentDirectory={currentDirectory}
+                currentFile={currentFilePath}
+                onFileSelect={(path) => {
+                    setCurrentDirectory(path.substring(0, path.lastIndexOf('/')));
+                    handleOpenFile(path);
+                }}
+                onDirectoryChange={setCurrentDirectory}
+            />
+        )}
+
+        {/* Right: video + spectrogram stacked */}
+        <div className="flex-1 flex flex-col relative overflow-hidden">
+
         {/* Video Pane */}
         <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex">
              <div className="flex-1 relative bg-black flex justify-center items-center">
@@ -602,12 +635,6 @@ export default function App() {
                          <Loader2 className="animate-spin text-[#e65161] mb-2" size={48} />
                          <p className="text-[#e65161] font-medium">Processing Media...</p>
                          <p className="text-slate-400 text-sm mt-1">Generating Spectrogram</p>
-                     </div>
-                 )}
-                 {spectrogramError && !isProcessing && (
-                     <div className="absolute top-4 left-4 bg-red-500/90 text-white px-4 py-2 rounded shadow-lg flex items-center space-x-2 z-30 animate-in fade-in slide-in-from-top-4">
-                         <AlertCircle size={20} />
-                         <span className="text-sm font-medium">{spectrogramError}</span>
                      </div>
                  )}
              </div>
@@ -843,9 +870,10 @@ export default function App() {
                 </div>
              )}
 
-             <Spectrogram 
-                audioBuffer={audioBuffer}
-                specData={specData}
+             <Spectrogram
+                chunkCache={chunkCacheRef.current}
+                sampleRate={sampleRate}
+                cacheVersion={cacheVersion}
                 currentTime={currentTime}
                 duration={duration}
                 isPlaying={isPlaying}
@@ -870,6 +898,7 @@ export default function App() {
                  </div>
              )}
         </div>
+        </div>{/* end right column */}
       </div>
     </div>
   );

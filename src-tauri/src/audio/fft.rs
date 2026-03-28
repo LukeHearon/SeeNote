@@ -1,0 +1,66 @@
+use rustfft::{FftPlanner, num_complex::Complex};
+use std::f32::consts::PI;
+
+/// Runs STFT on `samples` and returns a flat Vec<u8> of shape [n_cols * n_freq_bins],
+/// column-major. Each column stores bins from low-to-high frequency (index 0 = highest freq,
+/// matching the JS layout: outputData[col * height + (height - 1 - bin)]).
+///
+/// Normalization matches audioProcessing.ts:
+///   val = 20 * log10(mag + 1e-6)
+///   intensity = (val + 60) * 4   clamped to [0, 255]
+pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8> {
+    let n_freq_bins = fft_size / 2;
+
+    if samples.len() < fft_size {
+        return Vec::new();
+    }
+
+    let n_cols = (samples.len() - fft_size) / hop_size;
+    if n_cols == 0 {
+        return Vec::new();
+    }
+
+    let mut output = vec![0u8; n_cols * n_freq_bins];
+
+    // Build Hanning window
+    let window: Vec<f32> = (0..fft_size)
+        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
+        .collect();
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(fft_size);
+    let mut scratch = vec![Complex::new(0.0f32, 0.0f32); fft.get_outofplace_scratch_len()];
+
+    let mut buf_in = vec![Complex::new(0.0f32, 0.0f32); fft_size];
+    let mut buf_out = vec![Complex::new(0.0f32, 0.0f32); fft_size];
+
+    for col in 0..n_cols {
+        let start = col * hop_size;
+
+        // Apply Hanning window
+        for i in 0..fft_size {
+            buf_in[i] = Complex::new(samples[start + i] * window[i], 0.0);
+        }
+
+        fft.process_outofplace_with_scratch(&mut buf_in, &mut buf_out, &mut scratch);
+
+        // Write magnitude to output column
+        for bin in 0..n_freq_bins {
+            let re = buf_out[bin].re;
+            let im = buf_out[bin].im;
+            let mag = (re * re + im * im).sqrt();
+
+            // Match JS normalization exactly:
+            // val = 20 * log10(mag + 1e-6)
+            // intensity = (val + 60) * 4
+            let val = 20.0 * (mag + 1e-6f32).log10();
+            let intensity = (val + 60.0) * 4.0;
+            let intensity = intensity.clamp(0.0, 255.0) as u8;
+
+            // JS layout: outputData[col * height + (height - 1 - bin)]
+            output[col * n_freq_bins + (n_freq_bins - 1 - bin)] = intensity;
+        }
+    }
+
+    output
+}
