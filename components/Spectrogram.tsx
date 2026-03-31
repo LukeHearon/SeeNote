@@ -2,11 +2,12 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Label, SpectrogramSettings, LabelConfig } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateLabelLayers } from '../utils/helpers';
-import { SpectrogramChunkCache } from '../SpectrogramChunkCache';
+import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
+import { MIN_ZOOM_SEC } from '../constants';
 import { X } from 'lucide-react';
 
 interface SpectrogramProps {
-  chunkCache: SpectrogramChunkCache | null;
+  chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
   cacheVersion: number;
   currentTime: number;
@@ -102,38 +103,62 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
     const endTime = startTime + (width * timePerPixel);
 
     // 1. Draw Spectrogram Data if Available
-    // Trigger prefetch around current viewport center (non-blocking)
-    if (chunkCache) {
-        chunkCache.prefetchAround(startTime + (endTime - startTime) / 2);
-    }
-
     if (chunkCache && duration > 0) {
-        // Assemble a viewport-width specData from cached chunks.
-        // We pick the n_freq_bins from any available chunk; fallback to settings-derived value.
+        // Select resolution tier based on current zoom level
+        const visibleDuration = endTime - startTime;
+        const activeTier = chunkCache.selectTier(visibleDuration, width);
+
+        // Prefetch chunks visible in viewport at the selected tier
+        chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
+
+        // Assemble viewport from cached chunks with fallback to coarser tiers
         let nFreqBins = settings.fftSize / 2;
         // Try to find any loaded chunk to get the real bin count
         for (let px = 0; px < width; px++) {
             const t = startTime + px * timePerPixel;
-            const chunk = chunkCache.getChunkForTime(t);
-            if (chunk) { nFreqBins = chunk.nFreqBins; break; }
+            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+            if (result) { nFreqBins = result.chunk.nFreqBins; break; }
         }
 
         const viewportData = new Uint8Array(width * nFreqBins);
 
         for (let px = 0; px < width; px++) {
-            const t = startTime + px * timePerPixel;
-            const chunk = chunkCache.getChunkForTime(t);
-            if (!chunk || chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+            const tStart = startTime + px * timePerPixel;
+            const tEnd = startTime + (px + 1) * timePerPixel;
+            const tMid = (tStart + tEnd) / 2;
 
-            const colInChunk = Math.floor(
-                ((t - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols
-            );
-            if (colInChunk < 0 || colInChunk >= chunk.nCols) continue;
+            const result = chunkCache.getChunkWithFallback(tMid, activeTier.tier);
+            if (!result) continue;
+            const { chunk } = result;
+            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
 
-            const srcOffset = colInChunk * chunk.nFreqBins;
-            const dstOffset = px * nFreqBins;
             const bins = Math.min(nFreqBins, chunk.nFreqBins);
-            viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
+            const dstOffset = px * nFreqBins;
+
+            // Calculate range of source columns that map to this pixel
+            let colStart = Math.floor(((tStart - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
+            let colEnd = Math.ceil(((tEnd - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
+            colStart = Math.max(0, colStart);
+            colEnd = Math.min(chunk.nCols, colEnd);
+
+            if (colEnd - colStart <= 1) {
+                // 0 or 1 source column per pixel — direct copy
+                const col = Math.max(0, Math.min(chunk.nCols - 1,
+                    Math.floor(((tMid - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols)));
+                const srcOffset = col * chunk.nFreqBins;
+                viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
+            } else {
+                // Multiple source columns per pixel — max-pool per frequency bin
+                for (let col = colStart; col < colEnd; col++) {
+                    const srcOffset = col * chunk.nFreqBins;
+                    for (let bin = 0; bin < bins; bin++) {
+                        const val = chunk.data[srcOffset + bin];
+                        if (val > viewportData[dstOffset + bin]) {
+                            viewportData[dstOffset + bin] = val;
+                        }
+                    }
+                }
+            }
         }
 
         drawSpectrogramChunk(
@@ -266,10 +291,15 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
     // 4. Draw Time Ruler
     const timeRange = endTime - startTime;
     let timeStep = 1;
-    if (timeRange < 2) timeStep = 0.25;
-    else if (timeRange < 10) timeStep = 1;
-    else if (timeRange < 30) timeStep = 2;
-    else timeStep = 5;
+    if (timeRange > 36000) timeStep = 3600;      // 1 hour
+    else if (timeRange > 7200) timeStep = 600;    // 10 min
+    else if (timeRange > 1200) timeStep = 120;    // 2 min
+    else if (timeRange > 300) timeStep = 60;      // 1 min
+    else if (timeRange > 60) timeStep = 10;
+    else if (timeRange > 30) timeStep = 5;
+    else if (timeRange > 10) timeStep = 2;
+    else if (timeRange > 2) timeStep = 1;
+    else timeStep = 0.25;
 
     ctx.lineWidth = 3;
     ctx.font = 'bold 12px sans-serif';
@@ -449,7 +479,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         const direction = e.deltaY > 0 ? 1 : -1; 
         
         let newWindowSize = settings.windowSize * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-        newWindowSize = Math.max(1, Math.min(newWindowSize, 60, duration || 60));
+        newWindowSize = Math.max(MIN_ZOOM_SEC, Math.min(newWindowSize, duration || 86400));
         
         // Calculate new pixels per second based on new window size
         const containerWidth = containerRef.current.clientWidth;

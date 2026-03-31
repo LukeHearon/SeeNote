@@ -10,9 +10,28 @@ export const MAGMA_STOPS = [
 ];
 
 export const MIN_ZOOM_SEC = 1;
-export const MAX_ZOOM_SEC = 60;
+export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 5;
 export const SCROLL_SENSITIVITY = 1.0;
+
+// Multi-resolution spectrogram tier configuration.
+// Each tier defines a temporal resolution for a range of zoom levels.
+// hopMultiplier: hop = sampleRate * multiplier (for tiers scaled to sample rate)
+// hopSamples: fixed hop size in samples (for fine-detail tiers)
+export interface TierConfig {
+  tier: number;
+  hopMultiplier?: number;  // hop = sampleRate * multiplier
+  hopSamples?: number;     // fixed hop size (takes precedence if set)
+  chunkDuration: number;   // seconds per cached chunk
+  maxChunks: number;       // LRU cache capacity for this tier
+}
+
+export const TIER_CONFIGS: TierConfig[] = [
+  { tier: 0, hopMultiplier: 1.0,   chunkDuration: 600, maxChunks: 6  },
+  { tier: 1, hopMultiplier: 0.1,   chunkDuration: 120, maxChunks: 8  },
+  { tier: 2, hopSamples: 1024,     chunkDuration: 30,  maxChunks: 12 },
+  { tier: 3, hopSamples: 512,      chunkDuration: 15,  maxChunks: 16 },
+];
 
 // Default colors for hotkeys 1-9
 export const HOTKEY_COLORS = [

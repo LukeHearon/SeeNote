@@ -202,8 +202,8 @@ export const drawSpectrogramChunk = (
     // Determine the exact time for this pixel
     const t = startTime + (x * timePerPixel);
     
-    // Direct Nearest Neighbor Logic (No horizontal blur)
-    const exactCol = (t / totalDuration) * specWidth;
+    // Map time to column index relative to the data's start time
+    const exactCol = ((t - startTime) / (canvasWidth * timePerPixel)) * specWidth;
     
     // Bounds check
     if (exactCol >= 0 && exactCol < specWidth) {

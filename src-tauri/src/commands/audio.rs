@@ -46,11 +46,47 @@ pub struct SpectrogramChunkResult {
 pub async fn get_spectrogram_chunk(
     req: SpectrogramChunkRequest,
 ) -> Result<SpectrogramChunkResult, String> {
-    let (samples, sample_rate) =
+    let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
+    let sample_rate = info.sample_rate;
+    let n_freq_bins = req.fft_size / 2;
+
+    // For very large hop sizes (coarse overview tiers), use a sampled approach:
+    // seek to each column position and decode one FFT window instead of
+    // decoding the entire range and running a full STFT.
+    if req.hop_size >= (sample_rate as usize) / 2 {
+        let window_dur = req.fft_size as f64 / sample_rate as f64;
+        let actual_end = (req.start_sec + req.duration_sec).min(info.duration_secs);
+        let actual_duration_sec = actual_end - req.start_sec;
+        let n_cols = ((actual_duration_sec * sample_rate as f64) / req.hop_size as f64).ceil() as usize;
+
+        let mut output = vec![0u8; n_cols * n_freq_bins];
+        for col in 0..n_cols {
+            let t = req.start_sec + (col as f64 * req.hop_size as f64 / sample_rate as f64);
+            if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
+                if samples.len() >= req.fft_size {
+                    let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
+                    for bin in 0..n_freq_bins {
+                        output[col * n_freq_bins + bin] = col_data.get(bin).copied().unwrap_or(0);
+                    }
+                }
+            }
+        }
+
+        return Ok(SpectrogramChunkResult {
+            data: output,
+            n_cols,
+            n_freq_bins,
+            start_sec: req.start_sec,
+            actual_duration_sec,
+            sample_rate,
+        });
+    }
+
+    // Standard STFT path for fine-detail tiers
+    let (samples, _) =
         decoder::decode_audio_range(&req.path, req.start_sec, req.duration_sec)
             .map_err(|e| e.to_string())?;
 
-    let n_freq_bins = req.fft_size / 2;
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
     let actual_duration_sec = samples.len() as f64 / sample_rate as f64;

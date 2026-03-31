@@ -1,13 +1,13 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { FolderOpen, Play, Pause, Download, Settings, Loader2, Volume2, VolumeX, Keyboard, ChevronDown, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { FolderOpen, Play, Pause, Download, Settings, Loader2, Volume2, VolumeX, Keyboard, ChevronDown, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, Save } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import Spectrogram from './components/Spectrogram';
-import FileBrowser from './components/FileBrowser';
+import FileTree from './components/FileTree';
 import { Label, SpectrogramSettings, LabelConfig, FrequencyScale } from './types';
-import { DEFAULT_ZOOM_SEC, MAX_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON } from './utils/helpers';
-import { getFileInfo, openFileDialog, toAssetUrl } from './utils/tauriCommands';
-import { SpectrogramChunkCache } from './SpectrogramChunkCache';
+import { getFileInfo, openFileOrFolderDialog, openDirectoryDialog, listMediaFilesRecursive, readTextFile, writeTextFile, toAssetUrl } from './utils/tauriCommands';
+import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 
 export default function App() {
   // Media State
@@ -21,10 +21,12 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [allMediaFiles, setAllMediaFiles] = useState<string[]>([]);
+  const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false);
+  const [annotationDirectory, setAnnotationDirectory] = useState<string | null>(null);
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
-  const chunkCacheRef = useRef<SpectrogramChunkCache | null>(null);
+  const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
   
   // Volume: 0 to 4 (400% or +12dB approx)
@@ -116,20 +118,19 @@ export default function App() {
         if (info.duration_secs > 0) setDuration(info.duration_secs);
         setSettings(s => ({ ...s, maxFreq: info.sample_rate / 2 }));
 
-        // Create new chunk cache for this file
-        const cache = new SpectrogramChunkCache(
+        // Create new multi-tier chunk cache for this file
+        const cache = new MultiTierSpectrogramCache(
             absolutePath,
             settings.fftSize,
-            settings.fftSize / 2,
-            30,
-            12,
+            info.sample_rate,
+            info.duration_secs,
             () => setCacheVersion(v => v + 1),
         );
         chunkCacheRef.current = cache;
         setCacheVersion(0);
 
-        // Kick off first chunk immediately
-        cache.prefetchAround(0);
+        // Kick off first viewport prefetch immediately
+        cache.prefetchViewport(0, settings.windowSize, cache.selectTier(settings.windowSize, 1200).tier);
         addLog('Spectrogram loading...');
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -140,11 +141,141 @@ export default function App() {
   }, [settings.fftSize]);
 
   const handleOpenFileDialog = async () => {
-    const path = await openFileDialog();
-    if (path) {
-        const dir = path.substring(0, path.lastIndexOf('/'));
-        setCurrentDirectory(dir);
-        handleOpenFile(path);
+    const result = await openFileOrFolderDialog();
+    if (!result) return;
+
+    let dir: string;
+    if (result.is_dir) {
+        dir = result.path;
+    } else {
+        dir = result.path.substring(0, result.path.lastIndexOf('/'));
+    }
+    setCurrentDirectory(dir);
+
+    // Fetch all media files under the directory
+    try {
+        const files = await listMediaFilesRecursive(dir);
+        setAllMediaFiles(files);
+
+        if (result.is_dir) {
+            // Auto-open the first file if a directory was selected
+            if (files.length > 0) handleOpenFile(files[0]);
+        } else {
+            handleOpenFile(result.path);
+        }
+    } catch (err) {
+        addLog(`Error scanning directory: ${err}`, 'error');
+        if (!result.is_dir) handleOpenFile(result.path);
+    }
+  };
+
+  // Navigation: next/prev file in the sorted list
+  const currentFileIndex = useMemo(() => {
+    if (!currentFilePath || allMediaFiles.length === 0) return -1;
+    return allMediaFiles.indexOf(currentFilePath);
+  }, [currentFilePath, allMediaFiles]);
+
+  const navigateFile = useCallback((direction: 'prev' | 'next') => {
+    if (allMediaFiles.length === 0) return;
+    let idx = currentFileIndex;
+    if (direction === 'prev') idx = Math.max(0, idx - 1);
+    else idx = Math.min(allMediaFiles.length - 1, idx + 1);
+    if (idx >= 0 && idx < allMediaFiles.length && allMediaFiles[idx] !== currentFilePath) {
+        handleOpenFile(allMediaFiles[idx]);
+    }
+  }, [allMediaFiles, currentFileIndex, currentFilePath, handleOpenFile]);
+
+  // Compute annotation file path: mirrors audio dir structure into annotation dir
+  const getAnnotationPath = useCallback((audioPath: string): string | null => {
+    if (!annotationDirectory || !currentDirectory) return null;
+    const rel = audioPath.substring(currentDirectory.length);
+    // Replace extension with .txt (Audacity format)
+    const withoutExt = rel.replace(/\.[^/.]+$/, '');
+    return annotationDirectory + withoutExt + '.txt';
+  }, [annotationDirectory, currentDirectory]);
+
+  // Auto-save annotations on every label change
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipAutoSaveRef = useRef(false);
+  useEffect(() => {
+    if (!currentFilePath || !annotationDirectory) return;
+    const annotPath = getAnnotationPath(currentFilePath);
+    if (!annotPath) return;
+
+    // Debounce saves by 300ms
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      if (skipAutoSaveRef.current) return;
+      try {
+        if (labels.length === 0) {
+          // Don't write an empty file — optionally could delete, but let's just skip
+          return;
+        }
+        let content = '';
+        labels.forEach(l => {
+          content += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
+        });
+        await writeTextFile(annotPath, content);
+      } catch (err) {
+        addLog(`Auto-save error: ${err}`, 'error');
+      }
+    }, 300);
+
+    return () => {
+      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    };
+  }, [labels, currentFilePath, annotationDirectory, getAnnotationPath]);
+
+  // Auto-load annotations when the current file or annotation directory changes
+  useEffect(() => {
+    if (!currentFilePath || !annotationDirectory || !currentDirectory) return;
+    const annotPath = getAnnotationPath(currentFilePath);
+    if (!annotPath) return;
+
+    (async () => {
+      try {
+        const content = await readTextFile(annotPath);
+        if (!content) return;
+
+        const loaded: Label[] = [];
+        const lines = content.trim().split('\n');
+        for (const line of lines) {
+          const parts = line.split('\t');
+          if (parts.length >= 3) {
+            const start = parseFloat(parts[0]);
+            const end = parseFloat(parts[1]);
+            const text = parts.slice(2).join('\t');
+            if (!isNaN(start) && !isNaN(end)) {
+              const matchedConfig = labelConfigs.find(c => c.text === text);
+              loaded.push({
+                id: Math.random().toString(36).substring(2, 9),
+                configId: matchedConfig?.key ?? '0',
+                start,
+                end,
+                text,
+                color: matchedConfig?.color ?? '#ffffff',
+              });
+            }
+          }
+        }
+        if (loaded.length > 0) {
+          skipAutoSaveRef.current = true;
+          setLabels(loaded);
+          addLog(`Loaded ${loaded.length} annotations`);
+          // Reset skip flag after a tick
+          setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
+        }
+      } catch (err) {
+        addLog(`Error loading annotations: ${err}`, 'error');
+      }
+    })();
+  }, [currentFilePath, annotationDirectory]);
+
+  const handleSetAnnotationDir = async () => {
+    const dir = await openDirectoryDialog();
+    if (dir) {
+      setAnnotationDirectory(dir);
+      addLog(`Annotation directory: ${dir}`);
     }
   };
 
@@ -192,11 +323,20 @@ export default function App() {
                   setActiveLabelIndex(idx);
               }
           }
+
+          // File navigation: [ = prev, ] = next
+          if (e.key === '[') {
+              e.preventDefault();
+              navigateFile('prev');
+          } else if (e.key === ']') {
+              e.preventDefault();
+              navigateFile('next');
+          }
       };
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -371,15 +511,15 @@ export default function App() {
                 className="flex items-center space-x-2 cursor-pointer hover:bg-slate-700 px-3 py-1.5 rounded transition-colors"
             >
                 <FolderOpen size={18} />
-                <span className="text-sm">Open File</span>
+                <span className="text-sm">Open</span>
             </button>
             <button
-                onClick={() => setShowFileBrowser(v => !v)}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded transition-colors ${showFileBrowser ? 'bg-slate-700 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
-                title="Browse folder"
+                onClick={handleSetAnnotationDir}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded transition-colors ${annotationDirectory ? 'text-green-400 hover:bg-slate-700' : 'text-amber-400 hover:bg-slate-700'}`}
+                title={annotationDirectory ? `Annotations: ${annotationDirectory}` : 'Set annotation directory'}
             >
-                <FolderOpen size={18} />
-                <span className="text-sm">Browse</span>
+                <Save size={18} />
+                <span className="text-sm">{annotationDirectory ? annotationDirectory.split('/').pop() : 'Set Annotations'}</span>
             </button>
         </div>
 
@@ -590,6 +730,7 @@ export default function App() {
                       <div className="flex justify-between"><span className="text-slate-400">0 - 9</span> <span>Set Active Label</span></div>
                       <div className="flex justify-between"><span className="text-slate-400">Ctrl/Cmd + Scroll</span> <span>Zoom Spectrogram</span></div>
                       <div className="flex justify-between"><span className="text-slate-400">Scroll / Right Click</span> <span>Pan Spectrogram</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400">[ / ]</span> <span>Previous / Next File</span></div>
                       <div className="flex justify-between"><span className="text-slate-400">Escape</span> <span>Exit Label Edit</span></div>
                   </div>
               </div>
@@ -598,16 +739,19 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex relative overflow-hidden">
-        {/* File Browser Sidebar */}
-        {showFileBrowser && (
-            <FileBrowser
-                currentDirectory={currentDirectory}
+        {/* File Tree Sidebar */}
+        {currentDirectory && (
+            <FileTree
+                rootDirectory={currentDirectory}
+                allFiles={allMediaFiles}
                 currentFile={currentFilePath}
-                onFileSelect={(path) => {
-                    setCurrentDirectory(path.substring(0, path.lastIndexOf('/')));
-                    handleOpenFile(path);
-                }}
-                onDirectoryChange={setCurrentDirectory}
+                onFileSelect={(path) => handleOpenFile(path)}
+                collapsed={fileTreeCollapsed}
+                onToggleCollapse={() => setFileTreeCollapsed(c => !c)}
+                onNavigatePrev={() => navigateFile('prev')}
+                onNavigateNext={() => navigateFile('next')}
+                canNavigatePrev={currentFileIndex > 0}
+                canNavigateNext={currentFileIndex < allMediaFiles.length - 1}
             />
         )}
 
@@ -816,16 +960,34 @@ export default function App() {
                                 />
                             </div>
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block flex justify-between">
-                                    <span>Window Size (Zoom)</span>
-                                    <span>{settings.windowSize.toFixed(1)}s</span>
-                                </label>
-                                <input 
-                                    type="range" min={MIN_ZOOM_SEC} max={MAX_ZOOM_SEC} step="1"
-                                    value={settings.windowSize}
-                                    onChange={(e) => setSettings({...settings, windowSize: parseFloat(e.target.value)})}
-                                    className="w-full accent-[#e65161]"
-                                />
+                                <label className="text-xs text-slate-400 mb-1 block">Window Size (Zoom)</label>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="range" min={0} max={1} step="0.001"
+                                        value={duration > 0 ? Math.log(settings.windowSize / MIN_ZOOM_SEC) / Math.log((duration || 86400) / MIN_ZOOM_SEC) : 0}
+                                        onChange={(e) => {
+                                            const maxZoom = duration || 86400;
+                                            const v = parseFloat(e.target.value);
+                                            const ws = MIN_ZOOM_SEC * Math.pow(maxZoom / MIN_ZOOM_SEC, v);
+                                            setSettings({...settings, windowSize: Math.max(MIN_ZOOM_SEC, Math.min(ws, maxZoom))});
+                                        }}
+                                        className="flex-1 accent-[#e65161]"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={settings.windowSize < 60 ? settings.windowSize.toFixed(1) + 's' : (settings.windowSize / 60).toFixed(1) + 'm'}
+                                        onChange={(e) => {
+                                            const raw = e.target.value.trim().toLowerCase();
+                                            let val = parseFloat(raw);
+                                            if (isNaN(val)) return;
+                                            if (raw.endsWith('m')) val *= 60;
+                                            else if (raw.endsWith('h')) val *= 3600;
+                                            const maxZoom = duration || 86400;
+                                            setSettings({...settings, windowSize: Math.max(MIN_ZOOM_SEC, Math.min(val, maxZoom))});
+                                        }}
+                                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+                                    />
+                                </div>
                             </div>
                         </div>
 

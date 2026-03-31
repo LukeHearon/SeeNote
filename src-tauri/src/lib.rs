@@ -9,9 +9,12 @@ pub fn run() {
             commands::audio::get_spectrogram_chunk,
             commands::audio::get_overview_spectrogram,
             commands::filesystem::list_directory,
+            commands::filesystem::list_media_files_recursive,
             commands::filesystem::write_text_file,
+            commands::filesystem::read_text_file,
             commands::filesystem::open_file_dialog,
             commands::filesystem::open_directory_dialog,
+            commands::filesystem::open_file_or_folder_dialog,
             commands::filesystem::save_file_dialog,
         ])
         .run(tauri::generate_context!())
