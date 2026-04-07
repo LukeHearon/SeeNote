@@ -31,3 +31,15 @@ export interface LabelConfig {
   text: string;
   color: string;
 }
+
+export interface Project {
+  id: string;
+  name: string;
+  audioDirectory: string;
+  annotationDirectory: string;
+  outputFormat: 'json' | 'csv' | 'txt';
+  createdAt: string;
+  lastOpened: string;
+  labelConfigs: LabelConfig[];
+  spectrogramSettings?: SpectrogramSettings;
+}

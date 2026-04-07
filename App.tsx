@@ -1,13 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { FolderOpen, Play, Pause, Download, Settings, Loader2, Volume2, VolumeX, Keyboard, ChevronDown, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, Save } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import Spectrogram from './components/Spectrogram';
 import FileTree from './components/FileTree';
-import { Label, SpectrogramSettings, LabelConfig, FrequencyScale } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
-import { formatTime, exportToCSV, exportToAudacity, exportToJSON } from './utils/helpers';
-import { getFileInfo, openFileOrFolderDialog, openDirectoryDialog, listMediaFilesRecursive, readTextFile, writeTextFile, toAssetUrl } from './utils/tauriCommands';
+import LaunchScreen from './components/LaunchScreen';
+import ProjectSettingsModal from './components/ProjectSettingsModal';
+import { Label, SpectrogramSettings, LabelConfig, FrequencyScale, Project } from './types';
+import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
+import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent } from './utils/helpers';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, toAssetUrl } from './utils/tauriCommands';
+import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
+import { revealInFinder, countAnnotationEntries } from './utils/projectCommands';
 
 export default function App() {
   // Media State
@@ -23,7 +27,23 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [allMediaFiles, setAllMediaFiles] = useState<string[]>([]);
   const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false);
-  const [annotationDirectory, setAnnotationDirectory] = useState<string | null>(null);
+
+  // Project state
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
+  const { updateProject, touchLastOpened } = useProjects();
+
+  // Derived from active project
+  const annotationDirectory = activeProject?.annotationDirectory ?? null;
+  const exportFormat = activeProject?.outputFormat ?? 'txt';
+
+  // Queue / shuffle
+  const [shuffleMode, setShuffleMode] = useState(false);
+  const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
+
+  // Undo/redo history for labels
+  const labelsHistoryRef = useRef<Label[][]>([[]]);
+  const historyIndexRef = useRef<number>(0);
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
@@ -51,20 +71,21 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'json' | 'csv' | 'txt'>('txt'); // Default to Audacity (txt)
   const [isAddingLabel, setIsAddingLabel] = useState(false);
   const [newLabelText, setNewLabelText] = useState("");
   
   const [settings, setSettings] = useState<SpectrogramSettings>({
       minFreq: 0,
       maxFreq: 22050,
-      intensity: 0.7, // Lower default intensity
-      contrast: 1.0, // Default contrast
-      fftSize: 1024,
+      intensity: 0.7,
+      contrast: 1.0,
+      fftSize: 2048,
       windowSize: DEFAULT_ZOOM_SEC,
-      frequencyScale: 'linear' // Default scale
+      frequencyScale: 'mel',
   });
+
+  // Annotation counts: audio file path → number of annotations
+  const [annotationCounts, setAnnotationCounts] = useState<Record<string, number>>({});
 
   const addLog = (msg: string, type: 'info'|'error' = 'info') => {
       const time = new Date().toLocaleTimeString();
@@ -97,6 +118,12 @@ export default function App() {
     setSelectedLabelId(null);
     setDebugLogs([]);
     setCurrentFilePath(absolutePath);
+    // Reset playhead to beginning of file
+    setCurrentTime(0);
+    if (videoRef.current) videoRef.current.currentTime = 0;
+    // Reset undo/redo history for new file
+    labelsHistoryRef.current = [[]];
+    historyIndexRef.current = 0;
 
     const fileName = absolutePath.split('/').pop() ?? absolutePath;
     const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
@@ -140,59 +167,121 @@ export default function App() {
     }
   }, [settings.fftSize]);
 
-  const handleOpenFileDialog = async () => {
-    const result = await openFileOrFolderDialog();
-    if (!result) return;
 
-    let dir: string;
-    if (result.is_dir) {
-        dir = result.path;
-    } else {
-        dir = result.path.substring(0, result.path.lastIndexOf('/'));
-    }
-    setCurrentDirectory(dir);
+  // The ordered list used for navigation (respects shuffle mode)
+  const displayQueue = useMemo(
+    () => (shuffleMode ? shuffledFiles : allMediaFiles),
+    [shuffleMode, shuffledFiles, allMediaFiles]
+  );
 
-    // Fetch all media files under the directory
-    try {
-        const files = await listMediaFilesRecursive(dir);
-        setAllMediaFiles(files);
-
-        if (result.is_dir) {
-            // Auto-open the first file if a directory was selected
-            if (files.length > 0) handleOpenFile(files[0]);
-        } else {
-            handleOpenFile(result.path);
-        }
-    } catch (err) {
-        addLog(`Error scanning directory: ${err}`, 'error');
-        if (!result.is_dir) handleOpenFile(result.path);
-    }
-  };
-
-  // Navigation: next/prev file in the sorted list
+  // Navigation: next/prev file in the display queue
   const currentFileIndex = useMemo(() => {
-    if (!currentFilePath || allMediaFiles.length === 0) return -1;
-    return allMediaFiles.indexOf(currentFilePath);
-  }, [currentFilePath, allMediaFiles]);
+    if (!currentFilePath || displayQueue.length === 0) return -1;
+    return displayQueue.indexOf(currentFilePath);
+  }, [currentFilePath, displayQueue]);
 
   const navigateFile = useCallback((direction: 'prev' | 'next') => {
-    if (allMediaFiles.length === 0) return;
+    if (displayQueue.length === 0) return;
     let idx = currentFileIndex;
     if (direction === 'prev') idx = Math.max(0, idx - 1);
-    else idx = Math.min(allMediaFiles.length - 1, idx + 1);
-    if (idx >= 0 && idx < allMediaFiles.length && allMediaFiles[idx] !== currentFilePath) {
-        handleOpenFile(allMediaFiles[idx]);
+    else idx = Math.min(displayQueue.length - 1, idx + 1);
+    if (idx >= 0 && idx < displayQueue.length && displayQueue[idx] !== currentFilePath) {
+        handleOpenFile(displayQueue[idx]);
     }
-  }, [allMediaFiles, currentFileIndex, currentFilePath, handleOpenFile]);
+  }, [displayQueue, currentFileIndex, currentFilePath, handleOpenFile]);
+
+  // Toggle shuffle: randomise current allMediaFiles order
+  const toggleShuffle = useCallback(() => {
+    setShuffleMode(prev => {
+      if (!prev) {
+        const shuffled = [...allMediaFiles];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        setShuffledFiles(shuffled);
+      }
+      return !prev;
+    });
+  }, [allMediaFiles]);
+
+  // Ident: relative path from audio root to file, without extension
+  const fileIdent = useMemo(() => {
+    if (!currentFilePath || !currentDirectory) return null;
+    const rel = currentFilePath.substring(currentDirectory.length + 1);
+    return rel.replace(/\.[^/.]+$/, '');
+  }, [currentFilePath, currentDirectory]);
+
+  // Label history helpers
+  const pushToHistory = useCallback((newLabels: Label[]) => {
+    labelsHistoryRef.current = labelsHistoryRef.current.slice(0, historyIndexRef.current + 1);
+    labelsHistoryRef.current.push(newLabels);
+    historyIndexRef.current = labelsHistoryRef.current.length - 1;
+  }, []);
+
+  // Intermediate update — no history entry (called during drags/resizes/text edits)
+  const handleLabelsChange = useCallback((newLabels: Label[]) => {
+    setLabels(newLabels);
+  }, []);
+
+  // Final update — pushes to history (called on mouse release, delete, etc.)
+  const handleLabelsCommit = useCallback((newLabels: Label[]) => {
+    setLabels(newLabels);
+    pushToHistory(newLabels);
+  }, [pushToHistory]);
+
+  const undoLabels = useCallback(() => {
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current--;
+    setLabels(labelsHistoryRef.current[historyIndexRef.current]);
+  }, []);
+
+  const redoLabels = useCallback(() => {
+    if (historyIndexRef.current >= labelsHistoryRef.current.length - 1) return;
+    historyIndexRef.current++;
+    setLabels(labelsHistoryRef.current[historyIndexRef.current]);
+  }, []);
+
+  // Persist label configs and spectrogram settings to active project whenever they change
+  const labelConfigPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevProjectIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeProject) return;
+    // Skip persistence when switching projects (avoids overwriting with stale configs)
+    if (prevProjectIdRef.current !== activeProject.id) {
+      prevProjectIdRef.current = activeProject.id;
+      return;
+    }
+    if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
+    labelConfigPersistRef.current = setTimeout(() => {
+      updateProject({ ...activeProject, labelConfigs });
+    }, 500);
+    return () => {
+      if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
+    };
+  }, [labelConfigs]);
+
+  useEffect(() => {
+    if (!activeProject) return;
+    if (prevProjectIdRef.current !== activeProject.id) return;
+    if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
+    settingsPersistRef.current = setTimeout(() => {
+      updateProject({ ...activeProject, spectrogramSettings: settings });
+    }, 800);
+    return () => {
+      if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
+    };
+  }, [settings]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((audioPath: string): string | null => {
     if (!annotationDirectory || !currentDirectory) return null;
     const rel = audioPath.substring(currentDirectory.length);
-    // Replace extension with .txt (Audacity format)
     const withoutExt = rel.replace(/\.[^/.]+$/, '');
-    return annotationDirectory + withoutExt + '.txt';
-  }, [annotationDirectory, currentDirectory]);
+    const ext = exportFormat === 'json' ? '.json' : exportFormat === 'csv' ? '.csv' : '.txt';
+    return annotationDirectory + withoutExt + ext;
+  }, [annotationDirectory, currentDirectory, exportFormat]);
 
   // Auto-save annotations on every label change
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -207,15 +296,13 @@ export default function App() {
     autoSaveTimeoutRef.current = setTimeout(async () => {
       if (skipAutoSaveRef.current) return;
       try {
-        if (labels.length === 0) {
-          // Don't write an empty file — optionally could delete, but let's just skip
-          return;
-        }
-        let content = '';
-        labels.forEach(l => {
-          content += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
-        });
+        if (labels.length === 0) return;
+        let content: string;
+        if (exportFormat === 'json') content = generateJSONContent(labels);
+        else if (exportFormat === 'csv') content = generateCSVContent(labels);
+        else content = generateAudacityContent(labels);
         await writeTextFile(annotPath, content);
+        setAnnotationCounts(prev => ({ ...prev, [currentFilePath]: labels.length }));
       } catch (err) {
         addLog(`Auto-save error: ${err}`, 'error');
       }
@@ -238,31 +325,55 @@ export default function App() {
         if (!content) return;
 
         const loaded: Label[] = [];
-        const lines = content.trim().split('\n');
-        for (const line of lines) {
-          const parts = line.split('\t');
-          if (parts.length >= 3) {
-            const start = parseFloat(parts[0]);
-            const end = parseFloat(parts[1]);
-            const text = parts.slice(2).join('\t');
-            if (!isNaN(start) && !isNaN(end)) {
-              const matchedConfig = labelConfigs.find(c => c.text === text);
-              loaded.push({
-                id: Math.random().toString(36).substring(2, 9),
-                configId: matchedConfig?.key ?? '0',
-                start,
-                end,
-                text,
-                color: matchedConfig?.color ?? '#ffffff',
-              });
+
+        if (exportFormat === 'json') {
+          const parsed = JSON.parse(content) as Label[];
+          parsed.forEach(l => {
+            const matchedConfig = labelConfigs.find(c => c.text === l.text);
+            loaded.push({
+              ...l,
+              id: Math.random().toString(36).substring(2, 9),
+              configId: matchedConfig?.key ?? l.configId ?? '0',
+              color: matchedConfig?.color ?? l.color ?? '#ffffff',
+            });
+          });
+        } else if (exportFormat === 'csv') {
+          const lines = content.trim().split('\n').slice(1); // skip header
+          for (const line of lines) {
+            const match = line.match(/^"?(.*?)"?,([0-9.]+),([0-9.]+)$/);
+            if (match) {
+              const text = match[1].replace(/""/g, '"');
+              const start = parseFloat(match[2]);
+              const end = parseFloat(match[3]);
+              if (!isNaN(start) && !isNaN(end)) {
+                const matchedConfig = labelConfigs.find(c => c.text === text);
+                loaded.push({ id: Math.random().toString(36).substring(2, 9), configId: matchedConfig?.key ?? '0', start, end, text, color: matchedConfig?.color ?? '#ffffff' });
+              }
+            }
+          }
+        } else {
+          // Audacity .txt
+          const lines = content.trim().split('\n');
+          for (const line of lines) {
+            const parts = line.split('\t');
+            if (parts.length >= 3) {
+              const start = parseFloat(parts[0]);
+              const end = parseFloat(parts[1]);
+              const text = parts.slice(2).join('\t');
+              if (!isNaN(start) && !isNaN(end)) {
+                const matchedConfig = labelConfigs.find(c => c.text === text);
+                loaded.push({ id: Math.random().toString(36).substring(2, 9), configId: matchedConfig?.key ?? '0', start, end, text, color: matchedConfig?.color ?? '#ffffff' });
+              }
             }
           }
         }
+
         if (loaded.length > 0) {
           skipAutoSaveRef.current = true;
           setLabels(loaded);
+          labelsHistoryRef.current = [loaded];
+          historyIndexRef.current = 0;
           addLog(`Loaded ${loaded.length} annotations`);
-          // Reset skip flag after a tick
           setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
         }
       } catch (err) {
@@ -271,13 +382,87 @@ export default function App() {
     })();
   }, [currentFilePath, annotationDirectory]);
 
-  const handleSetAnnotationDir = async () => {
-    const dir = await openDirectoryDialog();
-    if (dir) {
-      setAnnotationDirectory(dir);
-      addLog(`Annotation directory: ${dir}`);
+  const handleOpenProject = useCallback(async (project: Project) => {
+    await touchLastOpened(project.id);
+    setLabelConfigs(project.labelConfigs.length > 0 ? project.labelConfigs : DEFAULT_LABEL_CONFIGS);
+    if (project.spectrogramSettings) {
+      setSettings(project.spectrogramSettings);
     }
-  };
+    setCurrentDirectory(project.audioDirectory);
+    setAnnotationCounts({});
+    setLabels([]);
+    setCurrentFilePath(null);
+    setVideoSrc(null);
+    labelsHistoryRef.current = [[]];
+    historyIndexRef.current = 0;
+    try {
+      const files = await listMediaFilesRecursive(project.audioDirectory);
+      setAllMediaFiles(files);
+      setActiveProject(project);
+      if (files.length > 0) handleOpenFile(files[0]);
+      // Load annotation counts in the background
+      countAnnotationEntries(project.annotationDirectory, project.outputFormat)
+        .then(entries => {
+          const counts: Record<string, number> = {};
+          const audioRoot = project.audioDirectory;
+          for (const { rel_path, count } of entries) {
+            const match = files.find(f => {
+              const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+              return rel === rel_path;
+            });
+            if (match) counts[match] = count;
+          }
+          setAnnotationCounts(counts);
+        })
+        .catch(() => {});
+    } catch (err) {
+      setAllMediaFiles([]);
+      setActiveProject(project);
+      addLog(`Error scanning audio directory: ${err}`, 'error');
+    }
+  }, [touchLastOpened, handleOpenFile]);
+
+  const handleProjectSettingsSaved = useCallback(async (updated: Project) => {
+    await updateProject(updated);
+    const audioDirChanged = updated.audioDirectory !== activeProject?.audioDirectory;
+    setLabelConfigs(updated.labelConfigs.length > 0 ? updated.labelConfigs : DEFAULT_LABEL_CONFIGS);
+    if (audioDirChanged) {
+      setCurrentDirectory(updated.audioDirectory);
+      setCurrentFilePath(null);
+      setVideoSrc(null);
+      setLabels([]);
+      try {
+        const files = await listMediaFilesRecursive(updated.audioDirectory);
+        setAllMediaFiles(files);
+        if (files.length > 0) handleOpenFile(files[0]);
+      } catch (err) {
+        setAllMediaFiles([]);
+        addLog(`Error scanning audio directory: ${err}`, 'error');
+      }
+    }
+    setActiveProject(updated);
+    setShowProjectSettings(false);
+  }, [activeProject, updateProject, handleOpenFile]);
+
+  const handleRevealInFinder = useCallback((path: string) => {
+    revealInFinder(path).catch(err => addLog(`reveal_in_finder error: ${err}`, 'error'));
+  }, []);
+
+  const handleRevealAnnotations = useCallback((audioFilePath: string) => {
+    // If path is not in the known audio files list, treat as a directory
+    if (!allMediaFiles.includes(audioFilePath)) {
+      if (annotationDirectory) revealInFinder(annotationDirectory).catch(() => {});
+      return;
+    }
+    const annotPath = getAnnotationPath(audioFilePath);
+    if (annotPath) {
+      revealInFinder(annotPath).catch(() => {
+        if (annotationDirectory) revealInFinder(annotationDirectory).catch(() => {});
+      });
+    } else if (annotationDirectory) {
+      revealInFinder(annotationDirectory).catch(() => {});
+    }
+  }, [allMediaFiles, getAnnotationPath, annotationDirectory]);
 
   const togglePlay = useCallback(() => {
       if (videoRef.current) {
@@ -299,6 +484,19 @@ export default function App() {
       const handleKeyDown = (e: KeyboardEvent) => {
           if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
+          // Undo / Redo
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+              e.preventDefault();
+              if (e.shiftKey) redoLabels();
+              else undoLabels();
+              return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+              e.preventDefault();
+              redoLabels();
+              return;
+          }
+
           switch(e.key.toLowerCase()) {
               case ' ':
                   e.preventDefault();
@@ -310,7 +508,7 @@ export default function App() {
               case 'delete':
               case 'backspace':
                   if (selectedLabelId) {
-                      setLabels(prev => prev.filter(l => l.id !== selectedLabelId));
+                      handleLabelsCommit(labels.filter(l => l.id !== selectedLabelId));
                       setSelectedLabelId(null);
                   }
                   break;
@@ -336,7 +534,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -344,7 +542,7 @@ export default function App() {
           await exportToJSON(labels, videoFileName, currentFilePath);
       } else if (exportFormat === 'csv') {
           await exportToCSV(labels, videoFileName, currentFilePath);
-      } else if (exportFormat === 'txt') {
+      } else {
           await exportToAudacity(labels, videoFileName, currentFilePath);
       }
       addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
@@ -489,38 +687,27 @@ export default function App() {
   const volPercent = Math.min(100, (volume / 4) * 100); 
   const isBoosted = volume > 1;
 
-  // Format label for display in dropdown
-  const getFormatLabel = (fmt: string) => {
-      if (fmt === 'txt') return 'Audacity';
-      return fmt.toUpperCase();
-  };
+  if (!activeProject) {
+    return <LaunchScreen onOpenProject={handleOpenProject} />;
+  }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900 text-slate-200" onClick={() => setShowExportMenu(false)}>
+    <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
       {/* Header */}
       <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative">
         <div className="flex items-center space-x-4">
+            <button
+                onClick={() => setActiveProject(null)}
+                className="flex items-center space-x-1 text-slate-400 hover:text-white hover:bg-slate-700 px-2 py-1.5 rounded transition-colors"
+                title="Back to projects"
+            >
+                <ArrowLeft size={18} />
+            </button>
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r
   from-[#e65161]
   to-[rgb(249,195,135)]">
-                SeeNote
+                {activeProject.name}
             </h1>
-            <div className="h-6 w-px bg-slate-600 mx-2" />
-            <button
-                onClick={handleOpenFileDialog}
-                className="flex items-center space-x-2 cursor-pointer hover:bg-slate-700 px-3 py-1.5 rounded transition-colors"
-            >
-                <FolderOpen size={18} />
-                <span className="text-sm">Open</span>
-            </button>
-            <button
-                onClick={handleSetAnnotationDir}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded transition-colors ${annotationDirectory ? 'text-green-400 hover:bg-slate-700' : 'text-amber-400 hover:bg-slate-700'}`}
-                title={annotationDirectory ? `Annotations: ${annotationDirectory}` : 'Set annotation directory'}
-            >
-                <Save size={18} />
-                <span className="text-sm">{annotationDirectory ? annotationDirectory.split('/').pop() : 'Set Annotations'}</span>
-            </button>
         </div>
 
         <div className="flex items-center space-x-4">
@@ -559,64 +746,35 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-3">
-             <button 
+             <button
                 onClick={() => setShowDebug(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 title="Debug Console"
             >
                 <Bug size={18} />
             </button>
-             <button 
+             <button
                 onClick={() => setShowHelp(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 title="Help Guide"
             >
                 <HelpCircle size={18} />
             </button>
-             <button 
+             <button
                 onClick={() => setShowHotkeysHelp(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 title="Keyboard Shortcuts"
             >
                 <Keyboard size={18} />
             </button>
-            
-            <div className="flex items-center space-x-2">
-                <div className="relative">
-                     <button 
-                         onClick={(e) => { e.stopPropagation(); setShowExportMenu(!showExportMenu); }}
-                         className="flex items-center space-x-2 px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm border border-slate-600 min-w-[120px] justify-between"
-                         title="Select Export Format"
-                     >
-                        <span className="font-semibold text-[#e65161]">{getFormatLabel(exportFormat)}</span>
-                        <ChevronDown size={14} />
-                     </button>
-                     <span className="text-[10px] text-slate-400 absolute -bottom-4 left-0 w-full text-center">Export Format</span>
-
-                     {showExportMenu && (
-                        <div className="absolute top-full right-0 mt-2 w-32 bg-slate-800 border border-slate-700 rounded shadow-xl overflow-hidden z-50">
-                            <button onClick={() => { setExportFormat('txt'); setShowExportMenu(false); }} className={`w-full text-left px-4 py-2 hover:bg-slate-700 text-sm flex justify-between ${exportFormat === 'txt' ? 'text-[#e65161]' : ''}`}>
-                                Audacity {exportFormat === 'txt' && '✓'}
-                            </button>
-                            <button onClick={() => { setExportFormat('json'); setShowExportMenu(false); }} className={`w-full text-left px-4 py-2 hover:bg-slate-700 text-sm flex justify-between ${exportFormat === 'json' ? 'text-[#e65161]' : ''}`}>
-                                JSON {exportFormat === 'json' && '✓'}
-                            </button>
-                            <button onClick={() => { setExportFormat('csv'); setShowExportMenu(false); }} className={`w-full text-left px-4 py-2 hover:bg-slate-700 text-sm flex justify-between ${exportFormat === 'csv' ? 'text-[#e65161]' : ''}`}>
-                                CSV {exportFormat === 'csv' && '✓'}
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                <button 
-                    onClick={performExport}
-                    disabled={labels.length === 0}
-                    className="p-2 rounded bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 disabled:bg-slate-700 text-white transition-colors"
-                    title="Download Annotations"
-                >
-                    <Download size={20} />
-                </button>
-            </div>
+            <button
+                onClick={() => setShowProjectSettings(true)}
+                className="flex items-center space-x-2 px-3 py-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                title="Project Settings"
+            >
+                <Settings size={18} />
+                <span className="text-sm">Project</span>
+            </button>
         </div>
       </header>
       
@@ -743,7 +901,7 @@ export default function App() {
         {currentDirectory && (
             <FileTree
                 rootDirectory={currentDirectory}
-                allFiles={allMediaFiles}
+                allFiles={displayQueue}
                 currentFile={currentFilePath}
                 onFileSelect={(path) => handleOpenFile(path)}
                 collapsed={fileTreeCollapsed}
@@ -751,7 +909,12 @@ export default function App() {
                 onNavigatePrev={() => navigateFile('prev')}
                 onNavigateNext={() => navigateFile('next')}
                 canNavigatePrev={currentFileIndex > 0}
-                canNavigateNext={currentFileIndex < allMediaFiles.length - 1}
+                canNavigateNext={currentFileIndex < displayQueue.length - 1}
+                shuffleMode={shuffleMode}
+                onToggleShuffle={toggleShuffle}
+                annotationCounts={annotationCounts}
+                onRevealInFinder={handleRevealInFinder}
+                onRevealAnnotations={handleRevealAnnotations}
             />
         )}
 
@@ -943,7 +1106,7 @@ export default function App() {
                             <h4 className="text-xs font-bold text-slate-500 uppercase">Visuals</h4>
                             <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Brightness</label>
-                                <input 
+                                <input
                                     type="range" min="0.1" max="2.0" step="0.1"
                                     value={settings.intensity}
                                     onChange={(e) => setSettings({...settings, intensity: parseFloat(e.target.value)})}
@@ -952,51 +1115,33 @@ export default function App() {
                             </div>
                             <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Contrast</label>
-                                <input 
+                                <input
                                     type="range" min="0.5" max="2.0" step="0.1"
                                     value={settings.contrast}
                                     onChange={(e) => setSettings({...settings, contrast: parseFloat(e.target.value)})}
                                     className="w-full accent-[#e65161]"
                                 />
                             </div>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">Window Size (Zoom)</label>
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="range" min={0} max={1} step="0.001"
-                                        value={duration > 0 ? Math.log(settings.windowSize / MIN_ZOOM_SEC) / Math.log((duration || 86400) / MIN_ZOOM_SEC) : 0}
-                                        onChange={(e) => {
-                                            const maxZoom = duration || 86400;
-                                            const v = parseFloat(e.target.value);
-                                            const ws = MIN_ZOOM_SEC * Math.pow(maxZoom / MIN_ZOOM_SEC, v);
-                                            setSettings({...settings, windowSize: Math.max(MIN_ZOOM_SEC, Math.min(ws, maxZoom))});
-                                        }}
-                                        className="flex-1 accent-[#e65161]"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={settings.windowSize < 60 ? settings.windowSize.toFixed(1) + 's' : (settings.windowSize / 60).toFixed(1) + 'm'}
-                                        onChange={(e) => {
-                                            const raw = e.target.value.trim().toLowerCase();
-                                            let val = parseFloat(raw);
-                                            if (isNaN(val)) return;
-                                            if (raw.endsWith('m')) val *= 60;
-                                            else if (raw.endsWith('h')) val *= 3600;
-                                            const maxZoom = duration || 86400;
-                                            setSettings({...settings, windowSize: Math.max(MIN_ZOOM_SEC, Math.min(val, maxZoom))});
-                                        }}
-                                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                            </div>
                         </div>
 
                         {/* Frequency */}
                         <div className="space-y-3">
                             <h4 className="text-xs font-bold text-slate-500 uppercase">Frequency</h4>
-                             <div>
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">FFT Window Size</label>
+                                <select
+                                    value={settings.fftSize}
+                                    onChange={(e) => setSettings({...settings, fftSize: parseInt(e.target.value)})}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
+                                >
+                                    {[256, 512, 1024, 2048, 4096, 8192].map(n => (
+                                        <option key={n} value={n}>{n}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Scale</label>
-                                <select 
+                                <select
                                     value={settings.frequencyScale}
                                     onChange={(e) => setSettings({...settings, frequencyScale: e.target.value as FrequencyScale})}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
@@ -1006,12 +1151,12 @@ export default function App() {
                                     <option value="mel">Mel</option>
                                 </select>
                             </div>
-                            
+
                             <div className="flex space-x-2 pt-2">
                                 <div className="flex-1">
                                     <label className="text-xs text-slate-400">Min (Hz)</label>
-                                    <input 
-                                        type="number" 
+                                    <input
+                                        type="number"
                                         value={settings.minFreq}
                                         onChange={(e) => setSettings({...settings, minFreq: Math.max(0, parseInt(e.target.value))})}
                                         className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
@@ -1019,8 +1164,8 @@ export default function App() {
                                 </div>
                                 <div className="flex-1">
                                     <label className="text-xs text-slate-400">Max (Hz)</label>
-                                    <input 
-                                        type="number" 
+                                    <input
+                                        type="number"
                                         value={settings.maxFreq}
                                         onChange={(e) => setSettings({...settings, maxFreq: parseInt(e.target.value)})}
                                         className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
@@ -1040,13 +1185,15 @@ export default function App() {
                 duration={duration}
                 isPlaying={isPlaying}
                 isProcessing={isProcessing}
+                fileIdent={fileIdent}
                 settings={settings}
                 labels={labels}
                 selectedLabelId={selectedLabelId}
                 activeLabelConfig={labelConfigs[activeLabelIndex]}
                 labelConfigs={labelConfigs}
                 onSeek={seek}
-                onLabelsChange={setLabels}
+                onLabelsChange={handleLabelsChange}
+                onLabelsCommit={handleLabelsCommit}
                 onSelectLabel={setSelectedLabelId}
                 onZoomChange={(z) => setSettings(s => ({...s, windowSize: z}))}
              />
@@ -1062,6 +1209,14 @@ export default function App() {
         </div>
         </div>{/* end right column */}
       </div>
+
+      {showProjectSettings && (
+        <ProjectSettingsModal
+          project={activeProject}
+          onSave={handleProjectSettingsSaved}
+          onClose={() => setShowProjectSettings(false)}
+        />
+      )}
     </div>
   );
 }

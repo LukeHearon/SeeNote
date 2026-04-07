@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, ChevronUp, ChevronDownIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, ChevronUp, ChevronDownIcon, Shuffle, AlignJustify, ChevronsDown, ChevronsUp } from 'lucide-react';
 
 interface TreeNode {
   name: string;
@@ -19,6 +19,19 @@ interface FileTreeProps {
   onNavigateNext: () => void;
   canNavigatePrev: boolean;
   canNavigateNext: boolean;
+  shuffleMode: boolean;
+  onToggleShuffle: () => void;
+  annotationCounts: Record<string, number>;
+  onRevealInFinder: (path: string) => void;
+  onRevealAnnotations: (audioFilePath: string) => void;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  path: string;
+  isDir: boolean;
+  isAudioRoot?: boolean;
 }
 
 const AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma']);
@@ -56,6 +69,22 @@ function buildTree(rootDir: string, files: string[]): TreeNode[] {
   return root.children;
 }
 
+function countFiles(node: TreeNode): number {
+  if (!node.isDir) return 1;
+  return node.children.reduce((sum, c) => sum + countFiles(c), 0);
+}
+
+function getAllDirPaths(nodes: TreeNode[]): string[] {
+  const paths: string[] = [];
+  for (const node of nodes) {
+    if (node.isDir) {
+      paths.push(node.path);
+      paths.push(...getAllDirPaths(node.children));
+    }
+  }
+  return paths;
+}
+
 interface TreeItemProps {
   node: TreeNode;
   currentFile: string | null;
@@ -63,6 +92,8 @@ interface TreeItemProps {
   depth: number;
   expandedDirs: Set<string>;
   toggleDir: (path: string) => void;
+  annotationCounts: Record<string, number>;
+  onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
@@ -72,13 +103,17 @@ const TreeItem: React.FC<TreeItemProps> = ({
   depth,
   expandedDirs,
   toggleDir,
+  annotationCounts,
+  onContextMenu,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
+    const fileCount = countFiles(node);
     return (
       <div>
         <button
           onClick={() => toggleDir(node.path)}
+          onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, true); }}
           className="flex items-center gap-1 w-full px-2 py-1 text-left hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors group"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
@@ -88,7 +123,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
           }
           <FolderOpen size={13} className="flex-none text-slate-500 group-hover:text-slate-300" />
           <span className="text-xs truncate">{node.name}</span>
-          <span className="text-[10px] text-slate-600 ml-auto flex-none">{node.children.filter(c => !c.isDir).length}</span>
+          <span className="text-[10px] text-slate-600 ml-auto flex-none">{fileCount}</span>
         </button>
         {isExpanded && node.children.map(child => (
           <TreeItem
@@ -99,6 +134,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
             depth={depth + 1}
             expandedDirs={expandedDirs}
             toggleDir={toggleDir}
+            annotationCounts={annotationCounts}
+            onContextMenu={onContextMenu}
           />
         ))}
       </div>
@@ -107,10 +144,12 @@ const TreeItem: React.FC<TreeItemProps> = ({
 
   const isActive = node.path === currentFile;
   const isAudio = AUDIO_EXTS.has(getExt(node.name));
+  const annotCount = annotationCounts[node.path];
 
   return (
     <button
       onClick={() => onFileSelect(node.path)}
+      onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
       className={`flex items-center gap-2 w-full py-1 text-left transition-colors ${
         isActive
           ? 'bg-[#e65161]/20 text-[#e65161]'
@@ -123,7 +162,12 @@ const TreeItem: React.FC<TreeItemProps> = ({
         ? <Music size={12} className="flex-none opacity-70" />
         : <Film size={12} className="flex-none opacity-70" />
       }
-      <span className="text-xs truncate">{node.name}</span>
+      <span className="text-xs truncate flex-1">{node.name}</span>
+      {annotCount != null && annotCount > 0 && (
+        <span className="flex-none flex items-center justify-center rounded-full bg-[#e65161]/80 text-white text-[9px] font-bold min-w-[16px] h-4 px-1">
+          {annotCount > 99 ? '99+' : annotCount}
+        </span>
+      )}
     </button>
   );
 };
@@ -139,27 +183,55 @@ export default function FileTree({
   onNavigateNext,
   canNavigatePrev,
   canNavigateNext,
+  shuffleMode,
+  onToggleShuffle,
+  annotationCounts,
+  onRevealInFinder,
+  onRevealAnnotations,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const tree = useMemo(() => {
     if (!rootDirectory || allFiles.length === 0) return [];
     return buildTree(rootDirectory, allFiles);
   }, [rootDirectory, allFiles]);
 
-  // Auto-expand directories containing the current file
+  // Expand all dirs by default when tree is built/rebuilt
+  useEffect(() => {
+    if (tree.length > 0) {
+      setExpandedDirs(new Set(getAllDirPaths(tree)));
+    }
+  }, [tree]);
+
+  // Also auto-expand ancestors of the current file
   useEffect(() => {
     if (!currentFile || !rootDirectory) return;
     const rel = currentFile.substring(rootDirectory.length + 1);
     const parts = rel.split('/');
-    const newExpanded = new Set(expandedDirs);
-    let path = rootDirectory;
-    for (let i = 0; i < parts.length - 1; i++) {
-      path += '/' + parts[i];
-      newExpanded.add(path);
-    }
-    setExpandedDirs(newExpanded);
+    setExpandedDirs(prev => {
+      const next = new Set(prev);
+      let path = rootDirectory;
+      for (let i = 0; i < parts.length - 1; i++) {
+        path += '/' + parts[i];
+        next.add(path);
+      }
+      return next;
+    });
   }, [currentFile, rootDirectory]);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [contextMenu]);
 
   const toggleDir = (path: string) => {
     setExpandedDirs(prev => {
@@ -169,6 +241,25 @@ export default function FileTree({
       return next;
     });
   };
+
+  const expandAll = () => {
+    setExpandedDirs(new Set(getAllDirPaths(tree)));
+  };
+
+  const collapseAll = () => {
+    setExpandedDirs(new Set());
+  };
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
+  }, []);
+
+  const handleRootContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!rootDirectory) return;
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, path: rootDirectory, isDir: true, isAudioRoot: true });
+  }, [rootDirectory]);
 
   const dirName = rootDirectory?.split('/').pop() || 'No folder';
 
@@ -199,7 +290,10 @@ export default function FileTree({
   return (
     <div className="flex-none w-56 bg-slate-900 border-r border-slate-700 flex flex-col select-none h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-2 py-2 bg-slate-800 border-b border-slate-700 flex-none gap-1">
+      <div
+        className="flex items-center justify-between px-2 py-2 bg-slate-800 border-b border-slate-700 flex-none gap-1"
+        onContextMenu={handleRootContextMenu}
+      >
         <div className="flex items-center gap-1 min-w-0 flex-1">
           <FolderOpen size={13} className="flex-none text-slate-500" />
           <span className="text-xs text-slate-400 truncate" title={rootDirectory || ''}>
@@ -208,6 +302,31 @@ export default function FileTree({
           <span className="text-[10px] text-slate-600 flex-none">({allFiles.length})</span>
         </div>
         <div className="flex items-center gap-0.5 flex-none">
+          {!shuffleMode && (
+            <>
+              <button
+                onClick={expandAll}
+                className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+                title="Expand all"
+              >
+                <ChevronsDown size={13} />
+              </button>
+              <button
+                onClick={collapseAll}
+                className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+                title="Collapse all"
+              >
+                <ChevronsUp size={13} />
+              </button>
+            </>
+          )}
+          <button
+            onClick={onToggleShuffle}
+            className={`p-1 rounded hover:bg-slate-700 ${shuffleMode ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+            title={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
+          >
+            {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
+          </button>
           <button
             onClick={onNavigatePrev}
             disabled={!canNavigatePrev}
@@ -234,7 +353,7 @@ export default function FileTree({
         </div>
       </div>
 
-      {/* Tree */}
+      {/* File list */}
       <div className="flex-1 overflow-y-auto">
         {!rootDirectory && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
@@ -242,7 +361,42 @@ export default function FileTree({
             <p className="text-xs">Open a file or folder to browse</p>
           </div>
         )}
-        {tree.map(node => (
+
+        {/* Shuffle mode: flat list with relative paths */}
+        {shuffleMode && rootDirectory && allFiles.map(filePath => {
+          const rel = filePath.substring(rootDirectory.length + 1);
+          const relNoExt = rel.replace(/\.[^/.]+$/, '');
+          const isActive = filePath === currentFile;
+          const isAudio = AUDIO_EXTS.has(getExt(filePath));
+          const annotCount = annotationCounts[filePath];
+          return (
+            <button
+              key={filePath}
+              onClick={() => onFileSelect(filePath)}
+              onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
+              className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
+                isActive
+                  ? 'bg-[#e65161]/20 text-[#e65161]'
+                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+              title={filePath}
+            >
+              {isAudio
+                ? <Music size={12} className="flex-none opacity-70" />
+                : <Film size={12} className="flex-none opacity-70" />
+              }
+              <span className="text-xs truncate flex-1">{relNoExt}</span>
+              {annotCount != null && annotCount > 0 && (
+                <span className="flex-none flex items-center justify-center rounded-full bg-[#e65161]/80 text-white text-[9px] font-bold min-w-[16px] h-4 px-1">
+                  {annotCount > 99 ? '99+' : annotCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        {/* Normal tree mode */}
+        {!shuffleMode && tree.map(node => (
           <TreeItem
             key={node.path}
             node={node}
@@ -251,9 +405,55 @@ export default function FileTree({
             depth={0}
             expandedDirs={expandedDirs}
             toggleDir={toggleDir}
+            annotationCounts={annotationCounts}
+            onContextMenu={handleContextMenu}
           />
         ))}
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-[100] bg-slate-800 border border-slate-600 rounded-lg shadow-2xl py-1 min-w-[180px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+            onClick={() => {
+              onRevealInFinder(contextMenu.path);
+              setContextMenu(null);
+            }}
+          >
+            {contextMenu.isDir ? 'Show Folder in Finder' : 'Show File in Finder'}
+          </button>
+          {!contextMenu.isDir && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                onRevealAnnotations(contextMenu.path);
+                setContextMenu(null);
+              }}
+            >
+              Show Annotations
+            </button>
+          )}
+          {contextMenu.isDir && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                // For a directory, reveal annotations for any file within it
+                // by just opening the annotations dir (handled by App.tsx via a file path)
+                // We pass the directory path — App.tsx will open annotation dir
+                onRevealAnnotations(contextMenu.path);
+                setContextMenu(null);
+              }}
+            >
+              Show Annotations
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

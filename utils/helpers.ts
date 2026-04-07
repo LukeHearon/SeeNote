@@ -2,10 +2,15 @@ import { Label } from '../types';
 import { saveFileDialog, writeTextFile } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
-  const m = Math.floor(seconds / 60);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 100);
-  return `${m}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+  const cs = Math.floor((seconds % 1) * 100);
+  const csStr = cs.toString().padStart(2, '0');
+  const secStr = `${s}.${csStr}s`;
+  if (h > 0) return `${h}h${m}m${secStr}`;
+  if (m > 0) return `${m}m${secStr}`;
+  return secStr;
 };
 
 export const generateId = (): string => {
@@ -69,33 +74,40 @@ const defaultSavePath = (currentFilePath: string | null, filename: string, suffi
     return outName;
 };
 
+// Pure content generators (no file dialog — used by auto-save and export alike)
+export const generateCSVContent = (labels: Label[]): string => {
+    let content = "Label,Start,End\n";
+    labels.forEach(l => {
+        const safeText = `"${l.text.replace(/"/g, '""')}"`;
+        content += `${safeText},${l.start.toFixed(4)},${l.end.toFixed(4)}\n`;
+    });
+    return content;
+};
+
+export const generateAudacityContent = (labels: Label[]): string => {
+    let content = "";
+    labels.forEach(l => {
+        content += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
+    });
+    return content;
+};
+
+export const generateJSONContent = (labels: Label[]): string =>
+    JSON.stringify(labels, null, 2);
+
 // Export to CSV
 export const exportToCSV = async (labels: Label[], filename: string, currentFilePath: string | null) => {
     const path = defaultSavePath(currentFilePath, filename, '_annotations', '.csv');
-
-    let csvContent = "Label,Start,End\n";
-    labels.forEach(l => {
-        const safeText = `"${l.text.replace(/"/g, '""')}"`;
-        csvContent += `${safeText},${l.start.toFixed(4)},${l.end.toFixed(4)}\n`;
-    });
-
-    await saveFile(csvContent, path, '.csv');
+    await saveFile(generateCSVContent(labels), path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
 export const exportToAudacity = async (labels: Label[], filename: string, currentFilePath: string | null) => {
     const path = defaultSavePath(currentFilePath, filename, '_labels', '.txt');
-
-    let txtContent = "";
-    labels.forEach(l => {
-        txtContent += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
-    });
-
-    await saveFile(txtContent, path, '.txt');
+    await saveFile(generateAudacityContent(labels), path, '.txt');
 };
 
 export const exportToJSON = async (labels: Label[], filename: string, currentFilePath: string | null) => {
     const path = defaultSavePath(currentFilePath, filename, '_annotations', '.json');
-    const jsonContent = JSON.stringify(labels, null, 2);
-    await saveFile(jsonContent, path, '.json');
+    await saveFile(generateJSONContent(labels), path, '.json');
 };

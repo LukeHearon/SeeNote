@@ -6,6 +6,23 @@ import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC } from '../constants';
 import { X } from 'lucide-react';
 
+// Format time for the spectrogram ruler.
+// Uses decimal seconds when timeStep < 1 (dividers split individual seconds),
+// otherwise uses whole numbers.
+function formatRulerTime(s: number, timeStep: number): string {
+  if (timeStep < 1) {
+    return s.toFixed(2);
+  }
+  const totalSec = Math.round(s);
+  if (totalSec < 60) return String(totalSec);
+  const m = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (m < 60) return `${m}:${String(sec).padStart(2, '0')}`;
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  return `${h}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
@@ -14,6 +31,7 @@ interface SpectrogramProps {
   duration: number;
   isPlaying: boolean;
   isProcessing: boolean;
+  fileIdent: string | null;
   settings: SpectrogramSettings;
   labels: Label[];
   selectedLabelId: string | null;
@@ -21,6 +39,7 @@ interface SpectrogramProps {
   labelConfigs: LabelConfig[];
   onSeek: (time: number) => void;
   onLabelsChange: (labels: Label[]) => void;
+  onLabelsCommit: (labels: Label[]) => void;
   onSelectLabel: (id: string | null) => void;
   onZoomChange: (newWindowSize: number) => void;
 }
@@ -37,6 +56,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   duration,
   isPlaying,
   isProcessing,
+  fileIdent,
   settings,
   labels,
   selectedLabelId,
@@ -44,6 +64,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   labelConfigs,
   onSeek,
   onLabelsChange,
+  onLabelsCommit,
   onSelectLabel,
   onZoomChange
 }) => {
@@ -61,6 +82,8 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   const [draggedLabel, setDraggedLabel] = useState<{ id: string; startOffset: number } | null>(null);
 
   const requestRef = useRef<number | null>(null);
+  // Tracks the latest labels passed to onLabelsChange so mouseup can commit the final state
+  const pendingLabelsRef = useRef<Label[]>(labels);
   
   // Calculate pixelsPerSecond based on settings.windowSize
   const pixelsPerSecond = useMemo(() => {
@@ -323,7 +346,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
             ctx.stroke();
 
             // Text
-            const timeStr = timeStep < 1 ? s.toFixed(2) : formatTime(s);
+            const timeStr = formatRulerTime(s, timeStep);
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 3;
             ctx.strokeText(timeStr, x, height - 10);
@@ -333,7 +356,18 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         }
     }
 
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, currentTime, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
+    // 5. Draw ident text at top of spectrogram
+    if (fileIdent) {
+      ctx.save();
+      ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(fileIdent, 58, 6);
+      ctx.restore();
+    }
+
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, currentTime, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing, fileIdent]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(draw);
@@ -415,6 +449,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         }
         return l;
       });
+      pendingLabelsRef.current = updated;
       onLabelsChange(updated);
       return;
     }
@@ -428,6 +463,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
            }
            return l;
        });
+       pendingLabelsRef.current = updated;
        onLabelsChange(updated);
        return;
     }
@@ -439,27 +475,32 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
     if (creatingLabel) {
       const start = Math.min(creatingLabel.start, creatingLabel.current);
       const end = Math.max(creatingLabel.start, creatingLabel.current);
-      
-      if (end - start > 0.05) { 
+      if (end - start > 0.05) {
         const id = Math.random().toString(36).substr(2, 9);
-        const isActiveDefault = activeLabelConfig.key === "0";
-        
         const newLabel: Label = {
             id,
             configId: activeLabelConfig.key,
             start,
             end,
-            text: isActiveDefault ? "" : activeLabelConfig.text,
+            text: activeLabelConfig.text,
             color: activeLabelConfig.color
         };
-        onLabelsChange([...labels, newLabel]);
-        onSelectLabel(id); 
+        const committed = [...labels, newLabel];
+        onLabelsCommit(committed);
+        onSelectLabel(id);
       }
       setCreatingLabel(null);
     }
 
-    setResizingLabel(null);
-    setDraggedLabel(null);
+    if (resizingLabel) {
+      onLabelsCommit(pendingLabelsRef.current);
+      setResizingLabel(null);
+    }
+
+    if (draggedLabel) {
+      onLabelsCommit(pendingLabelsRef.current);
+      setDraggedLabel(null);
+    }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -527,7 +568,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   };
 
   return (
-    <div 
+    <div
         ref={containerRef}
         className="relative w-full h-full bg-slate-900 overflow-hidden cursor-crosshair select-none"
         onMouseDown={handleMouseDown}
@@ -538,6 +579,24 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         onContextMenu={(e) => e.preventDefault()}
     >
       <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+
+      {/* Blurred placeholder overlay during spectrogram generation */}
+      {isProcessing && (
+        <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
+          <div
+            className="absolute inset-0"
+            style={{
+              background: 'repeating-linear-gradient(180deg, rgba(71,85,105,0.35) 0px, rgba(30,41,59,0.2) 6px, rgba(51,65,85,0.3) 6px, rgba(15,23,42,0.15) 14px)',
+              filter: 'blur(6px)',
+              transform: 'scale(1.06)',
+            }}
+          />
+          <div className="absolute inset-0 bg-slate-900/60" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-slate-400 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide">Generating spectrogram…</span>
+          </div>
+        </div>
+      )}
       
       <div ref={interactionRef} className="absolute top-0 left-0 w-full h-full">
          {layeredLabels.map((l) => {
@@ -581,7 +640,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
                         // Middle Click Delete (Button 1)
                         if (e.button === 1) {
                             e.preventDefault();
-                            onLabelsChange(labels.filter(lb => lb.id !== l.id));
+                            onLabelsCommit(labels.filter(lb => lb.id !== l.id));
                             if(isSelected) onSelectLabel(null);
                             return;
                         }
@@ -618,21 +677,18 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
                                 const newText = e.target.value;
                                 const newLabels = labels.map(lb => {
                                     if (lb.id === l.id) {
-                                        // Check for collisions with predefined labels (case insensitive)
                                         const matchingConfig = labelConfigs.find(c => c.text.toLowerCase() === newText.toLowerCase() && c.key !== "0");
-                                        
                                         if (matchingConfig) {
                                              return { ...lb, text: matchingConfig.text, configId: matchingConfig.key, color: matchingConfig.color };
                                         }
-
-                                        // If modifying a predefined label that doesn't match anymore, convert to Custom (White, Config 0)
                                         if (lb.configId !== "0" && lb.color !== "#ffffff" && lb.text !== newText) {
                                             return { ...lb, text: newText, configId: "0", color: "#ffffff" };
                                         }
                                         return { ...lb, text: newText };
-                                    } 
+                                    }
                                     return lb;
                                 });
+                                pendingLabelsRef.current = newLabels;
                                 onLabelsChange(newLabels);
                             }}
                             onKeyDown={(e) => {
@@ -646,11 +702,13 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
                                     (e.target as HTMLInputElement).blur();
                                 }
                             }}
-                            onBlur={(e) => {
-                                // If label is empty on blur (and it's custom), delete it
+                            onBlur={() => {
                                 if (l.text.trim() === "") {
-                                    onLabelsChange(labels.filter(lb => lb.id !== l.id));
+                                    const filtered = labels.filter(lb => lb.id !== l.id);
+                                    onLabelsCommit(filtered);
                                     onSelectLabel(null);
+                                } else {
+                                    onLabelsCommit(pendingLabelsRef.current);
                                 }
                             }}
                             className="absolute left-2 right-2 top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
@@ -664,7 +722,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
                                 if (e.button === 1) { // Middle click to delete
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    onLabelsChange(labels.filter(lb => lb.id !== l.id));
+                                    onLabelsCommit(labels.filter(lb => lb.id !== l.id));
                                     if(isSelected) onSelectLabel(null);
                                     return;
                                 }
