@@ -1,33 +1,43 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Project, LabelConfig } from '../types';
+import { Project } from '../types';
 import { getAppDataDir, loadProjects, saveProjects } from '../utils/projectCommands';
 
 function getProjectsFilePath(appDataDir: string): string {
-  // Use forward slashes; Tauri handles platform path separators on the Rust side
-  return appDataDir + '/.projects/projects.json';
+  const base = appDataDir.replace(/[/\\]+$/, '');
+  return base + '/.projects/projects.json';
 }
 
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [projectsFilePath, setProjectsFilePath] = useState<string | null>(null);
   const projectsFileRef = useRef<string | null>(null);
 
-  // On mount: resolve app data dir and load projects.
-  // Note: Tauri v2 uses the same app_data_dir (based on the bundle identifier
-  // "com.seenote.app") in both `tauri dev` and packaged builds, so projects
-  // created in one environment will appear in the other.
+  // Ref that always holds the latest projects array, updated synchronously.
+  // This avoids stale-closure bugs where a mutation (e.g. touchLastOpened)
+  // runs before React has re-rendered with the latest setProjects() value.
+  const projectsRef = useRef<Project[]>([]);
+
+  const setProjectsBoth = useCallback((next: Project[]) => {
+    projectsRef.current = next;
+    setProjects(next);
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
         const appDataDir = await getAppDataDir();
         const filePath = getProjectsFilePath(appDataDir);
         projectsFileRef.current = filePath;
+        setProjectsFilePath(filePath);
         const loaded = await loadProjects(filePath);
-        // Sort by lastOpened descending
         loaded.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
-        setProjects(loaded);
+        setProjectsBoth(loaded);
       } catch (err) {
-        console.error('Failed to load projects:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to load projects:', msg);
+        setLoadError(msg);
       } finally {
         setIsLoading(false);
       }
@@ -35,8 +45,16 @@ export function useProjects() {
   }, []);
 
   const persist = useCallback(async (updated: Project[]) => {
-    if (!projectsFileRef.current) return;
-    await saveProjects(projectsFileRef.current, updated);
+    if (!projectsFileRef.current) {
+      console.error('persist called before projectsFileRef was set');
+      return;
+    }
+    try {
+      await saveProjects(projectsFileRef.current, updated);
+    } catch (err) {
+      console.error('Failed to save projects:', err);
+      throw err;
+    }
   }, []);
 
   const createProject = useCallback(async (
@@ -49,34 +67,42 @@ export function useProjects() {
       createdAt: now,
       lastOpened: now,
     };
-    const updated = [project, ...projects];
-    setProjects(updated);
+    const updated = [project, ...projectsRef.current];
+    setProjectsBoth(updated);
     await persist(updated);
     return project;
-  }, [projects, persist]);
+  }, [persist, setProjectsBoth]);
 
   const updateProject = useCallback(async (updated: Project): Promise<void> => {
-    const next = projects.map(p => p.id === updated.id ? updated : p);
-    setProjects(next);
+    const next = projectsRef.current.map(p => p.id === updated.id ? updated : p);
+    setProjectsBoth(next);
     await persist(next);
-  }, [projects, persist]);
+  }, [persist, setProjectsBoth]);
 
   const deleteProject = useCallback(async (id: string): Promise<void> => {
-    const next = projects.filter(p => p.id !== id);
-    setProjects(next);
+    const next = projectsRef.current.filter(p => p.id !== id);
+    setProjectsBoth(next);
     await persist(next);
-  }, [projects, persist]);
+  }, [persist, setProjectsBoth]);
 
   const touchLastOpened = useCallback(async (id: string): Promise<void> => {
     const now = new Date().toISOString();
-    const next = projects.map(p =>
+    const next = projectsRef.current.map(p =>
       p.id === id ? { ...p, lastOpened: now } : p
     );
-    // Re-sort
     next.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
-    setProjects(next);
+    setProjectsBoth(next);
     await persist(next);
-  }, [projects, persist]);
+  }, [persist, setProjectsBoth]);
 
-  return { projects, isLoading, createProject, updateProject, deleteProject, touchLastOpened };
+  return {
+    projects,
+    isLoading,
+    loadError,
+    projectsFilePath,
+    createProject,
+    updateProject,
+    deleteProject,
+    touchLastOpened,
+  };
 }
