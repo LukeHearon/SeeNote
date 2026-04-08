@@ -88,13 +88,8 @@ export const copyAnnotationFiles = (
 export const revealInFinder = (path: string): Promise<void> =>
   invoke('reveal_in_finder', { path });
 
-export interface AnnotationCountEntry {
-  rel_path: string; // relative path from annotation dir without extension, forward slashes
-  count: number;
-}
-
-export const countAnnotationEntries = (
+export const listAnnotationFiles = (
   annotationDir: string,
   outputFormat: string,
-): Promise<AnnotationCountEntry[]> =>
-  invoke('count_annotation_entries', { annotationDir, outputFormat });
+): Promise<string[]> =>
+  invoke('list_annotation_files', { annotationDir, outputFormat });

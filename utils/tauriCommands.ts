@@ -88,6 +88,9 @@ export const openFileOrFolderDialog = (): Promise<OpenResult | null> =>
 export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_media_files_recursive', { path });
 
+export const removeFile = (path: string): Promise<void> =>
+  invoke('remove_file', { path });
+
 export const saveFileDialog = (
   defaultPath: string,
   filters: DialogFilter[],

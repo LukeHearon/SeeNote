@@ -16,6 +16,7 @@ pub fn run() {
             commands::filesystem::open_directory_dialog,
             commands::filesystem::open_file_or_folder_dialog,
             commands::filesystem::save_file_dialog,
+            commands::filesystem::remove_file,
             commands::projects::get_app_data_dir,
             commands::projects::load_projects,
             commands::projects::save_projects,
@@ -24,7 +25,7 @@ pub fn run() {
             commands::projects::copy_annotation_files,
             commands::projects::list_txt_files_recursive,
             commands::projects::reveal_in_finder,
-            commands::projects::count_annotation_entries,
+            commands::projects::list_annotation_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

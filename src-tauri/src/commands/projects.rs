@@ -249,19 +249,13 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Annotation count scanning ─────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct AnnotationCount {
-    pub rel_path: String, // relative path from annotation dir, no extension, forward slashes
-    pub count: usize,
-}
+// ── Annotation file existence scanning ────────────────────────────────────────
 
 #[tauri::command]
-pub async fn count_annotation_entries(
+pub async fn list_annotation_files(
     annotation_dir: String,
     output_format: String,
-) -> Result<Vec<AnnotationCount>, String> {
+) -> Result<Vec<String>, String> {
     let ext = match output_format.as_str() {
         "csv" => "csv",
         "json" => "json",
@@ -272,15 +266,15 @@ pub async fn count_annotation_entries(
         return Ok(vec![]);
     }
     let mut results = vec![];
-    scan_annotation_counts(root, root, ext, &mut results);
+    scan_annotation_files(root, root, ext, &mut results);
     Ok(results)
 }
 
-fn scan_annotation_counts(
+fn scan_annotation_files(
     dir: &Path,
     root: &Path,
     ext: &str,
-    results: &mut Vec<AnnotationCount>,
+    results: &mut Vec<String>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -289,41 +283,17 @@ fn scan_annotation_counts(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_annotation_counts(&path, root, ext, results);
+            scan_annotation_files(&path, root, ext, results);
         } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
-            let count = count_entries_in_file(&path, ext);
-            if count > 0 {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    // Normalise to forward slashes, strip extension
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&format!(".{}", ext)) {
-                        s.to_string()
-                    } else {
-                        rel_str
-                    };
-                    results.push(AnnotationCount { rel_path: rel_no_ext, count });
-                }
+            if let Ok(rel) = path.strip_prefix(root) {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&format!(".{}", ext)) {
+                    s.to_string()
+                } else {
+                    rel_str
+                };
+                results.push(rel_no_ext);
             }
         }
-    }
-}
-
-fn count_entries_in_file(path: &Path, ext: &str) -> usize {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return 0,
-    };
-    match ext {
-        "txt" => content.lines().filter(|l| !l.trim().is_empty()).count(),
-        "csv" => {
-            let mut lines = content.lines();
-            lines.next(); // skip header
-            lines.filter(|l| !l.trim().is_empty()).count()
-        }
-        "json" => serde_json::from_str::<JsonValue>(&content)
-            .ok()
-            .and_then(|v| v.as_array().map(|a| a.len()))
-            .unwrap_or(0),
-        _ => 0,
     }
 }

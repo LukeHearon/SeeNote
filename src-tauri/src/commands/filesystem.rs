@@ -215,6 +215,15 @@ pub async fn open_file_or_folder_dialog(_app: tauri::AppHandle) -> Result<Option
     }
 }
 
+#[tauri::command]
+pub async fn remove_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        std::fs::remove_file(p).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct OpenResult {
     pub path: String,
