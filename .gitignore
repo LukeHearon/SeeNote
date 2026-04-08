@@ -25,3 +25,11 @@ dist-ssr
 
 # Tauri build artifacts
 src-tauri/target/
+
+
+# misc
+local/
+
+# Claude Code
+CLAUDE.md
+.claude/
