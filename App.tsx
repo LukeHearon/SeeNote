@@ -8,10 +8,10 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { Label, SpectrogramSettings, LabelConfig, FrequencyScale, Project } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, toAssetUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
-import { revealInFinder, countAnnotationEntries } from './utils/projectCommands';
+import { revealInFinder, listAnnotationFiles } from './utils/projectCommands';
 
 export default function App() {
   // Media State
@@ -24,6 +24,7 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allMediaFiles, setAllMediaFiles] = useState<string[]>([]);
   const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false);
@@ -31,7 +32,7 @@ export default function App() {
   // Project state
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
-  const { updateProject, touchLastOpened } = useProjects();
+  const { projects, isLoading, loadError, projectsFilePath, createProject, updateProject, deleteProject, touchLastOpened } = useProjects();
 
   // Derived from active project
   const annotationDirectory = activeProject?.annotationDirectory ?? null;
@@ -57,7 +58,12 @@ export default function App() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const [labelConfigs, setLabelConfigs] = useState<LabelConfig[]>(DEFAULT_LABEL_CONFIGS);
-  const [activeLabelIndex, setActiveLabelIndex] = useState(0); // 0 is Default
+  // null = Selection Mode (no label config active); string key of the active config otherwise.
+  const [activeLabelKey, setActiveLabelKey] = useState<string | null>(null);
+
+  // Selection region for Selection Mode playback and UI
+  const [selectionRegion, setSelectionRegion] = useState<{ start: number; end: number } | null>(null);
+  const selectionRegionRef = useRef<{ start: number; end: number } | null>(null);
 
   // Label Editing State
   const [editingLabelIndex, setEditingLabelIndex] = useState<number | null>(null);
@@ -84,28 +90,42 @@ export default function App() {
       frequencyScale: 'mel',
   });
 
-  // Annotation counts: audio file path → number of annotations
-  const [annotationCounts, setAnnotationCounts] = useState<Record<string, number>>({});
+  // Set of audio file paths that have an annotation file
+  const [annotatedFiles, setAnnotatedFiles] = useState<Set<string>>(new Set());
 
   const addLog = (msg: string, type: 'info'|'error' = 'info') => {
       const time = new Date().toLocaleTimeString();
       setDebugLogs(prev => [...prev, { time, msg, type }]);
   };
 
-  // Smooth Scrolling Logic via RequestAnimationFrame
+  // Keep selectionRegionRef in sync with state (for use in rAF loop without stale closure)
+  useEffect(() => { selectionRegionRef.current = selectionRegion; }, [selectionRegion]);
+
+  // Smooth Scrolling Logic via RequestAnimationFrame.
+  // Also enforces selection-bounded playback: stop at selectionRegion.end and return to start.
   useEffect(() => {
     let rAF: number;
     const loop = () => {
         if (videoRef.current && !videoRef.current.paused) {
-            setCurrentTime(videoRef.current.currentTime);
+            const t = videoRef.current.currentTime;
+            const sel = selectionRegionRef.current;
+            if (sel && t >= sel.end - 0.05) {
+                // Reached end of selection — stop and return to start
+                videoRef.current.pause();
+                videoRef.current.currentTime = sel.start;
+                setCurrentTime(sel.start);
+                setIsPlaying(false);
+                return;
+            }
+            setCurrentTime(t);
             rAF = requestAnimationFrame(loop);
         }
     };
-    
+
     if (isPlaying) {
         loop();
     }
-    
+
     return () => {
         if (rAF) cancelAnimationFrame(rAF);
     };
@@ -174,11 +194,17 @@ export default function App() {
     [shuffleMode, shuffledFiles, allMediaFiles]
   );
 
-  // Navigation: next/prev file in the display queue
+  // Index lookup map for O(1) navigation
+  const displayQueueIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < displayQueue.length; i++) map.set(displayQueue[i], i);
+    return map;
+  }, [displayQueue]);
+
   const currentFileIndex = useMemo(() => {
-    if (!currentFilePath || displayQueue.length === 0) return -1;
-    return displayQueue.indexOf(currentFilePath);
-  }, [currentFilePath, displayQueue]);
+    if (!currentFilePath) return -1;
+    return displayQueueIndex.get(currentFilePath) ?? -1;
+  }, [currentFilePath, displayQueueIndex]);
 
   const navigateFile = useCallback((direction: 'prev' | 'next') => {
     if (displayQueue.length === 0) return;
@@ -296,13 +322,25 @@ export default function App() {
     autoSaveTimeoutRef.current = setTimeout(async () => {
       if (skipAutoSaveRef.current) return;
       try {
-        if (labels.length === 0) return;
+        if (labels.length === 0) {
+          await removeFile(annotPath);
+          setAnnotatedFiles(prev => {
+            const next = new Set(prev);
+            next.delete(currentFilePath);
+            return next;
+          });
+          return;
+        }
         let content: string;
         if (exportFormat === 'json') content = generateJSONContent(labels);
         else if (exportFormat === 'csv') content = generateCSVContent(labels);
         else content = generateAudacityContent(labels);
         await writeTextFile(annotPath, content);
-        setAnnotationCounts(prev => ({ ...prev, [currentFilePath]: labels.length }));
+        setAnnotatedFiles(prev => {
+            const next = new Set(prev);
+            next.add(currentFilePath);
+            return next;
+          });
       } catch (err) {
         addLog(`Auto-save error: ${err}`, 'error');
       }
@@ -389,7 +427,7 @@ export default function App() {
       setSettings(project.spectrogramSettings);
     }
     setCurrentDirectory(project.audioDirectory);
-    setAnnotationCounts({});
+    setAnnotatedFiles(new Set());
     setLabels([]);
     setCurrentFilePath(null);
     setVideoSrc(null);
@@ -400,19 +438,22 @@ export default function App() {
       setAllMediaFiles(files);
       setActiveProject(project);
       if (files.length > 0) handleOpenFile(files[0]);
-      // Load annotation counts in the background
-      countAnnotationEntries(project.annotationDirectory, project.outputFormat)
-        .then(entries => {
-          const counts: Record<string, number> = {};
+      // Load annotation file existence in the background
+      listAnnotationFiles(project.annotationDirectory, project.outputFormat)
+        .then(relPaths => {
           const audioRoot = project.audioDirectory;
-          for (const { rel_path, count } of entries) {
-            const match = files.find(f => {
-              const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
-              return rel === rel_path;
-            });
-            if (match) counts[match] = count;
+          // Build a map from rel path (no ext) → full audio path for O(1) lookup
+          const relToFull = new Map<string, string>();
+          for (const f of files) {
+            const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+            relToFull.set(rel, f);
           }
-          setAnnotationCounts(counts);
+          const annotated = new Set<string>();
+          for (const rp of relPaths) {
+            const full = relToFull.get(rp);
+            if (full) annotated.add(full);
+          }
+          setAnnotatedFiles(annotated);
         })
         .catch(() => {});
     } catch (err) {
@@ -421,6 +462,32 @@ export default function App() {
       addLog(`Error scanning audio directory: ${err}`, 'error');
     }
   }, [touchLastOpened, handleOpenFile]);
+
+  const handleRefreshFiles = useCallback(async () => {
+    if (!activeProject) return;
+    try {
+      const files = await listMediaFilesRecursive(activeProject.audioDirectory);
+      setAllMediaFiles(files);
+      listAnnotationFiles(activeProject.annotationDirectory, activeProject.outputFormat)
+        .then(relPaths => {
+          const audioRoot = activeProject.audioDirectory;
+          const relToFull = new Map<string, string>();
+          for (const f of files) {
+            const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+            relToFull.set(rel, f);
+          }
+          const annotated = new Set<string>();
+          for (const rp of relPaths) {
+            const full = relToFull.get(rp);
+            if (full) annotated.add(full);
+          }
+          setAnnotatedFiles(annotated);
+        })
+        .catch(() => {});
+    } catch (err) {
+      addLog(`Error refreshing files: ${err}`, 'error');
+    }
+  }, [activeProject]);
 
   const handleProjectSettingsSaved = useCallback(async (updated: Project) => {
     await updateProject(updated);
@@ -466,11 +533,24 @@ export default function App() {
 
   const togglePlay = useCallback(() => {
       if (videoRef.current) {
-          if (isPlaying) videoRef.current.pause();
-          else videoRef.current.play();
-          setIsPlaying(!isPlaying);
+          if (isPlaying || isBuffering) {
+              videoRef.current.pause();
+              setIsPlaying(false);
+              setIsBuffering(false);
+          } else {
+              // If there's a selection region and playhead is at or past the end, restart from start
+              const sel = selectionRegionRef.current;
+              if (sel && (videoRef.current.currentTime >= sel.end - 0.05 || videoRef.current.currentTime < sel.start)) {
+                  videoRef.current.currentTime = sel.start;
+                  setCurrentTime(sel.start);
+              }
+              videoRef.current.play().catch(() => setIsBuffering(false));
+              setIsBuffering(true);
+              // isPlaying is set to true only when the 'playing' event fires (onPlaying callback),
+              // ensuring the rAF loop and playhead don't advance until audio is actually producing output.
+          }
       }
-  }, [isPlaying]);
+  }, [isPlaying, isBuffering]);
 
   const seek = useCallback((time: number) => {
       if (videoRef.current) {
@@ -505,6 +585,9 @@ export default function App() {
               case 'm':
                   setMuted(prev => !prev);
                   break;
+              case 'escape':
+                  setActiveLabelKey(null);
+                  break;
               case 'delete':
               case 'backspace':
                   if (selectedLabelId) {
@@ -514,11 +597,30 @@ export default function App() {
                   break;
           }
 
-          // Hotkey Numbers (0-9) - Set Active Label Index
+          // Hotkey Numbers (0-9)
           if (/^[0-9]$/.test(e.key)) {
-              const idx = parseInt(e.key);
-              if (idx < labelConfigs.length) {
-                  setActiveLabelIndex(idx);
+              const key = e.key;
+              const config = labelConfigs.find(c => c.key === key);
+              if (config) {
+                  // If in selection mode with an active selection, drop a label onto it
+                  if (activeLabelKey === null && selectionRegion !== null) {
+                      const id = Math.random().toString(36).substr(2, 9);
+                      const isCustom = config.key === '0';
+                      const newLabel: Label = {
+                          id,
+                          configId: config.key,
+                          start: selectionRegion.start,
+                          end: selectionRegion.end,
+                          text: isCustom ? '' : config.text,
+                          color: config.color,
+                      };
+                      handleLabelsCommit([...labels, newLabel]);
+                      setSelectedLabelId(id);
+                      setSelectionRegion(null);
+                      setActiveLabelKey(key);
+                  } else {
+                      setActiveLabelKey(prev => prev === key ? null : key);
+                  }
               }
           }
 
@@ -534,7 +636,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -572,7 +674,7 @@ export default function App() {
       setIsAddingLabel(false);
       setNewLabelText("");
       // Auto-select the newly created label config
-      setActiveLabelIndex(nextIndex);
+      setActiveLabelKey(newConfig.key);
       addLog(`Added category: ${newLabelText} (${nextIndex})`);
   };
 
@@ -651,7 +753,7 @@ export default function App() {
       const reindexed = newConfigs.map((c, i) => ({ ...c, key: i.toString(), color: HOTKEY_COLORS[i] }));
       
       setLabelConfigs(reindexed);
-      setActiveLabelIndex(0);
+      setActiveLabelKey('0');
   };
 
   const handleSplitDrag = (e: React.MouseEvent) => {
@@ -688,7 +790,18 @@ export default function App() {
   const isBoosted = volume > 1;
 
   if (!activeProject) {
-    return <LaunchScreen onOpenProject={handleOpenProject} />;
+    return (
+      <LaunchScreen
+        projects={projects}
+        isLoading={isLoading}
+        loadError={loadError}
+        projectsFilePath={projectsFilePath}
+        onOpenProject={handleOpenProject}
+        createProject={createProject}
+        updateProject={updateProject}
+        deleteProject={deleteProject}
+      />
+    );
   }
 
   return (
@@ -710,40 +823,7 @@ export default function App() {
             </h1>
         </div>
 
-        <div className="flex items-center space-x-4">
-            <div className="text-mono text-lg font-medium w-24 text-center">
-                {formatTime(currentTime)}
-            </div>
-            <div className="flex items-center space-x-2">
-                 <button 
-                    onClick={togglePlay}
-                    disabled={!videoSrc}
-                    className="p-2 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg"
-                >
-                    {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="ml-0.5" />}
-                </button>
-            </div>
-            
-            {/* Volume Control */}
-            <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-1 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600">
-                <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
-                    {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-                </button>
-                <div className="relative w-24 h-5 flex items-center">
-                    <input 
-                        type="range" min="0" max="4" step="0.05"
-                        value={muted ? 0 : volume}
-                        onChange={handleVolumeChange}
-                        className={`w-full h-1 bg-slate-500 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
-                        style={{
-                            background: `linear-gradient(to right, ${isBoosted ? '#ef4444' : '#e65161'} 0%, ${isBoosted ? '#ef4444' : '#e65161'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(volume / 4) * 100}%, #64748b ${(volume / 4) * 100}%, #64748b 100%)`
-                        }}
-                    />
-                    {/* Tick for 100% */}
-                    <div className="absolute left-[25%] top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none"></div>
-                </div>
-            </div>
-        </div>
+        <div />
 
         <div className="flex items-center space-x-3">
              <button
@@ -808,88 +888,191 @@ export default function App() {
 
       {/* Help Modal */}
       {showHelp && (
-        <div 
-             className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-             onClick={() => setShowHelp(false)}
+        <div
+          className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
+          onClick={() => setShowHelp(false)}
         >
-             <div 
-                  className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-lg w-full p-6 relative"
-                  onClick={(e) => e.stopPropagation()}
-             >
-                  <button 
-                    onClick={() => setShowHelp(false)}
-                    className="absolute top-4 right-4 text-slate-400 hover:text-white"
-                  >
-                      <X size={20} />
-                  </button>
-                  <h3 className="text-xl font-bold mb-4 text-[#e65161]">How to use SeeNote</h3>
-                  
-                  <div className="space-y-4 text-sm text-slate-300">
-                    <div className="space-y-1">
-                      <h4 className="font-semibold text-white">1. Get Started</h4>
-                      <p>Upload a video or audio file. The app will visualize the spectrogram below.</p>
-                    </div>
+          <div
+            className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-2xl w-full flex flex-col relative"
+            style={{ maxHeight: '90vh' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex-none flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-700">
+              <h3 className="text-xl font-bold text-[#e65161]">SeeNote Guide</h3>
+              <button onClick={() => setShowHelp(false)} className="text-slate-400 hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
 
-                    <div className="space-y-1">
-                      <h4 className="font-semibold text-white">2. Navigation</h4>
-                      <p>
-                        <span className="text-white">Pan:</span> Right-Click & Drag or use Scroll Wheel.<br/>
-                        <span className="text-white">Zoom:</span> Ctrl + Scroll Wheel to zoom in/out of time.<br/>
-                        <span className="text-white">Play/Pause:</span> Press Spacebar.
-                      </p>
-                    </div>
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6 text-sm text-slate-300">
 
-                    <div className="space-y-1">
-                      <h4 className="font-semibold text-white">3. Creating Labels</h4>
-                      <p>Click and drag anywhere on the spectrogram to create a new label segment. The label will inherit the currently active category (bottom right).</p>
-                    </div>
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Projects</h4>
+                <p>
+                  SeeNote is organized around <span className="text-white">projects</span>. Each project links an
+                  <span className="text-white"> audio/video directory</span> (the files you want to annotate) to an
+                  <span className="text-white"> annotation output directory</span> where label files are saved.
+                </p>
+                <p>
+                  Create a project from the launch screen. You can configure the output format (Audacity .txt, CSV, or JSON) and
+                  label categories in <span className="font-mono bg-slate-700 px-1 rounded">Project → Settings</span>.
+                  All settings—including label categories and spectrogram display—persist per project.
+                </p>
+              </section>
 
-                    <div className="space-y-1">
-                      <h4 className="font-semibold text-white">4. Managing Categories</h4>
-                      <p>Use the panel on the right to add named categories. Press numbers <span className="font-mono bg-slate-700 px-1 rounded">0-9</span> on your keyboard to quickly switch between them.</p>
-                      <p>Click a category name to rename it (updates all labels).</p>
-                    </div>
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">File Tree</h4>
+                <p>
+                  The left sidebar lists every audio/video file in the project directory. Files with existing annotations show a
+                  count badge. Click any file to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">[</kbd> /
+                  <kbd className="font-mono bg-slate-700 px-1 rounded">]</kbd> to step through files in order.
+                  Right-click a file for options: reveal in Finder, reveal annotation file, or toggle shuffle mode.
+                </p>
+              </section>
 
-                    <div className="space-y-1">
-                      <h4 className="font-semibold text-white">5. Editing & Deleting</h4>
-                      <p>
-                        Drag the left/right edges of a label to resize.<br/>
-                        Click the label text to rename. <span className="text-orange-400">Note:</span> Renaming a colored label converts it to a generic "Custom Label".<br/>
-                        <span className="text-red-400">Middle Click</span> any label to delete it instantly.
-                      </p>
-                    </div>
-                  </div>
-             </div>
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Spectrogram Navigation</h4>
+                <ul className="space-y-1 list-none">
+                  <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
+                  <li><span className="text-white">Zoom:</span> Cmd/Ctrl + scroll wheel.</li>
+                  <li><span className="text-white">Seek:</span> Left-click on the spectrogram (in Selection Mode) to move the playhead.</li>
+                  <li><span className="text-white">Play/Pause:</span> <kbd className="font-mono bg-slate-700 px-1 rounded">Space</kbd>.</li>
+                </ul>
+              </section>
+
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Two Modes: Selection vs. Label</h4>
+                <p>
+                  The active label category in the right-side palette controls the current mode.
+                </p>
+                <ul className="space-y-1.5 list-none">
+                  <li>
+                    <span className="text-white">Selection Mode</span> (no category active — press <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to enter):
+                    left-click &amp; drag creates a <span className="italic">selection region</span> shown as a shaded band.
+                    Playback is bounded to that region. While a selection is active, pressing a category key
+                    (<kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>) instantly
+                    drops an annotation onto it.
+                  </li>
+                  <li>
+                    <span className="text-white">Label Mode</span> (a category is active):
+                    left-click &amp; drag directly creates an annotation with that category's color and name.
+                    Press a number key to switch categories, or <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to return to Selection Mode.
+                  </li>
+                </ul>
+              </section>
+
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Annotations</h4>
+                <ul className="space-y-1.5 list-none">
+                  <li><span className="text-white">Create:</span> drag on the spectrogram while a category is active.</li>
+                  <li><span className="text-white">Resize:</span> drag the left or right edge handle of any annotation.</li>
+                  <li>
+                    <span className="text-white">Bound selection:</span> click the center of an annotation to bind the selection region to it.
+                    The playhead will loop within that annotation. Use <kbd className="font-mono bg-slate-700 px-1 rounded">;</kbd> /
+                    <kbd className="font-mono bg-slate-700 px-1 rounded">'</kbd> (or the ‹ › buttons on the spectrogram) to jump between annotations.
+                  </li>
+                  <li><span className="text-white">Rename:</span> click the annotation's text label to edit it inline. Key 0 (Custom Label) annotations open for editing automatically.</li>
+                  <li><span className="text-white">Delete:</span> select an annotation and press <kbd className="font-mono bg-slate-700 px-1 rounded">Delete</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Backspace</kbd>, or middle-click it directly.</li>
+                  <li><span className="text-white">Undo/Redo:</span> <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Z</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Shift+Z</kbd>.</li>
+                </ul>
+              </section>
+
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Label Categories</h4>
+                <p>
+                  Categories are named classes bound to hotkeys <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>.
+                  Key <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd> is always "Custom Label"—
+                  annotations created with it open immediately for you to type a one-off name.
+                </p>
+                <p>
+                  Click a category name in the palette to rename it; all existing annotations with that category update automatically.
+                  Use the <span className="font-mono bg-slate-700 px-1 rounded">+</span> button to add a category, or the trash icon to remove one
+                  (you can choose to convert its annotations to Custom Labels or delete them outright).
+                  Category configuration is saved per project.
+                </p>
+              </section>
+
+              <section className="space-y-2">
+                <h4 className="font-semibold text-white text-base">Auto-save &amp; Export</h4>
+                <p>
+                  Annotations are saved automatically to the project's annotation directory every time you make a change.
+                  The file structure mirrors the audio directory. You can also export manually via the export button, which
+                  writes the current file's annotations in the project's chosen format (Audacity .txt, CSV, or JSON).
+                  Clearing all annotations from a file removes its annotation file.
+                </p>
+              </section>
+
+            </div>
+
+            {/* Footer */}
+            <div className="flex-none px-6 py-3 border-t border-slate-700 flex justify-end">
+              <button
+                onClick={() => { setShowHelp(false); setShowHotkeysHelp(true); }}
+                className="text-xs text-slate-400 hover:text-white transition-colors"
+              >
+                View keyboard shortcuts →
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {/* Hotkey Help Modal */}
       {showHotkeysHelp && (
-          <div 
-             className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-             onClick={() => setShowHotkeysHelp(false)}
+          <div
+            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
+            onClick={() => setShowHotkeysHelp(false)}
           >
-              <div 
-                  className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-sm w-full p-6 relative"
-                  onClick={(e) => e.stopPropagation()}
+              <div
+                className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-sm w-full flex flex-col relative"
+                onClick={(e) => e.stopPropagation()}
               >
-                  <button 
-                    onClick={() => setShowHotkeysHelp(false)}
-                    className="absolute top-4 right-4 text-slate-400 hover:text-white"
-                  >
+                  <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-700">
+                    <h3 className="text-lg font-bold">Keyboard Shortcuts</h3>
+                    <button onClick={() => setShowHotkeysHelp(false)} className="text-slate-400 hover:text-white">
                       <X size={20} />
-                  </button>
-                  <h3 className="text-lg font-bold mb-4">Keyboard Shortcuts</h3>
-                  <div className="space-y-2 text-sm">
-                      <div className="flex justify-between"><span className="text-slate-400">Space</span> <span>Play / Pause</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">M</span> <span>Mute / Unmute</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Delete / Backspace</span> <span>Delete Selected</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Middle Click</span> <span>Delete Label</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">0 - 9</span> <span>Set Active Label</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Ctrl/Cmd + Scroll</span> <span>Zoom Spectrogram</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Scroll / Right Click</span> <span>Pan Spectrogram</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">[ / ]</span> <span>Previous / Next File</span></div>
-                      <div className="flex justify-between"><span className="text-slate-400">Escape</span> <span>Exit Label Edit</span></div>
+                    </button>
+                  </div>
+
+                  <div className="px-6 py-4 space-y-4 text-sm">
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Playback</p>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Space</span><span>Play / Pause</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">M</span><span>Mute / Unmute</span></div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Spectrogram</p>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Right-drag / Scroll</span><span>Pan</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl + Scroll</span><span>Zoom</span></div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Annotations</p>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">0 – 9</span><span>Set active label category</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Esc</span><span>Selection Mode / clear selection</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Delete / Backspace</span><span>Delete selected annotation</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Middle-click</span><span>Delete annotation instantly</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">; / '</span><span>Previous / Next annotation</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Z</span><span>Undo</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Shift+Z</span><span>Redo</span></div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Files</p>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">[ / ]</span><span>Previous / Next file</span></div>
+                    </div>
+                  </div>
+
+                  <div className="px-6 py-3 border-t border-slate-700 flex justify-end">
+                    <button
+                      onClick={() => { setShowHotkeysHelp(false); setShowHelp(true); }}
+                      className="text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Full guide →
+                    </button>
                   </div>
               </div>
           </div>
@@ -903,7 +1086,7 @@ export default function App() {
                 rootDirectory={currentDirectory}
                 allFiles={displayQueue}
                 currentFile={currentFilePath}
-                onFileSelect={(path) => handleOpenFile(path)}
+                onFileSelect={handleOpenFile}
                 collapsed={fileTreeCollapsed}
                 onToggleCollapse={() => setFileTreeCollapsed(c => !c)}
                 onNavigatePrev={() => navigateFile('prev')}
@@ -912,9 +1095,10 @@ export default function App() {
                 canNavigateNext={currentFileIndex < displayQueue.length - 1}
                 shuffleMode={shuffleMode}
                 onToggleShuffle={toggleShuffle}
-                annotationCounts={annotationCounts}
+                annotatedFiles={annotatedFiles}
                 onRevealInFinder={handleRevealInFinder}
                 onRevealAnnotations={handleRevealAnnotations}
+                onRefresh={handleRefreshFiles}
             />
         )}
 
@@ -924,7 +1108,7 @@ export default function App() {
         {/* Video Pane */}
         <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex">
              <div className="flex-1 relative bg-black flex justify-center items-center">
-                 <VideoPlayer 
+                 <VideoPlayer
                     ref={videoRef}
                     src={videoSrc}
                     volume={volume}
@@ -936,6 +1120,8 @@ export default function App() {
                     }}
                     onDurationChange={setDuration}
                     onLoadedMetadata={() => {}}
+                    onPlaying={() => { setIsPlaying(true); setIsBuffering(false); }}
+                    onWaiting={() => { setIsBuffering(true); }}
                  />
                  {isProcessing && (
                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
@@ -947,12 +1133,11 @@ export default function App() {
              </div>
 
              {/* Right-Side Label Palette Overlay */}
-             {/* Adjusted to handle varying label widths and better button placement */}
              <div className="absolute top-4 right-4 bottom-4 w-64 flex flex-col items-end pointer-events-none z-30 space-y-2">
                  {/* Label List */}
                  <div className="w-full flex flex-col items-end space-y-2 pointer-events-auto overflow-y-auto pr-2 custom-scrollbar max-h-full py-2">
                      {labelConfigs.map((cfg, idx) => {
-                         const isActive = idx === activeLabelIndex;
+                         const isActive = cfg.key === activeLabelKey;
                          const isDefault = idx === 0;
                          const isEditing = editingLabelIndex === idx;
 
@@ -998,9 +1183,9 @@ export default function App() {
                                 )}
                                 
                                 <button
-                                    onClick={() => setActiveLabelIndex(idx)}
+                                    onClick={() => setActiveLabelKey(prev => prev === cfg.key ? null : cfg.key)}
                                     className={`
-                                        relative flex items-center justify-between px-3 py-1.5 rounded-lg transition-all border 
+                                        relative flex items-center justify-between px-3 py-1.5 rounded-lg transition-all border
                                         ${isActive ? 'opacity-100 ring-2 ring-white scale-105' : 'opacity-70 hover:opacity-100'}
                                     `}
                                     style={{ 
@@ -1078,7 +1263,7 @@ export default function App() {
         </div>
 
         {/* Spectrogram Pane */}
-        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700">
+        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700 flex flex-col">
              
              {/* Settings Button (Top Right) */}
              <div className="absolute top-4 right-4 z-50">
@@ -1177,6 +1362,44 @@ export default function App() {
                 </div>
              )}
 
+             {/* Playback banner */}
+             <div className="flex items-center space-x-3 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
+                 <button
+                    onClick={togglePlay}
+                    disabled={!videoSrc}
+                    className="p-1.5 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg flex-none"
+                >
+                    {isBuffering && !isPlaying
+                        ? <Loader2 size={16} className="animate-spin" />
+                        : isPlaying
+                            ? <Pause size={16} fill="currentColor" />
+                            : <Play size={16} fill="currentColor" className="ml-0.5" />
+                    }
+                </button>
+                <div className="text-mono text-sm font-medium w-16 text-slate-300 flex-none">
+                    {Math.floor(currentTime)}s
+                </div>
+                {/* Volume Control */}
+                <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600">
+                    <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
+                        {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                    </button>
+                    <div className="relative w-20 h-5 flex items-center">
+                        <input
+                            type="range" min="0" max="4" step="0.05"
+                            value={muted ? 0 : volume}
+                            onChange={handleVolumeChange}
+                            className={`w-full h-1 bg-slate-500 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
+                            style={{
+                                background: `linear-gradient(to right, ${isBoosted ? '#ef4444' : '#e65161'} 0%, ${isBoosted ? '#ef4444' : '#e65161'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(volume / 4) * 100}%, #64748b ${(volume / 4) * 100}%, #64748b 100%)`
+                            }}
+                        />
+                        <div className="absolute left-[25%] top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none"></div>
+                    </div>
+                </div>
+             </div>
+
+             <div className="flex-1 relative overflow-hidden">
              <Spectrogram
                 chunkCache={chunkCacheRef.current}
                 sampleRate={sampleRate}
@@ -1189,14 +1412,17 @@ export default function App() {
                 settings={settings}
                 labels={labels}
                 selectedLabelId={selectedLabelId}
-                activeLabelConfig={labelConfigs[activeLabelIndex]}
+                activeLabelConfig={activeLabelKey !== null ? (labelConfigs.find(c => c.key === activeLabelKey) ?? null) : null}
                 labelConfigs={labelConfigs}
+                selectionRegion={selectionRegion}
                 onSeek={seek}
                 onLabelsChange={handleLabelsChange}
                 onLabelsCommit={handleLabelsCommit}
                 onSelectLabel={setSelectedLabelId}
+                onSelectionChange={setSelectionRegion}
                 onZoomChange={(z) => setSettings(s => ({...s, windowSize: z}))}
              />
+             </div>
              
              {!videoSrc && (
                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
