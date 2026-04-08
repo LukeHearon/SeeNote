@@ -1,16 +1,31 @@
 import React, { useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, Trash2 } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, Trash2, FolderOpen, AlertCircle } from 'lucide-react';
 import { Project } from '../types';
-import { useProjects } from '../hooks/useProjects';
+import { revealInFinder } from '../utils/projectCommands';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 
 interface Props {
+  projects: Project[];
+  isLoading: boolean;
+  loadError: string | null;
+  projectsFilePath: string | null;
   onOpenProject: (project: Project) => void;
+  createProject: (draft: Omit<Project, 'id' | 'createdAt' | 'lastOpened'>) => Promise<Project>;
+  updateProject: (updated: Project) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
 }
 
-export default function LaunchScreen({ onOpenProject }: Props) {
-  const { projects, isLoading, createProject, updateProject, deleteProject } = useProjects();
+export default function LaunchScreen({
+  projects,
+  isLoading,
+  loadError,
+  projectsFilePath,
+  onOpenProject,
+  createProject,
+  updateProject,
+  deleteProject,
+}: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
 
@@ -34,6 +49,15 @@ export default function LaunchScreen({ onOpenProject }: Props) {
   const handleGear = (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
     setEditingProject(project);
+  };
+
+  const handleShowDataFolder = () => {
+    if (!projectsFilePath) return;
+    const dir = projectsFilePath.substring(0, projectsFilePath.lastIndexOf('/'));
+    revealInFinder(dir).catch(() => {
+      const appDataDir = dir.substring(0, dir.lastIndexOf('/'));
+      revealInFinder(appDataDir).catch(() => {});
+    });
   };
 
   const formatDate = (iso: string) => {
@@ -66,6 +90,17 @@ export default function LaunchScreen({ onOpenProject }: Props) {
             New Project
           </button>
         </div>
+
+        {/* Load error */}
+        {loadError && (
+          <div className="mb-4 flex items-start gap-2 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm">
+            <AlertCircle size={16} className="flex-none mt-0.5" />
+            <div>
+              <p className="font-medium">Failed to load projects</p>
+              <p className="text-red-400 text-xs mt-1 font-mono">{loadError}</p>
+            </div>
+          </div>
+        )}
 
         {/* Project list */}
         {isLoading ? (
@@ -120,6 +155,23 @@ export default function LaunchScreen({ onOpenProject }: Props) {
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Data folder path */}
+        {projectsFilePath && !isLoading && (
+          <div className="mt-6 flex items-center gap-2">
+            <button
+              onClick={handleShowDataFolder}
+              className="flex items-center gap-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors"
+              title="Open the folder where projects are stored"
+            >
+              <FolderOpen size={12} />
+              Show data folder
+            </button>
+            <span className="text-gray-700 text-xs font-mono truncate" title={projectsFilePath}>
+              {projectsFilePath}
+            </span>
+          </div>
         )}
       </div>
 
