@@ -47,14 +47,22 @@ export const HOTKEY_COLORS = [
   "#64748b", // 9 Slate
 ];
 
-// Default species labels for new projects
+// Default label configs for new projects.
+//
+// IMPORTANT: Key "0" is ALWAYS reserved for "Custom Label". When this label
+// is active, new annotations get an empty text field so the user can type a
+// one-off event name without creating a new named category. The autoFocus on
+// the annotation text input is triggered by `text === ""`, which depends on
+// key "0" staying as Custom Label. Do NOT replace key "0" with a species
+// label — doing so silently breaks the custom-label UX.
 export const DEFAULT_LABEL_CONFIGS = [
-  { key: "0", text: "ins_buzz_high",    color: HOTKEY_COLORS[0] },
-  { key: "1", text: "ins_buzz_medium",  color: HOTKEY_COLORS[1] },
-  { key: "2", text: "ins_buzz_low",     color: HOTKEY_COLORS[2] },
-  { key: "3", text: "ambient_scraping", color: HOTKEY_COLORS[3] },
-  { key: "4", text: "ambient_rustle",   color: HOTKEY_COLORS[4] },
-  { key: "5", text: "ambient_bang",     color: HOTKEY_COLORS[5] },
-  { key: "6", text: "ins_trill_cicada", color: HOTKEY_COLORS[6] },
-  { key: "7", text: "ins_trill_cricket",color: HOTKEY_COLORS[7] },
+  { key: "0", text: "Custom Label",      color: HOTKEY_COLORS[0] },
+  { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1] },
+  { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2] },
+  { key: "3", text: "ins_buzz_low",      color: HOTKEY_COLORS[3] },
+  { key: "4", text: "ambient_scraping",  color: HOTKEY_COLORS[4] },
+  { key: "5", text: "ambient_rustle",    color: HOTKEY_COLORS[5] },
+  { key: "6", text: "ambient_bang",      color: HOTKEY_COLORS[6] },
+  { key: "7", text: "ins_trill_cicada",  color: HOTKEY_COLORS[7] },
+  { key: "8", text: "ins_trill_cricket", color: HOTKEY_COLORS[8] },
 ];
