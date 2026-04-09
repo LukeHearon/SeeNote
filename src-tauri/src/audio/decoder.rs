@@ -85,17 +85,24 @@ pub fn decode_audio_range(
         .channels
         .map(|c| c.count())
         .unwrap_or(1);
+    let time_base = track.codec_params.time_base;
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .context("Failed to create decoder")?;
 
-    // Seek to start position
-    if start_sec > 0.0 {
+    // Seek with a safety margin before the target so that even if the seek
+    // lands imprecisely (common with compressed formats like MP3/AAC/Vorbis),
+    // we can skip forward to the exact requested position.
+    let desired_start_frame = (start_sec * sample_rate as f64).round() as u64;
+    let seek_margin_sec = 0.5; // 500ms margin
+    let seek_target = (start_sec - seek_margin_sec).max(0.0);
+
+    if seek_target > 0.0 {
         let _ = format.seek(
             SeekMode::Accurate,
             SeekTo::Time {
-                time: Time::from(start_sec),
+                time: Time::from(seek_target),
                 track_id: Some(track_id),
             },
         );
@@ -103,6 +110,11 @@ pub fn decode_audio_range(
 
     let target_samples = (duration_sec * sample_rate as f64).ceil() as usize;
     let mut output: Vec<f32> = Vec::with_capacity(target_samples);
+
+    // Track absolute frame position using the first packet's timestamp so we
+    // know exactly which decoded frames to skip vs. keep.
+    let mut abs_frame: u64 = 0; // absolute frame counter from first packet
+    let mut first_packet = true;
 
     'outer: loop {
         let packet = match format.next_packet() {
@@ -112,6 +124,21 @@ pub fn decode_audio_range(
 
         if packet.track_id() != track_id {
             continue;
+        }
+
+        // On the first packet, determine our absolute position from its
+        // timestamp so we can skip precisely to desired_start_frame.
+        if first_packet {
+            first_packet = false;
+            if let Some(tb) = time_base {
+                let pkt_time = tb.calc_time(packet.ts());
+                let pkt_secs = pkt_time.seconds as f64 + pkt_time.frac;
+                abs_frame = (pkt_secs * sample_rate as f64).round() as u64;
+            }
+            // If no time_base, abs_frame stays 0; for start_sec=0 this is
+            // correct, and for start_sec>0 the skip logic still works because
+            // desired_start_frame > 0 and we'll skip the right amount relative
+            // to wherever the seek landed.
         }
 
         let decoded = match decoder.decode(&packet) {
@@ -127,6 +154,23 @@ pub fn decode_audio_range(
         let n_ch = channels;
         let frames = samples.len() / n_ch;
         for frame in 0..frames {
+            let cur = abs_frame + frame as u64;
+
+            // Skip frames before the desired start
+            if cur < desired_start_frame {
+                continue;
+            }
+
+            // If the seek overshot past desired_start_frame, prepend silence
+            // for the gap so the output length stays aligned with start_sec.
+            if output.is_empty() && cur > desired_start_frame {
+                let gap = (cur - desired_start_frame) as usize;
+                output.resize(gap.min(target_samples), 0.0);
+                if output.len() >= target_samples {
+                    break 'outer;
+                }
+            }
+
             let mut mono = 0.0f32;
             for ch in 0..n_ch {
                 mono += samples[frame * n_ch + ch];
@@ -137,6 +181,7 @@ pub fn decode_audio_range(
                 break 'outer;
             }
         }
+        abs_frame += frames as u64;
     }
 
     Ok((output, sample_rate))

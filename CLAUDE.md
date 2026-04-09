@@ -68,7 +68,7 @@ npm run dev         # run as plain web app (no Tauri backend)
 
 ## IMPORTANT: Always commit your changes
 
-**After completing any task that modifies files, you MUST create a git commit.** Do not finish a task without committing. This includes bug fixes, features, refactors, and any other code changes — no exceptions. Write a clear, concise commit message describing what changed and why.
+**After completing any task that modifies files, you MUST create a git commit.** Do not finish a task without committing. This includes bug fixes, features, refactors, and any other code changes — no exceptions. Write a clear, concise commit message describing what changed and why. **If the change requires user verification (e.g. visual/behavioral changes, bug fixes that need manual testing), prompt the user to verify first and wait for their confirmation before committing.**
 
 ## IMPORTANT: Maintain local/TODO.md
 

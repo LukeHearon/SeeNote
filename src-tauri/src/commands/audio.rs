@@ -82,14 +82,42 @@ pub async fn get_spectrogram_chunk(
         });
     }
 
-    // Standard STFT path for fine-detail tiers
-    let (samples, _) =
-        decoder::decode_audio_range(&req.path, req.start_sec, req.duration_sec)
+    // Standard STFT path for fine-detail tiers.
+    //
+    // Decode a half-window of extra audio context on both sides so that:
+    //  - Column 0's Hanning window center lands at req.start_sec (no zero-energy head)
+    //  - The last column's window extends past the chunk end (no zero-energy tail)
+    // Then report actual_duration_sec = requested duration so the renderer's
+    // time→column mapping covers the full chunk with no unmapped pixels at boundaries.
+    let half_window = req.fft_size / 2;
+    let half_window_sec = half_window as f64 / sample_rate as f64;
+
+    // Pre-context: decode up to half a window before the chunk start
+    let pre_sec = req.start_sec.min(half_window_sec);
+    let decode_start = req.start_sec - pre_sec;
+    // Post-context: decode half a window past the chunk end
+    let decode_duration = pre_sec + req.duration_sec + half_window_sec;
+
+    let (raw_samples, _) =
+        decoder::decode_audio_range(&req.path, decode_start, decode_duration)
             .map_err(|e| e.to_string())?;
+
+    // Zero-pad the front when near the file start so column 0 is still centered
+    // at start_sec even if we couldn't decode a full half-window of pre-context.
+    let pre_samples_decoded = (pre_sec * sample_rate as f64).round() as usize;
+    let zero_pad = half_window.saturating_sub(pre_samples_decoded);
+    let mut samples = vec![0.0f32; zero_pad];
+    samples.extend_from_slice(&raw_samples);
 
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
-    let actual_duration_sec = samples.len() as f64 / sample_rate as f64;
+
+    // Use the requested duration (capped at file end) so that the column mapping
+    // covers the full chunk.  With the extra context decoded above, n_cols is
+    // large enough that no pixel within [start_sec, start_sec + duration] maps
+    // to an out-of-bounds column index.
+    let actual_duration_sec = req.duration_sec
+        .min((info.duration_secs - req.start_sec).max(0.0));
 
     Ok(SpectrogramChunkResult {
         data,
