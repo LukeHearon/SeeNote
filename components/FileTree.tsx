@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw } from 'lucide-react';
+import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye } from 'lucide-react';
 
 interface TreeNode {
   name: string;
@@ -23,6 +23,8 @@ interface FileTreeProps {
   shuffleMode: boolean;
   onToggleShuffle: () => void;
   annotatedFiles: Set<string>;
+  hideAnnotated: boolean;
+  onToggleHideAnnotated: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
   onRefresh: () => void;
@@ -211,6 +213,8 @@ function FileTree({
   shuffleMode,
   onToggleShuffle,
   annotatedFiles,
+  hideAnnotated,
+  onToggleHideAnnotated,
   onRevealInFinder,
   onRevealAnnotations,
   onRefresh,
@@ -345,6 +349,13 @@ function FileTree({
             <RefreshCw size={13} />
           </button>
           <button
+            onClick={onToggleHideAnnotated}
+            className={`p-1 rounded hover:bg-slate-700 ${hideAnnotated ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+            title={hideAnnotated ? 'Show all files' : 'Hide annotated files'}
+          >
+            {hideAnnotated ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+          <button
             onClick={onToggleShuffle}
             className={`p-1 rounded hover:bg-slate-700 ${shuffleMode ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
             title={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
@@ -370,35 +381,69 @@ function FileTree({
           </div>
         )}
 
-        {/* Shuffle mode: flat list with relative paths */}
-        {shuffleMode && rootDirectory && allFiles.map(filePath => {
-          const rel = filePath.substring(rootDirectory.length + 1);
-          const relNoExt = rel.replace(/\.[^/.]+$/, '');
-          const isActive = filePath === currentFile;
-          const isAudio = AUDIO_EXTS.has(getExt(filePath));
-          const hasAnnotation = annotatedFiles.has(filePath);
+        {/* Shuffle mode: windowed flat list (±105 files around current, with fade at edges) */}
+        {shuffleMode && rootDirectory && (() => {
+          const WINDOW = 105;
+          const FADE_FROM = 100; // items at distance 100–104 fade out
+
+          const currentIdx = allFiles.findIndex(f => f === currentFile);
+          const startIdx = Math.max(0, currentIdx >= 0 ? currentIdx - WINDOW : 0);
+          const endIdx = Math.min(allFiles.length - 1, currentIdx >= 0 ? currentIdx + WINDOW : WINDOW * 2);
+          const visible = allFiles.slice(startIdx, endIdx + 1);
+          const hasMoreBefore = startIdx > 0;
+          const hasMoreAfter = endIdx < allFiles.length - 1;
+
           return (
-            <button
-              key={filePath}
-              onClick={() => onFileSelect(filePath)}
-              onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
-              className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
-                isActive
-                  ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
-                  : hasAnnotation
-                    ? 'hover:bg-slate-800 text-sky-400 hover:text-sky-300'
-                    : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
-              }`}
-              title={filePath}
-            >
-              {isAudio
-                ? <Music size={12} className="flex-none opacity-70" />
-                : <Film size={12} className="flex-none opacity-70" />
-              }
-              <span className="text-xs truncate flex-1">{relNoExt}</span>
-            </button>
+            <>
+              {hasMoreBefore && (
+                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">
+                  ⋯ {startIdx} file{startIdx !== 1 ? 's' : ''} not shown
+                </div>
+              )}
+              {visible.map((filePath, i) => {
+                const absoluteIdx = startIdx + i;
+                const distFromCurrent = currentIdx >= 0 ? Math.abs(absoluteIdx - currentIdx) : 0;
+                let opacity = 1;
+                if (distFromCurrent > FADE_FROM) {
+                  opacity = Math.max(0, 1 - (distFromCurrent - FADE_FROM) / 5);
+                }
+
+                const rel = filePath.substring(rootDirectory.length + 1);
+                const relNoExt = rel.replace(/\.[^/.]+$/, '');
+                const isActive = filePath === currentFile;
+                const isAudio = AUDIO_EXTS.has(getExt(filePath));
+                const hasAnnotation = annotatedFiles.has(filePath);
+                return (
+                  <button
+                    key={filePath}
+                    onClick={() => onFileSelect(filePath)}
+                    onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
+                    className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
+                      isActive
+                        ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
+                        : hasAnnotation
+                          ? 'hover:bg-slate-800 text-sky-400 hover:text-sky-300'
+                          : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
+                    }`}
+                    style={{ opacity }}
+                    title={filePath}
+                  >
+                    {isAudio
+                      ? <Music size={12} className="flex-none opacity-70" />
+                      : <Film size={12} className="flex-none opacity-70" />
+                    }
+                    <span className="text-xs truncate flex-1">{relNoExt}</span>
+                  </button>
+                );
+              })}
+              {hasMoreAfter && (
+                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">
+                  ⋯ {allFiles.length - 1 - endIdx} file{allFiles.length - 1 - endIdx !== 1 ? 's' : ''} not shown
+                </div>
+              )}
+            </>
           );
-        })}
+        })()}
 
         {/* Normal tree mode */}
         {!shuffleMode && tree.map(node => (

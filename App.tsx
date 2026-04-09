@@ -220,11 +220,12 @@ export default function App() {
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
   }, [settings.fftSize]);
 
-  // The ordered list used for navigation (respects shuffle mode)
-  const displayQueue = useMemo(
-    () => (shuffleMode ? shuffledFiles : allMediaFiles),
-    [shuffleMode, shuffledFiles, allMediaFiles]
-  );
+  // The ordered list used for navigation (respects shuffle mode and hideAnnotated filter)
+  const displayQueue = useMemo(() => {
+    const base = shuffleMode ? shuffledFiles : allMediaFiles;
+    if (activeProject?.hideAnnotated) return base.filter(f => !annotatedFiles.has(f));
+    return base;
+  }, [shuffleMode, shuffledFiles, allMediaFiles, activeProject?.hideAnnotated, annotatedFiles]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {
@@ -557,6 +558,11 @@ export default function App() {
     setActiveProject(updated);
     setShowProjectSettings(false);
   }, [activeProject, updateProject, handleOpenFile]);
+
+  const handleToggleHideAnnotated = useCallback(() => {
+    if (!activeProject) return;
+    updateProject({ ...activeProject, hideAnnotated: !activeProject.hideAnnotated });
+  }, [activeProject, updateProject]);
 
   const handleRevealInFinder = useCallback((path: string) => {
     revealInFinder(path).catch(err => addLog(`reveal_in_finder error: ${err}`, 'error'));
@@ -899,9 +905,12 @@ export default function App() {
             >
                 <ArrowLeft size={18} />
             </button>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r
-  from-[#e65161]
-  to-[rgb(249,195,135)]">
+            <h1
+                className="text-xl font-bold bg-clip-text text-transparent"
+                style={{
+                  backgroundImage: `linear-gradient(to right, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`
+                }}
+            >
                 {activeProject.name}
             </h1>
         </div>
@@ -1182,6 +1191,8 @@ export default function App() {
                 shuffleMode={shuffleMode}
                 onToggleShuffle={toggleShuffle}
                 annotatedFiles={annotatedFiles}
+                hideAnnotated={activeProject?.hideAnnotated ?? false}
+                onToggleHideAnnotated={handleToggleHideAnnotated}
                 onRevealInFinder={handleRevealInFinder}
                 onRevealAnnotations={handleRevealAnnotations}
                 onRefresh={handleRefreshFiles}
@@ -1485,13 +1496,8 @@ export default function App() {
                     <SkipForward size={15} />
                 </button>
 
-                {/* Time display */}
-                <div className="text-mono text-sm font-medium w-20 text-slate-300 flex-none ml-2 tabular-nums">
-                    {currentTime.toFixed(2)}s
-                </div>
-
                 {/* Volume Control */}
-                <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600">
+                <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1">
                     <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
                         {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
                     </button>
@@ -1507,6 +1513,16 @@ export default function App() {
                         />
                         <div className="absolute left-[25%] top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none"></div>
                     </div>
+                </div>
+
+                {/* Time display */}
+                <div className="flex flex-col justify-center flex-none ml-2 tabular-nums leading-tight">
+                    <span className="text-sm font-mono font-medium text-slate-300">{currentTime.toFixed(2)}s</span>
+                    {selectionRegion && (
+                        <span className="text-[10px] font-mono text-slate-400">
+                            {selectionRegion.start.toFixed(2)}→{selectionRegion.end.toFixed(2)} ({(selectionRegion.end - selectionRegion.start).toFixed(2)}s)
+                        </span>
+                    )}
                 </div>
 
                 {/* Spectrogram Settings */}

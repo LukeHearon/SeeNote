@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project, LabelConfig } from '../types';
 import { openDirectoryDialog } from '../utils/tauriCommands';
-import { DEFAULT_LABEL_CONFIGS } from '../constants';
+import { DEFAULT_LABEL_CONFIGS, randomMagmaGradient } from '../constants';
 
 interface Props {
   onCreated: (project: Project) => void;
@@ -42,6 +42,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
         annotationDirectory: annotationDir,
         outputFormat,
         labelConfigs: DEFAULT_LABEL_CONFIGS,
+        nameGradientColors: randomMagmaGradient(),
       });
       onCreated(project);
     } catch (err) {

@@ -35,6 +35,33 @@ export const TIER_CONFIGS: TierConfig[] = [
   { tier: 3, hopSamples: 512,      chunkDuration: 15,  maxChunks: 16 },
 ];
 
+// Interpolate the Roseus/Magma colormap at position t in [0, 1] and return a hex color string.
+function interpolateMagmaHex(t: number): string {
+  t = Math.max(0, Math.min(1, t));
+  let lower = MAGMA_STOPS[0];
+  let upper = MAGMA_STOPS[MAGMA_STOPS.length - 1];
+  for (let i = 0; i < MAGMA_STOPS.length - 1; i++) {
+    if (t >= MAGMA_STOPS[i].pos && t <= MAGMA_STOPS[i + 1].pos) {
+      lower = MAGMA_STOPS[i];
+      upper = MAGMA_STOPS[i + 1];
+      break;
+    }
+  }
+  const range = upper.pos - lower.pos;
+  const localT = range === 0 ? 0 : (t - lower.pos) / range;
+  const r = Math.round(lower.r + localT * (upper.r - lower.r));
+  const g = Math.round(lower.g + localT * (upper.g - lower.g));
+  const b = Math.round(lower.b + localT * (upper.b - lower.b));
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+// Pick two visually distinct colors from the Magma colormap for use as a gradient.
+export function randomMagmaGradient(): [string, string] {
+  const t1 = Math.random() * 0.5;         // dark end [0, 0.5]
+  const t2 = 0.55 + Math.random() * 0.45; // bright end [0.55, 1.0]
+  return [interpolateMagmaHex(t1), interpolateMagmaHex(t2)];
+}
+
 // Default colors for hotkeys 1-9
 export const HOTKEY_COLORS = [
   "#ffffff", // 0 (Default/Custom) - White

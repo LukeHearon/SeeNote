@@ -41,4 +41,6 @@ export interface Project {
   lastOpened: string;
   labelConfigs: LabelConfig[];
   spectrogramSettings?: SpectrogramSettings;
+  nameGradientColors?: [string, string];
+  hideAnnotated?: boolean;
 }

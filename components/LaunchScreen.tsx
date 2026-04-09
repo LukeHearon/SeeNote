@@ -128,7 +128,14 @@ export default function LaunchScreen({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-white font-medium truncate">{project.name}</p>
+                    <p
+                      className="font-medium truncate bg-clip-text text-transparent"
+                      style={{
+                        backgroundImage: `linear-gradient(to right, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`
+                      }}
+                    >
+                      {project.name}
+                    </p>
                     <p className="text-gray-500 text-xs mt-1 truncate">{project.audioDirectory}</p>
                     <p className="text-gray-600 text-xs truncate">{project.annotationDirectory}</p>
                   </div>

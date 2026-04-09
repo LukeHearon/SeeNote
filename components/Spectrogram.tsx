@@ -277,10 +277,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
 
     const startTime = scrollLeft / pixelsPerSecond;
     const timePerPixel = 1 / pixelsPerSecond;
@@ -359,14 +362,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     // 5. Draw ident text at top of spectrogram
     if (fileIdent) {
-      ctx.save();
       ctx.font = 'bold 12px monospace';
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillText(fileIdent, 8, 6);
-      ctx.restore();
     }
+
+    ctx.restore();
   }, [scrollLeft, pixelsPerSecond, currentTime, fileIdent, selectionRegion, creatingSelection]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
@@ -376,10 +379,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
     ctx.fillRect(0, 0, width, height);
 
@@ -451,6 +457,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
       }
     }
+    ctx.restore();
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   useEffect(() => {
@@ -465,17 +472,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
+        const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
           canvasRef.current.width = Math.max(1, width);
           canvasRef.current.height = height;
         }
         if (overlayCanvasRef.current) {
-          overlayCanvasRef.current.width = width;
-          overlayCanvasRef.current.height = height;
+          overlayCanvasRef.current.width = width * dpr;
+          overlayCanvasRef.current.height = height * dpr;
         }
         if (yAxisCanvasRef.current) {
-          yAxisCanvasRef.current.width = 50;
-          yAxisCanvasRef.current.height = height;
+          yAxisCanvasRef.current.width = 50 * dpr;
+          yAxisCanvasRef.current.height = height * dpr;
         }
         draw();
         drawOverlay();
@@ -760,7 +768,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const direction = e.deltaY > 0 ? 1 : -1;
 
         let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-        newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration || 86400));
+        newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
 
         const containerWidth = containerRef.current.clientWidth;
         const newPixelsPerSecond = containerWidth / newZoomSec;
@@ -815,27 +823,31 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     return (
       <>
-        {/* Left handle */}
+        {/* Left handle — 1px white line with slightly wider invisible hit area */}
         {leftX >= 0 && leftX <= containerWidth && (
           <div
-            className="absolute top-0 bottom-0 w-2 bg-white/60 hover:bg-white/90 cursor-ew-resize"
-            style={{ left: `${leftX - 1}px`, zIndex: 15 }}
+            className="absolute top-0 bottom-0 cursor-ew-resize"
+            style={{ left: `${leftX - 4}px`, width: '9px', zIndex: 15 }}
             onMouseDown={(e) => {
               e.stopPropagation();
               setResizingSelectionHandle('start');
             }}
-          />
+          >
+            <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
+          </div>
         )}
-        {/* Right handle */}
+        {/* Right handle — 1px white line with slightly wider invisible hit area */}
         {rightX >= 0 && rightX <= containerWidth && (
           <div
-            className="absolute top-0 bottom-0 w-2 bg-white/60 hover:bg-white/90 cursor-ew-resize"
-            style={{ left: `${rightX - 1}px`, zIndex: 15 }}
+            className="absolute top-0 bottom-0 cursor-ew-resize"
+            style={{ left: `${rightX - 4}px`, width: '9px', zIndex: 15 }}
             onMouseDown={(e) => {
               e.stopPropagation();
               setResizingSelectionHandle('end');
             }}
-          />
+          >
+            <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
+          </div>
         )}
       </>
     );
