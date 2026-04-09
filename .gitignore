@@ -31,5 +31,4 @@ src-tauri/target/
 local/
 
 # Claude Code
-CLAUDE.md
 .claude/
