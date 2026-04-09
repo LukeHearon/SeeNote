@@ -3,28 +3,17 @@
 // Source: https://github.com/dofuuz/roseus
 // 17 stops sampled evenly from the 256-entry dataset (indices 0, 16, 32 … 240, 255)
 export const MAGMA_STOPS = [
-  { pos: 0.000, r: 0,   g: 0,   b: 0   },
-  { pos: 0.063, r: 19,  g: 9,   b: 2   },
-  { pos: 0.125, r: 46,  g: 19,  b: 1   },
-  { pos: 0.188, r: 76,  g: 24,  b: 1   },
-  { pos: 0.251, r: 103, g: 24,  b: 10  },
-  { pos: 0.314, r: 130, g: 21,  b: 30  },
-  { pos: 0.376, r: 156, g: 14,  b: 65  },
-  { pos: 0.439, r: 176, g: 14,  b: 106 },
-  { pos: 0.502, r: 191, g: 32,  b: 152 },
-  { pos: 0.565, r: 197, g: 60,  b: 196 },
-  { pos: 0.627, r: 195, g: 93,  b: 229 },
-  { pos: 0.690, r: 190, g: 127, b: 248 },
-  { pos: 0.753, r: 186, g: 158, b: 254 },
-  { pos: 0.816, r: 192, g: 188, b: 252 },
-  { pos: 0.878, r: 207, g: 212, b: 247 },
-  { pos: 0.941, r: 230, g: 233, b: 246 },
-  { pos: 1.000, r: 255, g: 250, b: 250 },
+  { pos: 0.0, r: 28,  g: 15,  b: 70  },   // Midnight purple                                                           
+  { pos: 0.2, r: 80,  g: 17,  b: 123 },  // Purple                                                                     
+  { pos: 0.4, r: 180, g: 53,  b: 120 },  // Red-Purple                                                                 
+  { pos: 0.6, r: 230, g: 81,  b: 97  },  // Orange-Red                                                                 
+  { pos: 0.8, r: 249, g: 195, b: 135 },  // Orange-Yellow                                                              
+  { pos: 1.0, r: 250, g: 251, b: 198 },  // White-Yellow      
 ];
 
 export const MIN_ZOOM_SEC = 1;
 export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
-export const DEFAULT_ZOOM_SEC = 5;
+export const DEFAULT_ZOOM_SEC = 10;
 export const SCROLL_SENSITIVITY = 1.0;
 
 // Multi-resolution spectrogram tier configuration.

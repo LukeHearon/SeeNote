@@ -16,7 +16,6 @@ export interface SpectrogramSettings {
   intensity: number; // Brightness multiplier
   contrast: number; // Contrast multiplier
   fftSize: number; // Power of 2 (e.g., 1024, 2048)
-  windowSize: number; // Zoom level (seconds visible)
   frequencyScale: FrequencyScale;
 }
 

@@ -73,6 +73,17 @@ export default function App() {
   const activeProjectRef = useRef<typeof activeProject>(null);
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
 
+  // Keep activeProject in sync with the projects list so that activeProjectRef.current
+  // always has the latest saved data. Without this, interleaved persist effects (labelConfigs
+  // vs spectrogramSettings) each spread a stale activeProjectRef and clobber each other's saves.
+  useEffect(() => {
+    if (!activeProject) return;
+    const synced = projects.find(p => p.id === activeProject.id);
+    if (synced && synced !== activeProject) {
+      setActiveProject(synced);
+    }
+  }, [projects]);
+
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
@@ -87,13 +98,13 @@ export default function App() {
   const [isAddingLabel, setIsAddingLabel] = useState(false);
   const [newLabelText, setNewLabelText] = useState("");
   
+  const [zoomSec, setZoomSec] = useState(DEFAULT_ZOOM_SEC);
   const [settings, setSettings] = useState<SpectrogramSettings>({
       minFreq: 0,
       maxFreq: 22050,
-      intensity: 1.0,
-      contrast: 1.0,
+      intensity: 1.6,
+      contrast: 1.4,
       fftSize: 1024,
-      windowSize: DEFAULT_ZOOM_SEC,
       frequencyScale: 'mel',
   });
 
@@ -184,7 +195,7 @@ export default function App() {
         setCacheVersion(0);
 
         // Kick off first viewport prefetch immediately
-        cache.prefetchViewport(0, settings.windowSize, cache.selectTier(settings.windowSize, 1200).tier);
+        cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
         addLog('Spectrogram loading...');
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -194,6 +205,20 @@ export default function App() {
     }
   }, [settings.fftSize]);
 
+  // Rebuild cache when FFT size changes while a file is open
+  useEffect(() => {
+    if (!currentFilePath || !sampleRate || !duration) return;
+    const cache = new MultiTierSpectrogramCache(
+      currentFilePath,
+      settings.fftSize,
+      sampleRate,
+      duration,
+      () => setCacheVersion(v => v + 1),
+    );
+    chunkCacheRef.current = cache;
+    setCacheVersion(0);
+    cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
+  }, [settings.fftSize]);
 
   // The ordered list used for navigation (respects shuffle mode)
   const displayQueue = useMemo(
@@ -442,6 +467,10 @@ export default function App() {
 
   const handleOpenProject = useCallback(async (project: Project) => {
     await touchLastOpened(project.id);
+    // Set activeProject in the same React batch as labelConfigs/settings so the
+    // persist-effect guard (prevProjectIdRef) sees the new project immediately and
+    // correctly skips the load-triggered changes.
+    setActiveProject(project);
     setLabelConfigs(project.labelConfigs.length > 0 ? project.labelConfigs : DEFAULT_LABEL_CONFIGS);
     if (project.spectrogramSettings) {
       setSettings(project.spectrogramSettings);
@@ -456,7 +485,6 @@ export default function App() {
     try {
       const files = await listMediaFilesRecursive(project.audioDirectory);
       setAllMediaFiles(files);
-      setActiveProject(project);
       if (files.length > 0) handleOpenFile(files[0]);
       // Load annotation file existence in the background
       listAnnotationFiles(project.annotationDirectory, project.outputFormat)
@@ -478,7 +506,6 @@ export default function App() {
         .catch(() => {});
     } catch (err) {
       setAllMediaFiles([]);
-      setActiveProject(project);
       addLog(`Error scanning audio directory: ${err}`, 'error');
     }
   }, [touchLastOpened, handleOpenFile]);
@@ -624,12 +651,12 @@ export default function App() {
           // Arrow keys: scrub playhead ±20% of visible window
           if (e.key === 'ArrowLeft' && !e.metaKey && !e.ctrlKey) {
               e.preventDefault();
-              seek(Math.max(0, currentTime - settings.windowSize * 0.2));
+              seek(Math.max(0, currentTime - zoomSec * 0.2));
               return;
           }
           if (e.key === 'ArrowRight' && !e.metaKey && !e.ctrlKey) {
               e.preventDefault();
-              seek(Math.min(duration, currentTime + settings.windowSize * 0.2));
+              seek(Math.min(duration, currentTime + zoomSec * 0.2));
               return;
           }
 
@@ -692,7 +719,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, seek, currentTime, settings.windowSize, duration]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, seek, currentTime, zoomSec, duration]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -1340,7 +1367,7 @@ export default function App() {
                             <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Brightness</label>
                                 <input
-                                    type="range" min="0.1" max="2.0" step="0.1"
+                                    type="range" min="0.2" max="3.0" step="0.1"
                                     value={settings.intensity}
                                     onChange={(e) => setSettings({...settings, intensity: parseFloat(e.target.value)})}
                                     className="w-full accent-[#e65161]"
@@ -1349,7 +1376,7 @@ export default function App() {
                             <div>
                                 <label className="text-xs text-slate-400 mb-1 block">Contrast</label>
                                 <input
-                                    type="range" min="0.5" max="2.0" step="0.1"
+                                    type="range" min="0.4" max="2.4" step="0.1"
                                     value={settings.contrast}
                                     onChange={(e) => setSettings({...settings, contrast: parseFloat(e.target.value)})}
                                     className="w-full accent-[#e65161]"
@@ -1506,6 +1533,7 @@ export default function App() {
                 isProcessing={isProcessing}
                 fileIdent={fileIdent}
                 settings={settings}
+                zoomSec={zoomSec}
                 labels={labels}
                 selectedLabelId={selectedLabelId}
                 activeLabelConfig={activeLabelKey !== null ? (labelConfigs.find(c => c.key === activeLabelKey) ?? null) : null}
@@ -1516,7 +1544,7 @@ export default function App() {
                 onLabelsCommit={handleLabelsCommit}
                 onSelectLabel={setSelectedLabelId}
                 onSelectionChange={setSelectionRegion}
-                onZoomChange={(z) => setSettings(s => ({...s, windowSize: z}))}
+                onZoomChange={setZoomSec}
              />
              </div>
              

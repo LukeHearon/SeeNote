@@ -43,6 +43,7 @@ interface SpectrogramProps {
   isProcessing: boolean;
   fileIdent: string | null;
   settings: SpectrogramSettings;
+  zoomSec: number;
   labels: Label[];
   selectedLabelId: string | null;
   // null = Selection Mode (no label config active)
@@ -54,7 +55,7 @@ interface SpectrogramProps {
   onLabelsCommit: (labels: Label[]) => void;
   onSelectLabel: (id: string | null) => void;
   onSelectionChange: (region: SelectionRegion | null) => void;
-  onZoomChange: (newWindowSize: number) => void;
+  onZoomChange: (newZoomSec: number) => void;
 }
 
 export interface SpectrogramHandle {
@@ -75,6 +76,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   isProcessing,
   fileIdent,
   settings,
+  zoomSec,
   labels,
   selectedLabelId,
   activeLabelConfig,
@@ -148,8 +150,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const pixelsPerSecond = useMemo(() => {
      if (!containerRef.current) return 100;
-     return containerRef.current.clientWidth / settings.windowSize;
-  }, [settings.windowSize, containerRef.current?.clientWidth]);
+     return containerRef.current.clientWidth / zoomSec;
+  }, [zoomSec, containerRef.current?.clientWidth]);
 
   // Reset scroll position to 0 when switching files
   useEffect(() => {
@@ -162,7 +164,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   useEffect(() => {
       if (isPlaying && containerRef.current) {
           const containerWidth = containerRef.current.clientWidth;
-          const pps = containerWidth / settings.windowSize;
+          const pps = containerWidth / zoomSec;
           const curScroll = scrollLeftRef.current;
           const visibleCenterTime = (curScroll + containerWidth / 2) / pps;
           if (currentTime >= visibleCenterTime) {
@@ -170,7 +172,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               setScrollLeft(Math.max(0, targetScroll));
           }
       }
-  }, [isPlaying, currentTime, settings.windowSize]);
+  }, [isPlaying, currentTime, zoomSec]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
@@ -743,11 +745,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const zoomFactor = 1.1;
         const direction = e.deltaY > 0 ? 1 : -1;
 
-        let newWindowSize = settings.windowSize * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-        newWindowSize = Math.max(MIN_ZOOM_SEC, Math.min(newWindowSize, duration || 86400));
+        let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
+        newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration || 86400));
 
         const containerWidth = containerRef.current.clientWidth;
-        const newPixelsPerSecond = containerWidth / newWindowSize;
+        const newPixelsPerSecond = containerWidth / newZoomSec;
 
         let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
         // Allow scrolling 40% of the view past the end of the file so the user can
@@ -757,7 +759,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
 
         setScrollLeft(newScrollLeft);
-        onZoomChange(newWindowSize);
+        onZoomChange(newZoomSec);
       } else {
           const panAmount = e.deltaY + e.deltaX;
           const containerWidth = containerRef.current?.clientWidth || 0;
