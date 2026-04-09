@@ -91,9 +91,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Overlay canvas: draws axis, playhead, ident, and selection darkening.
+  // Overlay canvas: draws playhead, time ruler, ident, and selection darkening.
   // Must be above label HTML divs (z-30 > labels z-10/20).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Y-axis canvas: separate element to the left of the spectrogram area, never layered on top of spectrogram content.
+  const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const interactionRef = useRef<HTMLDivElement>(null);
 
   // Internal scroll state (in pixels)
@@ -186,9 +188,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     ctx.clearRect(0, 0, width, height);
 
-    // The spectrogram canvas starts 50px into the container (Y-axis occupies the left 50px).
-    const yAxisWidth = 50;
-    const startTime = (scrollLeft + yAxisWidth) / pixelsPerSecond;
+    const startTime = scrollLeft / pixelsPerSecond;
     const timePerPixel = 1 / pixelsPerSecond;
     const endTime = startTime + (width * timePerPixel);
 
@@ -319,78 +319,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.stroke();
     }
 
-    // 3. Draw Frequency Axis (Left)
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-    ctx.fillRect(0, 0, 50, height);
-    ctx.beginPath();
-    ctx.moveTo(50, 0);
-    ctx.lineTo(50, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-
-    const renderTick = (freq: number) => {
-         let y = 0;
-         if (settings.frequencyScale === 'linear') {
-             const pct = (freq - settings.minFreq) / (settings.maxFreq - settings.minFreq);
-             y = height - (pct * height);
-         } else if (settings.frequencyScale === 'log') {
-             const minSafe = Math.max(settings.minFreq, 1);
-             const pct = Math.log(freq / minSafe) / Math.log(settings.maxFreq / minSafe);
-             y = height - (pct * height);
-         } else if (settings.frequencyScale === 'mel') {
-             const minM = toMel(settings.minFreq);
-             const maxM = toMel(settings.maxFreq);
-             const m = toMel(freq);
-             const pct = (m - minM) / (maxM - minM);
-             y = height - (pct * height);
-         }
-
-         if (y >= 0 && y <= height) {
-             ctx.beginPath();
-             ctx.moveTo(45, y);
-             ctx.lineTo(50, y);
-             ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-             ctx.stroke();
-
-             let label = freq.toString();
-             if (freq >= 1000) {
-                 label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
-             }
-             ctx.fillText(label, 42, y);
-         }
-    };
-
-    if (settings.frequencyScale === 'log') {
-        let mag = 10;
-        while (mag < settings.maxFreq) {
-            [1, 2, 5].forEach(mult => {
-                const freq = mag * mult;
-                if (freq >= settings.minFreq && freq <= settings.maxFreq) renderTick(freq);
-            });
-            mag *= 10;
-        }
-    } else {
-        const range = settings.maxFreq - settings.minFreq;
-        if (range > 0) {
-            const roughStep = range / 8;
-            const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
-            let step = magnitude;
-            if (roughStep / step > 5) step *= 5;
-            else if (roughStep / step > 2) step *= 2;
-            const firstTick = Math.ceil(settings.minFreq / step) * step;
-            for (let freq = firstTick; freq <= settings.maxFreq; freq += step) {
-                renderTick(freq);
-            }
-        }
-    }
-
-    // 4. Draw Time Ruler
+    // 3. Draw Time Ruler
     const timeRange = endTime - startTime;
     let timeStep = 1;
     if (timeRange > 36000) timeStep = 3600;
@@ -411,7 +340,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     for (let s = firstTimeTick; s <= endTime; s += timeStep) {
         if (s < 0) continue;
         const x = (s * pixelsPerSecond) - scrollLeft;
-        if (x >= 50 && x <= width + 50) {
+        if (x >= 0 && x <= width) {
             ctx.beginPath();
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 2;
@@ -435,33 +364,122 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText(fileIdent, 58, 6);
+      ctx.fillText(fileIdent, 8, 6);
       ctx.restore();
     }
-  }, [scrollLeft, pixelsPerSecond, currentTime, settings.minFreq, settings.maxFreq, settings.frequencyScale, fileIdent, selectionRegion, creatingSelection]);
+  }, [scrollLeft, pixelsPerSecond, currentTime, fileIdent, selectionRegion, creatingSelection]);
+
+  // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
+  const drawYAxis = useCallback(() => {
+    const canvas = yAxisCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+    ctx.fillRect(0, 0, width, height);
+
+    // Right border line
+    ctx.beginPath();
+    ctx.moveTo(width - 1, 0);
+    ctx.lineTo(width - 1, height);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+
+    const renderTick = (freq: number) => {
+      let y = 0;
+      if (settings.frequencyScale === 'linear') {
+        const pct = (freq - settings.minFreq) / (settings.maxFreq - settings.minFreq);
+        y = height - (pct * height);
+      } else if (settings.frequencyScale === 'log') {
+        const minSafe = Math.max(settings.minFreq, 1);
+        const pct = Math.log(freq / minSafe) / Math.log(settings.maxFreq / minSafe);
+        y = height - (pct * height);
+      } else if (settings.frequencyScale === 'mel') {
+        const minM = toMel(settings.minFreq);
+        const maxM = toMel(settings.maxFreq);
+        const m = toMel(freq);
+        const pct = (m - minM) / (maxM - minM);
+        y = height - (pct * height);
+      }
+
+      if (y >= 0 && y <= height) {
+        ctx.beginPath();
+        ctx.moveTo(width - 5, y);
+        ctx.lineTo(width - 1, y);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.stroke();
+
+        let label = freq.toString();
+        if (freq >= 1000) {
+          label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
+        }
+        ctx.fillText(label, width - 7, y);
+      }
+    };
+
+    if (settings.frequencyScale === 'log') {
+      let mag = 10;
+      while (mag < settings.maxFreq) {
+        [1, 2, 5].forEach(mult => {
+          const freq = mag * mult;
+          if (freq >= settings.minFreq && freq <= settings.maxFreq) renderTick(freq);
+        });
+        mag *= 10;
+      }
+    } else {
+      const range = settings.maxFreq - settings.minFreq;
+      if (range > 0) {
+        const roughStep = range / 8;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+        let step = magnitude;
+        if (roughStep / step > 5) step *= 5;
+        else if (roughStep / step > 2) step *= 2;
+        const firstTick = Math.ceil(settings.minFreq / step) * step;
+        for (let freq = firstTick; freq <= settings.maxFreq; freq += step) {
+          renderTick(freq);
+        }
+      }
+    }
+  }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   useEffect(() => {
-    requestRef.current = requestAnimationFrame(() => { draw(); drawOverlay(); });
+    requestRef.current = requestAnimationFrame(() => { draw(); drawOverlay(); drawYAxis(); });
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [draw, drawOverlay]);
+  }, [draw, drawOverlay, drawYAxis]);
 
-  // Handle Resize — keep both canvases in sync with container dimensions
+  // Handle Resize — keep all canvases in sync with their container dimensions
   useEffect(() => {
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
         if (canvasRef.current) {
-          canvasRef.current.width = Math.max(1, width - 50);
+          canvasRef.current.width = Math.max(1, width);
           canvasRef.current.height = height;
         }
         if (overlayCanvasRef.current) {
           overlayCanvasRef.current.width = width;
           overlayCanvasRef.current.height = height;
         }
+        if (yAxisCanvasRef.current) {
+          yAxisCanvasRef.current.width = 50;
+          yAxisCanvasRef.current.height = height;
+        }
         draw();
         drawOverlay();
+        drawYAxis();
       }
     });
 
@@ -469,7 +487,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       resizeObserver.observe(containerRef.current);
     }
     return () => resizeObserver.disconnect();
-  }, [draw, drawOverlay]);
+  }, [draw, drawOverlay, drawYAxis]);
 
   // --- Annotation navigation ---
 
@@ -544,10 +562,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     if ((e.target as HTMLElement).closest('input') || (e.target as HTMLElement).closest('button')) return;
-
-    // Prevent interaction if clicking on the frequency axis area
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect && (e.clientX - rect.left) < 50) return;
 
     const labelItem = (e.target as HTMLElement).closest('.label-item');
     if (!labelItem) {
@@ -828,18 +842,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   };
 
   return (
-    <div
-        ref={containerRef}
-        className="relative w-full h-full bg-slate-900 overflow-hidden cursor-crosshair select-none"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => handleMouseUp()}
-        onWheel={handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
-    >
-      {/* Layer 1: spectrogram canvas (bottom) — starts at x=50, past the Y-axis */}
-      <canvas ref={canvasRef} className="absolute top-0 h-full pointer-events-none" style={{ left: '50px', width: 'calc(100% - 50px)' }} />
+    <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
+      {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
+      <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: 50 }} />
+
+      {/* Spectrogram area — all interactive content lives here */}
+      <div
+          ref={containerRef}
+          className="relative flex-1 h-full overflow-hidden cursor-crosshair"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={() => handleMouseUp()}
+          onWheel={handleWheel}
+          onContextMenu={(e) => e.preventDefault()}
+      >
+      {/* Layer 1: spectrogram canvas (bottom) */}
+      <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
 
       {/* Blurred placeholder overlay during spectrogram generation */}
       {isProcessing && (
@@ -1077,7 +1096,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
          {renderSelectionHandles()}
       </div>
 
-      {/* Layer 3: overlay canvas — axis, playhead, ident, selection darkening.
+      {/* Layer 3: overlay canvas — playhead, time ruler, ident, selection darkening.
           z-30 keeps it above label HTML divs (z-10/20) and below nav buttons (z-50). */}
       <canvas
         ref={overlayCanvasRef}
@@ -1085,6 +1104,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         style={{ zIndex: 30 }}
       />
 
+      </div>{/* end spectrogram area */}
     </div>
   );
 });
