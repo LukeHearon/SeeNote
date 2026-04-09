@@ -16,69 +16,53 @@ interface VideoPlayerProps {
 const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
   ({ src, volume, muted, isAudio, onTimeUpdate, onDurationChange, onLoadedMetadata, onPlaying, onWaiting }, ref) => {
     
-    // Web Audio API refs for boosting
+    // Web Audio API refs for boosting.
+    // createMediaElementSource permanently binds the element — create it once and reuse.
     const audioCtxRef = useRef<AudioContext | null>(null);
     const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
     const gainNodeRef = useRef<GainNode | null>(null);
-    const initializedRef = useRef(false);
 
+    // Build the Web Audio graph once, on first canplay. The source node is permanently
+    // bound to the video element; only the gain value changes between files.
     useEffect(() => {
         const video = (ref as React.MutableRefObject<HTMLVideoElement>).current;
-        if(!video) return;
+        if (!video) return;
 
-        // When src changes, tear down the old audio graph so it gets rebuilt on canplay.
-        // The MediaElementSource stays bound to the same video element, so we only need
-        // to recreate the GainNode connection and re-apply volume.
-        if (src) {
-            initializedRef.current = false;
-            // Disconnect old nodes if they exist; the AudioContext is reused across files.
-            if (sourceNodeRef.current) {
-                try { sourceNodeRef.current.disconnect(); } catch (_) {}
-                sourceNodeRef.current = null;
+        const ensureAudioGraph = () => {
+            if (sourceNodeRef.current) return; // already built
+            try {
+                const AC = window.AudioContext || (window as any).webkitAudioContext;
+                if (!audioCtxRef.current) audioCtxRef.current = new AC();
+                sourceNodeRef.current = audioCtxRef.current.createMediaElementSource(video);
+                gainNodeRef.current = audioCtxRef.current.createGain();
+                sourceNodeRef.current.connect(gainNodeRef.current);
+                gainNodeRef.current.connect(audioCtxRef.current.destination);
+            } catch (e) {
+                console.error("Audio Context Setup Failed", e);
             }
-            if (gainNodeRef.current) {
-                try { gainNodeRef.current.disconnect(); } catch (_) {}
-                gainNodeRef.current = null;
-            }
-        }
+        };
+
+        const handleCanPlay = () => ensureAudioGraph();
+
+        video.addEventListener('canplay', handleCanPlay);
+        // If the element is already ready (e.g. hot-reload), build immediately
+        if (video.readyState >= 3) ensureAudioGraph();
+
+        return () => video.removeEventListener('canplay', handleCanPlay);
+    }, [ref]); // only depends on the ref — graph is created once
+
+    // Event listeners for playback state forwarding
+    useEffect(() => {
+        const video = (ref as React.MutableRefObject<HTMLVideoElement>).current;
+        if (!video) return;
 
         const handleTime = () => onTimeUpdate(video.currentTime);
         const handleDuration = () => onDurationChange(video.duration);
 
-        // Build the Web Audio graph as soon as we have enough data to play.
-        // This separates graph construction (no user gesture needed) from context
-        // resumption (requires user gesture), reducing cold-start latency on play.
-        const handleCanPlay = () => {
-            if (!initializedRef.current && video.src) {
-                try {
-                    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-                    if (!audioCtxRef.current) {
-                        audioCtxRef.current = new AudioContext();
-                    }
-                    if (!sourceNodeRef.current) {
-                        sourceNodeRef.current = audioCtxRef.current.createMediaElementSource(video);
-                        gainNodeRef.current = audioCtxRef.current.createGain();
-                        sourceNodeRef.current.connect(gainNodeRef.current);
-                        gainNodeRef.current.connect(audioCtxRef.current.destination);
-                    }
-                    if (gainNodeRef.current) {
-                        gainNodeRef.current.gain.value = muted ? 0 : volume;
-                    }
-                    initializedRef.current = true;
-                } catch (e) {
-                    console.error("Audio Context Setup Failed", e);
-                }
-            }
-        };
-
         // On play (user gesture context): resume the AudioContext if suspended.
         const handlePlay = () => {
             if (audioCtxRef.current?.state === 'suspended') {
-                audioCtxRef.current.resume().then(() => {
-                    if (gainNodeRef.current) {
-                        gainNodeRef.current.gain.value = muted ? 0 : volume;
-                    }
-                });
+                audioCtxRef.current.resume();
             }
         };
 
@@ -88,7 +72,6 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
         video.addEventListener('timeupdate', handleTime);
         video.addEventListener('durationchange', handleDuration);
         video.addEventListener('loadedmetadata', onLoadedMetadata);
-        video.addEventListener('canplay', handleCanPlay);
         video.addEventListener('play', handlePlay);
         video.addEventListener('playing', handlePlaying);
         video.addEventListener('waiting', handleWaiting);
@@ -97,12 +80,11 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
             video.removeEventListener('timeupdate', handleTime);
             video.removeEventListener('durationchange', handleDuration);
             video.removeEventListener('loadedmetadata', onLoadedMetadata);
-            video.removeEventListener('canplay', handleCanPlay);
             video.removeEventListener('play', handlePlay);
             video.removeEventListener('playing', handlePlaying);
             video.removeEventListener('waiting', handleWaiting);
         };
-    }, [onTimeUpdate, onDurationChange, onLoadedMetadata, onPlaying, onWaiting, ref, src, volume, muted]);
+    }, [onTimeUpdate, onDurationChange, onLoadedMetadata, onPlaying, onWaiting, ref]);
 
     // Volume Effect
     useEffect(() => {
