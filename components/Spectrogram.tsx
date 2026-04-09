@@ -179,7 +179,9 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
 
     ctx.clearRect(0, 0, width, height);
 
-    const startTime = scrollLeft / pixelsPerSecond;
+    // The spectrogram canvas starts 50px into the container (Y-axis occupies the left 50px).
+    const yAxisWidth = 50;
+    const startTime = (scrollLeft + yAxisWidth) / pixelsPerSecond;
     const timePerPixel = 1 / pixelsPerSecond;
     const endTime = startTime + (width * timePerPixel);
 
@@ -199,6 +201,9 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
 
         for (let px = 0; px < width; px++) {
             const tStart = startTime + px * timePerPixel;
+            // Don't fill pixels past the end of the file — prevents the last column
+            // from being stretched across the remaining canvas area.
+            if (tStart >= duration) continue;
             const tEnd = startTime + (px + 1) * timePerPixel;
             const tMid = (tStart + tEnd) / 2;
 
@@ -441,7 +446,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
         if (canvasRef.current) {
-          canvasRef.current.width = width;
+          canvasRef.current.width = Math.max(1, width - 50);
           canvasRef.current.height = height;
         }
         if (overlayCanvasRef.current) {
@@ -560,7 +565,10 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (dragStart) {
       const delta = dragStart.x - e.clientX;
-      setScrollLeft(Math.max(0, dragStart.scroll + delta));
+      const containerWidth = containerRef.current?.clientWidth || 0;
+      const overrunPixels = containerWidth * 0.4;
+      const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
+      setScrollLeft(Math.max(0, Math.min(dragStart.scroll + delta, maxScroll)));
       return;
     }
 
@@ -732,14 +740,19 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         const newPixelsPerSecond = containerWidth / newWindowSize;
 
         let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
-        const maxScroll = Math.max(0, (duration * newPixelsPerSecond) - containerWidth);
+        // Allow scrolling 40% of the view past the end of the file so the user can
+        // center late events or zoom out with the end visible.
+        const overrunPixels = containerWidth * 0.4;
+        const maxScroll = Math.max(0, (duration * newPixelsPerSecond) - containerWidth + overrunPixels);
         newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
 
         setScrollLeft(newScrollLeft);
         onZoomChange(newWindowSize);
       } else {
           const panAmount = e.deltaY + e.deltaX;
-          const maxScroll = Math.max(0, (duration * pixelsPerSecond) - (containerRef.current?.clientWidth || 0));
+          const containerWidth = containerRef.current?.clientWidth || 0;
+          const overrunPixels = containerWidth * 0.4;
+          const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
           setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
       }
   };
@@ -813,8 +826,8 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Layer 1: spectrogram canvas (bottom) */}
-      <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+      {/* Layer 1: spectrogram canvas (bottom) — starts at x=50, past the Y-axis */}
+      <canvas ref={canvasRef} className="absolute top-0 h-full pointer-events-none" style={{ left: '50px', width: 'calc(100% - 50px)' }} />
 
       {/* Blurred placeholder overlay during spectrogram generation */}
       {isProcessing && (
