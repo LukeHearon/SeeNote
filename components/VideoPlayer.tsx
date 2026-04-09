@@ -9,75 +9,82 @@ interface VideoPlayerProps {
   onTimeUpdate: (t: number) => void;
   onDurationChange: (d: number) => void;
   onLoadedMetadata: () => void;
+  onPlaying?: () => void;
+  onWaiting?: () => void;
 }
 
 const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
-  ({ src, volume, muted, isAudio, onTimeUpdate, onDurationChange, onLoadedMetadata }, ref) => {
+  ({ src, volume, muted, isAudio, onTimeUpdate, onDurationChange, onLoadedMetadata, onPlaying, onWaiting }, ref) => {
     
-    // Web Audio API refs for boosting
+    // Web Audio API refs for boosting.
+    // createMediaElementSource permanently binds the element — create it once and reuse.
     const audioCtxRef = useRef<AudioContext | null>(null);
     const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
     const gainNodeRef = useRef<GainNode | null>(null);
-    const initializedRef = useRef(false);
 
+    // Build the Web Audio graph once, on first canplay. The source node is permanently
+    // bound to the video element; only the gain value changes between files.
     useEffect(() => {
         const video = (ref as React.MutableRefObject<HTMLVideoElement>).current;
-        if(!video) return;
+        if (!video) return;
 
-        // Clean up previous context if src changes
-        if (src) {
-            initializedRef.current = false;
-        }
+        const ensureAudioGraph = () => {
+            if (sourceNodeRef.current) return; // already built
+            try {
+                const AC = window.AudioContext || (window as any).webkitAudioContext;
+                if (!audioCtxRef.current) audioCtxRef.current = new AC();
+                sourceNodeRef.current = audioCtxRef.current.createMediaElementSource(video);
+                gainNodeRef.current = audioCtxRef.current.createGain();
+                sourceNodeRef.current.connect(gainNodeRef.current);
+                gainNodeRef.current.connect(audioCtxRef.current.destination);
+            } catch (e) {
+                console.error("Audio Context Setup Failed", e);
+            }
+        };
+
+        const handleCanPlay = () => ensureAudioGraph();
+
+        video.addEventListener('canplay', handleCanPlay);
+        // If the element is already ready (e.g. hot-reload), build immediately
+        if (video.readyState >= 3) ensureAudioGraph();
+
+        return () => video.removeEventListener('canplay', handleCanPlay);
+    }, [ref]); // only depends on the ref — graph is created once
+
+    // Event listeners for playback state forwarding
+    useEffect(() => {
+        const video = (ref as React.MutableRefObject<HTMLVideoElement>).current;
+        if (!video) return;
 
         const handleTime = () => onTimeUpdate(video.currentTime);
         const handleDuration = () => onDurationChange(video.duration);
 
-        // Initialize AudioContext on play to avoid autoplay policy issues
+        // On play (user gesture context): resume the AudioContext if suspended.
         const handlePlay = () => {
-             if (!initializedRef.current && video.src) {
-                try {
-                    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-                    if (!audioCtxRef.current) {
-                        audioCtxRef.current = new AudioContext();
-                    }
-                    
-                    if (audioCtxRef.current?.state === 'suspended') {
-                        audioCtxRef.current.resume();
-                    }
-
-                    if (!sourceNodeRef.current) {
-                         // Note: creating a MediaElementSource will mute the video element effectively,
-                         // routing audio through the graph.
-                         sourceNodeRef.current = audioCtxRef.current.createMediaElementSource(video);
-                         gainNodeRef.current = audioCtxRef.current.createGain();
-                         
-                         sourceNodeRef.current.connect(gainNodeRef.current);
-                         gainNodeRef.current.connect(audioCtxRef.current.destination);
-                    }
-                    initializedRef.current = true;
-                    
-                    // Apply current volume
-                    if (gainNodeRef.current) {
-                        gainNodeRef.current.gain.value = muted ? 0 : volume;
-                    }
-                } catch (e) {
-                    console.error("Audio Context Setup Failed", e);
-                }
-             }
+            if (audioCtxRef.current?.state === 'suspended') {
+                audioCtxRef.current.resume();
+            }
         };
+
+        const handlePlaying = () => onPlaying?.();
+        const handleWaiting = () => onWaiting?.();
 
         video.addEventListener('timeupdate', handleTime);
         video.addEventListener('durationchange', handleDuration);
         video.addEventListener('loadedmetadata', onLoadedMetadata);
         video.addEventListener('play', handlePlay);
+        video.addEventListener('playing', handlePlaying);
+        video.addEventListener('waiting', handleWaiting);
 
         return () => {
             video.removeEventListener('timeupdate', handleTime);
             video.removeEventListener('durationchange', handleDuration);
             video.removeEventListener('loadedmetadata', onLoadedMetadata);
             video.removeEventListener('play', handlePlay);
+            video.removeEventListener('playing', handlePlaying);
+            video.removeEventListener('waiting', handleWaiting);
         };
-    }, [onTimeUpdate, onDurationChange, onLoadedMetadata, ref, src, volume, muted]);
+    }, [onTimeUpdate, onDurationChange, onLoadedMetadata, onPlaying, onWaiting, ref]);
 
     // Volume Effect
     useEffect(() => {
@@ -119,6 +126,7 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
             className={`w-full h-full object-contain ${isAudio ? 'opacity-0' : ''}`}
             controls={false}
             crossOrigin="anonymous" // Important for Web Audio API
+            preload="metadata"
         />
       </div>
     );
