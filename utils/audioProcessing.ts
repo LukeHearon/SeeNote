@@ -124,10 +124,11 @@ export const generateSpectrogramData = async (
     // Compute Magnitude & Log Scale
     for (let bin = 0; bin < height; bin++) {
       const mag = Math.sqrt(r[bin] * r[bin] + i[bin] * i[bin]);
-      // Logarithmic scaling for audio decibels visualization
-      const val = 20 * Math.log10(mag + 1e-6); 
-      // Normalize roughly (-100db to 0db range to 0-255)
-      let intensity = (val + 60) * 4; 
+      // Normalize by Hanning coherent amplitude gain (N/4) so 0 dBFS → 0 dB
+      const magNorm = mag * 4.0 / fftSize;
+      const val = 20 * Math.log10(magNorm + 1e-6);
+      // 80 dB display range: -80 dBFS → 0, 0 dBFS → 255
+      let intensity = (val + 80) / 80 * 255;
       if (intensity < 0) intensity = 0;
       if (intensity > 255) intensity = 255;
       

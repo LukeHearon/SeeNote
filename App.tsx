@@ -90,7 +90,7 @@ export default function App() {
   const [settings, setSettings] = useState<SpectrogramSettings>({
       minFreq: 0,
       maxFreq: 22050,
-      intensity: 0.7,
+      intensity: 1.0,
       contrast: 1.0,
       fftSize: 1024,
       windowSize: DEFAULT_ZOOM_SEC,

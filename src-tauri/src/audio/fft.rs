@@ -5,9 +5,10 @@ use std::f32::consts::PI;
 /// column-major. Each column stores bins from low-to-high frequency (index 0 = highest freq,
 /// matching the JS layout: outputData[col * height + (height - 1 - bin)]).
 ///
-/// Normalization matches audioProcessing.ts:
-///   val = 20 * log10(mag + 1e-6)
-///   intensity = (val + 60) * 4   clamped to [0, 255]
+/// Normalization (matches audioProcessing.ts):
+///   mag_norm = mag * 4 / fft_size          (Hanning coherent amplitude gain → 0 dBFS = 0 dB)
+///   val      = 20 * log10(mag_norm + 1e-6) (dBFS)
+///   intensity = (val + 80) / 80 * 255      (80 dB range: -80 dBFS → 0, 0 dBFS → 255)
 pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8> {
     let n_freq_bins = fft_size / 2;
 
@@ -53,8 +54,11 @@ pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8
             // Match JS normalization exactly:
             // val = 20 * log10(mag + 1e-6)
             // intensity = (val + 60) * 4
-            let val = 20.0 * (mag + 1e-6f32).log10();
-            let intensity = (val + 60.0) * 4.0;
+            // Normalize by Hanning coherent amplitude gain (N/4) so 0 dBFS → 0 dB
+            let mag_norm = mag * 4.0 / fft_size as f32;
+            let val = 20.0 * (mag_norm + 1e-6f32).log10();
+            // 80 dB display range: -80 dBFS → 0, 0 dBFS → 255
+            let intensity = (val + 80.0) / 80.0 * 255.0;
             let intensity = intensity.clamp(0.0, 255.0) as u8;
 
             // JS layout: outputData[col * height + (height - 1 - bin)]
