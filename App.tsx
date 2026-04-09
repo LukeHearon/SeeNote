@@ -68,6 +68,11 @@ export default function App() {
   // Label Editing State
   const [editingLabelIndex, setEditingLabelIndex] = useState<number | null>(null);
   const [editingLabelText, setEditingLabelText] = useState("");
+
+  // Toolbar timestamp editing state
+  type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
+  const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
+  const [editingTimeRaw, setEditingTimeRaw] = useState("");
   
   // Ref that stays in sync with activeProject — avoids stale-closure bugs in persist effects
   const activeProjectRef = useRef<typeof activeProject>(null);
@@ -154,6 +159,7 @@ export default function App() {
     setLabels([]);
     setIsPlaying(false);
     setSelectedLabelId(null);
+    setSelectionRegion(null);
     setDebugLogs([]);
     setCurrentFilePath(absolutePath);
     // Reset playhead to beginning of file
@@ -654,15 +660,15 @@ export default function App() {
               }
           }
 
-          // Arrow keys: scrub playhead ±20% of visible window
+          // Arrow keys: scrub playhead ±10% of visible window
           if (e.key === 'ArrowLeft' && !e.metaKey && !e.ctrlKey) {
               e.preventDefault();
-              seek(Math.max(0, currentTime - zoomSec * 0.2));
+              seek(Math.max(0, currentTime - zoomSec * 0.1));
               return;
           }
           if (e.key === 'ArrowRight' && !e.metaKey && !e.ctrlKey) {
               e.preventDefault();
-              seek(Math.min(duration, currentTime + zoomSec * 0.2));
+              seek(Math.min(duration, currentTime + zoomSec * 0.1));
               return;
           }
 
@@ -713,14 +719,6 @@ export default function App() {
               }
           }
 
-          // File navigation: [ = prev, ] = next
-          if (e.key === '[') {
-              e.preventDefault();
-              navigateFile('prev');
-          } else if (e.key === ']') {
-              e.preventDefault();
-              navigateFile('next');
-          }
       };
 
       window.addEventListener('keydown', handleKeyDown);
@@ -868,15 +866,50 @@ export default function App() {
   // Handle volume slider change
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       let val = parseFloat(e.target.value);
-      // Snap to 1.0 if close
-      if (val > 0.95 && val < 1.05) val = 1.0;
+      // Snap to 1.0 if close (tighter detent during drag)
+      if (val > 0.97 && val < 1.03) val = 1.0;
       setVolume(val);
       setMuted(false);
   };
 
   // Calculate volume slider background
-  const volPercent = Math.min(100, (volume / 4) * 100); 
+  const volPercent = Math.min(100, (volume / 4) * 100);
   const isBoosted = volume > 1;
+
+  // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45", "1:23:45"
+  const parseTimestamp = (raw: string): number | null => {
+    const s = raw.trim();
+    // hh:mm:ss or hh:mm:ss.ff
+    const hms = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+    if (hms) return parseInt(hms[1]) * 3600 + parseInt(hms[2]) * 60 + parseFloat(hms[3]);
+    // mm:ss or mm:ss.ff
+    const ms = s.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+    if (ms) return parseInt(ms[1]) * 60 + parseFloat(ms[2]);
+    // plain seconds
+    const plain = parseFloat(s);
+    if (!isNaN(plain) && plain >= 0) return plain;
+    return null;
+  };
+
+  const commitTimeEdit = (raw: string) => {
+    if (!editingTimeField) return;
+    const parsed = parseTimestamp(raw);
+    if (parsed !== null) {
+      const clamped = Math.max(0, Math.min(duration, parsed));
+      if (editingTimeField === 'time') {
+        seek(clamped);
+        spectrogramRef.current?.scrollToTime(clamped);
+      } else if (editingTimeField === 'selStart' && selectionRegion) {
+        setSelectionRegion({ start: clamped, end: Math.max(clamped, selectionRegion.end) });
+      } else if (editingTimeField === 'selEnd' && selectionRegion) {
+        setSelectionRegion({ start: selectionRegion.start, end: Math.max(selectionRegion.start, clamped) });
+      } else if (editingTimeField === 'selDur' && selectionRegion) {
+        setSelectionRegion({ start: selectionRegion.start, end: Math.min(duration, selectionRegion.start + Math.max(0, parsed)) });
+      }
+    }
+    setEditingTimeField(null);
+    setEditingTimeRaw("");
+  };
 
   if (!activeProject) {
     return (
@@ -905,14 +938,21 @@ export default function App() {
             >
                 <ArrowLeft size={18} />
             </button>
-            <h1
-                className="text-xl font-bold bg-clip-text text-transparent"
-                style={{
-                  backgroundImage: `linear-gradient(to right, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`
-                }}
+            <button
+                onClick={() => setShowProjectSettings(true)}
+                className="flex items-center space-x-2 px-2 py-1.5 rounded hover:bg-slate-700 transition-colors group"
+                title="Project Settings"
             >
-                {activeProject.name}
-            </h1>
+                <h1
+                    className="text-xl font-bold bg-clip-text text-transparent"
+                    style={{
+                      backgroundImage: `linear-gradient(to right, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`
+                    }}
+                >
+                    {activeProject.name}
+                </h1>
+                <Settings size={15} className="text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
+            </button>
         </div>
 
         <div />
@@ -938,14 +978,6 @@ export default function App() {
                 title="Keyboard Shortcuts"
             >
                 <Keyboard size={18} />
-            </button>
-            <button
-                onClick={() => setShowProjectSettings(true)}
-                className="flex items-center space-x-2 px-3 py-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
-                title="Project Settings"
-            >
-                <Settings size={18} />
-                <span className="text-sm">Project</span>
             </button>
         </div>
       </header>
@@ -1018,8 +1050,8 @@ export default function App() {
                 <h4 className="font-semibold text-white text-base">File Tree</h4>
                 <p>
                   The left sidebar lists every audio/video file in the project directory. Files with existing annotations show a
-                  count badge. Click any file to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">[</kbd> /
-                  <kbd className="font-mono bg-slate-700 px-1 rounded">]</kbd> to step through files in order.
+                  count badge. Click any file to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↑</kbd> /
+                  <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↓</kbd> to step through files in order.
                   Right-click a file for options: reveal in Finder, reveal annotation file, or toggle shuffle mode.
                 </p>
               </section>
@@ -1062,8 +1094,8 @@ export default function App() {
                   <li><span className="text-white">Resize:</span> drag the left or right edge handle of any annotation.</li>
                   <li>
                     <span className="text-white">Bound selection:</span> click the center of an annotation to bind the selection region to it.
-                    The playhead will loop within that annotation. Use <kbd className="font-mono bg-slate-700 px-1 rounded">;</kbd> /
-                    <kbd className="font-mono bg-slate-700 px-1 rounded">'</kbd> (or the ‹ › buttons on the spectrogram) to jump between annotations.
+                    The playhead will loop within that annotation. Use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+←</kbd> /
+                    <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+→</kbd> (or the ‹ › buttons on the spectrogram) to jump between annotations.
                   </li>
                   <li><span className="text-white">Rename:</span> click the annotation's text label to edit it inline. Key 0 (Custom Label) annotations open for editing automatically.</li>
                   <li><span className="text-white">Delete:</span> select an annotation and press <kbd className="font-mono bg-slate-700 px-1 rounded">Delete</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Backspace</kbd>, or middle-click it directly.</li>
@@ -1143,11 +1175,9 @@ export default function App() {
 
                     <div className="space-y-1.5">
                       <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Navigation</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">← / →</span><span>Scrub playhead ±20% zoom</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">← / →</span><span>Scrub playhead ±10% zoom</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+← / →</span><span>Previous / Next annotation</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">; / '</span><span>Previous / Next annotation</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+↑ / ↓</span><span>Previous / Next file</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">[ / ]</span><span>Previous / Next file</span></div>
                     </div>
 
                     <div className="space-y-1.5">
@@ -1166,7 +1196,7 @@ export default function App() {
                       onClick={() => { setShowHotkeysHelp(false); setShowHelp(true); }}
                       className="text-xs text-slate-400 hover:text-white transition-colors"
                     >
-                      Full guide →
+                      Guide →
                     </button>
                   </div>
               </div>
@@ -1452,7 +1482,7 @@ export default function App() {
              <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
                  {/* Transport controls: [Start] [PrevAnnot] [Play] [NextAnnot] [End] */}
                  <button
-                    onClick={() => seek(0)}
+                    onClick={() => { seek(0); spectrogramRef.current?.scrollToTime(0); }}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
                     title="Skip to start"
@@ -1472,12 +1502,14 @@ export default function App() {
                     disabled={!videoSrc}
                     className="p-1.5 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg flex-none mx-0.5"
                 >
-                    {isBuffering && !isPlaying
-                        ? <Loader2 size={16} className="animate-spin" />
-                        : isPlaying
-                            ? <Pause size={16} fill="currentColor" />
-                            : <Play size={16} fill="currentColor" className="ml-0.5" />
-                    }
+                    <span className="flex items-center justify-center w-4 h-4">
+                        {isBuffering && !isPlaying
+                            ? <Loader2 size={16} className="animate-spin" />
+                            : isPlaying
+                                ? <Pause size={16} fill="currentColor" />
+                                : <Play size={16} fill="currentColor" />
+                        }
+                    </span>
                 </button>
                 <button
                     onClick={() => spectrogramRef.current?.goToNextAnnotation()}
@@ -1488,7 +1520,7 @@ export default function App() {
                     <ChevronRight size={15} />
                 </button>
                 <button
-                    onClick={() => seek(duration)}
+                    onClick={() => { seek(duration); spectrogramRef.current?.scrollToTime(duration); }}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
                     title="Skip to end"
@@ -1506,22 +1538,102 @@ export default function App() {
                             type="range" min="0" max="4" step="0.05"
                             value={muted ? 0 : volume}
                             onChange={handleVolumeChange}
+                            onPointerUp={(e) => {
+                                const val = parseFloat((e.target as HTMLInputElement).value);
+                                if (val > 0.9 && val < 1.1) { setVolume(1.0); setMuted(false); }
+                            }}
                             className={`w-full h-1 bg-slate-500 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
                             style={{
                                 background: `linear-gradient(to right, ${isBoosted ? '#ef4444' : '#e65161'} 0%, ${isBoosted ? '#ef4444' : '#e65161'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(volume / 4) * 100}%, #64748b ${(volume / 4) * 100}%, #64748b 100%)`
                             }}
                         />
-                        <div className="absolute left-[25%] top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none"></div>
+                        {/* Hash mark at 1.0 (default volume). Positioned to match the thumb center:
+                            left = (1/4) * (trackWidth - thumbWidth) + thumbRadius
+                                 = (trackWidth - 12px) * 0.25 + 6px = calc(25% - 3px + 6px) */}
+                        <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.25 + 6px)' }}></div>
                     </div>
                 </div>
 
-                {/* Time display */}
-                <div className="flex flex-col justify-center flex-none ml-2 tabular-nums leading-tight">
-                    <span className="text-sm font-mono font-medium text-slate-300">{currentTime.toFixed(2)}s</span>
+                {/* Time display — click any value to edit */}
+                <div className="flex flex-col justify-center flex-none ml-2 tabular-nums leading-tight gap-0.5">
+                    {editingTimeField === 'time' ? (
+                        <input
+                            autoFocus
+                            className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded px-1 w-20 outline-none"
+                            value={editingTimeRaw}
+                            onChange={e => setEditingTimeRaw(e.target.value)}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
+                                if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
+                            }}
+                            onBlur={() => commitTimeEdit(editingTimeRaw)}
+                        />
+                    ) : (
+                        <button
+                            className="text-sm font-mono font-medium text-slate-300 hover:text-white text-left"
+                            title="Click to jump to time"
+                            onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTime.toFixed(2)); }}
+                        >
+                            {currentTime.toFixed(2)}s
+                        </button>
+                    )}
                     {selectionRegion && (
-                        <span className="text-[10px] font-mono text-slate-400">
-                            {selectionRegion.start.toFixed(2)}→{selectionRegion.end.toFixed(2)} ({(selectionRegion.end - selectionRegion.start).toFixed(2)}s)
-                        </span>
+                        <div className="flex items-center gap-1 text-[10px] font-mono text-slate-400">
+                            {editingTimeField === 'selStart' ? (
+                                <input
+                                    autoFocus
+                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
+                                    value={editingTimeRaw}
+                                    onChange={e => setEditingTimeRaw(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
+                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
+                                    }}
+                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
+                                />
+                            ) : (
+                                <button className="hover:text-white" title="Edit selection start" onClick={() => { setEditingTimeField('selStart'); setEditingTimeRaw(selectionRegion.start.toFixed(2)); }}>
+                                    {selectionRegion.start.toFixed(2)}
+                                </button>
+                            )}
+                            <span>→</span>
+                            {editingTimeField === 'selEnd' ? (
+                                <input
+                                    autoFocus
+                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
+                                    value={editingTimeRaw}
+                                    onChange={e => setEditingTimeRaw(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
+                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
+                                    }}
+                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
+                                />
+                            ) : (
+                                <button className="hover:text-white" title="Edit selection end" onClick={() => { setEditingTimeField('selEnd'); setEditingTimeRaw(selectionRegion.end.toFixed(2)); }}>
+                                    {selectionRegion.end.toFixed(2)}
+                                </button>
+                            )}
+                            <span>(</span>
+                            {editingTimeField === 'selDur' ? (
+                                <input
+                                    autoFocus
+                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
+                                    value={editingTimeRaw}
+                                    onChange={e => setEditingTimeRaw(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
+                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
+                                    }}
+                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
+                                />
+                            ) : (
+                                <button className="hover:text-white" title="Edit selection duration" onClick={() => { setEditingTimeField('selDur'); setEditingTimeRaw((selectionRegion.end - selectionRegion.start).toFixed(2)); }}>
+                                    {(selectionRegion.end - selectionRegion.start).toFixed(2)}s
+                                </button>
+                            )}
+                            <span>)</span>
+                        </div>
                     )}
                 </div>
 

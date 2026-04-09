@@ -61,6 +61,7 @@ interface SpectrogramProps {
 export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
+  scrollToTime: (time: number) => void;
 }
 
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
@@ -251,6 +252,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             settings.intensity, settings.contrast,
             settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale
         );
+
+        // Paint end-of-file region with the background color so it's
+        // clearly distinct from zero-value spectrogram data.
+        const endX = Math.ceil((duration - startTime) * pixelsPerSecond);
+        if (endX < width) {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(endX, 0, width - endX, height);
+        }
     } else if (!chunkCache && duration > 0 && !isProcessing) {
         ctx.fillStyle = '#0f172a';
         ctx.fillRect(0, 0, width, height);
@@ -516,6 +525,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (prev) {
       onSeek(prev.start);
       scrollToAnnotation(prev.start);
+    } else {
+      onSeek(0);
+      scrollToAnnotation(0);
     }
   }, [sortedLabels, currentTime, onSeek, scrollToAnnotation]);
 
@@ -524,32 +536,36 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (next) {
       onSeek(next.start);
       scrollToAnnotation(next.start);
+    } else {
+      onSeek(duration);
+      scrollToAnnotation(duration);
     }
-  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation]);
+  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation]);
+
+  const scrollToTime = useCallback((time: number) => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth;
+    setScrollLeft(Math.max(0, time * pixelsPerSecond - containerWidth / 2));
+  }, [pixelsPerSecond]);
 
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
     goToNextAnnotation,
-  }), [goToPrevAnnotation, goToNextAnnotation]);
+    scrollToTime,
+  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime]);
 
-  // Keyboard shortcuts: ; = prev, ' = next, Escape = clear bound/selection
+  // Keyboard shortcuts: Escape = clear bound/selection
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      if (e.key === ';') {
-        e.preventDefault();
-        goToPrevAnnotation();
-      } else if (e.key === "'") {
-        e.preventDefault();
-        goToNextAnnotation();
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         setBoundAnnotationId(null);
         onSelectionChange(null);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [goToPrevAnnotation, goToNextAnnotation, onSelectionChange]);
+  }, [onSelectionChange]);
 
   // --- Interaction Handlers ---
 

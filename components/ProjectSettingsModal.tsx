@@ -3,7 +3,7 @@ import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
 import { openDirectoryDialog } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
-import { randomMagmaGradient } from '../constants';
+import GradientPicker from './GradientPicker';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
 
@@ -19,8 +19,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
   const [outputFormat, setOutputFormat] = useState(project.outputFormat);
   const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
-  const [gradientColor1, setGradientColor1] = useState<string>(defaultColors[0]);
-  const [gradientColor2, setGradientColor2] = useState<string>(defaultColors[1]);
+  const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -53,7 +52,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       audioDirectory: audioDir,
       annotationDirectory: annotationDir,
       outputFormat,
-      nameGradientColors: [gradientColor1, gradientColor2],
+      nameGradientColors: gradientColors,
     };
     pendingRef.current = updated;
 
@@ -217,39 +216,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
               <div>
                 <label className="text-gray-400 text-sm block mb-2">Project Name Colors</label>
-                <div
-                  className="h-7 rounded-lg mb-2"
-                  style={{ backgroundImage: `linear-gradient(to right, ${gradientColor1}, ${gradientColor2})` }}
-                />
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 flex-1">
-                    <input
-                      type="color"
-                      value={gradientColor1}
-                      onChange={e => setGradientColor1(e.target.value)}
-                      className="w-8 h-8 rounded cursor-pointer border border-gray-600 bg-transparent"
-                      title="Start color"
-                    />
-                    <input
-                      type="color"
-                      value={gradientColor2}
-                      onChange={e => setGradientColor2(e.target.value)}
-                      className="w-8 h-8 rounded cursor-pointer border border-gray-600 bg-transparent"
-                      title="End color"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const [c1, c2] = randomMagmaGradient();
-                      setGradientColor1(c1);
-                      setGradientColor2(c2);
-                    }}
-                    className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
-                  >
-                    Random
-                  </button>
-                </div>
+                <GradientPicker value={gradientColors} onChange={setGradientColors} />
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

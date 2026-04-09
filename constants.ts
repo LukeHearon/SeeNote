@@ -36,7 +36,7 @@ export const TIER_CONFIGS: TierConfig[] = [
 ];
 
 // Interpolate the Roseus/Magma colormap at position t in [0, 1] and return a hex color string.
-function interpolateMagmaHex(t: number): string {
+export function interpolateMagmaHex(t: number): string {
   t = Math.max(0, Math.min(1, t));
   let lower = MAGMA_STOPS[0];
   let upper = MAGMA_STOPS[MAGMA_STOPS.length - 1];

@@ -170,6 +170,12 @@ export const drawSpectrogramChunk = (
   const imgData = ctx.createImageData(canvasWidth, canvasHeight);
   const data = imgData.data;
 
+  // Pre-fill with the spectrogram background color (#0f172a = r:15 g:23 b:42)
+  // so missing chunks and zero-value areas show navy rather than transparent/colormap-dark.
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 15; data[i + 1] = 23; data[i + 2] = 42; data[i + 3] = 255;
+  }
+
   // Pre-calculate Pixel Y -> Frequency Bin Index map
   // This allows us to handle Linear, Log, and Mel scales efficiently in the pixel loop
   const binMap = new Int32Array(canvasHeight);
