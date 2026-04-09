@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
-import Spectrogram from './components/Spectrogram';
+import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
@@ -69,6 +69,13 @@ export default function App() {
   const [editingLabelIndex, setEditingLabelIndex] = useState<number | null>(null);
   const [editingLabelText, setEditingLabelText] = useState("");
   
+  // Ref that stays in sync with activeProject — avoids stale-closure bugs in persist effects
+  const activeProjectRef = useRef<typeof activeProject>(null);
+  useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
+
+  // Ref to Spectrogram imperative handle (prev/next annotation navigation)
+  const spectrogramRef = useRef<SpectrogramHandle>(null);
+
   // UI State
   const videoRef = useRef<HTMLVideoElement>(null);
   const [splitRatio, setSplitRatio] = useState(0.5); 
@@ -85,7 +92,7 @@ export default function App() {
       maxFreq: 22050,
       intensity: 0.7,
       contrast: 1.0,
-      fftSize: 2048,
+      fftSize: 1024,
       windowSize: DEFAULT_ZOOM_SEC,
       frequencyScale: 'mel',
   });
@@ -216,6 +223,17 @@ export default function App() {
     }
   }, [displayQueue, currentFileIndex, currentFilePath, handleOpenFile]);
 
+  // Annotation navigation helpers (used by toolbar buttons and keyboard shortcuts)
+  const sortedLabels = useMemo(() => [...labels].sort((a, b) => a.start - b.start), [labels]);
+  const canGoPrevAnnotation = useMemo(
+    () => sortedLabels.some(l => l.start < currentTime - 0.05),
+    [sortedLabels, currentTime]
+  );
+  const canGoNextAnnotation = useMemo(
+    () => sortedLabels.some(l => l.start > currentTime + 0.05),
+    [sortedLabels, currentTime]
+  );
+
   // Toggle shuffle: randomise current allMediaFiles order
   const toggleShuffle = useCallback(() => {
     setShuffleMode(prev => {
@@ -281,7 +299,8 @@ export default function App() {
     }
     if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
     labelConfigPersistRef.current = setTimeout(() => {
-      updateProject({ ...activeProject, labelConfigs });
+      if (!activeProjectRef.current) return;
+      updateProject({ ...activeProjectRef.current, labelConfigs });
     }, 500);
     return () => {
       if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
@@ -293,7 +312,8 @@ export default function App() {
     if (prevProjectIdRef.current !== activeProject.id) return;
     if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
     settingsPersistRef.current = setTimeout(() => {
-      updateProject({ ...activeProject, spectrogramSettings: settings });
+      if (!activeProjectRef.current) return;
+      updateProject({ ...activeProjectRef.current, spectrogramSettings: settings });
     }, 800);
     return () => {
       if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
@@ -577,6 +597,42 @@ export default function App() {
               return;
           }
 
+          // CMD+Arrow: annotation navigation and file navigation
+          if (e.metaKey || e.ctrlKey) {
+              if (e.key === 'ArrowLeft') {
+                  e.preventDefault();
+                  spectrogramRef.current?.goToPrevAnnotation();
+                  return;
+              }
+              if (e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  spectrogramRef.current?.goToNextAnnotation();
+                  return;
+              }
+              if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  navigateFile('prev');
+                  return;
+              }
+              if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  navigateFile('next');
+                  return;
+              }
+          }
+
+          // Arrow keys: scrub playhead ±20% of visible window
+          if (e.key === 'ArrowLeft' && !e.metaKey && !e.ctrlKey) {
+              e.preventDefault();
+              seek(Math.max(0, currentTime - settings.windowSize * 0.2));
+              return;
+          }
+          if (e.key === 'ArrowRight' && !e.metaKey && !e.ctrlKey) {
+              e.preventDefault();
+              seek(Math.min(duration, currentTime + settings.windowSize * 0.2));
+              return;
+          }
+
           switch(e.key.toLowerCase()) {
               case ' ':
                   e.preventDefault();
@@ -636,7 +692,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, seek, currentTime, settings.windowSize, duration]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -1050,19 +1106,22 @@ export default function App() {
                     </div>
 
                     <div className="space-y-1.5">
+                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Navigation</p>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">← / →</span><span>Scrub playhead ±20% zoom</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+← / →</span><span>Previous / Next annotation</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">; / '</span><span>Previous / Next annotation</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+↑ / ↓</span><span>Previous / Next file</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">[ / ]</span><span>Previous / Next file</span></div>
+                    </div>
+
+                    <div className="space-y-1.5">
                       <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Annotations</p>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">0 – 9</span><span>Set active label category</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Esc</span><span>Selection Mode / clear selection</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Delete / Backspace</span><span>Delete selected annotation</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Middle-click</span><span>Delete annotation instantly</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">; / '</span><span>Previous / Next annotation</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Z</span><span>Undo</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Shift+Z</span><span>Redo</span></div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Files</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">[ / ]</span><span>Previous / Next file</span></div>
                     </div>
                   </div>
 
@@ -1265,20 +1324,9 @@ export default function App() {
         {/* Spectrogram Pane */}
         <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700 flex flex-col">
              
-             {/* Settings Button (Top Right) */}
-             <div className="absolute top-4 right-4 z-50">
-                <button 
-                    onClick={() => setShowSettings(!showSettings)}
-                    className={`p-2 rounded hover:bg-slate-700 ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-                    title="Spectrogram Settings"
-                >
-                    <Settings size={20} />
-                </button>
-             </div>
-
-             {/* Settings Panel (Absolute, relative to this pane) */}
+             {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
-                <div className="absolute top-14 right-4 z-40 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
+                <div className="absolute top-10 right-4 z-40 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
                     <div className="p-4 border-b border-slate-700 flex justify-between items-center sticky top-0 bg-slate-800 z-10">
                         <h3 className="font-semibold text-slate-200 flex items-center gap-2">
                             <AudioWaveform size={16} /> Spectrogram Settings
@@ -1362,12 +1410,29 @@ export default function App() {
                 </div>
              )}
 
-             {/* Playback banner */}
-             <div className="flex items-center space-x-3 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
+             {/* Playback toolbar */}
+             <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
+                 {/* Transport controls: [Start] [PrevAnnot] [Play] [NextAnnot] [End] */}
                  <button
+                    onClick={() => seek(0)}
+                    disabled={!videoSrc}
+                    className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
+                    title="Skip to start"
+                >
+                    <SkipBack size={15} />
+                </button>
+                <button
+                    onClick={() => spectrogramRef.current?.goToPrevAnnotation()}
+                    disabled={!videoSrc || !canGoPrevAnnotation}
+                    className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
+                    title="Previous annotation (Cmd+←  or  ;)"
+                >
+                    <ChevronLeft size={15} />
+                </button>
+                <button
                     onClick={togglePlay}
                     disabled={!videoSrc}
-                    className="p-1.5 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg flex-none"
+                    className="p-1.5 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg flex-none mx-0.5"
                 >
                     {isBuffering && !isPlaying
                         ? <Loader2 size={16} className="animate-spin" />
@@ -1376,9 +1441,28 @@ export default function App() {
                             : <Play size={16} fill="currentColor" className="ml-0.5" />
                     }
                 </button>
-                <div className="text-mono text-sm font-medium w-16 text-slate-300 flex-none">
-                    {Math.floor(currentTime)}s
+                <button
+                    onClick={() => spectrogramRef.current?.goToNextAnnotation()}
+                    disabled={!videoSrc || !canGoNextAnnotation}
+                    className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
+                    title="Next annotation (Cmd+→  or  ')"
+                >
+                    <ChevronRight size={15} />
+                </button>
+                <button
+                    onClick={() => seek(duration)}
+                    disabled={!videoSrc}
+                    className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
+                    title="Skip to end"
+                >
+                    <SkipForward size={15} />
+                </button>
+
+                {/* Time display */}
+                <div className="text-mono text-sm font-medium w-20 text-slate-300 flex-none ml-2 tabular-nums">
+                    {currentTime.toFixed(2)}s
                 </div>
+
                 {/* Volume Control */}
                 <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600">
                     <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
@@ -1397,10 +1481,22 @@ export default function App() {
                         <div className="absolute left-[25%] top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none"></div>
                     </div>
                 </div>
+
+                {/* Spectrogram Settings */}
+                <div className="ml-auto">
+                    <button
+                        onClick={() => setShowSettings(!showSettings)}
+                        className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+                        title="Spectrogram Settings"
+                    >
+                        <Settings size={16} />
+                    </button>
+                </div>
              </div>
 
              <div className="flex-1 relative overflow-hidden">
              <Spectrogram
+                ref={spectrogramRef}
                 chunkCache={chunkCacheRef.current}
                 sampleRate={sampleRate}
                 cacheVersion={cacheVersion}

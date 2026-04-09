@@ -1,10 +1,10 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Label, SpectrogramSettings, LabelConfig } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateLabelLayers } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC } from '../constants';
-import { X, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
+import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
 // viewSpan: the total visible time range in seconds (used to decide whether to show hours).
@@ -57,10 +57,15 @@ interface SpectrogramProps {
   onZoomChange: (newWindowSize: number) => void;
 }
 
+export interface SpectrogramHandle {
+  goToPrevAnnotation: () => void;
+  goToNextAnnotation: () => void;
+}
+
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
 const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
 
-const Spectrogram: React.FC<SpectrogramProps> = ({
+const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
   sampleRate,
   cacheVersion,
@@ -81,7 +86,7 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
   onSelectLabel,
   onSelectionChange,
   onZoomChange
-}) => {
+}, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Overlay canvas: draws axis, playhead, ident, and selection darkening.
@@ -493,6 +498,11 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
       scrollToAnnotation(next.start);
     }
   }, [sortedLabels, currentTime, onSeek, scrollToAnnotation]);
+
+  useImperativeHandle(ref, () => ({
+    goToPrevAnnotation,
+    goToNextAnnotation,
+  }), [goToPrevAnnotation, goToNextAnnotation]);
 
   // Keyboard shortcuts: ; = prev, ' = next, Escape = clear bound/selection
   useEffect(() => {
@@ -1073,38 +1083,10 @@ const Spectrogram: React.FC<SpectrogramProps> = ({
         style={{ zIndex: 30 }}
       />
 
-      {/* Next/Previous Annotation — sits left of the settings button (settings is at right-4) */}
-      <div className="absolute top-1 right-14 z-50 flex flex-col items-center gap-0.5 pointer-events-auto">
-        <span className="text-[9px] text-slate-400 font-medium tracking-wide whitespace-nowrap">Next/Prev Annotation</span>
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={(e) => { e.stopPropagation(); goToPrevAnnotation(); }}
-            disabled={!canGoPrev}
-            className={`flex items-center justify-center w-6 h-6 bg-black/60 rounded transition-colors ${
-              canGoPrev
-                ? 'hover:bg-black/80 text-white/70 hover:text-white cursor-pointer'
-                : 'text-white/20 cursor-default'
-            }`}
-            title="Previous annotation (;)"
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); goToNextAnnotation(); }}
-            disabled={!canGoNext}
-            className={`flex items-center justify-center w-6 h-6 bg-black/60 rounded transition-colors ${
-              canGoNext
-                ? 'hover:bg-black/80 text-white/70 hover:text-white cursor-pointer'
-                : 'text-white/20 cursor-default'
-            }`}
-            title="Next annotation (')"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      </div>
     </div>
   );
-};
+});
+
+Spectrogram.displayName = 'Spectrogram';
 
 export default Spectrogram;

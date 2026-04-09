@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, ChevronsDown, ChevronsUp, RefreshCw } from 'lucide-react';
+import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw } from 'lucide-react';
 
 interface TreeNode {
   name: string;
@@ -326,14 +326,14 @@ function FileTree({
                 className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 title="Expand all"
               >
-                <ChevronsDown size={13} />
+                <UnfoldVertical size={13} />
               </button>
               <button
                 onClick={collapseAll}
                 className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 title="Collapse all"
               >
-                <ChevronsUp size={13} />
+                <FoldVertical size={13} />
               </button>
             </>
           )}
