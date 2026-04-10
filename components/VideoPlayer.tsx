@@ -56,6 +56,20 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
         const video = (ref as React.MutableRefObject<HTMLVideoElement>).current;
         if (!video) return;
 
+        // NOTE ON PLAYBACK PRECISION:
+        // HTMLMediaElement.currentTime has ~10–20ms of inherent jitter —
+        // it only updates on 'timeupdate' events, which fire roughly every
+        // 50–250ms depending on browser/platform, and the value is
+        // quantized to the last decoded frame boundary. This means the
+        // playhead that follows audio/video playback can lag or jump by
+        // that much relative to the spectrogram, even though the
+        // spectrogram itself is sample-accurate.
+        //
+        // For annotation work this is usually fine — the user seeks by
+        // clicking the canvas, not by watching the playhead crawl — but if
+        // we ever need truly sample-synchronous playback (e.g. to verify
+        // ML model alignment), we'll need a custom audio backend. See
+        // local/TODO_audioBackend.md for the planning notes.
         const handleTime = () => onTimeUpdate(video.currentTime);
         const handleDuration = () => onDurationChange(video.duration);
 

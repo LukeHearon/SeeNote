@@ -194,6 +194,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const endTime = startTime + (width * timePerPixel);
 
     if (chunkCache && duration > 0) {
+        // ── Two-stage spectrogram rendering pipeline ────────────────────────
+        // Stage 1 (THIS BLOCK): composite cached chunks into a viewport buffer
+        // with exactly one STFT column per canvas pixel. Each pixel's time
+        // range is [tStart, tEnd); we look up that range in whichever chunk
+        // contains tMid, then either copy the single column or max-reduce
+        // multiple columns that fall under the pixel.
+        //
+        // Stage 2 (drawSpectrogramChunk in utils/audioProcessing.ts): consumes
+        // the viewport buffer and handles frequency-axis mapping, contrast,
+        // brightness, and colormap. It does NOT do any time-axis remapping —
+        // see the note at the top of that function.
+        //
+        // Pixel ↔ time coordinate system used throughout the app:
+        //     time = (scrollLeft + x) / pixelsPerSecond
+        // Playhead, pointer events, annotation rendering, and this loop all
+        // agree on this formula, so an annotation drawn at time t always
+        // lands on the same pixel as the spectrogram column for time t.
         const visibleDuration = endTime - startTime;
         const activeTier = chunkCache.selectTier(visibleDuration, width);
         chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
@@ -205,6 +222,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             if (result) { nFreqBins = result.chunk.nFreqBins; break; }
         }
 
+        // Pre-composited viewport buffer: width columns × nFreqBins bins.
+        // Passed to drawSpectrogramChunk as `specData` with specWidth = width.
         const viewportData = new Uint8Array(width * nFreqBins);
 
         for (let px = 0; px < width; px++) {

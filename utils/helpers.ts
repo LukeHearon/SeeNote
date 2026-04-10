@@ -74,7 +74,19 @@ const defaultSavePath = (currentFilePath: string | null, filename: string, suffi
     return outName;
 };
 
-// Pure content generators (no file dialog — used by auto-save and export alike)
+// Pure content generators (no file dialog — used by auto-save and export alike).
+//
+// Precision note: annotation start/end are stored in seconds as JS floats
+// (IEEE 754 double, ~15 significant digits — easily sample-accurate for any
+// audio sample rate and file length we care about). The `toFixed(4)` / `(6)`
+// calls below only control the *text* representation:
+//   - CSV: 4 decimal places = 100µs, ~4.4 samples at 44.1kHz. Convenient for
+//     spreadsheet workflows; NOT intended for sample-exact re-import.
+//   - Audacity label: 6 decimal places = 1µs, < 0.05 sample at 44.1kHz —
+//     effectively lossless round-trip.
+// If you ever need sample-exact CSV round-trip, bump toFixed(4) to toFixed(6)
+// or export frame indices alongside. Do not confuse these format choices with
+// the internal precision of the pipeline.
 export const generateCSVContent = (labels: Label[]): string => {
     let content = "Label,Start,End\n";
     labels.forEach(l => {

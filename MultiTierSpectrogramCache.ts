@@ -33,7 +33,14 @@ export class MultiTierSpectrogramCache {
     private readonly duration: number,
     private readonly onChunkLoaded: () => void,
   ) {
-    // Resolve tier configs into concrete hop sizes
+    // Resolve tier configs into concrete hop sizes.
+    // NOTE: Math.round() here is benign for sample-accuracy. The hop size
+    // determines the STFT column grid WITHIN a chunk, and all downstream
+    // time math uses `chunk.actualDurationSec` + `chunk.nCols` (i.e. the
+    // *reported* column spacing, not a reconstructed one), so a 1-sample
+    // rounding in hopSize does not shift annotations or playhead.
+    // Annotations are stored in absolute seconds and never round-trip
+    // through column indices.
     this.tiers = TIER_CONFIGS.map(tc => {
       const hopSize = tc.hopSamples ?? Math.round(sampleRate * (tc.hopMultiplier ?? 1));
       return {

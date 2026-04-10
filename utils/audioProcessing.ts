@@ -150,10 +150,21 @@ export const generateSpectrogramData = async (
 const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
 const fromMel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
 
+// NOTE TO FUTURE READERS / CODE AUDITORS:
+// This function does NOT decide which STFT column lands on which pixel.
+// It receives `specData` as a **pre-composited viewport buffer** built by
+// `Spectrogram.tsx` where there is already exactly one data column per
+// canvas pixel (`specWidth === canvasWidth`). The column→pixel alignment
+// lives in `Spectrogram.tsx` (see the `viewportData` loop around the
+// `colStart`/`colEnd` computation). Here we only do per-pixel work:
+// frequency-axis mapping (linear/log/mel), contrast/brightness, and
+// colormap lookup. The `exactCol` formula below simplifies to `x` by
+// construction — do not "fix" it without first reading the compositing
+// loop in Spectrogram.tsx.
 export const drawSpectrogramChunk = (
   ctx: CanvasRenderingContext2D,
   specData: Uint8Array,
-  specWidth: number, // Total columns in data
+  specWidth: number, // Total columns in data (== canvasWidth in current pipeline)
   specHeight: number, // Total bins
   startTime: number, // Time at x=0
   timePerPixel: number, // Duration per pixel

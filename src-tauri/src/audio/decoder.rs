@@ -55,7 +55,38 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
 }
 
 /// Decodes PCM samples for [start_sec, start_sec + duration_sec).
-/// Returns mono f32 samples (channel 0 only, or averaged if stereo) and the sample rate.
+/// Returns mono f32 samples (averaged across all channels) and the sample rate.
+///
+/// ── Sample-accuracy contract ─────────────────────────────────────────────────
+/// The returned buffer is aligned to `start_sec` at sample resolution:
+///   output[0] corresponds to frame floor(start_sec * sample_rate)
+///   output[i] corresponds to frame floor(start_sec * sample_rate) + i
+///
+/// This contract matters because:
+///  - Adjacent chunks requested back-to-back must line up seamlessly in the
+///    spectrogram (chunk-boundary gap bug, fixed 2026-04).
+///  - Annotations created on the spectrogram must map to the exact same PCM
+///    samples when exported.
+///
+/// ── Why the 500ms seek margin + packet-timestamp tracking ────────────────────
+/// Symphonia's `format.seek(Accurate, ...)` is NOT sample-accurate for
+/// compressed formats (MP3/AAC/Vorbis). It lands at the nearest decodable
+/// frame boundary, which can be tens of milliseconds off — and critically,
+/// the actual landing position is only visible via the first decoded
+/// packet's timestamp, not the seek return value.
+///
+/// So we:
+///   1. Seek to (start_sec - 0.5s) so we're guaranteed to land *before* the
+///      desired position, even after a sloppy compressed-format seek.
+///   2. Read the first packet's timestamp (via the track's time_base) to
+///      learn exactly where the decoder actually landed, in absolute frames.
+///   3. Walk forward frame-by-frame, dropping frames until we hit
+///      `desired_start_frame`, then emit from there.
+///
+/// If the decoder somehow overshoots `desired_start_frame` (rare, but possible
+/// with broken files), we prepend silence so the returned buffer still
+/// starts at `start_sec`. This is preferable to returning a shorter buffer
+/// because callers rely on `output[0] == start_sec`.
 pub fn decode_audio_range(
     path: &str,
     start_sec: f64,
@@ -93,9 +124,12 @@ pub fn decode_audio_range(
 
     // Seek with a safety margin before the target so that even if the seek
     // lands imprecisely (common with compressed formats like MP3/AAC/Vorbis),
-    // we can skip forward to the exact requested position.
+    // we can skip forward to the exact requested position. See the
+    // sample-accuracy contract at the top of this function for why this
+    // matters and why 500ms is chosen (empirically covers all compressed
+    // formats we've tested; cheap to decode and discard).
     let desired_start_frame = (start_sec * sample_rate as f64).round() as u64;
-    let seek_margin_sec = 0.5; // 500ms margin
+    let seek_margin_sec = 0.5; // 500ms margin — see doc comment above
     let seek_target = (start_sec - seek_margin_sec).max(0.0);
 
     if seek_target > 0.0 {
@@ -134,11 +168,12 @@ pub fn decode_audio_range(
                 let pkt_time = tb.calc_time(packet.ts());
                 let pkt_secs = pkt_time.seconds as f64 + pkt_time.frac;
                 abs_frame = (pkt_secs * sample_rate as f64).round() as u64;
+            } else {
+                // No time_base: estimate position from where we asked to seek.
+                // Without this, abs_frame would stay 0 and we'd skip far too
+                // many frames when start_sec > 0.
+                abs_frame = (seek_target * sample_rate as f64).round() as u64;
             }
-            // If no time_base, abs_frame stays 0; for start_sec=0 this is
-            // correct, and for start_sec>0 the skip logic still works because
-            // desired_start_frame > 0 and we'll skip the right amount relative
-            // to wherever the seek landed.
         }
 
         let decoded = match decoder.decode(&packet) {

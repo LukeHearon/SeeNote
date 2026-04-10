@@ -84,11 +84,37 @@ pub async fn get_spectrogram_chunk(
 
     // Standard STFT path for fine-detail tiers.
     //
-    // Decode a half-window of extra audio context on both sides so that:
-    //  - Column 0's Hanning window center lands at req.start_sec (no zero-energy head)
-    //  - The last column's window extends past the chunk end (no zero-energy tail)
-    // Then report actual_duration_sec = requested duration so the renderer's
-    // time→column mapping covers the full chunk with no unmapped pixels at boundaries.
+    // ── Why we decode extra context on both sides ───────────────────────────
+    // A Hanning-windowed STFT column at time t has its energy centered at t
+    // but draws samples from [t - fft_size/2, t + fft_size/2]. If we only
+    // decoded [start_sec, start_sec + duration_sec), then:
+    //  - Column 0 (centered at start_sec) would have its left half filled
+    //    with zero-padded silence → dark stripe at the left edge of the chunk.
+    //  - The last column near the chunk end would have its right half zeros
+    //    → dark stripe at the right edge.
+    // When chunks are stitched together in Spectrogram.tsx, these edge
+    // stripes would show up as visible gaps at chunk boundaries. This bug
+    // was the chunk-boundary gap reported 2026-04; the fix lives here AND
+    // in decoder.rs (sample-accurate seeking).
+    //
+    // So we decode up to half an FFT window of pre-context and half a
+    // window of post-context around the requested range, and run the STFT
+    // over the padded buffer. Column 0's Hanning center then lands exactly
+    // at req.start_sec with real audio on both sides of it.
+    //
+    // ── Why actual_duration_sec uses req.duration_sec (not n_cols*hop/sr) ──
+    // The renderer in Spectrogram.tsx maps canvas pixels → chunk columns via
+    //   col = ((t - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols
+    // Because we decoded extra context, n_cols is SLIGHTLY larger than
+    // (duration_sec * sample_rate / hop_size). If we reported
+    // actual_duration_sec = n_cols * hop / sample_rate (which is > req.duration_sec),
+    // pixels near the chunk's right edge would map to columns inside the
+    // post-context region that belongs to the NEXT chunk's area — causing
+    // the "gap" to manifest as a time-shifted stripe instead.
+    // Reporting req.duration_sec keeps the mapping consistent with the
+    // chunk boundary on the time axis, and the extra post-context columns
+    // are simply unused (they exist only to give earlier columns full
+    // Hanning windows).
     let half_window = req.fft_size / 2;
     let half_window_sec = half_window as f64 / sample_rate as f64;
 
