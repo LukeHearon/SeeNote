@@ -4,10 +4,14 @@ mod commands;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(commands::audio::PcmStreamState::default())
         .invoke_handler(tauri::generate_handler![
             commands::audio::get_file_info,
             commands::audio::get_spectrogram_chunk,
             commands::audio::get_overview_spectrogram,
+            commands::audio::start_pcm_stream,
+            commands::audio::read_pcm_chunk,
+            commands::audio::close_pcm_stream,
             commands::filesystem::list_directory,
             commands::filesystem::list_media_files_recursive,
             commands::filesystem::write_text_file,

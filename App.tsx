@@ -12,6 +12,7 @@ import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, remo
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFinder, listAnnotationFiles } from './utils/projectCommands';
+import { AudioEngine } from './utils/AudioEngine';
 
 export default function App() {
   // Media State
@@ -92,6 +93,37 @@ export default function App() {
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
+  const engineRef = useRef<AudioEngine | null>(null);
+  // Ref so the onEnded closure (created once on mount) can read current isAudioFile
+  const isAudioFileRef = useRef(false);
+
+  // Create engine on mount, destroy on unmount
+  useEffect(() => {
+    engineRef.current = new AudioEngine({
+      onTimeUpdate: (t) => setCurrentTime(t),
+      onPlaying: () => { setIsPlaying(true); setIsBuffering(false); },
+      onPaused: () => setIsPlaying(false),
+      onEnded: () => {
+        // Stop playback and return playhead to selection start (matching old behavior).
+        // For video files, also pause the video element (which plays frames).
+        const sel = selectionRegionRef.current;
+        if (!isAudioFileRef.current) {
+          videoRef.current?.pause();
+        }
+        if (sel) {
+          engineRef.current?.seek(sel.start);
+          setCurrentTime(sel.start);
+        }
+        setIsPlaying(false);
+      },
+      onBufferUnderrun: () => setIsBuffering(true),
+    });
+    return () => {
+      engineRef.current?.dispose();
+      engineRef.current = null;
+    };
+  }, []);
+
   // UI State
   const videoRef = useRef<HTMLVideoElement>(null);
   const [splitRatio, setSplitRatio] = useState(0.5); 
@@ -124,35 +156,32 @@ export default function App() {
   // Keep selectionRegionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRegionRef.current = selectionRegion; }, [selectionRegion]);
 
-  // Smooth Scrolling Logic via RequestAnimationFrame.
-  // Also enforces selection-bounded playback: stop at selectionRegion.end and return to start.
+  // Keep isAudioFileRef in sync so the onEnded closure (created once on mount) reads the current value
+  useEffect(() => { isAudioFileRef.current = isAudioFile; }, [isAudioFile]);
+
+  // Video-frame sync loop — video files only.
+  // The AudioEngine's onTimeUpdate callback drives setCurrentTime for all files.
+  // This loop keeps video.currentTime in sync with the engine's audio clock so
+  // that video frames align with the audio the engine is producing.
   useEffect(() => {
+    if (isAudioFile || !isPlaying) return;
+
     let rAF: number;
     const loop = () => {
-        if (videoRef.current && !videoRef.current.paused) {
-            const t = videoRef.current.currentTime;
-            const sel = selectionRegionRef.current;
-            if (sel && t >= sel.end - 0.05) {
-                // Reached end of selection — stop and return to start
-                videoRef.current.pause();
-                videoRef.current.currentTime = sel.start;
-                setCurrentTime(sel.start);
-                setIsPlaying(false);
-                return;
-            }
-            setCurrentTime(t);
-            rAF = requestAnimationFrame(loop);
+        if (!videoRef.current || !engineRef.current) return;
+        const engineTime = engineRef.current.getMediaTime();
+        if (Math.abs(videoRef.current.currentTime - engineTime) > 0.05) {
+            videoRef.current.currentTime = engineTime;
         }
+        rAF = requestAnimationFrame(loop);
     };
 
-    if (isPlaying) {
-        loop();
-    }
+    loop();
 
     return () => {
         if (rAF) cancelAnimationFrame(rAF);
     };
-  }, [isPlaying]);
+  }, [isPlaying, isAudioFile]);
 
   // Open a file by absolute path (called from button or FileBrowser)
   const handleOpenFile = useCallback(async (absolutePath: string) => {
@@ -172,7 +201,8 @@ export default function App() {
     const fileName = absolutePath.split('/').pop() ?? absolutePath;
     const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
     const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-    setIsAudioFile(audioExts.includes(ext));
+    const isAudio = audioExts.includes(ext);
+    setIsAudioFile(isAudio);
     setVideoFileName(fileName);
 
     const assetUrl = toAssetUrl(absolutePath);
@@ -182,19 +212,32 @@ export default function App() {
     setIsProcessing(true);
 
     try {
-        const info = await getFileInfo(absolutePath);
-        addLog(`File info: ${info.duration_secs.toFixed(2)}s, ${info.sample_rate}Hz, ${info.channels}ch`);
+        // Load into the engine for all file types. Engine calls getFileInfo internally.
+        // For video files the engine handles audio; the <video> element shows frames only.
+        let sr: number;
+        let dur: number;
+        if (engineRef.current) {
+            const engineInfo = await engineRef.current.loadFile(absolutePath);
+            sr = engineInfo.sampleRate;
+            dur = engineInfo.durationSec;
+            addLog(`File info: ${dur.toFixed(2)}s, ${sr}Hz, ${engineInfo.channels}ch`);
+        } else {
+            const info = await getFileInfo(absolutePath);
+            sr = info.sample_rate;
+            dur = info.duration_secs;
+            addLog(`File info: ${dur.toFixed(2)}s, ${sr}Hz, ${info.channels}ch`);
+        }
 
-        setSampleRate(info.sample_rate);
-        if (info.duration_secs > 0) setDuration(info.duration_secs);
-        setSettings(s => ({ ...s, maxFreq: info.sample_rate / 2 }));
+        setSampleRate(sr);
+        if (dur > 0) setDuration(dur);
+        setSettings(s => ({ ...s, maxFreq: sr / 2 }));
 
         // Create new multi-tier chunk cache for this file
         const cache = new MultiTierSpectrogramCache(
             absolutePath,
             settings.fftSize,
-            info.sample_rate,
-            info.duration_secs,
+            sr,
+            dur,
             () => setCacheVersion(v => v + 1),
         );
         chunkCacheRef.current = cache;
@@ -591,32 +634,40 @@ export default function App() {
   }, [allMediaFiles, getAnnotationPath, annotationDirectory]);
 
   const togglePlay = useCallback(() => {
-      if (videoRef.current) {
-          if (isPlaying || isBuffering) {
-              videoRef.current.pause();
-              setIsPlaying(false);
-              setIsBuffering(false);
-          } else {
-              // If there's a selection region and playhead is at or past the end, restart from start
-              const sel = selectionRegionRef.current;
-              if (sel && (videoRef.current.currentTime >= sel.end - 0.05 || videoRef.current.currentTime < sel.start)) {
-                  videoRef.current.currentTime = sel.start;
-                  setCurrentTime(sel.start);
-              }
-              videoRef.current.play().catch(() => setIsBuffering(false));
-              setIsBuffering(true);
-              // isPlaying is set to true only when the 'playing' event fires (onPlaying callback),
-              // ensuring the rAF loop and playhead don't advance until audio is actually producing output.
+      if (isPlaying || isBuffering) {
+          engineRef.current?.pause();
+          // For video files, also pause the video element (audio engine fires onPaused
+          // which sets isPlaying=false; we stop the frame track here).
+          if (!isAudioFile) videoRef.current?.pause();
+      } else {
+          const sel = selectionRegionRef.current;
+          let startSec = currentTime;
+          // If there's a selection and the playhead is outside it, restart from selection start
+          if (sel && (currentTime >= sel.end - 0.05 || currentTime < sel.start)) {
+              startSec = sel.start;
+              setCurrentTime(sel.start);
+          }
+          setIsBuffering(true);
+          // isPlaying is set to true only when onPlaying fires (first sample emitted).
+          // endSec enables sample-accurate selection stop.
+          engineRef.current?.play(startSec, sel ? sel.end : undefined);
+          // For video files, start the video element for frame display (muted — audio
+          // comes from the engine). Seek it to startSec first for frame sync.
+          if (!isAudioFile && videoRef.current) {
+              videoRef.current.currentTime = startSec;
+              videoRef.current.play().catch(() => {});
           }
       }
-  }, [isPlaying, isBuffering]);
+  }, [isPlaying, isBuffering, isAudioFile, currentTime]);
 
   const seek = useCallback((time: number) => {
-      if (videoRef.current) {
+      engineRef.current?.seek(time);
+      setCurrentTime(time);
+      // Keep video frames in sync for video files
+      if (!isAudioFile && videoRef.current) {
           videoRef.current.currentTime = time;
-          setCurrentTime(time);
       }
-  }, []);
+  }, [isAudioFile]);
 
   // Global Hotkeys
   useEffect(() => {
@@ -862,6 +913,11 @@ export default function App() {
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
   };
+
+  // Keep the engine's gain in sync with the volume slider and mute button
+  useEffect(() => {
+    engineRef.current?.setGain(muted ? 0 : volume);
+  }, [volume, muted]);
 
   // Handle volume slider change
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1239,16 +1295,13 @@ export default function App() {
                     ref={videoRef}
                     src={videoSrc}
                     volume={volume}
-                    muted={muted}
+                    muted={true}          // engine handles all audio; video element is frames-only
                     isAudio={isAudioFile}
-                    onTimeUpdate={(t) => {
-                        // Only update from event if NOT playing (to avoid jitter with RAF)
-                        if (!isPlaying) setCurrentTime(t);
-                    }}
+                    onTimeUpdate={() => {}}
                     onDurationChange={setDuration}
                     onLoadedMetadata={() => {}}
-                    onPlaying={() => { setIsPlaying(true); setIsBuffering(false); }}
-                    onWaiting={() => { setIsBuffering(true); }}
+                    onPlaying={() => {}}
+                    onWaiting={() => {}}
                  />
                  {isProcessing && (
                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
