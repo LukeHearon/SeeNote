@@ -28,7 +28,7 @@ pub fn run() {
             commands::projects::delete_files,
             commands::projects::copy_annotation_files,
             commands::projects::list_txt_files_recursive,
-            commands::projects::reveal_in_finder,
+            commands::projects::reveal_in_file_manager,
             commands::projects::list_annotation_files,
         ])
         .run(tauri::generate_context!())

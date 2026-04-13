@@ -211,7 +211,7 @@ pub async fn copy_annotation_files(
 // ── Reveal in Finder / Explorer ──────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
     #[cfg(target_os = "macos")]
     {

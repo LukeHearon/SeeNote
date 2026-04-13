@@ -11,7 +11,7 @@ import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudaci
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
-import { revealInFinder, listAnnotationFiles } from './utils/projectCommands';
+import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 
 export default function App() {
@@ -614,22 +614,22 @@ export default function App() {
   }, [activeProject, updateProject]);
 
   const handleRevealInFinder = useCallback((path: string) => {
-    revealInFinder(path).catch(err => addLog(`reveal_in_finder error: ${err}`, 'error'));
+    revealInFileManager(path).catch(err => addLog(`reveal_in_file_manager error: ${err}`, 'error'));
   }, []);
 
   const handleRevealAnnotations = useCallback((audioFilePath: string) => {
     // If path is not in the known audio files list, treat as a directory
     if (!allMediaFiles.includes(audioFilePath)) {
-      if (annotationDirectory) revealInFinder(annotationDirectory).catch(() => {});
+      if (annotationDirectory) revealInFileManager(annotationDirectory).catch(() => {});
       return;
     }
     const annotPath = getAnnotationPath(audioFilePath);
     if (annotPath) {
-      revealInFinder(annotPath).catch(() => {
-        if (annotationDirectory) revealInFinder(annotationDirectory).catch(() => {});
+      revealInFileManager(annotPath).catch(() => {
+        if (annotationDirectory) revealInFileManager(annotationDirectory).catch(() => {});
       });
     } else if (annotationDirectory) {
-      revealInFinder(annotationDirectory).catch(() => {});
+      revealInFileManager(annotationDirectory).catch(() => {});
     }
   }, [allMediaFiles, getAnnotationPath, annotationDirectory]);
 

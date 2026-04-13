@@ -34,7 +34,7 @@ The time-axis elements that MUST stay in lockstep:
 | Color map, zoom limits, tier configs, default labels | `constants.ts` |
 | Export helpers (CSV/Audacity/JSON), `calculateLabelLayers` | `utils/helpers.ts` |
 | Tauri `invoke()` wrappers (all IPC calls live here) | `utils/tauriCommands.ts` |
-| Project file I/O, `revealInFinder`, `countAnnotationEntries` | `utils/projectCommands.ts` |
+| Project file I/O, `revealInFileManager`, `countAnnotationEntries` | `utils/projectCommands.ts` |
 | Spectrogram image math (`drawSpectrogramChunk`) | `utils/audioProcessing.ts` |
 | Project list persistence hook | `hooks/useProjects.ts` |
 | Multi-tier LRU spectrogram chunk cache | `MultiTierSpectrogramCache.ts` |

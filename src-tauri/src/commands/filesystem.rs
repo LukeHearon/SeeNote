@@ -139,13 +139,14 @@ fn collect_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::i
 /// Opens a dialog that allows selecting either a file or a folder.
 /// Returns `{ path, is_dir }`.
 #[tauri::command]
-pub async fn open_file_or_folder_dialog(_app: tauri::AppHandle) -> Result<Option<OpenResult>, String> {
+pub async fn open_file_or_folder_dialog(app: tauri::AppHandle) -> Result<Option<OpenResult>, String> {
     // On macOS we can use NSOpenPanel with both canChooseFiles and canChooseDirectories.
     // The tauri dialog plugin doesn't expose this, so we use the file picker with a
     // workaround: first try picking a file. If the user cancels, we could offer a
     // directory picker, but for simplicity we configure the native panel directly.
     #[cfg(target_os = "macos")]
     {
+        let _ = app; // not needed on macOS; NSOpenPanel is used directly
         use std::path::PathBuf;
         use std::sync::mpsc;
 

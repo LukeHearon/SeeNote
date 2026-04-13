@@ -85,8 +85,8 @@ export const copyAnnotationFiles = (
 ): Promise<{ copied: number; skipped: number; errors: string[] }> =>
   invoke('copy_annotation_files', { copies, conflictResolution });
 
-export const revealInFinder = (path: string): Promise<void> =>
-  invoke('reveal_in_finder', { path });
+export const revealInFileManager = (path: string): Promise<void> =>
+  invoke('reveal_in_file_manager', { path });
 
 export const listAnnotationFiles = (
   annotationDir: string,

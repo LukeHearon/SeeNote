@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AudioWaveform, Plus, Settings, Loader2, Trash2, FolderOpen, AlertCircle } from 'lucide-react';
 import { Project } from '../types';
-import { revealInFinder } from '../utils/projectCommands';
+import { revealInFileManager } from '../utils/projectCommands';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 
@@ -54,9 +54,9 @@ export default function LaunchScreen({
   const handleShowDataFolder = () => {
     if (!projectsFilePath) return;
     const dir = projectsFilePath.substring(0, projectsFilePath.lastIndexOf('/'));
-    revealInFinder(dir).catch(() => {
+    revealInFileManager(dir).catch(() => {
       const appDataDir = dir.substring(0, dir.lastIndexOf('/'));
-      revealInFinder(appDataDir).catch(() => {});
+      revealInFileManager(appDataDir).catch(() => {});
     });
   };
 
