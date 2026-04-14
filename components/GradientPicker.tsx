@@ -1,4 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
+import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { MAGMA_STOPS, interpolateMagmaHex } from '../constants';
 
 interface Props {
@@ -13,7 +14,6 @@ const MAGMA_CSS = `linear-gradient(to right, ${MAGMA_STOPS.map(s => {
 }).join(', ')})`;
 
 // Infer the closest magma t-value for a given hex color by scanning the colormap.
-// Returns a float in [0, 1]. If the color is not on the magma gradient, returns 0.5.
 function hexToMagmaT(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -37,30 +37,10 @@ export default function GradientPicker({ value, onChange }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
   const [tStart, setTStart] = useState(() => hexToMagmaT(value[0]));
   const [tEnd, setTEnd] = useState(() => hexToMagmaT(value[1]));
-  // Which handle is currently being dragged: 0 = start, 1 = end, null = none
-  const draggingRef = useRef<0 | 1 | null>(null);
-  // Color wheel input refs for the two handles
-  const colorInput0Ref = useRef<HTMLInputElement>(null);
-  const colorInput1Ref = useRef<HTMLInputElement>(null);
-  // Track whether a handle's color is custom (not on the magma gradient)
-  const [customColor0, setCustomColor0] = useState(value[0]);
-  const [customColor1, setCustomColor1] = useState(value[1]);
-  // Whether the color for each handle is custom (off the magma ramp)
-  const [useCustom0, setUseCustom0] = useState(false);
-  const [useCustom1, setUseCustom1] = useState(false);
 
-  // Propagate to parent whenever tStart/tEnd or custom colors change
   useEffect(() => {
-    const c0 = useCustom0 ? customColor0 : interpolateMagmaHex(tStart);
-    const c1 = useCustom1 ? customColor1 : interpolateMagmaHex(tEnd);
-    onChange([c0, c1]);
-  }, [tStart, tEnd, useCustom0, useCustom1, customColor0, customColor1]);
-
-  // Initialize t values from the incoming value prop on mount
-  useEffect(() => {
-    setTStart(hexToMagmaT(value[0]));
-    setTEnd(hexToMagmaT(value[1]));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    onChange([interpolateMagmaHex(tStart), interpolateMagmaHex(tEnd)]);
+  }, [tStart, tEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tToPercent = (t: number) => `${(t * 100).toFixed(1)}%`;
 
@@ -72,15 +52,12 @@ export default function GradientPicker({ value, onChange }: Props) {
 
   const handleBarMouseDown = useCallback((e: React.MouseEvent, handle: 0 | 1) => {
     e.preventDefault();
-    draggingRef.current = handle;
-
     const onMove = (ev: MouseEvent) => {
       const t = getBarT(ev.clientX);
-      if (handle === 0) { setTStart(t); setUseCustom0(false); }
-      else { setTEnd(t); setUseCustom1(false); }
+      if (handle === 0) setTStart(t);
+      else setTEnd(t);
     };
     const onUp = () => {
-      draggingRef.current = null;
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
@@ -88,84 +65,34 @@ export default function GradientPicker({ value, onChange }: Props) {
     window.addEventListener('mouseup', onUp);
   }, [getBarT]);
 
-  const color0 = useCustom0 ? customColor0 : interpolateMagmaHex(tStart);
-  const color1 = useCustom1 ? customColor1 : interpolateMagmaHex(tEnd);
+  const color0 = interpolateMagmaHex(tStart);
+  const color1 = interpolateMagmaHex(tEnd);
 
   return (
-    <div className="space-y-3">
-      {/* Live preview of the selected gradient */}
+    // py-1.5 gives the nodes (h-5 = 20px) room to extend 5px beyond the bar (h-2.5 = 10px) on each side
+    <div className="relative py-1.5">
       <div
-        className="h-6 rounded-md"
-        style={{ backgroundImage: `linear-gradient(to right, ${color0}, ${color1})` }}
+        ref={barRef}
+        className="h-2.5 rounded-full cursor-crosshair"
+        style={{ backgroundImage: MAGMA_CSS }}
       />
-
-      {/* Magma ramp bar with draggable handles */}
-      <div className="relative">
-        <div
-          ref={barRef}
-          className="h-6 rounded-md cursor-crosshair"
-          style={{ backgroundImage: MAGMA_CSS }}
-        />
-        {/* Start handle */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
-          style={{ left: tToPercent(tStart), backgroundColor: color0 }}
-          onMouseDown={e => handleBarMouseDown(e, 0)}
-          title="Drag to change start color"
-        />
-        {/* End handle */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
-          style={{ left: tToPercent(tEnd), backgroundColor: color1 }}
-          onMouseDown={e => handleBarMouseDown(e, 1)}
-          title="Drag to change end color"
-        />
+      {/* Start handle — rightward chevron indicates gradient start */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center w-5 h-5 rounded border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
+        style={{ left: tToPercent(tStart), backgroundColor: color0 }}
+        onMouseDown={e => handleBarMouseDown(e, 0)}
+        title="Drag to change start color"
+      >
+        <ChevronRight size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>
-
-      {/* Color wheel buttons */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5 flex-1">
-          <span className="text-gray-400 text-xs">Start</span>
-          <div
-            className="w-5 h-5 rounded-full border border-gray-600 cursor-pointer"
-            style={{ backgroundColor: color0 }}
-            title="Custom color for start"
-            onClick={() => colorInput0Ref.current?.click()}
-          />
-          <input
-            ref={colorInput0Ref}
-            type="color"
-            value={color0}
-            onChange={e => { setCustomColor0(e.target.value); setUseCustom0(true); }}
-            className="sr-only"
-          />
-        </div>
-        <div className="flex items-center gap-1.5 flex-1">
-          <span className="text-gray-400 text-xs">End</span>
-          <div
-            className="w-5 h-5 rounded-full border border-gray-600 cursor-pointer"
-            style={{ backgroundColor: color1 }}
-            title="Custom color for end"
-            onClick={() => colorInput1Ref.current?.click()}
-          />
-          <input
-            ref={colorInput1Ref}
-            type="color"
-            value={color1}
-            onChange={e => { setCustomColor1(e.target.value); setUseCustom1(true); }}
-            className="sr-only"
-          />
-        </div>
-        {(useCustom0 || useCustom1) && (
-          <button
-            type="button"
-            onClick={() => { setUseCustom0(false); setUseCustom1(false); }}
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-            title="Reset to magma gradient"
-          >
-            Reset to magma
-          </button>
-        )}
+      {/* End handle — leftward chevron indicates gradient end */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center w-5 h-5 rounded border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
+        style={{ left: tToPercent(tEnd), backgroundColor: color1 }}
+        onMouseDown={e => handleBarMouseDown(e, 1)}
+        title="Drag to change end color"
+      >
+        <ChevronLeft size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>
     </div>
   );

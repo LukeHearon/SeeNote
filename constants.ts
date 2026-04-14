@@ -55,10 +55,10 @@ export function interpolateMagmaHex(t: number): string {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
-// Pick two visually distinct colors from the Magma colormap for use as a gradient.
+// Pick two colors independently from the Magma colormap, skipping the dark purple end.
 export function randomMagmaGradient(): [string, string] {
-  const t1 = Math.random() * 0.5;         // dark end [0, 0.5]
-  const t2 = 0.55 + Math.random() * 0.45; // bright end [0.55, 1.0]
+  const t1 = 0.2 + Math.random() * 0.8;
+  const t2 = 0.2 + Math.random() * 0.8;
   return [interpolateMagmaHex(t1), interpolateMagmaHex(t2)];
 }
 

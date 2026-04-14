@@ -3,6 +3,7 @@ import { X, FolderOpen } from 'lucide-react';
 import { Project, LabelConfig } from '../types';
 import { openDirectoryDialog } from '../utils/tauriCommands';
 import { DEFAULT_LABEL_CONFIGS, randomMagmaGradient } from '../constants';
+import GradientPicker from './GradientPicker';
 
 interface Props {
   onCreated: (project: Project) => void;
@@ -15,6 +16,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
   const [audioDir, setAudioDir] = useState('');
   const [annotationDir, setAnnotationDir] = useState('');
   const [outputFormat, setOutputFormat] = useState<'json' | 'csv' | 'txt'>('txt');
+  const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -42,7 +44,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
         annotationDirectory: annotationDir,
         outputFormat,
         labelConfigs: DEFAULT_LABEL_CONFIGS,
-        nameGradientColors: randomMagmaGradient(),
+        nameGradientColors: gradientColors,
       });
       onCreated(project);
     } catch (err) {
@@ -73,6 +75,22 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
               className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
               autoFocus
             />
+            {name.trim() && (
+              <div className="mt-2 py-1">
+                <span
+                  className="text-xl font-bold bg-clip-text text-transparent"
+                  style={{
+                    backgroundImage: `linear-gradient(to right, ${gradientColors[0]}, ${gradientColors[1]})`,
+                    display: 'inline-block',
+                  }}
+                >
+                  {name.trim()}
+                </span>
+              </div>
+            )}
+            <div className="mt-3">
+              <GradientPicker value={gradientColors} onChange={setGradientColors} />
+            </div>
           </div>
 
           {/* Audio directory */}

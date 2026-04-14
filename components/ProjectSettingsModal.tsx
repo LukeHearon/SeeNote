@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
 import { openDirectoryDialog } from '../utils/tauriCommands';
@@ -15,11 +15,17 @@ interface Props {
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
   const [name, setName] = useState(project.name);
+  const nameRef = useRef<HTMLDivElement>(null);
   const [audioDir, setAudioDir] = useState(project.audioDirectory);
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
   const [outputFormat, setOutputFormat] = useState(project.outputFormat);
   const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
   const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
+
+  // Set initial text content of the contentEditable name field on mount
+  useEffect(() => {
+    if (nameRef.current) nameRef.current.textContent = project.name;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -157,12 +163,29 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             <div className="space-y-4">
               <div>
                 <label className="text-gray-400 text-sm block mb-1">Project Name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                />
+                <div className="border-b border-gray-600 focus-within:border-blue-500 pb-1">
+                  <div
+                    ref={nameRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={e => setName((e.target as HTMLDivElement).textContent || '')}
+                    onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                    onPaste={e => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData('text/plain');
+                      document.execCommand('insertText', false, text);
+                    }}
+                    className="text-xl font-bold bg-clip-text text-transparent outline-none cursor-text"
+                    style={{
+                      backgroundImage: `linear-gradient(to right, ${gradientColors[0]}, ${gradientColors[1]})`,
+                      display: 'inline-block',
+                      minWidth: '2ch',
+                    }}
+                  />
+                </div>
+                <div className="mt-3">
+                  <GradientPicker value={gradientColors} onChange={setGradientColors} />
+                </div>
               </div>
 
               <div>
@@ -212,11 +235,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   <option value="csv">CSV (.csv)</option>
                   <option value="json">JSON (.json)</option>
                 </select>
-              </div>
-
-              <div>
-                <label className="text-gray-400 text-sm block mb-2">Project Name Colors</label>
-                <GradientPicker value={gradientColors} onChange={setGradientColors} />
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

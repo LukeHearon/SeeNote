@@ -128,13 +128,12 @@ export default function LaunchScreen({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">
+                    <p className="font-bold truncate">
                       <span
                         className="bg-clip-text text-transparent"
                         style={{
                           backgroundImage: `linear-gradient(to right, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`,
                           display: 'inline-block',
-                          width: '100%',
                         }}
                       >
                         {project.name}
