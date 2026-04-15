@@ -50,11 +50,13 @@ interface SpectrogramProps {
   activeLabelConfig: LabelConfig | null;
   labelConfigs: LabelConfig[];
   selectionRegion: SelectionRegion | null;
+  boundAnnotationId: string | null;
   onSeek: (time: number) => void;
   onLabelsChange: (labels: Label[]) => void;
   onLabelsCommit: (labels: Label[]) => void;
   onSelectLabel: (id: string | null) => void;
   onSelectionChange: (region: SelectionRegion | null) => void;
+  onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
 }
 
@@ -83,11 +85,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   activeLabelConfig,
   labelConfigs,
   selectionRegion,
+  boundAnnotationId,
   onSeek,
   onLabelsChange,
   onLabelsCommit,
   onSelectLabel,
   onSelectionChange,
+  onBoundAnnotationChange,
   onZoomChange
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -141,9 +145,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const [creatingSelection, setCreatingSelection] = useState<{ start: number; current: number } | null>(null);
   const [resizingSelectionHandle, setResizingSelectionHandle] = useState<'start' | 'end' | null>(null);
 
-  // Annotation-bound selection: clicking center of a label binds selection to it.
-  // Null means no bound annotation.
-  const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
+  // Annotation-bound selection state is lifted to App.tsx (boundAnnotationId prop + onBoundAnnotationChange).
 
   // Track mousedown on label center to distinguish click vs drag
   const clickDownRef = useRef<{ x: number; y: number; labelId: string; pointerTime: number } | null>(null);
@@ -540,6 +542,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [pixelsPerSecond]);
 
   const goToPrevAnnotation = useCallback(() => {
+    // In Selection Mode with an active selection: jump to selection start
+    if (activeLabelConfig === null && selectionRegion !== null) {
+      onSeek(selectionRegion.start);
+      scrollToAnnotation(selectionRegion.start);
+      return;
+    }
     const prev = [...sortedLabels].reverse().find(l => l.start < currentTime - 0.05);
     if (prev) {
       onSeek(prev.start);
@@ -548,9 +556,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation]);
+  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation, activeLabelConfig, selectionRegion]);
 
   const goToNextAnnotation = useCallback(() => {
+    // In Selection Mode with an active selection: jump to selection end
+    if (activeLabelConfig === null && selectionRegion !== null) {
+      onSeek(selectionRegion.end);
+      scrollToAnnotation(selectionRegion.end);
+      return;
+    }
     const next = sortedLabels.find(l => l.start > currentTime + 0.05);
     if (next) {
       onSeek(next.start);
@@ -559,7 +573,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(duration);
       scrollToAnnotation(duration);
     }
-  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation]);
+  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation, activeLabelConfig, selectionRegion]);
 
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
@@ -578,13 +592,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const handler = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       if (e.key === 'Escape') {
-        setBoundAnnotationId(null);
+        onBoundAnnotationChange(null);
         onSelectionChange(null);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onSelectionChange]);
+  }, [onSelectionChange, onBoundAnnotationChange]);
 
   // --- Interaction Handlers ---
 
@@ -612,20 +626,45 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const t = getPointerTime(e);
 
       if (activeLabelConfig === null) {
-        // Selection Mode: single click seeks and clears selection
+        // Selection Mode
+
+        // Shift+click while paused: extend selection from playhead to click point
+        if (e.shiftKey && !isPlaying) {
+          const selStart = Math.min(currentTime, t);
+          const selEnd = Math.max(currentTime, t);
+          if (selEnd - selStart > 0.001) {
+            onSelectionChange({ start: selStart, end: selEnd });
+          }
+          return;
+        }
+
+        // Click inside existing selection: seek only, preserve selection
+        if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
+          onSeek(t);
+          return;
+        }
+
+        // Click outside selection: clear selection, seek, start tracking for drag
         onSelectLabel(null);
-        setBoundAnnotationId(null);
+        onBoundAnnotationChange(null);
         onSelectionChange(null);
         onSeek(t);
-        // Start tracking in case user drags (creates selection)
         setCreatingSelection({ start: t, current: t });
       } else {
-        // Label Mode: start annotation creation
+        // Label Mode
+
+        // Click inside existing selection: seek only, preserve selection
+        if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
+          onSeek(t);
+          return;
+        }
+
+        // Click outside selection: clear any active selection, start annotation creation
         onSelectLabel(null);
-        setBoundAnnotationId(null);
-        const t2 = getPointerTime(e);
-        setCreatingLabel({ start: t2, current: t2 });
-        onSeek(t2);
+        onBoundAnnotationChange(null);
+        onSelectionChange(null);
+        setCreatingLabel({ start: t, current: t });
+        onSeek(t);
       }
     }
     // Label center clicks are handled in the label onMouseDown handler
@@ -730,7 +769,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (clickDownRef.current) {
       const annotation = labels.find(l => l.id === clickDownRef.current!.labelId);
       if (annotation) {
-        setBoundAnnotationId(annotation.id);
+        onBoundAnnotationChange(annotation.id);
         onSelectionChange({ start: annotation.start, end: annotation.end });
         onSelectLabel(annotation.id);
       }
@@ -763,7 +802,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const end = Math.max(creatingSelection.start, creatingSelection.current);
       if (end - start > 0.05) {
         onSelectionChange({ start, end });
-        setBoundAnnotationId(null);
+        onBoundAnnotationChange(null);
       } else {
         // Very small drag = treat as click; selection already cleared in mousedown
         onSelectionChange(null);
@@ -976,7 +1015,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             onLabelsCommit(labels.filter(lb => lb.id !== l.id));
                             if (isSelected) onSelectLabel(null);
                             if (boundAnnotationId === l.id) {
-                              setBoundAnnotationId(null);
+                              onBoundAnnotationChange(null);
                               onSelectionChange(null);
                             }
                             return;
@@ -1125,7 +1164,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             onLabelsCommit(labels.filter(lb => lb.id !== l.id));
                             if (isSelected) onSelectLabel(null);
                             if (boundAnnotationId === l.id) {
-                              setBoundAnnotationId(null);
+                              onBoundAnnotationChange(null);
                               onSelectionChange(null);
                             }
                         }}

@@ -66,6 +66,14 @@ export default function App() {
   const [selectionRegion, setSelectionRegion] = useState<{ start: number; end: number } | null>(null);
   const selectionRegionRef = useRef<{ start: number; end: number } | null>(null);
 
+  // Annotation currently bound to the selection region (null = free selection or no selection)
+  const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
+
+  // Per-session text buffer for label reassignment: saves each configId's text while an annotation
+  // is bound, so switching back to a prior config restores the previously-entered text.
+  // Cleared when the bound annotation is deselected.
+  const reassignBufferRef = useRef<Record<string, string>>({});
+
   // Label Editing State
   const [editingLabelIndex, setEditingLabelIndex] = useState<number | null>(null);
   const [editingLabelText, setEditingLabelText] = useState("");
@@ -156,6 +164,9 @@ export default function App() {
   // Keep selectionRegionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRegionRef.current = selectionRegion; }, [selectionRegion]);
 
+  // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
+  useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
+
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
@@ -201,6 +212,7 @@ export default function App() {
     setIsBuffering(false);
     setSelectedLabelId(null);
     setSelectionRegion(null);
+    setBoundAnnotationId(null);
     setDebugLogs([]);
     setCurrentFilePath(absolutePath);
     // Reset playhead to beginning of file
@@ -805,10 +817,32 @@ export default function App() {
               const key = e.key;
               const config = labelConfigs.find(c => c.key === key);
               if (config) {
-                  // If in selection mode with an active selection, drop a label onto it
-                  if (activeLabelKey === null && selectionRegion !== null) {
+                  e.preventDefault(); // Prevent the digit from being typed into the new custom label input
+                  const isCustom = config.key === '0';
+                  // If a bound annotation is selected: reassign its label, don't create a new one
+                  if (boundAnnotationId !== null) {
+                      const currentAnnotation = labels.find(l => l.id === boundAnnotationId);
+                      if (currentAnnotation) {
+                          // Save the annotation's current text before overwriting, so it can be
+                          // restored if the user switches back to this configId later.
+                          reassignBufferRef.current = {
+                              ...reassignBufferRef.current,
+                              [currentAnnotation.configId]: currentAnnotation.text,
+                          };
+                          // Restore saved text for the new configId, or fall back to the default.
+                          const savedText = reassignBufferRef.current[config.key];
+                          const newText = savedText !== undefined ? savedText : (isCustom ? '' : config.text);
+                          const updated = labels.map(l => l.id === boundAnnotationId
+                              ? { ...l, configId: config.key, text: newText, color: config.color }
+                              : l
+                          );
+                          handleLabelsCommit(updated);
+                          setActiveLabelKey(key);
+                      }
+                  }
+                  // If in selection mode with a free selection, drop a new label onto it
+                  else if (activeLabelKey === null && selectionRegion !== null) {
                       const id = Math.random().toString(36).substr(2, 9);
-                      const isCustom = config.key === '0';
                       const newLabel: Label = {
                           id,
                           configId: config.key,
@@ -831,7 +865,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, seek, currentTime, zoomSec, duration]);
+  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
 
   const performExport = async () => {
       if (labels.length === 0) return;
@@ -1777,11 +1811,13 @@ export default function App() {
                 activeLabelConfig={activeLabelKey !== null ? (labelConfigs.find(c => c.key === activeLabelKey) ?? null) : null}
                 labelConfigs={labelConfigs}
                 selectionRegion={selectionRegion}
+                boundAnnotationId={boundAnnotationId}
                 onSeek={seek}
                 onLabelsChange={handleLabelsChange}
                 onLabelsCommit={handleLabelsCommit}
                 onSelectLabel={setSelectedLabelId}
                 onSelectionChange={setSelectionRegion}
+                onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
              />
              </div>
