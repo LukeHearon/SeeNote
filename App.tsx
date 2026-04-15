@@ -156,6 +156,9 @@ export default function App() {
   // Keep selectionRegionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRegionRef.current = selectionRegion; }, [selectionRegion]);
 
+  const durationRef = useRef(0);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+
   // Keep isAudioFileRef in sync so the onEnded closure (created once on mount) reads the current value
   useEffect(() => { isAudioFileRef.current = isAudioFile; }, [isAudioFile]);
 
@@ -195,6 +198,7 @@ export default function App() {
 
     setLabels([]);
     setIsPlaying(false);
+    setIsBuffering(false);
     setSelectedLabelId(null);
     setSelectionRegion(null);
     setDebugLogs([]);
@@ -630,6 +634,13 @@ export default function App() {
     setShowProjectSettings(false);
   }, [activeProject, updateProject, handleOpenFile]);
 
+  const handleCloseProject = useCallback(() => {
+    engineRef.current?.pause();
+    setIsPlaying(false);
+    setIsBuffering(false);
+    setActiveProject(null);
+  }, []);
+
   const handleToggleHideAnnotated = useCallback(() => {
     if (!activeProject) return;
     updateProject({ ...activeProject, hideAnnotated: !activeProject.hideAnnotated });
@@ -658,6 +669,8 @@ export default function App() {
   const togglePlay = useCallback(() => {
       if (isPlaying || isBuffering) {
           engineRef.current?.pause();
+          setIsPlaying(false);
+          setIsBuffering(false);
           // For video files, also pause the video element (audio engine fires onPaused
           // which sets isPlaying=false; we stop the frame track here).
           if (!isAudioFile) videoRef.current?.pause();
@@ -695,14 +708,20 @@ export default function App() {
           videoRef.current.currentTime = time;
       }
       if (scrollView) spectrogramRef.current?.scrollToTime(time);
-      // If playback was active, restart from the new position
+      // If playback was active, restart from the new position (stop if at/past EOF)
       if (wasPlaying) {
-          const sel = selectionRegionRef.current;
-          setIsBuffering(true);
-          engineRef.current?.play(time, sel ? sel.end : undefined);
-          if (!isAudioFile && videoRef.current) {
-              videoRef.current.currentTime = time;
-              videoRef.current.play().catch(() => {});
+          if (time < durationRef.current) {
+              const sel = selectionRegionRef.current;
+              setIsBuffering(true);
+              engineRef.current?.play(time, sel ? sel.end : undefined);
+              if (!isAudioFile && videoRef.current) {
+                  videoRef.current.currentTime = time;
+                  videoRef.current.play().catch(() => {});
+              }
+          } else {
+              // Seeked to/past EOF — stop cleanly rather than hanging
+              setIsPlaying(false);
+              if (!isAudioFile) videoRef.current?.pause();
           }
       }
   }, [isAudioFile]);
@@ -1025,7 +1044,7 @@ export default function App() {
       <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative">
         <div className="flex items-center space-x-4">
             <button
-                onClick={() => setActiveProject(null)}
+                onClick={handleCloseProject}
                 className="flex items-center space-x-1 text-slate-400 hover:text-white hover:bg-slate-700 px-2 py-1.5 rounded transition-colors"
                 title="Back to projects"
             >
