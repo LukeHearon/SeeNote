@@ -11,6 +11,23 @@ export const MAGMA_STOPS = [
   { pos: 1.0, r: 250, g: 251, b: 198 },  // White-Yellow      
 ];
 
+// Extensions that the Rust symphonia decoder can actually decode.
+// Files with other extensions are still scanned and shown in the file tree,
+// but marked "(unsupported)" and disabled — we can't produce audio or a
+// spectrogram for them. Keep in sync with src-tauri/Cargo.toml symphonia
+// features and VideoPlayer's <video> capability.
+// ogg intentionally omitted: symphonia 0.5's ogg/vorbis path hangs on decode
+// in our environment (play button never unsticks). Revisit if/when we swap
+// decoders or upgrade symphonia. Ogg files are still scanned and shown, just
+// grayed as (unsupported) so users aren't surprised by silent failures.
+export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a']);
+export const SUPPORTED_VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm']);
+
+export function isSupportedMediaFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return SUPPORTED_AUDIO_EXTS.has(ext) || SUPPORTED_VIDEO_EXTS.has(ext);
+}
+
 export const MIN_ZOOM_SEC = 1;
 export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 10;

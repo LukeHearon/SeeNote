@@ -6,7 +6,7 @@ import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { Label, SpectrogramSettings, LabelConfig, FrequencyScale, Project } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS } from './constants';
+import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
@@ -117,6 +117,7 @@ export default function App() {
         setIsPlaying(false);
       },
       onBufferUnderrun: () => setIsBuffering(true),
+      onDebugLog: (msg, type = 'info') => addLog(msg, type),
     });
     return () => {
       engineRef.current?.dispose();
@@ -185,6 +186,14 @@ export default function App() {
 
   // Open a file by absolute path (called from button or FileBrowser)
   const handleOpenFile = useCallback(async (absolutePath: string) => {
+    // Guard: never attempt to open a file whose extension we can't decode.
+    // Both the tree and nav paths already filter these out; this is a belt-and-suspenders
+    // check so a stray caller can't put us into a half-loaded state.
+    if (!isSupportedMediaFile(absolutePath)) {
+      addLog(`Skipped unsupported file: ${absolutePath.split('/').pop() ?? absolutePath}`, 'error');
+      return;
+    }
+
     setLabels([]);
     setIsPlaying(false);
     setSelectedLabelId(null);
@@ -249,6 +258,17 @@ export default function App() {
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         addLog(`Error opening file: ${errMsg}`, 'error');
+        // Fully clear state so stale audio/spectrogram/video from the previous
+        // file don't remain on screen while the user thinks they're seeing the
+        // new one. Without this, a failed decode leaves the engine bound to the
+        // previous PcmStream and the spectrogram canvas bound to the previous cache.
+        setVideoSrc(null);
+        setCurrentFilePath(null);
+        setDuration(0);
+        setSampleRate(44100);
+        setIsAudioFile(false);
+        chunkCacheRef.current = null;
+        setCacheVersion(v => v + 1);
     } finally {
         setIsProcessing(false);
     }
@@ -290,9 +310,12 @@ export default function App() {
 
   const navigateFile = useCallback((direction: 'prev' | 'next') => {
     if (displayQueue.length === 0) return;
-    let idx = currentFileIndex;
-    if (direction === 'prev') idx = Math.max(0, idx - 1);
-    else idx = Math.min(displayQueue.length - 1, idx + 1);
+    const step = direction === 'prev' ? -1 : 1;
+    let idx = currentFileIndex + step;
+    // Skip over unsupported files so prev/next lands on a file we can actually open.
+    while (idx >= 0 && idx < displayQueue.length && !isSupportedMediaFile(displayQueue[idx])) {
+        idx += step;
+    }
     if (idx >= 0 && idx < displayQueue.length && displayQueue[idx] !== currentFilePath) {
         handleOpenFile(displayQueue[idx]);
     }
@@ -1302,6 +1325,7 @@ export default function App() {
                     onLoadedMetadata={() => {}}
                     onPlaying={() => {}}
                     onWaiting={() => {}}
+                    onDebugLog={addLog}
                  />
                  {isProcessing && (
                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">

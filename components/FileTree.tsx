@@ -38,6 +38,8 @@ interface ContextMenuState {
   isAudioRoot?: boolean;
 }
 
+import { isSupportedMediaFile } from '../constants';
+
 const AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma']);
 
 // OS-aware label for the system file browser
@@ -175,6 +177,25 @@ const TreeItem: React.FC<TreeItemProps> = ({
   const isActive = node.path === currentFile;
   const isAudio = AUDIO_EXTS.has(getExt(node.name));
   const hasAnnotation = annotatedFiles.has(node.path);
+  const isSupported = isSupportedMediaFile(node.path);
+
+  if (!isSupported) {
+    return (
+      <div
+        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
+        className="flex items-center gap-2 w-full py-1 text-left text-slate-600 cursor-not-allowed"
+        style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
+        title={`${node.name} (unsupported file type)`}
+      >
+        {isAudio
+          ? <Music size={12} className="flex-none opacity-40" />
+          : <Film size={12} className="flex-none opacity-40" />
+        }
+        <span className="text-xs truncate flex-1 italic">{node.name}</span>
+        <span className="text-[10px] flex-none opacity-70">(unsupported)</span>
+      </div>
+    );
+  }
 
   return (
     <button
@@ -413,6 +434,25 @@ function FileTree({
                 const isActive = filePath === currentFile;
                 const isAudio = AUDIO_EXTS.has(getExt(filePath));
                 const hasAnnotation = annotatedFiles.has(filePath);
+                const isSupported = isSupportedMediaFile(filePath);
+                if (!isSupported) {
+                  return (
+                    <div
+                      key={filePath}
+                      onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-slate-600 cursor-not-allowed"
+                      style={{ opacity }}
+                      title={`${filePath} (unsupported file type)`}
+                    >
+                      {isAudio
+                        ? <Music size={12} className="flex-none opacity-40" />
+                        : <Film size={12} className="flex-none opacity-40" />
+                      }
+                      <span className="text-xs truncate flex-1 italic">{relNoExt}</span>
+                      <span className="text-[10px] flex-none opacity-70">(unsupported)</span>
+                    </div>
+                  );
+                }
                 return (
                   <button
                     key={filePath}
