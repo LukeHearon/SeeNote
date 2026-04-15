@@ -39,7 +39,18 @@ export interface AudioEngineCallbacks {
   onEnded: () => void;
   /** Called when audio decoding can't keep up and there's a gap. */
   onBufferUnderrun: () => void;
+  /** Optional: emitted for notable engine events (opens, errors, watchdog trips, etc.). */
+  onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
 }
+
+/**
+ * How long play() is allowed to wait for the first PCM chunk to arrive before
+ * we assume the decode path is stuck and abort. This is a safety valve for
+ * codecs that open fine but then never deliver samples (e.g. hung format
+ * readers). Without it the UI sits in "buffering" forever with no way for the
+ * user to try another file.
+ */
+const STUCK_PLAY_TIMEOUT_MS = 3000;
 
 /** Metadata for one scheduled AudioBufferSourceNode. */
 interface ScheduledNode {
@@ -93,8 +104,16 @@ export class AudioEngine {
   private streamId: number | null = null;
 
   private rafHandle: number | null = null;
+  /** Number of PCM chunks successfully scheduled in the current play(). Used by
+   *  the stuck-play watchdog to detect decodes that open but never deliver. */
+  private chunksScheduled = 0;
+  private stuckWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   private callbacks: AudioEngineCallbacks;
+
+  private _log(msg: string, type: 'info' | 'error' = 'info'): void {
+    this.callbacks.onDebugLog?.(`[audio] ${msg}`, type);
+  }
 
   constructor(callbacks: AudioEngineCallbacks) {
     this.callbacks = callbacks;
@@ -176,10 +195,32 @@ export class AudioEngine {
     this.schedCursor = startSec;
     this.endSec = endSec ?? null;
     this.queue = [];
+    this.chunksScheduled = 0;
 
     // Schedule the first sample slightly in the future so the prefetch loop
     // has time to fetch the first chunk before playback begins.
     this.playStartCtx = this.ctx.currentTime + START_DELAY_SEC;
+
+    this._log(
+      `play start=${startSec.toFixed(3)}s ${endSec !== undefined ? `end=${endSec.toFixed(3)}s ` : ''}`
+      + `ctx.sr=${this.ctx.sampleRate} file.sr=${this.fileSampleRate} ch=${this.fileChannels} ctx.state=${this.ctx.state}`,
+    );
+
+    // ── Stuck-play watchdog ───────────────────────────────────────────────────
+    // If no PCM chunks are scheduled within STUCK_PLAY_TIMEOUT_MS we assume
+    // the Rust decode path is hung (seen with ogg/vorbis) and abort cleanly
+    // so the UI can return to a useful state.
+    this.stuckWatchdog = setTimeout(() => {
+      if (this.playId !== myPlayId) return;
+      if (this.chunksScheduled === 0) {
+        this._log(
+          `watchdog: no chunks scheduled after ${STUCK_PLAY_TIMEOUT_MS}ms — aborting (likely decoder hang)`,
+          'error',
+        );
+        this._cancelPlayback();
+        this.callbacks.onPaused();
+      }
+    }, STUCK_PLAY_TIMEOUT_MS);
 
     this._prefetchLoop(myPlayId);
     this._rafLoop(myPlayId);
@@ -255,6 +296,11 @@ export class AudioEngine {
     // Increment playId — all async loops holding a stale id will exit
     this.playId++;
 
+    if (this.stuckWatchdog !== null) {
+      clearTimeout(this.stuckWatchdog);
+      this.stuckWatchdog = null;
+    }
+
     if (this.rafHandle !== null) {
       cancelAnimationFrame(this.rafHandle);
       this.rafHandle = null;
@@ -296,8 +342,17 @@ export class AudioEngine {
     } catch (err) {
       if (this.playId !== myPlayId) return;
       console.error('AudioEngine: startPcmStream failed', err);
+      this._log(`startPcmStream failed: ${String(err)}`, 'error');
+      // Fully tear down so the UI doesn't stay stuck in the "buffering" state
+      // and the user can try another file cleanly. Without this, isBuffering
+      // remains true on the React side and subsequent plays inherit the hang.
+      this._cancelPlayback();
+      this.callbacks.onPaused();
       return;
     }
+    this._log(
+      `stream opened id=${handle.stream_id} sr=${handle.sample_rate} ch=${handle.channels} total_frames=${handle.total_frames}`,
+    );
     if (this.playId !== myPlayId) {
       closePcmStream(handle.stream_id).catch(() => {});
       return;
@@ -329,7 +384,12 @@ export class AudioEngine {
       } catch (err) {
         if (this.playId !== myPlayId) break;
         console.error('AudioEngine: readPcmChunk failed', err);
-        break;
+        this._log(`readPcmChunk failed: ${String(err)}`, 'error');
+        // A mid-stream decode error would otherwise leave the engine "playing"
+        // silence with no way to recover the UI. Cancel cleanly and notify.
+        this._cancelPlayback();
+        this.callbacks.onPaused();
+        return;
       }
       if (this.playId !== myPlayId) break;
 
@@ -392,6 +452,10 @@ export class AudioEngine {
       this.queue.push({ source, mediaStart: chunkMediaStart, mediaEnd: chunkMediaStart + chunkDurationSec, ctxStart, ctxEnd });
       expectedNextCtxStart = ctxEnd;
       this.schedCursor = chunkMediaStart + chunkDurationSec;
+      this.chunksScheduled++;
+      if (this.chunksScheduled === 1) {
+        this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s frames=${framesToSchedule}`);
+      }
 
       if (reachedEnd) break;
     }
