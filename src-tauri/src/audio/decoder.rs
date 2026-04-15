@@ -14,6 +14,22 @@ pub struct FileInfo {
     pub channels: u16,
 }
 
+/// Find the first track in the container that has a decodable audio codec.
+///
+/// `format.default_track()` returns whatever the container marked as default — for
+/// MP4/MKV with a video track that is often the video, not the audio. Building
+/// an audio decoder against video codec params then fails silently upstream.
+/// We iterate tracks and pick the first one that produces a working decoder.
+fn find_audio_track(format: &dyn FormatReader) -> Option<&symphonia::core::formats::Track> {
+    let codecs = symphonia::default::get_codecs();
+    format.tracks().iter().find(|t| {
+        t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL
+            && codecs
+                .make(&t.codec_params, &DecoderOptions::default())
+                .is_ok()
+    })
+}
+
 pub fn get_file_info(path: &str) -> Result<FileInfo> {
     let file = File::open(path).with_context(|| format!("Cannot open file: {path}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -27,29 +43,72 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .context("Unsupported format")?;
 
-    let format = probed.format;
-    let track = format
-        .default_track()
-        .context("No default audio track found")?;
+    let mut format = probed.format;
+    let (track_id, initial_sr, initial_channels, n_frames) = {
+        let track = find_audio_track(format.as_ref())
+            .context("No decodable audio track found")?;
+        let p = &track.codec_params;
+        (
+            track.id,
+            p.sample_rate.unwrap_or(44100),
+            p.channels.map(|c| c.count() as u16).unwrap_or(1),
+            p.n_frames,
+        )
+    };
 
-    let params = &track.codec_params;
-    let sample_rate = params.sample_rate.unwrap_or(44100);
-    let channels = params
-        .channels
-        .map(|c| c.count() as u16)
-        .unwrap_or(1);
+    // ── SBR / post-decode sample-rate discovery ────────────────────────────────
+    // HE-AAC (common inside MP4) uses Spectral Band Replication (SBR). The
+    // AudioSpecificConfig carried in codec_params reports the BASE sample rate
+    // (e.g. 24 kHz), but the decoder outputs samples at 2× that rate (48 kHz)
+    // once SBR is applied. Reporting the base rate to the frontend makes Web
+    // Audio treat the real-48 kHz buffer as 24 kHz, playing it back at half
+    // speed — audio sounds pitched down an octave and the stream appears to
+    // "run long" past the playhead.
+    //
+    // To get the truth we have to *decode a packet* and read `decoded.spec()`.
+    // We do a one-packet peek here in get_file_info, and PcmStream::open does
+    // the same at open time so the streaming path uses the real rate too.
+    let (real_sr, real_channels) =
+        probe_decoded_spec(format.as_mut(), track_id).unwrap_or((initial_sr, initial_channels));
 
-    let duration_secs = if let Some(n_frames) = params.n_frames {
-        n_frames as f64 / sample_rate as f64
+    // n_frames is reported in *base-rate* frames (same units as time_base), so
+    // dividing by initial_sr gives correct seconds regardless of SBR.
+    let duration_secs = if let Some(n) = n_frames {
+        n as f64 / initial_sr as f64
     } else {
         0.0
     };
 
     Ok(FileInfo {
         duration_secs,
-        sample_rate,
-        channels,
+        sample_rate: real_sr,
+        channels: real_channels,
     })
+}
+
+/// Decode one packet from `track_id` and return its real post-SBR spec.
+/// Leaves the format reader consumed by that packet — only used for one-shot
+/// inspection by `get_file_info`, not for streaming.
+fn probe_decoded_spec(
+    format: &mut dyn FormatReader,
+    track_id: u32,
+) -> Option<(u32, u16)> {
+    let track = format.tracks().iter().find(|t| t.id == track_id)?;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .ok()?;
+
+    for _ in 0..16 {
+        let packet = format.next_packet().ok()?;
+        if packet.track_id() != track_id {
+            continue;
+        }
+        if let Ok(decoded) = decoder.decode(&packet) {
+            let spec = *decoded.spec();
+            return Some((spec.rate, spec.channels.count() as u16));
+        }
+    }
+    None
 }
 
 // ── PcmStream ─────────────────────────────────────────────────────────────────
@@ -114,27 +173,34 @@ impl PcmStream {
             .context("Unsupported format")?;
 
         let mut format = probed.format;
-        let track = format
-            .default_track()
-            .context("No default audio track found")?;
+        // See find_audio_track: must not rely on default_track() for MP4/MKV,
+        // where it may point at the video stream.
+        let (track_id, initial_sr, initial_channels, time_base) = {
+            let track = find_audio_track(format.as_ref())
+                .context("No decodable audio track found")?;
+            (
+                track.id,
+                track.codec_params.sample_rate.unwrap_or(44100),
+                track
+                    .codec_params
+                    .channels
+                    .map(|c| c.count() as u16)
+                    .unwrap_or(1),
+                track.codec_params.time_base,
+            )
+        };
 
-        let track_id = track.id;
-        let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-        let channels = track
-            .codec_params
-            .channels
-            .map(|c| c.count() as u16)
-            .unwrap_or(1);
-        let time_base = track.codec_params.time_base;
+        let mut decoder = {
+            let track = format.tracks().iter().find(|t| t.id == track_id).unwrap();
+            symphonia::default::get_codecs()
+                .make(&track.codec_params, &DecoderOptions::default())
+                .context("Failed to create decoder")?
+        };
 
-        let decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .context("Failed to create decoder")?;
-
-        let desired_start_frame = (start_sec * sample_rate as f64).round() as u64;
+        // Seek using the *base* sample rate; symphonia's seek is in seconds,
+        // so SBR doesn't affect the seek target calculation.
         let seek_margin_sec = 0.5;
         let seek_target = (start_sec - seek_margin_sec).max(0.0);
-        let seek_target_frame = (seek_target * sample_rate as f64).round() as u64;
 
         if seek_target > 0.0 {
             let _ = format.seek(
@@ -146,6 +212,55 @@ impl PcmStream {
             );
         }
 
+        // ── Eager first-packet decode to discover the real post-SBR spec ────
+        // See get_file_info for the full SBR rationale. We need the actual
+        // decoded sample rate BEFORE returning so the caller reports the
+        // correct rate to the frontend. We also need it so abs_frame /
+        // desired_start_frame math is in the same frame-rate as the samples
+        // we'll emit.
+        let mut pending: Vec<f32> = Vec::new();
+        let mut first_abs_frame: u64 = 0;
+        let mut sample_rate = initial_sr;
+        let mut channels = initial_channels;
+        let mut eof = true; // flipped to false once we decode a packet
+
+        for _ in 0..16 {
+            let packet = match format.next_packet() {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            if packet.track_id() != track_id {
+                continue;
+            }
+            let decoded = match decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let spec = *decoded.spec();
+            sample_rate = spec.rate;
+            channels = spec.channels.count() as u16;
+
+            // Packet ts is in base units (time_base is based on the container's
+            // timescale, pre-SBR). Convert to seconds, then to frames at the
+            // real (post-SBR) sample_rate.
+            if let Some(tb) = time_base {
+                let t = tb.calc_time(packet.ts());
+                let pkt_secs = t.seconds as f64 + t.frac;
+                first_abs_frame = (pkt_secs * sample_rate as f64).round() as u64;
+            } else {
+                first_abs_frame = (seek_target * sample_rate as f64).round() as u64;
+            }
+
+            let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+            buf.copy_interleaved_ref(decoded);
+            pending = buf.samples().to_vec();
+            eof = false;
+            break;
+        }
+
+        let desired_start_frame = (start_sec * sample_rate as f64).round() as u64;
+        let seek_target_frame = (seek_target * sample_rate as f64).round() as u64;
+
         Ok(PcmStream {
             format,
             decoder,
@@ -154,12 +269,15 @@ impl PcmStream {
             channels,
             desired_start_frame,
             seek_target_frame,
-            abs_frame: 0,
-            first_packet: true,
+            abs_frame: first_abs_frame,
+            // first_packet is already consumed — fill_next_packet must NOT
+            // re-assign abs_frame from packet.ts() on its next call, and
+            // SHOULD advance abs_frame by prev_frames like any other packet.
+            first_packet: false,
             time_base,
-            pending: Vec::new(),
+            pending,
             pending_pos: 0,
-            eof: false,
+            eof,
             next_output_frame: desired_start_frame,
         })
     }
