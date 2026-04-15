@@ -233,6 +233,8 @@ export class AudioEngine {
     this.callbacks.onPaused();
   }
 
+  get isPlaying(): boolean { return this.isPlayingState; }
+
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
     this.pausedAt = Math.max(0, Math.min(sec, this.fileDurationSec));

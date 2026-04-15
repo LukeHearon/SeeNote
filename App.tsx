@@ -111,8 +111,7 @@ export default function App() {
           videoRef.current?.pause();
         }
         if (sel) {
-          engineRef.current?.seek(sel.start);
-          setCurrentTime(sel.start);
+          seek(sel.start, true);
         }
         setIsPlaying(false);
       },
@@ -668,7 +667,11 @@ export default function App() {
           // If there's a selection and the playhead is outside it, restart from selection start
           if (sel && (currentTime >= sel.end - 0.05 || currentTime < sel.start)) {
               startSec = sel.start;
-              setCurrentTime(sel.start);
+              seek(sel.start, true);
+          } else if (!sel && duration > 0 && currentTime >= duration - 0.05) {
+              // At end of file with no selection — return to beginning
+              startSec = 0;
+              seek(0, true);
           }
           setIsBuffering(true);
           // isPlaying is set to true only when onPlaying fires (first sample emitted).
@@ -681,14 +684,26 @@ export default function App() {
               videoRef.current.play().catch(() => {});
           }
       }
-  }, [isPlaying, isBuffering, isAudioFile, currentTime]);
+  }, [isPlaying, isBuffering, isAudioFile, currentTime, duration]);
 
-  const seek = useCallback((time: number) => {
+  const seek = useCallback((time: number, scrollView = false) => {
+      const wasPlaying = engineRef.current?.isPlaying ?? false;
       engineRef.current?.seek(time);
       setCurrentTime(time);
       // Keep video frames in sync for video files
       if (!isAudioFile && videoRef.current) {
           videoRef.current.currentTime = time;
+      }
+      if (scrollView) spectrogramRef.current?.scrollToTime(time);
+      // If playback was active, restart from the new position
+      if (wasPlaying) {
+          const sel = selectionRegionRef.current;
+          setIsBuffering(true);
+          engineRef.current?.play(time, sel ? sel.end : undefined);
+          if (!isAudioFile && videoRef.current) {
+              videoRef.current.currentTime = time;
+              videoRef.current.play().catch(() => {});
+          }
       }
   }, [isAudioFile]);
 
@@ -976,8 +991,7 @@ export default function App() {
     if (parsed !== null) {
       const clamped = Math.max(0, Math.min(duration, parsed));
       if (editingTimeField === 'time') {
-        seek(clamped);
-        spectrogramRef.current?.scrollToTime(clamped);
+        seek(clamped, true);
       } else if (editingTimeField === 'selStart' && selectionRegion) {
         setSelectionRegion({ start: clamped, end: Math.max(clamped, selectionRegion.end) });
       } else if (editingTimeField === 'selEnd' && selectionRegion) {
@@ -1559,7 +1573,7 @@ export default function App() {
              <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
                  {/* Transport controls: [Start] [PrevAnnot] [Play] [NextAnnot] [End] */}
                  <button
-                    onClick={() => { seek(0); spectrogramRef.current?.scrollToTime(0); }}
+                    onClick={() => seek(0, true)}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
                     title="Skip to start"
@@ -1597,7 +1611,7 @@ export default function App() {
                     <ChevronRight size={15} />
                 </button>
                 <button
-                    onClick={() => { seek(duration); spectrogramRef.current?.scrollToTime(duration); }}
+                    onClick={() => seek(duration, true)}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
                     title="Skip to end"
