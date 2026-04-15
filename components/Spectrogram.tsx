@@ -109,6 +109,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
   const [dragStart, setDragStart] = useState<{ x: number; scroll: number } | null>(null);
 
+  // Custom cursor position (relative to the spectrogram container)
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+
   // Hovered label id for hover effects (delete button, pencil icon)
   const [hoveredLabelId, setHoveredLabelId] = useState<string | null>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -671,6 +674,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+
     if (dragStart) {
       const delta = dragStart.x - e.clientX;
       const containerWidth = containerRef.current?.clientWidth || 0;
@@ -935,11 +941,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       {/* Spectrogram area — all interactive content lives here */}
       <div
           ref={containerRef}
-          className="relative flex-1 h-full overflow-hidden cursor-crosshair"
+          className="relative flex-1 h-full overflow-hidden cursor-none"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={() => handleMouseUp()}
+          onMouseLeave={() => { handleMouseUp(); setCursorPos(null); }}
           onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
       >
@@ -1189,6 +1195,33 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         className="absolute top-0 left-0 w-full h-full pointer-events-none"
         style={{ zIndex: 30 }}
       />
+
+      {/* Custom cursor — z-40, above overlay canvas */}
+      {cursorPos && (
+        <div
+          className="absolute pointer-events-none"
+          style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
+        >
+          {/* Crosshair */}
+          <div className="absolute" style={{ left: -8, top: -0.5, width: 16, height: 1, background: 'white', opacity: 0.85 }} />
+          <div className="absolute" style={{ left: -0.5, top: -8, width: 1, height: 16, background: 'white', opacity: 0.85 }} />
+          {/* Label name — only shown when a label mode is active */}
+          {activeLabelConfig && (
+            <div
+              className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
+              style={{
+                top: 10,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                color: activeLabelConfig.color,
+                textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
+              }}
+            >
+              {activeLabelConfig.key === '0' ? 'Custom' : activeLabelConfig.text}
+            </div>
+          )}
+        </div>
+      )}
 
       </div>{/* end spectrogram area */}
     </div>
