@@ -111,6 +111,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // Custom cursor position (relative to the spectrogram container)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [suppressCustomCursor, setSuppressCustomCursor] = useState(false);
 
   // Hovered label id for hover effects (delete button, pencil icon)
   const [hoveredLabelId, setHoveredLabelId] = useState<string | null>(null);
@@ -696,6 +697,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const elUnder = document.elementFromPoint(e.clientX, e.clientY);
+    const computedCursor = elUnder ? window.getComputedStyle(elUnder).cursor : 'none';
+    setSuppressCustomCursor(computedCursor !== 'none');
 
     if (dragStart) {
       const delta = dragStart.x - e.clientX;
@@ -1205,7 +1209,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       />
 
       {/* Custom cursor — z-40, above overlay canvas */}
-      {cursorPos && (
+      {cursorPos && !suppressCustomCursor && (
         <div
           className="absolute pointer-events-none"
           style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
