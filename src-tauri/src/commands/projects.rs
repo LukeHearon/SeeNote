@@ -6,8 +6,10 @@ use tauri::Manager;
 const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a", "opus", "wma"];
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
+/// Wire-format record for an annotation tool, kept as `label_configs` in the
+/// JSON for backward compatibility with existing project files.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct LabelConfigRecord {
+pub struct AnnotationToolRecord {
     pub key: String,
     pub text: String,
     pub color: String,
@@ -22,7 +24,7 @@ pub struct ProjectRecord {
     pub output_format: String,
     pub created_at: String,
     pub last_opened: String,
-    pub label_configs: Vec<LabelConfigRecord>,
+    pub label_configs: Vec<AnnotationToolRecord>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub spectrogram_settings: Option<JsonValue>,
 }

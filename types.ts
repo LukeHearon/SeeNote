@@ -1,8 +1,8 @@
 export type FrequencyScale = 'linear' | 'log' | 'mel';
 
-export interface Label {
+export interface Annotation {
   id: string;
-  configId: string; // The ID of the configuration (e.g., "0", "1") this label belongs to
+  toolKey: string; // The key of the annotation tool (e.g., "0", "1") used to create this annotation
   start: number; // Seconds
   end: number;   // Seconds
   text: string;
@@ -25,7 +25,7 @@ export interface AudioMetadata {
   channels: number;
 }
 
-export interface LabelConfig {
+export interface AnnotationTool {
   key: string;
   text: string;
   color: string;
@@ -39,7 +39,7 @@ export interface Project {
   outputFormat: 'json' | 'csv' | 'txt';
   createdAt: string;
   lastOpened: string;
-  labelConfigs: LabelConfig[];
+  annotationTools: AnnotationTool[];
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
   hideAnnotated?: boolean;

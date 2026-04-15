@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { X, FolderOpen } from 'lucide-react';
-import { Project, LabelConfig } from '../types';
+import { Project } from '../types';
 import { openDirectoryDialog } from '../utils/tauriCommands';
-import { DEFAULT_LABEL_CONFIGS, randomMagmaGradient } from '../constants';
+import { DEFAULT_ANNOTATION_TOOLS, randomMagmaGradient } from '../constants';
 import GradientPicker from './GradientPicker';
 
 interface Props {
@@ -43,7 +43,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
         audioDirectory: audioDir,
         annotationDirectory: annotationDir,
         outputFormat,
-        labelConfigs: DEFAULT_LABEL_CONFIGS,
+        annotationTools: DEFAULT_ANNOTATION_TOOLS,
         nameGradientColors: gradientColors,
       });
       onCreated(project);

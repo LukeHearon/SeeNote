@@ -12,7 +12,7 @@ export const MAGMA_STOPS = [
 ];
 
 // Extensions that the Rust symphonia decoder can actually decode.
-// Files with other extensions are still scanned and shown in the file tree,
+// Files with other extensions are still scanned and shown in the file panel,
 // but marked "(unsupported)" and disabled — we can't produce audio or a
 // spectrogram for them. Keep in sync with src-tauri/Cargo.toml symphonia
 // features and VideoPlayer's <video> capability.
@@ -93,16 +93,17 @@ export const HOTKEY_COLORS = [
   "#64748b", // 9 Slate
 ];
 
-// Default label configs for new projects.
+// Default annotation tools for new projects.
 //
-// IMPORTANT: Key "0" is ALWAYS reserved for "Custom Label". When this label
-// is active, new annotations get an empty text field so the user can type a
-// one-off event name without creating a new named category. The autoFocus on
-// the annotation text input is triggered by `text === ""`, which depends on
-// key "0" staying as Custom Label. Do NOT replace key "0" with a species
-// label — doing so silently breaks the custom-label UX.
-export const DEFAULT_LABEL_CONFIGS = [
-  { key: "0", text: "Custom Label",      color: HOTKEY_COLORS[0] },
+// IMPORTANT: Key "0" is ALWAYS reserved for the Custom Annotation Tool. When
+// this tool is active, new annotations get an empty text field so the user can
+// type a one-off name without creating a new named annotation tool. The
+// autoFocus on the annotation text input is triggered by `text === ""`, which
+// depends on key "0" staying as the Custom Annotation Tool. Do NOT replace
+// key "0" with a defined annotation tool — doing so silently breaks the
+// custom annotation UX.
+export const DEFAULT_ANNOTATION_TOOLS = [
+  { key: "0", text: "Custom",            color: HOTKEY_COLORS[0] },
   { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1] },
   { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2] },
   { key: "3", text: "ins_buzz_low",      color: HOTKEY_COLORS[3] },

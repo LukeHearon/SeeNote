@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Label, SpectrogramSettings, LabelConfig } from '../types';
+import { Annotation, SpectrogramSettings, AnnotationTool } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
-import { formatTime, calculateLabelLayers, makeLabelFromConfig } from '../utils/helpers';
+import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC } from '../constants';
 import { X, Pencil } from 'lucide-react';
@@ -44,17 +44,17 @@ interface SpectrogramProps {
   fileIdent: string | null;
   settings: SpectrogramSettings;
   zoomSec: number;
-  labels: Label[];
-  selectedLabelId: string | null;
-  // null = Selection Mode (no label config active)
-  activeLabelConfig: LabelConfig | null;
-  labelConfigs: LabelConfig[];
+  annotations: Annotation[];
+  selectedAnnotationId: string | null;
+  // null = Selection Mode (no annotation tool active)
+  activeAnnotationTool: AnnotationTool | null;
+  annotationTools: AnnotationTool[];
   selectionRegion: SelectionRegion | null;
   boundAnnotationId: string | null;
   onSeek: (time: number) => void;
-  onLabelsChange: (labels: Label[]) => void;
-  onLabelsCommit: (labels: Label[]) => void;
-  onSelectLabel: (id: string | null) => void;
+  onAnnotationsChange: (annotations: Annotation[]) => void;
+  onAnnotationsCommit: (annotations: Annotation[]) => void;
+  onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: SelectionRegion | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
@@ -80,16 +80,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   fileIdent,
   settings,
   zoomSec,
-  labels,
-  selectedLabelId,
-  activeLabelConfig,
-  labelConfigs,
+  annotations,
+  selectedAnnotationId,
+  activeAnnotationTool,
+  annotationTools,
   selectionRegion,
   boundAnnotationId,
   onSeek,
-  onLabelsChange,
-  onLabelsCommit,
-  onSelectLabel,
+  onAnnotationsChange,
+  onAnnotationsCommit,
+  onSelectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
   onZoomChange
@@ -97,7 +97,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Overlay canvas: draws playhead, time ruler, ident, and selection darkening.
-  // Must be above label HTML divs (z-30 > labels z-10/20).
+  // Must be above annotation HTML divs (z-30 > annotations z-10/20).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   // Y-axis canvas: separate element to the left of the spectrogram area, never layered on top of spectrogram content.
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -113,23 +113,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [suppressCustomCursor, setSuppressCustomCursor] = useState(false);
 
-  // Hovered label id for hover effects (delete button, pencil icon)
-  const [hoveredLabelId, setHoveredLabelId] = useState<string | null>(null);
+  // Hovered annotation id for hover effects (delete button, pencil icon)
+  const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Refs for input focus (pencil icon click)
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [pencilClickedId, setPencilClickedId] = useState<string | null>(null);
-  // Tracks which label is currently in text-edit mode (only via pencil)
+  // Tracks which annotation is currently in text-edit mode (only via pencil)
   const [editingInputId, setEditingInputId] = useState<string | null>(null);
 
-  const handleLabelMouseEnter = useCallback((id: string) => {
+  const handleAnnotationMouseEnter = useCallback((id: string) => {
     if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
-    setHoveredLabelId(id);
+    setHoveredAnnotationId(id);
   }, []);
 
-  const handleLabelMouseLeave = useCallback(() => {
-    hoverTimeoutRef.current = setTimeout(() => setHoveredLabelId(null), 300);
+  const handleAnnotationMouseLeave = useCallback(() => {
+    hoverTimeoutRef.current = setTimeout(() => setHoveredAnnotationId(null), 300);
   }, []);
 
   // Focus input when pencil is clicked
@@ -140,10 +140,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   }, [pencilClickedId]);
 
-  // Interaction State (Labels — only when activeLabelConfig !== null)
-  const [creatingLabel, setCreatingLabel] = useState<{ start: number; current: number } | null>(null);
-  const [resizingLabel, setResizingLabel] = useState<{ id: string; side: 'start' | 'end'; originalTime: number } | null>(null);
-  const [draggedLabel, setDraggedLabel] = useState<{ id: string; startOffset: number } | null>(null);
+  // Interaction State (annotations — only when activeAnnotationTool !== null)
+  const [creatingAnnotation, setCreatingAnnotation] = useState<{ start: number; current: number } | null>(null);
+  const [resizingAnnotation, setResizingAnnotation] = useState<{ id: string; side: 'start' | 'end'; originalTime: number } | null>(null);
+  const [draggedAnnotation, setDraggedAnnotation] = useState<{ id: string; startOffset: number } | null>(null);
 
   // Selection Mode interaction state
   const [creatingSelection, setCreatingSelection] = useState<{ start: number; current: number } | null>(null);
@@ -151,18 +151,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // Annotation-bound selection state is lifted to App.tsx (boundAnnotationId prop + onBoundAnnotationChange).
 
-  // Track mousedown on label center to distinguish click vs drag
-  const clickDownRef = useRef<{ x: number; y: number; labelId: string; pointerTime: number } | null>(null);
+  // Track mousedown on annotation center to distinguish click vs drag
+  const clickDownRef = useRef<{ x: number; y: number; annotationId: string; pointerTime: number } | null>(null);
 
   const requestRef = useRef<number | null>(null);
-  const pendingLabelsRef = useRef<Label[]>(labels);
+  const pendingAnnotationsRef = useRef<Annotation[]>(annotations);
 
   const pixelsPerSecond = useMemo(() => {
      if (!containerRef.current) return 100;
      return containerRef.current.clientWidth / zoomSec;
   }, [zoomSec, containerRef.current?.clientWidth]);
 
-  // Reset scroll position to 0 when switching files
+  // Reset scroll position to 0 when switching tracks
   useEffect(() => {
     setScrollLeft(0);
   }, [fileIdent]);
@@ -304,7 +304,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
 
   // Overlay canvas: axis, playhead, ident, and selection region darkening.
-  // Rendered above label HTML divs (z-30).
+  // Rendered above annotation HTML divs (z-30).
   const drawOverlay = useCallback(() => {
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
@@ -533,10 +533,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // --- Annotation navigation ---
 
-  const sortedLabels = useMemo(() => [...labels].sort((a, b) => a.start - b.start), [labels]);
+  const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
 
-  const canGoPrev = sortedLabels.length > 0 && sortedLabels.some(l => l.start < currentTime - 0.05);
-  const canGoNext = sortedLabels.length > 0 && sortedLabels.some(l => l.start > currentTime + 0.05);
+  const canGoPrev = sortedAnnotations.length > 0 && sortedAnnotations.some(a => a.start < currentTime - 0.05);
+  const canGoNext = sortedAnnotations.length > 0 && sortedAnnotations.some(a => a.start > currentTime + 0.05);
 
   const scrollToAnnotation = useCallback((annotStart: number) => {
     if (!containerRef.current) return;
@@ -552,7 +552,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       scrollToAnnotation(selectionRegion.start);
       return;
     }
-    const prev = [...sortedLabels].reverse().find(l => l.start < currentTime - 0.05);
+    const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTime - 0.05);
     if (prev) {
       onSeek(prev.start);
       scrollToAnnotation(prev.start);
@@ -560,7 +560,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation, selectionRegion]);
+  }, [sortedAnnotations, currentTime, onSeek, scrollToAnnotation, selectionRegion]);
 
   const goToNextAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection end
@@ -569,7 +569,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       scrollToAnnotation(selectionRegion.end);
       return;
     }
-    const next = sortedLabels.find(l => l.start > currentTime + 0.05);
+    const next = sortedAnnotations.find(a => a.start > currentTime + 0.05);
     if (next) {
       onSeek(next.start);
       scrollToAnnotation(next.start);
@@ -577,7 +577,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(duration);
       scrollToAnnotation(duration);
     }
-  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation, selectionRegion]);
+  }, [sortedAnnotations, currentTime, duration, onSeek, scrollToAnnotation, selectionRegion]);
 
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
@@ -606,15 +606,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // --- Interaction Handlers ---
 
-  // Shared: create a label from the active config, commit it, and enter bound-selection state.
-  const commitNewLabel = useCallback((start: number, end: number) => {
-    if (!activeLabelConfig) return;
-    const newLabel = makeLabelFromConfig(activeLabelConfig, start, end);
-    onLabelsCommit([...labels, newLabel]);
-    onSelectLabel(newLabel.id);
-    onBoundAnnotationChange(newLabel.id);
+  // Shared: create an annotation from the active tool, commit it, and enter annotation-bound selection state.
+  const commitNewAnnotation = useCallback((start: number, end: number) => {
+    if (!activeAnnotationTool) return;
+    const newAnnotation = makeAnnotationFromTool(activeAnnotationTool, start, end);
+    onAnnotationsCommit([...annotations, newAnnotation]);
+    onSelectAnnotation(newAnnotation.id);
+    onBoundAnnotationChange(newAnnotation.id);
     onSelectionChange({ start, end });
-  }, [activeLabelConfig, labels, onLabelsCommit, onSelectLabel, onBoundAnnotationChange, onSelectionChange]);
+  }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange]);
 
   const getPointerTime = (e: React.MouseEvent) => {
     if (!containerRef.current) return 0;
@@ -634,12 +634,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     if ((e.target as HTMLElement).closest('input') || (e.target as HTMLElement).closest('button')) return;
 
-    const labelItem = (e.target as HTMLElement).closest('.label-item');
-    if (!labelItem) {
+    const annotationItem = (e.target as HTMLElement).closest('.annotation-item');
+    if (!annotationItem) {
       // Clicking bare spectrogram
       const t = getPointerTime(e);
 
-      if (activeLabelConfig === null) {
+      if (activeAnnotationTool === null) {
         // Selection Mode
 
         // Shift+click while paused: extend selection from playhead to click point
@@ -659,20 +659,20 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
 
         // Click outside selection: clear selection, seek, start tracking for drag
-        onSelectLabel(null);
+        onSelectAnnotation(null);
         onBoundAnnotationChange(null);
         onSelectionChange(null);
         onSeek(t);
         setCreatingSelection({ start: t, current: t });
       } else {
-        // Label Mode
+        // Annotation Tool Mode
 
-        // Shift+click while paused: drop a label spanning playhead↔click and bind selection
-        if (e.shiftKey && !isPlaying && activeLabelConfig !== null) {
+        // Shift+click while paused: drop an annotation spanning playhead↔click and bind selection
+        if (e.shiftKey && !isPlaying && activeAnnotationTool !== null) {
           const selStart = Math.min(currentTime, t);
           const selEnd = Math.max(currentTime, t);
           if (selEnd - selStart > 0.05) {
-            commitNewLabel(selStart, selEnd);
+            commitNewAnnotation(selStart, selEnd);
           }
           return;
         }
@@ -684,14 +684,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
 
         // Click outside selection: clear any active selection, start annotation creation
-        onSelectLabel(null);
+        onSelectAnnotation(null);
         onBoundAnnotationChange(null);
         onSelectionChange(null);
-        setCreatingLabel({ start: t, current: t });
+        setCreatingAnnotation({ start: t, current: t });
         onSeek(t);
       }
     }
-    // Label center clicks are handled in the label onMouseDown handler
+    // Annotation center clicks are handled in the annotation onMouseDown handler
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -712,23 +712,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     const t = getPointerTime(e);
 
-    // Check if we should convert a pending label click into a drag
+    // Check if we should convert a pending annotation click into a drag
     if (clickDownRef.current) {
       const dx = e.clientX - clickDownRef.current.x;
       const dy = e.clientY - clickDownRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) > 5) {
         // Convert to drag
-        const dragLabel = labels.find(l => l.id === clickDownRef.current!.labelId);
-        if (dragLabel) {
-          setDraggedLabel({ id: clickDownRef.current.labelId, startOffset: clickDownRef.current.pointerTime - dragLabel.start });
+        const dragAnnotation = annotations.find(a => a.id === clickDownRef.current!.annotationId);
+        if (dragAnnotation) {
+          setDraggedAnnotation({ id: clickDownRef.current.annotationId, startOffset: clickDownRef.current.pointerTime - dragAnnotation.start });
         }
         clickDownRef.current = null;
       }
       return;
     }
 
-    if (creatingLabel) {
-      setCreatingLabel({ ...creatingLabel, current: t });
+    if (creatingAnnotation) {
+      setCreatingAnnotation({ ...creatingAnnotation, current: t });
       return;
     }
 
@@ -737,37 +737,37 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       return;
     }
 
-    if (resizingLabel) {
-      const updated = labels.map(l => {
-        if (l.id === resizingLabel.id) {
-          if (resizingLabel.side === 'start') return { ...l, start: Math.min(t, l.end - 0.05) };
-          return { ...l, end: Math.max(t, l.start + 0.05) };
+    if (resizingAnnotation) {
+      const updated = annotations.map(a => {
+        if (a.id === resizingAnnotation.id) {
+          if (resizingAnnotation.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
+          return { ...a, end: Math.max(t, a.start + 0.05) };
         }
-        return l;
+        return a;
       });
-      pendingLabelsRef.current = updated;
-      onLabelsChange(updated);
+      pendingAnnotationsRef.current = updated;
+      onAnnotationsChange(updated);
       // If resizing a bound annotation, update selection region to match
-      if (resizingLabel.id === boundAnnotationId) {
-        const updatedLabel = updated.find(l => l.id === resizingLabel.id);
-        if (updatedLabel) {
-          onSelectionChange({ start: updatedLabel.start, end: updatedLabel.end });
+      if (resizingAnnotation.id === boundAnnotationId) {
+        const updatedAnnotation = updated.find(a => a.id === resizingAnnotation.id);
+        if (updatedAnnotation) {
+          onSelectionChange({ start: updatedAnnotation.start, end: updatedAnnotation.end });
         }
       }
       return;
     }
 
-    if (draggedLabel) {
-       const updated = labels.map(l => {
-           if (l.id === draggedLabel.id) {
-               const dur = l.end - l.start;
-               const newStart = Math.max(0, t - draggedLabel.startOffset);
-               return { ...l, start: newStart, end: newStart + dur };
+    if (draggedAnnotation) {
+       const updated = annotations.map(a => {
+           if (a.id === draggedAnnotation.id) {
+               const dur = a.end - a.start;
+               const newStart = Math.max(0, t - draggedAnnotation.startOffset);
+               return { ...a, start: newStart, end: newStart + dur };
            }
-           return l;
+           return a;
        });
-       pendingLabelsRef.current = updated;
-       onLabelsChange(updated);
+       pendingAnnotationsRef.current = updated;
+       onAnnotationsChange(updated);
        return;
     }
 
@@ -782,12 +782,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSelectionChange({ start: newStart, end: newEnd });
       // If there's a bound annotation, update its extent to match
       if (boundAnnotationId) {
-        const updated = labels.map(l => {
-          if (l.id === boundAnnotationId) return { ...l, start: newStart, end: newEnd };
-          return l;
+        const updated = annotations.map(a => {
+          if (a.id === boundAnnotationId) return { ...a, start: newStart, end: newEnd };
+          return a;
         });
-        pendingLabelsRef.current = updated;
-        onLabelsChange(updated);
+        pendingAnnotationsRef.current = updated;
+        onAnnotationsChange(updated);
       }
     }
   };
@@ -795,24 +795,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const handleMouseUp = (e?: React.MouseEvent) => {
     if (dragStart) setDragStart(null);
 
-    // Pending label click (no significant movement) → annotation-bound selection
+    // Pending annotation click (no significant movement) → annotation-bound selection
     if (clickDownRef.current) {
-      const annotation = labels.find(l => l.id === clickDownRef.current!.labelId);
+      const annotation = annotations.find(a => a.id === clickDownRef.current!.annotationId);
       if (annotation) {
         onBoundAnnotationChange(annotation.id);
         onSelectionChange({ start: annotation.start, end: annotation.end });
-        onSelectLabel(annotation.id);
+        onSelectAnnotation(annotation.id);
       }
       clickDownRef.current = null;
     }
 
-    if (creatingLabel) {
-      const start = Math.min(creatingLabel.start, creatingLabel.current);
-      const end = Math.max(creatingLabel.start, creatingLabel.current);
-      if (end - start > 0.05 && activeLabelConfig !== null) {
-        commitNewLabel(start, end);
+    if (creatingAnnotation) {
+      const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
+      const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
+      if (end - start > 0.05 && activeAnnotationTool !== null) {
+        commitNewAnnotation(start, end);
       }
-      setCreatingLabel(null);
+      setCreatingAnnotation(null);
     }
 
     if (creatingSelection) {
@@ -828,19 +828,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setCreatingSelection(null);
     }
 
-    if (resizingLabel) {
-      onLabelsCommit(pendingLabelsRef.current);
-      setResizingLabel(null);
+    if (resizingAnnotation) {
+      onAnnotationsCommit(pendingAnnotationsRef.current);
+      setResizingAnnotation(null);
     }
 
-    if (draggedLabel) {
-      onLabelsCommit(pendingLabelsRef.current);
-      setDraggedLabel(null);
+    if (draggedAnnotation) {
+      onAnnotationsCommit(pendingAnnotationsRef.current);
+      setDraggedAnnotation(null);
     }
 
     if (resizingSelectionHandle) {
-      if (boundAnnotationId && pendingLabelsRef.current.length > 0) {
-        onLabelsCommit(pendingLabelsRef.current);
+      if (boundAnnotationId && pendingAnnotationsRef.current.length > 0) {
+        onAnnotationsCommit(pendingAnnotationsRef.current);
       }
       setResizingSelectionHandle(null);
     }
@@ -883,13 +883,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
   };
 
-  const layeredLabels = useMemo(() => calculateLabelLayers(labels), [labels]);
+  const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
-  // Overlay for annotation being created (label mode)
+  // Overlay for annotation being created (annotation tool mode)
   const renderCreatingOverlay = () => {
-    if (!creatingLabel || activeLabelConfig === null) return null;
-    const s = Math.min(creatingLabel.start, creatingLabel.current);
-    const eTime = Math.max(creatingLabel.start, creatingLabel.current);
+    if (!creatingAnnotation || activeAnnotationTool === null) return null;
+    const s = Math.min(creatingAnnotation.start, creatingAnnotation.current);
+    const eTime = Math.max(creatingAnnotation.start, creatingAnnotation.current);
     const left = (s * pixelsPerSecond) - scrollLeft;
     const width = ((eTime - s) * pixelsPerSecond);
 
@@ -982,19 +982,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         </div>
       )}
 
-      {/* Layer 2: label HTML divs and selection handles */}
+      {/* Layer 2: annotation HTML divs and selection handles */}
       <div ref={interactionRef} className="absolute top-0 left-0 w-full h-full">
-         {layeredLabels.map((l) => {
-             const left = (l.start * pixelsPerSecond) - scrollLeft;
-             const width = (l.end - l.start) * pixelsPerSecond;
-             const isSelected = selectedLabelId === l.id;
-             const isBound = boundAnnotationId === l.id;
+         {layeredAnnotations.map((annotation) => {
+             const left = (annotation.start * pixelsPerSecond) - scrollLeft;
+             const width = (annotation.end - annotation.start) * pixelsPerSecond;
+             const isSelected = selectedAnnotationId === annotation.id;
+             const isBound = boundAnnotationId === annotation.id;
 
              if (left + width < 0 || left > (containerRef.current?.clientWidth || 1000)) return null;
 
-             const top = 10 + ((l.layerIndex || 0) * 35);
+             const top = 10 + ((annotation.layerIndex || 0) * 35);
 
-             const baseColor = l.color || "#ffffff";
+             const baseColor = annotation.color || "#ffffff";
              const isWhite = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
 
              const styleVars = isWhite ? {
@@ -1007,12 +1007,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                  textColor: baseColor
              };
 
-             const isHovered = hoveredLabelId === l.id;
+             const isHovered = hoveredAnnotationId === annotation.id;
 
              return (
                  <div
-                    key={l.id}
-                    className="label-item absolute rounded transition-colors duration-200"
+                    key={annotation.id}
+                    className="annotation-item absolute rounded transition-colors duration-200"
                     style={{
                         left: `${left}px`,
                         width: `${Math.max(2, width)}px`,
@@ -1023,24 +1023,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                         boxShadow: isBound ? '0 0 0 2px rgba(255,255,255,0.4)' : '0 2px 4px rgba(0,0,0,0.5)',
                         zIndex: isSelected ? 20 : 10
                     }}
-                    onMouseEnter={() => handleLabelMouseEnter(l.id)}
-                    onMouseLeave={handleLabelMouseLeave}
+                    onMouseEnter={() => handleAnnotationMouseEnter(annotation.id)}
+                    onMouseLeave={handleAnnotationMouseLeave}
                     onMouseDown={(e) => {
                         e.stopPropagation();
                         // Middle Click Delete
                         if (e.button === 1) {
                             e.preventDefault();
-                            onLabelsCommit(labels.filter(lb => lb.id !== l.id));
-                            if (isSelected) onSelectLabel(null);
-                            if (boundAnnotationId === l.id) {
+                            onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
+                            if (isSelected) onSelectAnnotation(null);
+                            if (boundAnnotationId === annotation.id) {
                               onBoundAnnotationChange(null);
                               onSelectionChange(null);
                             }
                             return;
                         }
-                        onSelectLabel(l.id);
+                        onSelectAnnotation(annotation.id);
                         // Track for click vs drag detection
-                        clickDownRef.current = { x: e.clientX, y: e.clientY, labelId: l.id, pointerTime: getPointerTime(e) };
+                        clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };
                     }}
                  >
                     {/* Left resize handle */}
@@ -1049,8 +1049,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                         onMouseDown={(e) => {
                             e.stopPropagation();
                             clickDownRef.current = null;
-                            onSelectLabel(l.id);
-                            setResizingLabel({ id: l.id, side: 'start', originalTime: l.start });
+                            onSelectAnnotation(annotation.id);
+                            setResizingAnnotation({ id: annotation.id, side: 'start', originalTime: annotation.start });
                         }}
                     >
                         {width > 20 && <div className="w-[1px] h-3 bg-white/50" />}
@@ -1061,8 +1061,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                         onMouseDown={(e) => {
                             e.stopPropagation();
                             clickDownRef.current = null;
-                            onSelectLabel(l.id);
-                            setResizingLabel({ id: l.id, side: 'end', originalTime: l.end });
+                            onSelectAnnotation(annotation.id);
+                            setResizingAnnotation({ id: annotation.id, side: 'end', originalTime: annotation.end });
                         }}
                     >
                         {width > 20 && <div className="w-[1px] h-3 bg-white/50" />}
@@ -1070,31 +1070,31 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
                     {width > 30 ? (
                         <input
-                            ref={(el) => { inputRefs.current[l.id] = el; }}
+                            ref={(el) => { inputRefs.current[annotation.id] = el; }}
                             type="text"
-                            value={l.text}
+                            value={annotation.text}
                             onChange={(e) => {
                                 const newText = e.target.value;
-                                const newLabels = labels.map(lb => {
-                                    if (lb.id === l.id) {
-                                        const matchingConfig = labelConfigs.find(c => c.text.toLowerCase() === newText.toLowerCase() && c.key !== "0");
-                                        if (matchingConfig) {
-                                             return { ...lb, text: matchingConfig.text, configId: matchingConfig.key, color: matchingConfig.color };
+                                const newAnnotations = annotations.map(a => {
+                                    if (a.id === annotation.id) {
+                                        const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
+                                        if (matchingTool) {
+                                             return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
                                         }
-                                        if (lb.configId !== "0" && lb.color !== "#ffffff" && lb.text !== newText) {
-                                            return { ...lb, text: newText, configId: "0", color: "#ffffff" };
+                                        if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
+                                            return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
                                         }
-                                        return { ...lb, text: newText };
+                                        return { ...a, text: newText };
                                     }
-                                    return lb;
+                                    return a;
                                 });
-                                pendingLabelsRef.current = newLabels;
-                                onLabelsChange(newLabels);
+                                pendingAnnotationsRef.current = newAnnotations;
+                                onAnnotationsChange(newAnnotations);
                             }}
                             onKeyDown={(e) => {
                                 e.stopPropagation();
                                 if (e.key === 'Enter') {
-                                    onSelectLabel(null);
+                                    onSelectAnnotation(null);
                                     (e.target as HTMLInputElement).blur();
                                 }
                                 if (e.key === 'Escape') {
@@ -1103,12 +1103,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             }}
                             onBlur={() => {
                                 setEditingInputId(null);
-                                if (l.text.trim() === "") {
-                                    const filtered = labels.filter(lb => lb.id !== l.id);
-                                    onLabelsCommit(filtered);
-                                    onSelectLabel(null);
+                                if (annotation.text.trim() === "") {
+                                    const filtered = annotations.filter(a => a.id !== annotation.id);
+                                    onAnnotationsCommit(filtered);
+                                    onSelectAnnotation(null);
                                 } else {
-                                    onLabelsCommit(pendingLabelsRef.current);
+                                    onAnnotationsCommit(pendingAnnotationsRef.current);
                                 }
                             }}
                             className="absolute left-2 right-2 top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
@@ -1116,56 +1116,56 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                                 color: '#ffffff',
                                 fontWeight: 'bold',
                                 textShadow: '0 1px 2px black',
-                                // Only allow pointer interaction when editing via pencil or for new empty labels
-                                pointerEvents: (editingInputId === l.id || (isSelected && l.text === '')) ? 'auto' : 'none'
+                                // Only allow pointer interaction when editing via pencil or for new empty annotations
+                                pointerEvents: (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? 'auto' : 'none'
                             }}
-                            placeholder="Label..."
+                            placeholder="Name..."
                             onMouseDown={(e) => {
                                 if (e.button === 1) {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    onLabelsCommit(labels.filter(lb => lb.id !== l.id));
-                                    if (isSelected) onSelectLabel(null);
+                                    onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
+                                    if (isSelected) onSelectAnnotation(null);
                                     return;
                                 }
                                 e.stopPropagation();
                             }}
-                            autoFocus={isSelected && l.text === ""}
+                            autoFocus={isSelected && annotation.text === ""}
                         />
                     ) : null}
 
                     {/* Pencil icon — appears on hover, click to focus text input */}
                     {isHovered && (
                       width > 60 ? (
-                        // Render inside the label
+                        // Render inside the annotation
                         <button
                           className="absolute top-0 bottom-0 right-5 flex items-center justify-center z-20 opacity-70 hover:opacity-100 transition-opacity"
-                          onMouseEnter={() => handleLabelMouseEnter(l.id)}
-                          onMouseLeave={handleLabelMouseLeave}
+                          onMouseEnter={() => handleAnnotationMouseEnter(annotation.id)}
+                          onMouseLeave={handleAnnotationMouseLeave}
                           onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingInputId(l.id);
-                            setPencilClickedId(l.id);
+                            setEditingInputId(annotation.id);
+                            setPencilClickedId(annotation.id);
                           }}
-                          title="Edit label text"
+                          title="Edit annotation name"
                         >
                           <Pencil size={10} className="text-white drop-shadow" />
                         </button>
                       ) : (
-                        // Render outside to the right (floats above adjacent labels)
+                        // Render outside to the right (floats above adjacent annotations)
                         <button
                           className="absolute flex items-center justify-center bg-slate-800/90 rounded p-0.5 hover:bg-slate-700 transition-colors"
                           style={{ left: `${Math.max(2, width) + 2}px`, top: '4px', zIndex: 50 }}
-                          onMouseEnter={() => handleLabelMouseEnter(l.id)}
-                          onMouseLeave={handleLabelMouseLeave}
+                          onMouseEnter={() => handleAnnotationMouseEnter(annotation.id)}
+                          onMouseLeave={handleAnnotationMouseLeave}
                           onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingInputId(l.id);
-                            setPencilClickedId(l.id);
+                            setEditingInputId(annotation.id);
+                            setPencilClickedId(annotation.id);
                           }}
-                          title="Edit label text"
+                          title="Edit annotation name"
                         >
                           <Pencil size={10} className="text-white" />
                         </button>
@@ -1175,13 +1175,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                     {/* Delete button */}
                     <button
                         className={`absolute -top-3 -right-3 ${isHovered ? 'flex' : 'hidden'} bg-red-500 rounded-full p-0.5 z-30`}
-                        onMouseEnter={() => handleLabelMouseEnter(l.id)}
-                        onMouseLeave={handleLabelMouseLeave}
+                        onMouseEnter={() => handleAnnotationMouseEnter(annotation.id)}
+                        onMouseLeave={handleAnnotationMouseLeave}
                         onClick={(e) => {
                             e.stopPropagation();
-                            onLabelsCommit(labels.filter(lb => lb.id !== l.id));
-                            if (isSelected) onSelectLabel(null);
-                            if (boundAnnotationId === l.id) {
+                            onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
+                            if (isSelected) onSelectAnnotation(null);
+                            if (boundAnnotationId === annotation.id) {
                               onBoundAnnotationChange(null);
                               onSelectionChange(null);
                             }
@@ -1193,7 +1193,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
              );
          })}
 
-         {/* Creating annotation overlay (label mode) */}
+         {/* Creating annotation overlay (annotation tool mode) */}
          {renderCreatingOverlay()}
 
          {/* Selection region handles */}
@@ -1201,7 +1201,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       </div>
 
       {/* Layer 3: overlay canvas — playhead, time ruler, ident, selection darkening.
-          z-30 keeps it above label HTML divs (z-10/20) and below nav buttons (z-50). */}
+          z-30 keeps it above annotation HTML divs (z-10/20) and below nav buttons (z-50). */}
       <canvas
         ref={overlayCanvasRef}
         className="absolute top-0 left-0 w-full h-full pointer-events-none"
@@ -1217,19 +1217,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           {/* Crosshair */}
           <div className="absolute" style={{ left: -8, top: -0.5, width: 16, height: 1, background: 'white', opacity: 0.85 }} />
           <div className="absolute" style={{ left: -0.5, top: -8, width: 1, height: 16, background: 'white', opacity: 0.85 }} />
-          {/* Label name — only shown when a label mode is active */}
-          {activeLabelConfig && (
+          {/* Tool name — only shown when an annotation tool is active */}
+          {activeAnnotationTool && (
             <div
               className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
               style={{
                 top: 10,
                 left: '50%',
                 transform: 'translateX(-50%)',
-                color: activeLabelConfig.color,
+                color: activeAnnotationTool.color,
                 textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
               }}
             >
-              {activeLabelConfig.key === '0' ? 'Custom' : activeLabelConfig.text}
+              {activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text}
             </div>
           )}
         </div>

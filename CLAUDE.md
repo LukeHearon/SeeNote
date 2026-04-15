@@ -1,6 +1,6 @@
 # SeeNote — Agent Orientation
 
-SeeNote is a **Tauri v2 + React/TypeScript desktop app** for annotating audio/video files to build machine learning training datasets. Users open a project (audio directory + annotation output directory), navigate files via a sidebar, view spectrograms, and drag to create labeled time-range annotations. Annotations are automatically saved as Audacity-compatible `.txt`, `.csv`, or `.json` files mirroring the audio directory structure.
+SeeNote is a **Tauri v2 + React/TypeScript desktop app** for annotating audio/video files to build machine learning training datasets. Users open a project (audio directory + annotation output directory), navigate tracks via a file panel, view spectrograms, and drag to create time-range annotations. Annotations are automatically saved as Audacity-compatible `.txt`, `.csv`, or `.json` files mirroring the audio directory structure.
 
 ## CRITICAL: Sample-level synchrony is the cornerstone invariant
 
@@ -10,7 +10,7 @@ The time-axis elements that MUST stay in lockstep:
 - **Spectrogram pixels** — each column represents a precise sample window; chunk boundaries must be seamless (see `decoder.rs` sample-accuracy contract) 
 - **Playhead** — the position must correspond to the sample currently being emitted by the audio hardware, never ahead, never behind
 - **Audio playback** — when a selected region is played, playback must be sample-identical with no codec-frame snap, 
-- **Label / annotation boundaries** — rendered rectangles map to exact PCM samples and round-trip through export unchanged
+- **Annotation boundaries** — rendered rectangles map to exact PCM samples and round-trip through export unchanged
 - **Selection region** — the shaded band represents the exact half-open sample interval that will play
 
 **Rules that follow from this invariant:**
@@ -22,17 +22,17 @@ The time-axis elements that MUST stay in lockstep:
 
 | What you want to touch | Where |
 |---|---|
-| Main app state, hotkeys, play logic, label palette | `App.tsx` |
+| Main app state, hotkeys, play logic, annotation tool palette | `App.tsx` |
 | Sample-accurate audio/video playback engine | `utils/AudioEngine.ts` |
 | Spectrogram rendering, annotation drag/resize, selection | `components/Spectrogram.tsx` |
-| File tree sidebar + context menu | `components/FileTree.tsx` |
+| File panel sidebar + context menu | `components/FileTree.tsx` |
 | Launch screen, project picker | `components/LaunchScreen.tsx` |
 | Project creation modal | `components/CreateProjectModal.tsx` |
 | Project settings modal | `components/ProjectSettingsModal.tsx` |
 | `<video>` element (video frames only — audio via engine) | `components/VideoPlayer.tsx` |
 | All shared TypeScript types | `types.ts` |
-| Color map, zoom limits, tier configs, default labels | `constants.ts` |
-| Export helpers (CSV/Audacity/JSON), `calculateLabelLayers` | `utils/helpers.ts` |
+| Color map, zoom limits, tier configs, default annotation tools | `constants.ts` |
+| Export helpers (CSV/Audacity/JSON), `calculateAnnotationLayers` | `utils/helpers.ts` |
 | Tauri `invoke()` wrappers (all IPC calls live here) | `utils/tauriCommands.ts` |
 | Project file I/O, `revealInFileManager`, `countAnnotationEntries` | `utils/projectCommands.ts` |
 | Spectrogram image math (`drawSpectrogramChunk`) | `utils/audioProcessing.ts` |
@@ -55,7 +55,7 @@ The time-axis elements that MUST stay in lockstep:
 3. Web Audio's scheduler fires `source.start(when)` / `source.stop(when)` at sample-accurate context times
 4. `source.stop(ctxTime)` at exactly `endSec` provides sample-accurate selection stop
 5. `onTimeUpdate` fires on each rAF tick: `mediaTime = playStartMedia + (ctxNow - playStartCtx)`
-6. For video files, the `<video>` element shows frames only (muted); the engine syncs `video.currentTime` to the audio clock every 50ms
+6. For video tracks, the `<video>` element shows frames only (muted); the engine syncs `video.currentTime` to the audio clock every 50ms
 
 **Spectrogram pipeline:**
 1. Rust decodes audio and runs FFT → returns raw magnitude bytes via `get_spectrogram_chunk`
@@ -64,15 +64,15 @@ The time-axis elements that MUST stay in lockstep:
 4. `Spectrogram.tsx` has two stacked canvases: bottom = spectrogram pixels, top (z-30 overlay) = axis, playhead, selection darkening
 
 **Annotation model (`types.ts`):**
-- `Label` — `{ id, configId, start, end, text, color, layerIndex }`
-- `LabelConfig` — `{ key, text, color }` — named categories with hotkeys 0-9
-- `activeLabelKey: string | null` in `App.tsx` — `null` = Selection Mode, string = active config key
+- `Annotation` — `{ id, toolKey, start, end, text, color, layerIndex }`
+- `AnnotationTool` — `{ key, text, color }` — named tools with hotkeys 0-9
+- `activeToolKey: string | null` in `App.tsx` — `null` = Selection Mode, string = active tool key
 
-**Key "0" is reserved** for "Custom Label" — new annotations get an empty `text` field so the user can type a one-off name. The auto-focus on the annotation text input is triggered by `text === ""`. Do not repurpose key "0".
+**Key "0" is reserved** for the Custom Annotation Tool — new annotations get an empty `text` field so the user can type a one-off name. The auto-focus on the annotation text input is triggered by `text === ""`. Do not repurpose key "0".
 
-**Selection Mode** (`activeLabelKey === null`): dragging creates a selection region (not an annotation); playback is bounded to the region. Click bare canvas to seek and clear selection.
+**Selection Mode** (`activeToolKey === null`): dragging creates a selection region (not an annotation); playback is bounded to the region. Click bare canvas to seek and clear selection.
 
-**Annotation-bound selection**: clicking the center of an existing annotation enters bound selection mode — resize handles update both the annotation and the selection region.
+**Annotation Selection**: clicking the center of an existing annotation enters annotation-bound selection mode — resize handles update both the annotation and the selection region.
 
 **Tauri IPC**: every Rust command is wrapped in `utils/tauriCommands.ts` or `utils/projectCommands.ts`. Never call `invoke()` directly from components — add a wrapper there instead.
 

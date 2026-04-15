@@ -1,4 +1,4 @@
-import { Label, LabelConfig } from '../types';
+import { Annotation, AnnotationTool } from '../types';
 import { saveFileDialog, writeTextFile } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
@@ -17,38 +17,38 @@ export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };
 
-export const makeLabelFromConfig = (config: LabelConfig, start: number, end: number): Label => ({
+export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => ({
   id: generateId(),
-  configId: config.key,
+  toolKey: tool.key,
   start,
   end,
-  text: config.key === '0' ? '' : config.text,
-  color: config.color,
+  text: tool.key === '0' ? '' : tool.text,
+  color: tool.color,
 });
 
-// Calculate vertical dodging for overlapping labels
-export const calculateLabelLayers = (labels: Label[]): Label[] => {
+// Calculate vertical dodging for overlapping annotations
+export const calculateAnnotationLayers = (annotations: Annotation[]): Annotation[] => {
   // Sort by start time
-  const sorted = [...labels].sort((a, b) => a.start - b.start);
-  const processed: Label[] = [];
-  const layers: number[] = []; // Stores the end time of the last label in each layer
+  const sorted = [...annotations].sort((a, b) => a.start - b.start);
+  const processed: Annotation[] = [];
+  const layers: number[] = []; // Stores the end time of the last annotation in each layer
 
-  sorted.forEach((label) => {
+  sorted.forEach((annotation) => {
     let placed = false;
     for (let i = 0; i < layers.length; i++) {
       // Add a small buffer for visual spacing
-      if (layers[i] + 0.1 <= label.start) {
-        label.layerIndex = i;
-        layers[i] = label.end;
+      if (layers[i] + 0.1 <= annotation.start) {
+        annotation.layerIndex = i;
+        layers[i] = annotation.end;
         placed = true;
         break;
       }
     }
     if (!placed) {
-      label.layerIndex = layers.length;
-      layers.push(label.end);
+      annotation.layerIndex = layers.length;
+      layers.push(annotation.end);
     }
-    processed.push(label);
+    processed.push(annotation);
   });
   return processed;
 };
@@ -72,12 +72,12 @@ const saveFile = async (
 };
 
 // Derives the default save path next to the source file.
-// currentFilePath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
-const defaultSavePath = (currentFilePath: string | null, filename: string, suffix: string, ext: string): string => {
+// trackPath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
+const defaultSavePath = (trackPath: string | null, filename: string, suffix: string, ext: string): string => {
     const base = getBaseName(filename);
     const outName = `${base}${suffix}${ext}`;
-    if (currentFilePath) {
-        const dir = currentFilePath.substring(0, currentFilePath.lastIndexOf('/'));
+    if (trackPath) {
+        const dir = trackPath.substring(0, trackPath.lastIndexOf('/'));
         return `${dir}/${outName}`;
     }
     return outName;
@@ -96,39 +96,39 @@ const defaultSavePath = (currentFilePath: string | null, filename: string, suffi
 // If you ever need sample-exact CSV round-trip, bump toFixed(4) to toFixed(6)
 // or export frame indices alongside. Do not confuse these format choices with
 // the internal precision of the pipeline.
-export const generateCSVContent = (labels: Label[]): string => {
+export const generateCSVContent = (annotations: Annotation[]): string => {
     let content = "Label,Start,End\n";
-    labels.forEach(l => {
-        const safeText = `"${l.text.replace(/"/g, '""')}"`;
-        content += `${safeText},${l.start.toFixed(4)},${l.end.toFixed(4)}\n`;
+    annotations.forEach(a => {
+        const safeText = `"${a.text.replace(/"/g, '""')}"`;
+        content += `${safeText},${a.start.toFixed(4)},${a.end.toFixed(4)}\n`;
     });
     return content;
 };
 
-export const generateAudacityContent = (labels: Label[]): string => {
+export const generateAudacityContent = (annotations: Annotation[]): string => {
     let content = "";
-    labels.forEach(l => {
-        content += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
+    annotations.forEach(a => {
+        content += `${a.start.toFixed(6)}\t${a.end.toFixed(6)}\t${a.text}\n`;
     });
     return content;
 };
 
-export const generateJSONContent = (labels: Label[]): string =>
-    JSON.stringify(labels, null, 2);
+export const generateJSONContent = (annotations: Annotation[]): string =>
+    JSON.stringify(annotations, null, 2);
 
 // Export to CSV
-export const exportToCSV = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.csv');
-    await saveFile(generateCSVContent(labels), path, '.csv');
+export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+    const path = defaultSavePath(trackPath, trackName, '_annotations', '.csv');
+    await saveFile(generateCSVContent(annotations), path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_labels', '.txt');
-    await saveFile(generateAudacityContent(labels), path, '.txt');
+export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+    const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
+    await saveFile(generateAudacityContent(annotations), path, '.txt');
 };
 
-export const exportToJSON = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.json');
-    await saveFile(generateJSONContent(labels), path, '.json');
+export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+    const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
+    await saveFile(generateJSONContent(annotations), path, '.json');
 };

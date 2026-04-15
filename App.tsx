@@ -5,9 +5,9 @@ import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
-import { Label, SpectrogramSettings, LabelConfig, FrequencyScale, Project } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
-import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeLabelFromConfig } from './utils/helpers';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project } from './types';
+import { DEFAULT_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
+import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
@@ -15,12 +15,12 @@ import { revealInFileManager, listAnnotationFiles } from './utils/projectCommand
 import { AudioEngine } from './utils/AudioEngine';
 
 export default function App() {
-  // Media State
+  // Track State
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [videoFileName, setVideoFileName] = useState<string>("video");
-  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [trackName, setTrackName] = useState<string>("video");
+  const [trackPath, setTrackPath] = useState<string | null>(null);
   const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
-  const [isAudioFile, setIsAudioFile] = useState(false);
+  const [isAudioTrack, setIsAudioTrack] = useState(false);
   const [sampleRate, setSampleRate] = useState(44100);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -28,7 +28,7 @@ export default function App() {
   const [isBuffering, setIsBuffering] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allMediaFiles, setAllMediaFiles] = useState<string[]>([]);
-  const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false);
+  const [filePanelCollapsed, setFilePanelCollapsed] = useState(false);
 
   // Project state
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -43,8 +43,8 @@ export default function App() {
   const [shuffleMode, setShuffleMode] = useState(false);
   const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
 
-  // Undo/redo history for labels
-  const labelsHistoryRef = useRef<Label[][]>([[]]);
+  // Undo/redo history for annotations
+  const annotationsHistoryRef = useRef<Annotation[][]>([[]]);
   const historyIndexRef = useRef<number>(0);
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
@@ -56,11 +56,11 @@ export default function App() {
   const [muted, setMuted] = useState(false);
 
   // Annotation State
-  const [labels, setLabels] = useState<Label[]>([]);
-  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
-  const [labelConfigs, setLabelConfigs] = useState<LabelConfig[]>(DEFAULT_LABEL_CONFIGS);
-  // null = Selection Mode (no label config active); string key of the active config otherwise.
-  const [activeLabelKey, setActiveLabelKey] = useState<string | null>(null);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(DEFAULT_ANNOTATION_TOOLS);
+  // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
+  const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
   // Selection region for Selection Mode playback and UI
   const [selectionRegion, setSelectionRegion] = useState<{ start: number; end: number } | null>(null);
@@ -69,14 +69,14 @@ export default function App() {
   // Annotation currently bound to the selection region (null = free selection or no selection)
   const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
 
-  // Per-session text buffer for label reassignment: saves each configId's text while an annotation
-  // is bound, so switching back to a prior config restores the previously-entered text.
+  // Per-session text buffer for annotation tool reassignment: saves each toolKey's text while an
+  // annotation is bound, so switching back to a prior tool restores the previously-entered text.
   // Cleared when the bound annotation is deselected.
   const reassignBufferRef = useRef<Record<string, string>>({});
 
-  // Label Editing State
-  const [editingLabelIndex, setEditingLabelIndex] = useState<number | null>(null);
-  const [editingLabelText, setEditingLabelText] = useState("");
+  // Annotation Tool Editing State
+  const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
+  const [editingToolText, setEditingToolText] = useState("");
 
   // Toolbar timestamp editing state
   type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
@@ -88,7 +88,7 @@ export default function App() {
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
 
   // Keep activeProject in sync with the projects list so that activeProjectRef.current
-  // always has the latest saved data. Without this, interleaved persist effects (labelConfigs
+  // always has the latest saved data. Without this, interleaved persist effects (annotationTools
   // vs spectrogramSettings) each spread a stale activeProjectRef and clobber each other's saves.
   useEffect(() => {
     if (!activeProject) return;
@@ -102,8 +102,8 @@ export default function App() {
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
   const engineRef = useRef<AudioEngine | null>(null);
-  // Ref so the onEnded closure (created once on mount) can read current isAudioFile
-  const isAudioFileRef = useRef(false);
+  // Ref so the onEnded closure (created once on mount) can read current isAudioTrack
+  const isAudioTrackRef = useRef(false);
 
   // Create engine on mount, destroy on unmount
   useEffect(() => {
@@ -115,7 +115,7 @@ export default function App() {
         // Stop playback and return playhead to selection start (matching old behavior).
         // For video files, also pause the video element (which plays frames).
         const sel = selectionRegionRef.current;
-        if (!isAudioFileRef.current) {
+        if (!isAudioTrackRef.current) {
           videoRef.current?.pause();
         }
         if (sel) {
@@ -140,8 +140,8 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
-  const [isAddingLabel, setIsAddingLabel] = useState(false);
-  const [newLabelText, setNewLabelText] = useState("");
+  const [isAddingTool, setIsAddingTool] = useState(false);
+  const [newToolText, setNewToolText] = useState("");
   
   const [zoomSec, setZoomSec] = useState(DEFAULT_ZOOM_SEC);
   const [settings, setSettings] = useState<SpectrogramSettings>({
@@ -170,15 +170,15 @@ export default function App() {
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
-  // Keep isAudioFileRef in sync so the onEnded closure (created once on mount) reads the current value
-  useEffect(() => { isAudioFileRef.current = isAudioFile; }, [isAudioFile]);
+  // Keep isAudioTrackRef in sync so the onEnded closure (created once on mount) reads the current value
+  useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
 
-  // Video-frame sync loop — video files only.
-  // The AudioEngine's onTimeUpdate callback drives setCurrentTime for all files.
+  // Video-frame sync loop — video tracks only.
+  // The AudioEngine's onTimeUpdate callback drives setCurrentTime for all tracks.
   // This loop keeps video.currentTime in sync with the engine's audio clock so
   // that video frames align with the audio the engine is producing.
   useEffect(() => {
-    if (isAudioFile || !isPlaying) return;
+    if (isAudioTrack || !isPlaying) return;
 
     let rAF: number;
     const loop = () => {
@@ -195,9 +195,9 @@ export default function App() {
     return () => {
         if (rAF) cancelAnimationFrame(rAF);
     };
-  }, [isPlaying, isAudioFile]);
+  }, [isPlaying, isAudioTrack]);
 
-  // Open a file by absolute path (called from button or FileBrowser)
+  // Open a track by absolute path (called from button or file panel)
   const handleOpenFile = useCallback(async (absolutePath: string) => {
     // Guard: never attempt to open a file whose extension we can't decode.
     // Both the tree and nav paths already filter these out; this is a belt-and-suspenders
@@ -207,27 +207,27 @@ export default function App() {
       return;
     }
 
-    setLabels([]);
+    setAnnotations([]);
     setIsPlaying(false);
     setIsBuffering(false);
-    setSelectedLabelId(null);
+    setSelectedAnnotationId(null);
     setSelectionRegion(null);
     setBoundAnnotationId(null);
     setDebugLogs([]);
-    setCurrentFilePath(absolutePath);
-    // Reset playhead to beginning of file
+    setTrackPath(absolutePath);
+    // Reset playhead to beginning of track
     setCurrentTime(0);
     if (videoRef.current) videoRef.current.currentTime = 0;
-    // Reset undo/redo history for new file
-    labelsHistoryRef.current = [[]];
+    // Reset undo/redo history for new track
+    annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
 
     const fileName = absolutePath.split('/').pop() ?? absolutePath;
     const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
     const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
     const isAudio = audioExts.includes(ext);
-    setIsAudioFile(isAudio);
-    setVideoFileName(fileName);
+    setIsAudioTrack(isAudio);
+    setTrackName(fileName);
 
     const assetUrl = toAssetUrl(absolutePath);
     setVideoSrc(assetUrl);
@@ -278,10 +278,10 @@ export default function App() {
         // new one. Without this, a failed decode leaves the engine bound to the
         // previous PcmStream and the spectrogram canvas bound to the previous cache.
         setVideoSrc(null);
-        setCurrentFilePath(null);
+        setTrackPath(null);
         setDuration(0);
         setSampleRate(44100);
-        setIsAudioFile(false);
+        setIsAudioTrack(false);
         chunkCacheRef.current = null;
         setCacheVersion(v => v + 1);
     } finally {
@@ -289,11 +289,11 @@ export default function App() {
     }
   }, [settings.fftSize]);
 
-  // Rebuild cache when FFT size changes while a file is open
+  // Rebuild cache when FFT size changes while a track is open
   useEffect(() => {
-    if (!currentFilePath || !sampleRate || !duration) return;
+    if (!trackPath || !sampleRate || !duration) return;
     const cache = new MultiTierSpectrogramCache(
-      currentFilePath,
+      trackPath,
       settings.fftSize,
       sampleRate,
       duration,
@@ -319,9 +319,9 @@ export default function App() {
   }, [displayQueue]);
 
   const currentFileIndex = useMemo(() => {
-    if (!currentFilePath) return -1;
-    return displayQueueIndex.get(currentFilePath) ?? -1;
-  }, [currentFilePath, displayQueueIndex]);
+    if (!trackPath) return -1;
+    return displayQueueIndex.get(trackPath) ?? -1;
+  }, [trackPath, displayQueueIndex]);
 
   const navigateFile = useCallback((direction: 'prev' | 'next') => {
     if (displayQueue.length === 0) return;
@@ -331,20 +331,20 @@ export default function App() {
     while (idx >= 0 && idx < displayQueue.length && !isSupportedMediaFile(displayQueue[idx])) {
         idx += step;
     }
-    if (idx >= 0 && idx < displayQueue.length && displayQueue[idx] !== currentFilePath) {
+    if (idx >= 0 && idx < displayQueue.length && displayQueue[idx] !== trackPath) {
         handleOpenFile(displayQueue[idx]);
     }
-  }, [displayQueue, currentFileIndex, currentFilePath, handleOpenFile]);
+  }, [displayQueue, currentFileIndex, trackPath, handleOpenFile]);
 
   // Annotation navigation helpers (used by toolbar buttons and keyboard shortcuts)
-  const sortedLabels = useMemo(() => [...labels].sort((a, b) => a.start - b.start), [labels]);
+  const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
   const canGoPrevAnnotation = useMemo(
-    () => sortedLabels.some(l => l.start < currentTime - 0.05),
-    [sortedLabels, currentTime]
+    () => sortedAnnotations.some(a => a.start < currentTime - 0.05),
+    [sortedAnnotations, currentTime]
   );
   const canGoNextAnnotation = useMemo(
-    () => sortedLabels.some(l => l.start > currentTime + 0.05),
-    [sortedLabels, currentTime]
+    () => sortedAnnotations.some(a => a.start > currentTime + 0.05),
+    [sortedAnnotations, currentTime]
   );
 
   // Toggle shuffle: randomise current allMediaFiles order
@@ -362,63 +362,63 @@ export default function App() {
     });
   }, [allMediaFiles]);
 
-  // Ident: relative path from audio root to file, without extension
+  // Ident: relative path from audio root to track, without extension
   const fileIdent = useMemo(() => {
-    if (!currentFilePath || !currentDirectory) return null;
-    const rel = currentFilePath.substring(currentDirectory.length + 1);
+    if (!trackPath || !currentDirectory) return null;
+    const rel = trackPath.substring(currentDirectory.length + 1);
     return rel.replace(/\.[^/.]+$/, '');
-  }, [currentFilePath, currentDirectory]);
+  }, [trackPath, currentDirectory]);
 
-  // Label history helpers
-  const pushToHistory = useCallback((newLabels: Label[]) => {
-    labelsHistoryRef.current = labelsHistoryRef.current.slice(0, historyIndexRef.current + 1);
-    labelsHistoryRef.current.push(newLabels);
-    historyIndexRef.current = labelsHistoryRef.current.length - 1;
+  // Annotation history helpers
+  const pushAnnotationsToHistory = useCallback((newAnnotations: Annotation[]) => {
+    annotationsHistoryRef.current = annotationsHistoryRef.current.slice(0, historyIndexRef.current + 1);
+    annotationsHistoryRef.current.push(newAnnotations);
+    historyIndexRef.current = annotationsHistoryRef.current.length - 1;
   }, []);
 
   // Intermediate update — no history entry (called during drags/resizes/text edits)
-  const handleLabelsChange = useCallback((newLabels: Label[]) => {
-    setLabels(newLabels);
+  const handleAnnotationsChange = useCallback((newAnnotations: Annotation[]) => {
+    setAnnotations(newAnnotations);
   }, []);
 
   // Final update — pushes to history (called on mouse release, delete, etc.)
-  const handleLabelsCommit = useCallback((newLabels: Label[]) => {
-    setLabels(newLabels);
-    pushToHistory(newLabels);
-  }, [pushToHistory]);
+  const handleAnnotationsCommit = useCallback((newAnnotations: Annotation[]) => {
+    setAnnotations(newAnnotations);
+    pushAnnotationsToHistory(newAnnotations);
+  }, [pushAnnotationsToHistory]);
 
-  const undoLabels = useCallback(() => {
+  const undoAnnotations = useCallback(() => {
     if (historyIndexRef.current <= 0) return;
     historyIndexRef.current--;
-    setLabels(labelsHistoryRef.current[historyIndexRef.current]);
+    setAnnotations(annotationsHistoryRef.current[historyIndexRef.current]);
   }, []);
 
-  const redoLabels = useCallback(() => {
-    if (historyIndexRef.current >= labelsHistoryRef.current.length - 1) return;
+  const redoAnnotations = useCallback(() => {
+    if (historyIndexRef.current >= annotationsHistoryRef.current.length - 1) return;
     historyIndexRef.current++;
-    setLabels(labelsHistoryRef.current[historyIndexRef.current]);
+    setAnnotations(annotationsHistoryRef.current[historyIndexRef.current]);
   }, []);
 
-  // Persist label configs and spectrogram settings to active project whenever they change
-  const labelConfigPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Persist annotation tools and spectrogram settings to active project whenever they change
+  const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProjectIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeProject) return;
-    // Skip persistence when switching projects (avoids overwriting with stale configs)
+    // Skip persistence when switching projects (avoids overwriting with stale tools)
     if (prevProjectIdRef.current !== activeProject.id) {
       prevProjectIdRef.current = activeProject.id;
       return;
     }
-    if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
-    labelConfigPersistRef.current = setTimeout(() => {
+    if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
+    toolPersistRef.current = setTimeout(() => {
       if (!activeProjectRef.current) return;
-      updateProject({ ...activeProjectRef.current, labelConfigs });
+      updateProject({ ...activeProjectRef.current, annotationTools });
     }, 500);
     return () => {
-      if (labelConfigPersistRef.current) clearTimeout(labelConfigPersistRef.current);
+      if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
     };
-  }, [labelConfigs]);
+  }, [annotationTools]);
 
   useEffect(() => {
     if (!activeProject) return;
@@ -434,20 +434,20 @@ export default function App() {
   }, [settings]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
-  const getAnnotationPath = useCallback((audioPath: string): string | null => {
+  const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
     if (!annotationDirectory || !currentDirectory) return null;
-    const rel = audioPath.substring(currentDirectory.length);
+    const rel = trackFilePath.substring(currentDirectory.length);
     const withoutExt = rel.replace(/\.[^/.]+$/, '');
     const ext = exportFormat === 'json' ? '.json' : exportFormat === 'csv' ? '.csv' : '.txt';
     return annotationDirectory + withoutExt + ext;
   }, [annotationDirectory, currentDirectory, exportFormat]);
 
-  // Auto-save annotations on every label change
+  // Auto-save annotations whenever they change
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutoSaveRef = useRef(false);
   useEffect(() => {
-    if (!currentFilePath || !annotationDirectory) return;
-    const annotPath = getAnnotationPath(currentFilePath);
+    if (!trackPath || !annotationDirectory) return;
+    const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
 
     // Debounce saves by 300ms
@@ -455,23 +455,23 @@ export default function App() {
     autoSaveTimeoutRef.current = setTimeout(async () => {
       if (skipAutoSaveRef.current) return;
       try {
-        if (labels.length === 0) {
+        if (annotations.length === 0) {
           await removeFile(annotPath);
           setAnnotatedFiles(prev => {
             const next = new Set(prev);
-            next.delete(currentFilePath);
+            next.delete(trackPath);
             return next;
           });
           return;
         }
         let content: string;
-        if (exportFormat === 'json') content = generateJSONContent(labels);
-        else if (exportFormat === 'csv') content = generateCSVContent(labels);
-        else content = generateAudacityContent(labels);
+        if (exportFormat === 'json') content = generateJSONContent(annotations);
+        else if (exportFormat === 'csv') content = generateCSVContent(annotations);
+        else content = generateAudacityContent(annotations);
         await writeTextFile(annotPath, content);
         setAnnotatedFiles(prev => {
             const next = new Set(prev);
-            next.add(currentFilePath);
+            next.add(trackPath);
             return next;
           });
       } catch (err) {
@@ -482,12 +482,12 @@ export default function App() {
     return () => {
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
-  }, [labels, currentFilePath, annotationDirectory, getAnnotationPath]);
+  }, [annotations, trackPath, annotationDirectory, getAnnotationPath]);
 
-  // Auto-load annotations when the current file or annotation directory changes
+  // Auto-load annotations when the current track or annotation directory changes
   useEffect(() => {
-    if (!currentFilePath || !annotationDirectory || !currentDirectory) return;
-    const annotPath = getAnnotationPath(currentFilePath);
+    if (!trackPath || !annotationDirectory || !currentDirectory) return;
+    const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
 
     (async () => {
@@ -495,17 +495,17 @@ export default function App() {
         const content = await readTextFile(annotPath);
         if (!content) return;
 
-        const loaded: Label[] = [];
+        const loaded: Annotation[] = [];
 
         if (exportFormat === 'json') {
-          const parsed = JSON.parse(content) as Label[];
-          parsed.forEach(l => {
-            const matchedConfig = labelConfigs.find(c => c.text === l.text);
+          const parsed = JSON.parse(content) as Annotation[];
+          parsed.forEach(a => {
+            const matchedTool = annotationTools.find(t => t.text === a.text);
             loaded.push({
-              ...l,
+              ...a,
               id: Math.random().toString(36).substring(2, 9),
-              configId: matchedConfig?.key ?? l.configId ?? '0',
-              color: matchedConfig?.color ?? l.color ?? '#ffffff',
+              toolKey: matchedTool?.key ?? a.toolKey ?? '0',
+              color: matchedTool?.color ?? a.color ?? '#ffffff',
             });
           });
         } else if (exportFormat === 'csv') {
@@ -517,8 +517,8 @@ export default function App() {
               const start = parseFloat(match[2]);
               const end = parseFloat(match[3]);
               if (!isNaN(start) && !isNaN(end)) {
-                const matchedConfig = labelConfigs.find(c => c.text === text);
-                loaded.push({ id: Math.random().toString(36).substring(2, 9), configId: matchedConfig?.key ?? '0', start, end, text, color: matchedConfig?.color ?? '#ffffff' });
+                const matchedTool = annotationTools.find(t => t.text === text);
+                loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
               }
             }
           }
@@ -532,8 +532,8 @@ export default function App() {
               const end = parseFloat(parts[1]);
               const text = parts.slice(2).join('\t');
               if (!isNaN(start) && !isNaN(end)) {
-                const matchedConfig = labelConfigs.find(c => c.text === text);
-                loaded.push({ id: Math.random().toString(36).substring(2, 9), configId: matchedConfig?.key ?? '0', start, end, text, color: matchedConfig?.color ?? '#ffffff' });
+                const matchedTool = annotationTools.find(t => t.text === text);
+                loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
               }
             }
           }
@@ -541,8 +541,8 @@ export default function App() {
 
         if (loaded.length > 0) {
           skipAutoSaveRef.current = true;
-          setLabels(loaded);
-          labelsHistoryRef.current = [loaded];
+          setAnnotations(loaded);
+          annotationsHistoryRef.current = [loaded];
           historyIndexRef.current = 0;
           addLog(`Loaded ${loaded.length} annotations`);
           setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
@@ -551,24 +551,24 @@ export default function App() {
         addLog(`Error loading annotations: ${err}`, 'error');
       }
     })();
-  }, [currentFilePath, annotationDirectory]);
+  }, [trackPath, annotationDirectory]);
 
   const handleOpenProject = useCallback(async (project: Project) => {
     await touchLastOpened(project.id);
-    // Set activeProject in the same React batch as labelConfigs/settings so the
+    // Set activeProject in the same React batch as annotationTools/settings so the
     // persist-effect guard (prevProjectIdRef) sees the new project immediately and
     // correctly skips the load-triggered changes.
     setActiveProject(project);
-    setLabelConfigs(project.labelConfigs.length > 0 ? project.labelConfigs : DEFAULT_LABEL_CONFIGS);
+    setAnnotationTools(project.annotationTools.length > 0 ? project.annotationTools : DEFAULT_ANNOTATION_TOOLS);
     if (project.spectrogramSettings) {
       setSettings(project.spectrogramSettings);
     }
     setCurrentDirectory(project.audioDirectory);
     setAnnotatedFiles(new Set());
-    setLabels([]);
-    setCurrentFilePath(null);
+    setAnnotations([]);
+    setTrackPath(null);
     setVideoSrc(null);
-    labelsHistoryRef.current = [[]];
+    annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
     try {
       const files = await listMediaFilesRecursive(project.audioDirectory);
@@ -627,12 +627,12 @@ export default function App() {
   const handleProjectSettingsSaved = useCallback(async (updated: Project) => {
     await updateProject(updated);
     const audioDirChanged = updated.audioDirectory !== activeProject?.audioDirectory;
-    setLabelConfigs(updated.labelConfigs.length > 0 ? updated.labelConfigs : DEFAULT_LABEL_CONFIGS);
+    setAnnotationTools(updated.annotationTools.length > 0 ? updated.annotationTools : DEFAULT_ANNOTATION_TOOLS);
     if (audioDirChanged) {
       setCurrentDirectory(updated.audioDirectory);
-      setCurrentFilePath(null);
+      setTrackPath(null);
       setVideoSrc(null);
-      setLabels([]);
+      setAnnotations([]);
       try {
         const files = await listMediaFilesRecursive(updated.audioDirectory);
         setAllMediaFiles(files);
@@ -685,7 +685,7 @@ export default function App() {
           setIsBuffering(false);
           // For video files, also pause the video element (audio engine fires onPaused
           // which sets isPlaying=false; we stop the frame track here).
-          if (!isAudioFile) videoRef.current?.pause();
+          if (!isAudioTrack) videoRef.current?.pause();
       } else {
           const sel = selectionRegionRef.current;
           let startSec = currentTime;
@@ -694,7 +694,7 @@ export default function App() {
               startSec = sel.start;
               seek(sel.start, true);
           } else if (!sel && duration > 0 && currentTime >= duration - 0.05) {
-              // At end of file with no selection — return to beginning
+              // At end of track with no selection — return to beginning
               startSec = 0;
               seek(0, true);
           }
@@ -704,39 +704,39 @@ export default function App() {
           engineRef.current?.play(startSec, sel ? sel.end : undefined);
           // For video files, start the video element for frame display (muted — audio
           // comes from the engine). Seek it to startSec first for frame sync.
-          if (!isAudioFile && videoRef.current) {
+          if (!isAudioTrack && videoRef.current) {
               videoRef.current.currentTime = startSec;
               videoRef.current.play().catch(() => {});
           }
       }
-  }, [isPlaying, isBuffering, isAudioFile, currentTime, duration]);
+  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration]);
 
   const seek = useCallback((time: number, scrollView = false) => {
       const wasPlaying = engineRef.current?.isPlaying ?? false;
       engineRef.current?.seek(time);
       setCurrentTime(time);
-      // Keep video frames in sync for video files
-      if (!isAudioFile && videoRef.current) {
+      // Keep video frames in sync for video tracks
+      if (!isAudioTrack && videoRef.current) {
           videoRef.current.currentTime = time;
       }
       if (scrollView) spectrogramRef.current?.scrollToTime(time);
-      // If playback was active, restart from the new position (stop if at/past EOF)
+      // If playback was active, restart from the new position (stop if at/past end)
       if (wasPlaying) {
           if (time < durationRef.current) {
               const sel = selectionRegionRef.current;
               setIsBuffering(true);
               engineRef.current?.play(time, sel ? sel.end : undefined);
-              if (!isAudioFile && videoRef.current) {
+              if (!isAudioTrack && videoRef.current) {
                   videoRef.current.currentTime = time;
                   videoRef.current.play().catch(() => {});
               }
           } else {
-              // Seeked to/past EOF — stop cleanly rather than hanging
+              // Seeked to/past end — stop cleanly rather than hanging
               setIsPlaying(false);
-              if (!isAudioFile) videoRef.current?.pause();
+              if (!isAudioTrack) videoRef.current?.pause();
           }
       }
-  }, [isAudioFile]);
+  }, [isAudioTrack]);
 
   // Global Hotkeys
   useEffect(() => {
@@ -746,13 +746,13 @@ export default function App() {
           // Undo / Redo
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
               e.preventDefault();
-              if (e.shiftKey) redoLabels();
-              else undoLabels();
+              if (e.shiftKey) redoAnnotations();
+              else undoAnnotations();
               return;
           }
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
               e.preventDefault();
-              redoLabels();
+              redoAnnotations();
               return;
           }
 
@@ -801,55 +801,55 @@ export default function App() {
                   setMuted(prev => !prev);
                   break;
               case 'escape':
-                  setActiveLabelKey(null);
+                  setActiveToolKey(null);
                   break;
               case 'delete':
               case 'backspace':
-                  if (selectedLabelId) {
-                      handleLabelsCommit(labels.filter(l => l.id !== selectedLabelId));
-                      setSelectedLabelId(null);
+                  if (selectedAnnotationId) {
+                      handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
+                      setSelectedAnnotationId(null);
                   }
                   break;
           }
 
-          // Hotkey Numbers (0-9)
+          // Hotkey Numbers (0-9): select or switch active annotation tool
           if (/^[0-9]$/.test(e.key)) {
               const key = e.key;
-              const config = labelConfigs.find(c => c.key === key);
-              if (config) {
-                  e.preventDefault(); // Prevent the digit from being typed into the new custom label input
-                  const isCustom = config.key === '0';
-                  // If a bound annotation is selected: reassign its label, don't create a new one
+              const tool = annotationTools.find(t => t.key === key);
+              if (tool) {
+                  e.preventDefault(); // Prevent the digit from being typed into the new custom tool input
+                  const isCustom = tool.key === '0';
+                  // If a bound annotation is selected: reassign its tool, don't create a new one
                   if (boundAnnotationId !== null) {
-                      const currentAnnotation = labels.find(l => l.id === boundAnnotationId);
+                      const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
                       if (currentAnnotation) {
                           // Save the annotation's current text before overwriting, so it can be
-                          // restored if the user switches back to this configId later.
+                          // restored if the user switches back to this toolKey later.
                           reassignBufferRef.current = {
                               ...reassignBufferRef.current,
-                              [currentAnnotation.configId]: currentAnnotation.text,
+                              [currentAnnotation.toolKey]: currentAnnotation.text,
                           };
-                          // Restore saved text for the new configId, or fall back to the default.
-                          const savedText = reassignBufferRef.current[config.key];
-                          const newText = savedText !== undefined ? savedText : (isCustom ? '' : config.text);
-                          const updated = labels.map(l => l.id === boundAnnotationId
-                              ? { ...l, configId: config.key, text: newText, color: config.color }
-                              : l
+                          // Restore saved text for the new toolKey, or fall back to the default.
+                          const savedText = reassignBufferRef.current[tool.key];
+                          const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
+                          const updated = annotations.map(a => a.id === boundAnnotationId
+                              ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
+                              : a
                           );
-                          handleLabelsCommit(updated);
-                          setActiveLabelKey(key);
+                          handleAnnotationsCommit(updated);
+                          setActiveToolKey(key);
                       }
                   }
-                  // If in selection mode with a free selection, drop a new label onto it
-                  else if (activeLabelKey === null && selectionRegion !== null) {
-                      const newLabel = makeLabelFromConfig(config, selectionRegion.start, selectionRegion.end);
-                      handleLabelsCommit([...labels, newLabel]);
-                      setSelectedLabelId(newLabel.id);
-                      setBoundAnnotationId(newLabel.id);
-                      // Selection stays — now bound to the new label
-                      setActiveLabelKey(key);
+                  // If in selection mode with a free selection, drop a new annotation onto it
+                  else if (activeToolKey === null && selectionRegion !== null) {
+                      const newAnnotation = makeAnnotationFromTool(tool, selectionRegion.start, selectionRegion.end);
+                      handleAnnotationsCommit([...annotations, newAnnotation]);
+                      setSelectedAnnotationId(newAnnotation.id);
+                      setBoundAnnotationId(newAnnotation.id);
+                      // Selection stays — now bound to the new annotation
+                      setActiveToolKey(key);
                   } else {
-                      setActiveLabelKey(prev => prev === key ? null : key);
+                      setActiveToolKey(prev => prev === key ? null : key);
                   }
               }
           }
@@ -858,124 +858,122 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedLabelId, labelConfigs, navigateFile, undoLabels, redoLabels, handleLabelsCommit, labels, activeLabelKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
+  }, [togglePlay, selectedAnnotationId, annotationTools, navigateFile, undoAnnotations, redoAnnotations, handleAnnotationsCommit, annotations, activeToolKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
 
   const performExport = async () => {
-      if (labels.length === 0) return;
+      if (annotations.length === 0) return;
       if (exportFormat === 'json') {
-          await exportToJSON(labels, videoFileName, currentFilePath);
+          await exportToJSON(annotations, trackName, trackPath);
       } else if (exportFormat === 'csv') {
-          await exportToCSV(labels, videoFileName, currentFilePath);
+          await exportToCSV(annotations, trackName, trackPath);
       } else {
-          await exportToAudacity(labels, videoFileName, currentFilePath);
+          await exportToAudacity(annotations, trackName, trackPath);
       }
       addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
   };
 
-  const handleAddLabelConfig = () => {
-      if (newLabelText.trim() === "") {
-          setIsAddingLabel(false);
+  const handleAddTool = () => {
+      if (newToolText.trim() === "") {
+          setIsAddingTool(false);
           return;
       }
-      
-      const nextIndex = labelConfigs.length;
+
+      const nextIndex = annotationTools.length;
       if (nextIndex >= 10) {
-          alert("Maximum of 10 hotkey labels (0-9) allowed.");
-          setIsAddingLabel(false);
-          setNewLabelText("");
+          alert("Maximum of 10 annotation tools (0-9) allowed.");
+          setIsAddingTool(false);
+          setNewToolText("");
           return;
       }
-      
-      const newConfig: LabelConfig = {
+
+      const newTool: AnnotationTool = {
           key: nextIndex.toString(),
-          text: newLabelText,
+          text: newToolText,
           color: HOTKEY_COLORS[nextIndex]
       };
-      
-      setLabelConfigs([...labelConfigs, newConfig]);
-      setIsAddingLabel(false);
-      setNewLabelText("");
-      // Auto-select the newly created label config
-      setActiveLabelKey(newConfig.key);
-      addLog(`Added category: ${newLabelText} (${nextIndex})`);
+
+      setAnnotationTools([...annotationTools, newTool]);
+      setIsAddingTool(false);
+      setNewToolText("");
+      // Auto-select the newly created annotation tool
+      setActiveToolKey(newTool.key);
+      addLog(`Added tool: ${newToolText} (${nextIndex})`);
   };
 
-  const startEditingCategory = (idx: number) => {
-      setEditingLabelIndex(idx);
-      setEditingLabelText(labelConfigs[idx].text);
+  const startEditingTool = (idx: number) => {
+      setEditingToolIndex(idx);
+      setEditingToolText(annotationTools[idx].text);
   };
 
-  const saveEditingCategory = () => {
-      if (editingLabelIndex === null) return;
-      
-      const idx = editingLabelIndex;
-      const config = labelConfigs[idx];
-      const newName = editingLabelText.trim();
-      
-      if (newName && newName !== config.text) {
-          // Update Config
-          const updatedConfigs = [...labelConfigs];
-          updatedConfigs[idx] = { ...config, text: newName };
-          setLabelConfigs(updatedConfigs);
+  const saveEditingTool = () => {
+      if (editingToolIndex === null) return;
 
-          // Update ALL labels with this configId
-          const updatedLabels = labels.map(l => {
-              if (l.configId === config.key) {
-                  return { ...l, text: newName };
+      const idx = editingToolIndex;
+      const tool = annotationTools[idx];
+      const newName = editingToolText.trim();
+
+      if (newName && newName !== tool.text) {
+          // Update tool
+          const updatedTools = [...annotationTools];
+          updatedTools[idx] = { ...tool, text: newName };
+          setAnnotationTools(updatedTools);
+
+          // Update ALL annotations created with this tool
+          const updatedAnnotations = annotations.map(a => {
+              if (a.toolKey === tool.key) {
+                  return { ...a, text: newName };
               }
-              return l;
+              return a;
           });
-          setLabels(updatedLabels);
-          addLog(`Renamed category ${config.text} -> ${newName}. Updated linked events.`);
+          setAnnotations(updatedAnnotations);
+          addLog(`Renamed tool ${tool.text} -> ${newName}. Updated linked annotations.`);
       }
 
-      setEditingLabelIndex(null);
-      setEditingLabelText("");
+      setEditingToolIndex(null);
+      setEditingToolText("");
   };
 
-  const handleDeleteCategory = (idx: number, e: React.MouseEvent) => {
+  const handleDeleteTool = (idx: number, e: React.MouseEvent) => {
       e.stopPropagation();
-      if (idx === 0) return; // Cannot delete Custom Label
+      if (idx === 0) return; // Cannot delete the Custom Annotation Tool
 
-      const config = labelConfigs[idx];
-      const linkedLabels = labels.filter(l => l.configId === config.key);
-      
-      if (linkedLabels.length > 0) {
+      const tool = annotationTools[idx];
+      const linkedAnnotations = annotations.filter(a => a.toolKey === tool.key);
+
+      if (linkedAnnotations.length > 0) {
           // Prompt
           const choice = confirm(
-              `Deleting category "${config.text}" which is used by ${linkedLabels.length} events.\n\n` +
-              `OK: Convert events to Custom Labels (White)\n` +
-              `Cancel: Delete all ${linkedLabels.length} events`
+              `Deleting tool "${tool.text}" which is used by ${linkedAnnotations.length} annotations.\n\n` +
+              `OK: Convert annotations to Custom (White)\n` +
+              `Cancel: Delete all ${linkedAnnotations.length} annotations`
           );
-          
+
           if (choice) {
               // Convert
-              const updatedLabels = labels.map(l => {
-                  if (l.configId === config.key) {
-                      return { ...l, configId: "0", color: "#ffffff" };
+              const updatedAnnotations = annotations.map(a => {
+                  if (a.toolKey === tool.key) {
+                      return { ...a, toolKey: "0", color: "#ffffff" };
                   }
-                  return l;
+                  return a;
               });
-              setLabels(updatedLabels);
-              addLog(`Deleted category ${config.text}. Converted events to Custom.`);
+              setAnnotations(updatedAnnotations);
+              addLog(`Deleted tool ${tool.text}. Converted annotations to Custom.`);
           } else {
               // Delete
-              const updatedLabels = labels.filter(l => l.configId !== config.key);
-              setLabels(updatedLabels);
-              addLog(`Deleted category ${config.text} and all linked events.`);
+              const updatedAnnotations = annotations.filter(a => a.toolKey !== tool.key);
+              setAnnotations(updatedAnnotations);
+              addLog(`Deleted tool ${tool.text} and all linked annotations.`);
           }
       } else {
-          addLog(`Deleted category ${config.text} (unused).`);
+          addLog(`Deleted tool ${tool.text} (unused).`);
       }
 
-      // Remove Config
-      const newConfigs = labelConfigs.filter((_, i) => i !== idx);
-      // Re-index keys? No, keeping keys stable is safer for now, but UI shows 0-9. 
-      // Re-indexing is expected behavior for "Hotkeys 0-9".
-      const reindexed = newConfigs.map((c, i) => ({ ...c, key: i.toString(), color: HOTKEY_COLORS[i] }));
-      
-      setLabelConfigs(reindexed);
-      setActiveLabelKey('0');
+      // Remove tool and re-index hotkeys (0-9)
+      const newTools = annotationTools.filter((_, i) => i !== idx);
+      const reindexed = newTools.map((t, i) => ({ ...t, key: i.toString(), color: HOTKEY_COLORS[i] }));
+
+      setAnnotationTools(reindexed);
+      setActiveToolKey('0');
   };
 
   const handleSplitDrag = (e: React.MouseEvent) => {
@@ -1181,17 +1179,17 @@ export default function App() {
                 <p>
                   Create a project from the launch screen. You can configure the output format (Audacity .txt, CSV, or JSON) and
                   label categories in <span className="font-mono bg-slate-700 px-1 rounded">Project → Settings</span>.
-                  All settings—including label categories and spectrogram display—persist per project.
+                  All settings—including annotation tools and spectrogram display—persist per project.
                 </p>
               </section>
 
               <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">File Tree</h4>
+                <h4 className="font-semibold text-white text-base">File Panel</h4>
                 <p>
-                  The left sidebar lists every audio/video file in the project directory. Files with existing annotations show a
-                  count badge. Click any file to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↑</kbd> /
-                  <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↓</kbd> to step through files in order.
-                  Right-click a file for options: reveal in Finder, reveal annotation file, or toggle shuffle mode.
+                  The left panel lists every audio/video track in the project directory. Tracks with existing annotations show a
+                  count badge. Click any track to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↑</kbd> /
+                  <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↓</kbd> to step through tracks in order.
+                  Right-click a track for options: reveal in Finder, reveal annotation file, or toggle shuffle mode.
                 </p>
               </section>
 
@@ -1206,22 +1204,22 @@ export default function App() {
               </section>
 
               <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Two Modes: Selection vs. Label</h4>
+                <h4 className="font-semibold text-white text-base">Two Modes: Selection vs. Annotation Tool</h4>
                 <p>
-                  The active label category in the right-side palette controls the current mode.
+                  The active annotation tool in the right-side palette controls the current mode.
                 </p>
                 <ul className="space-y-1.5 list-none">
                   <li>
-                    <span className="text-white">Selection Mode</span> (no category active — press <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to enter):
+                    <span className="text-white">Selection Mode</span> (no tool active — press <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to enter):
                     left-click &amp; drag creates a <span className="italic">selection region</span> shown as a shaded band.
-                    Playback is bounded to that region. While a selection is active, pressing a category key
+                    Playback is bounded to that region. While a selection is active, pressing a tool key
                     (<kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>) instantly
                     drops an annotation onto it.
                   </li>
                   <li>
-                    <span className="text-white">Label Mode</span> (a category is active):
-                    left-click &amp; drag directly creates an annotation with that category's color and name.
-                    Press a number key to switch categories, or <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to return to Selection Mode.
+                    <span className="text-white">Annotation Tool Mode</span> (a tool is active):
+                    left-click &amp; drag directly creates an annotation with that tool's color and name.
+                    Press a number key to switch tools, or <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to return to Selection Mode.
                   </li>
                 </ul>
               </section>
@@ -1236,24 +1234,24 @@ export default function App() {
                     The playhead will loop within that annotation. Use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+←</kbd> /
                     <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+→</kbd> (or the ‹ › buttons on the spectrogram) to jump between annotations.
                   </li>
-                  <li><span className="text-white">Rename:</span> click the annotation's text label to edit it inline. Key 0 (Custom Label) annotations open for editing automatically.</li>
+                  <li><span className="text-white">Rename:</span> click the annotation's text to edit it inline. Key 0 (Custom Annotation Tool) annotations open for editing automatically.</li>
                   <li><span className="text-white">Delete:</span> select an annotation and press <kbd className="font-mono bg-slate-700 px-1 rounded">Delete</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Backspace</kbd>, or middle-click it directly.</li>
                   <li><span className="text-white">Undo/Redo:</span> <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Z</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Shift+Z</kbd>.</li>
                 </ul>
               </section>
 
               <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Label Categories</h4>
+                <h4 className="font-semibold text-white text-base">Annotation Tools</h4>
                 <p>
-                  Categories are named classes bound to hotkeys <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>.
-                  Key <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd> is always "Custom Label"—
+                  Annotation tools are named instruments bound to hotkeys <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>.
+                  Key <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd> is always the Custom Annotation Tool—
                   annotations created with it open immediately for you to type a one-off name.
                 </p>
                 <p>
-                  Click a category name in the palette to rename it; all existing annotations with that category update automatically.
-                  Use the <span className="font-mono bg-slate-700 px-1 rounded">+</span> button to add a category, or the trash icon to remove one
-                  (you can choose to convert its annotations to Custom Labels or delete them outright).
-                  Category configuration is saved per project.
+                  Click a tool name in the palette to rename it; all existing annotations created with that tool update automatically.
+                  Use the <span className="font-mono bg-slate-700 px-1 rounded">+</span> button to add a tool, or the trash icon to remove one
+                  (you can choose to convert its annotations to Custom or delete them outright).
+                  Annotation tool configuration is saved per project.
                 </p>
               </section>
 
@@ -1321,7 +1319,7 @@ export default function App() {
 
                     <div className="space-y-1.5">
                       <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Annotations</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">0 – 9</span><span>Set active label category</span></div>
+                      <div className="flex justify-between"><span className="font-mono text-slate-400">0 – 9</span><span>Set active annotation tool</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Esc</span><span>Selection Mode / clear selection</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Delete / Backspace</span><span>Delete selected annotation</span></div>
                       <div className="flex justify-between"><span className="font-mono text-slate-400">Middle-click</span><span>Delete annotation instantly</span></div>
@@ -1344,15 +1342,15 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex relative overflow-hidden">
-        {/* File Tree Sidebar */}
+        {/* File Panel */}
         {currentDirectory && (
             <FileTree
                 rootDirectory={currentDirectory}
                 allFiles={displayQueue}
-                currentFile={currentFilePath}
+                currentFile={trackPath}
                 onFileSelect={handleOpenFile}
-                collapsed={fileTreeCollapsed}
-                onToggleCollapse={() => setFileTreeCollapsed(c => !c)}
+                collapsed={filePanelCollapsed}
+                onToggleCollapse={() => setFilePanelCollapsed(c => !c)}
                 onNavigatePrev={() => navigateFile('prev')}
                 onNavigateNext={() => navigateFile('next')}
                 canNavigatePrev={currentFileIndex > 0}
@@ -1379,7 +1377,7 @@ export default function App() {
                     src={videoSrc}
                     volume={volume}
                     muted={true}          // engine handles all audio; video element is frames-only
-                    isAudio={isAudioFile}
+                    isAudio={isAudioTrack}
                     onTimeUpdate={() => {}}
                     onDurationChange={setDuration}
                     onLoadedMetadata={() => {}}
@@ -1396,117 +1394,117 @@ export default function App() {
                  )}
              </div>
 
-             {/* Right-Side Label Palette Overlay */}
+             {/* Right-Side Annotation Tool Palette */}
              <div className="absolute top-4 right-4 bottom-4 w-64 flex flex-col items-end pointer-events-none z-30 space-y-2">
-                 {/* Label List */}
+                 {/* Tool List */}
                  <div className="w-full flex flex-col items-end space-y-2 pointer-events-auto overflow-y-auto pr-2 custom-scrollbar max-h-full py-2">
-                     {labelConfigs.map((cfg, idx) => {
-                         const isActive = cfg.key === activeLabelKey;
+                     {annotationTools.map((tool, idx) => {
+                         const isActive = tool.key === activeToolKey;
                          const isDefault = idx === 0;
-                         const isEditing = editingLabelIndex === idx;
+                         const isEditing = editingToolIndex === idx;
 
                          if (isEditing) {
                             return (
-                                <div key={cfg.key} className="flex flex-col items-end animate-in fade-in slide-in-from-right-2 mb-2 bg-slate-800 p-2 rounded border border-slate-600 shadow-xl z-50 w-full max-w-[220px]">
-                                    <input 
+                                <div key={tool.key} className="flex flex-col items-end animate-in fade-in slide-in-from-right-2 mb-2 bg-slate-800 p-2 rounded border border-slate-600 shadow-xl z-50 w-full max-w-[220px]">
+                                    <input
                                        autoFocus
-                                       className="bg-slate-700 text-white text-sm px-2 py-1 rounded w-full outline-none border border-slate-600 focus:border-[#e65161]" 
-                                       value={editingLabelText}
-                                       onChange={e => setEditingLabelText(e.target.value)}
+                                       className="bg-slate-700 text-white text-sm px-2 py-1 rounded w-full outline-none border border-slate-600 focus:border-[#e65161]"
+                                       value={editingToolText}
+                                       onChange={e => setEditingToolText(e.target.value)}
                                        onKeyDown={(e) => {
-                                           if (e.key === 'Enter') saveEditingCategory();
-                                           if (e.key === 'Escape') setEditingLabelIndex(null);
+                                           if (e.key === 'Enter') saveEditingTool();
+                                           if (e.key === 'Escape') setEditingToolIndex(null);
                                        }}
-                                       onBlur={saveEditingCategory}
+                                       onBlur={saveEditingTool}
                                     />
-                                    <span className="text-[10px] text-orange-400 mt-1 w-full text-right font-medium">Renaming updates all matching labels</span>
+                                    <span className="text-[10px] text-orange-400 mt-1 w-full text-right font-medium">Renaming updates all matching annotations</span>
                                 </div>
                             );
                          }
 
                          return (
-                            <div key={cfg.key} className="flex items-center justify-end group/item gap-2 w-full">
-                                {/* Buttons container - appear to the left of label */}
+                            <div key={tool.key} className="flex items-center justify-end group/item gap-2 w-full">
+                                {/* Buttons container - appear to the left of tool */}
                                 {!isDefault && (
                                      <div className="flex items-center gap-1 opacity-0 group-hover/item:opacity-100 transition-opacity">
-                                         <button 
-                                            onClick={(e) => handleDeleteCategory(idx, e)}
+                                         <button
+                                            onClick={(e) => handleDeleteTool(idx, e)}
                                             className="text-red-500 hover:text-red-400 bg-black/80 rounded-full p-1.5 shadow-md hover:scale-110 transition-transform"
-                                            title="Delete Category"
+                                            title="Delete Tool"
                                         >
                                             <X size={14} />
                                         </button>
-                                         <button 
-                                            onClick={(e) => { e.stopPropagation(); startEditingCategory(idx); }}
+                                         <button
+                                            onClick={(e) => { e.stopPropagation(); startEditingTool(idx); }}
                                             className="text-blue-400 hover:text-blue-300 bg-black/80 rounded-full p-1.5 shadow-md hover:scale-110 transition-transform"
-                                            title="Rename Category"
+                                            title="Rename Tool"
                                         >
                                             <Pencil size={14} />
                                         </button>
                                     </div>
                                 )}
-                                
+
                                 <button
-                                    onClick={() => setActiveLabelKey(prev => prev === cfg.key ? null : cfg.key)}
+                                    onClick={() => setActiveToolKey(prev => prev === tool.key ? null : tool.key)}
                                     className={`
                                         relative flex items-center justify-between px-3 py-1.5 rounded-lg transition-all border
                                         ${isActive ? 'opacity-100 ring-2 ring-white scale-105' : 'opacity-70 hover:opacity-100'}
                                     `}
-                                    style={{ 
-                                        backgroundColor: cfg.color, 
-                                        borderColor: isDefault ? '#4b5563' : cfg.color, 
+                                    style={{
+                                        backgroundColor: tool.color,
+                                        borderColor: isDefault ? '#4b5563' : tool.color,
                                         minWidth: '100px', // Minimum width for touch target
                                         maxWidth: '100%'     // Allow growing based on text
                                     }}
                                 >
-                                    <span 
+                                    <span
                                         className={`text-sm font-medium ${isDefault ? 'text-black' : 'text-white'} truncate text-left mr-2`}
-                                        title={isDefault ? "Custom Label" : cfg.text}
+                                        title={isDefault ? "Custom Annotation Tool" : tool.text}
                                     >
-                                        {cfg.text}
+                                        {tool.text}
                                     </span>
                                     <span className={`text-xs font-mono opacity-80 ${isDefault ? 'text-black' : 'text-white'}`}>
-                                        {cfg.key}
+                                        {tool.key}
                                     </span>
                                 </button>
                             </div>
                          );
                      })}
 
-                     {/* Add Label Button */}
-                     {labelConfigs.length < 10 && (
+                     {/* Add Tool Button */}
+                     {annotationTools.length < 10 && (
                          <div className="flex items-center justify-end w-full pt-2">
-                             {isAddingLabel ? (
+                             {isAddingTool ? (
                                  <div className="flex items-center bg-slate-800 rounded-full border border-slate-600 p-1 shadow-lg animate-in fade-in slide-in-from-right-4">
-                                     <div 
+                                     <div
                                         className="w-6 h-6 rounded-full flex items-center justify-center mr-2"
-                                        style={{ backgroundColor: HOTKEY_COLORS[labelConfigs.length] }}
+                                        style={{ backgroundColor: HOTKEY_COLORS[annotationTools.length] }}
                                      >
-                                        <span className="text-white text-xs font-bold">{labelConfigs.length}</span>
+                                        <span className="text-white text-xs font-bold">{annotationTools.length}</span>
                                      </div>
-                                     <input 
+                                     <input
                                         autoFocus
                                         type="text"
                                         className="bg-transparent text-white text-sm outline-none w-24 mr-2"
-                                        placeholder="Label Name"
-                                        value={newLabelText}
-                                        onChange={(e) => setNewLabelText(e.target.value)}
+                                        placeholder="Tool Name"
+                                        value={newToolText}
+                                        onChange={(e) => setNewToolText(e.target.value)}
                                         onKeyDown={(e) => {
-                                            if(e.key === 'Enter') handleAddLabelConfig();
-                                            if(e.key === 'Escape') setIsAddingLabel(false);
+                                            if(e.key === 'Enter') handleAddTool();
+                                            if(e.key === 'Escape') setIsAddingTool(false);
                                         }}
-                                        onBlur={handleAddLabelConfig}
+                                        onBlur={handleAddTool}
                                      />
                                  </div>
                              ) : (
-                                 <button 
-                                    onClick={() => setIsAddingLabel(true)}
+                                 <button
+                                    onClick={() => setIsAddingTool(true)}
                                     className="flex items-center space-x-2 group"
                                  >
-                                    <span className="text-slate-400 text-sm font-medium group-hover:text-white transition-colors">Add Label</span>
-                                    <div 
+                                    <span className="text-slate-400 text-sm font-medium group-hover:text-white transition-colors">Add Tool</span>
+                                    <div
                                         className="w-8 h-8 rounded-full flex items-center justify-center transition-transform group-hover:scale-110 shadow-lg"
-                                        style={{ backgroundColor: HOTKEY_COLORS[labelConfigs.length] }}
+                                        style={{ backgroundColor: HOTKEY_COLORS[annotationTools.length] }}
                                     >
                                         <Plus size={16} className="text-white" />
                                     </div>
@@ -1799,16 +1797,16 @@ export default function App() {
                 fileIdent={fileIdent}
                 settings={settings}
                 zoomSec={zoomSec}
-                labels={labels}
-                selectedLabelId={selectedLabelId}
-                activeLabelConfig={activeLabelKey !== null ? (labelConfigs.find(c => c.key === activeLabelKey) ?? null) : null}
-                labelConfigs={labelConfigs}
+                annotations={annotations}
+                selectedAnnotationId={selectedAnnotationId}
+                activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
+                annotationTools={annotationTools}
                 selectionRegion={selectionRegion}
                 boundAnnotationId={boundAnnotationId}
                 onSeek={seek}
-                onLabelsChange={handleLabelsChange}
-                onLabelsCommit={handleLabelsCommit}
-                onSelectLabel={setSelectedLabelId}
+                onAnnotationsChange={handleAnnotationsChange}
+                onAnnotationsCommit={handleAnnotationsCommit}
+                onSelectAnnotation={setSelectedAnnotationId}
                 onSelectionChange={setSelectionRegion}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}

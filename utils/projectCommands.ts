@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Project, LabelConfig, SpectrogramSettings } from '../types';
+import { Project, AnnotationTool, SpectrogramSettings } from '../types';
 
 // ── Rust-side snake_case shape ────────────────────────────────────────────────
 
-interface LabelConfigRecord {
+// Wire format matching the Rust ProjectRecord struct (uses snake_case and the
+// legacy `label_configs` field name for backward compatibility with saved files).
+interface AnnotationToolRecord {
   key: string;
   text: string;
   color: string;
@@ -17,7 +19,7 @@ interface ProjectRecord {
   output_format: string;
   created_at: string;
   last_opened: string;
-  label_configs: LabelConfigRecord[];
+  label_configs: AnnotationToolRecord[];
   spectrogram_settings?: SpectrogramSettings; // stored as-is (camelCase) via serde_json::Value
 }
 
@@ -38,7 +40,7 @@ function toProject(r: ProjectRecord): Project {
     outputFormat: r.output_format as 'json' | 'csv' | 'txt',
     createdAt: r.created_at,
     lastOpened: r.last_opened,
-    labelConfigs: r.label_configs,
+    annotationTools: r.label_configs,
     spectrogramSettings: r.spectrogram_settings,
   };
 }
@@ -52,7 +54,7 @@ function toRecord(p: Project): ProjectRecord {
     output_format: p.outputFormat,
     created_at: p.createdAt,
     last_opened: p.lastOpened,
-    label_configs: p.labelConfigs,
+    label_configs: p.annotationTools,
     spectrogram_settings: p.spectrogramSettings,
   };
 }
