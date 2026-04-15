@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Label, SpectrogramSettings, LabelConfig } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
-import { formatTime, calculateLabelLayers } from '../utils/helpers';
+import { formatTime, calculateLabelLayers, makeLabelFromConfig } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC } from '../constants';
 import { X, Pencil } from 'lucide-react';
@@ -545,8 +545,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [pixelsPerSecond]);
 
   const goToPrevAnnotation = useCallback(() => {
-    // In Selection Mode with an active selection: jump to selection start
-    if (activeLabelConfig === null && selectionRegion !== null) {
+    // Any active selection (free or bound): jump to selection start
+    if (selectionRegion !== null) {
       onSeek(selectionRegion.start);
       scrollToAnnotation(selectionRegion.start);
       return;
@@ -559,11 +559,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation, activeLabelConfig, selectionRegion]);
+  }, [sortedLabels, currentTime, onSeek, scrollToAnnotation, selectionRegion]);
 
   const goToNextAnnotation = useCallback(() => {
-    // In Selection Mode with an active selection: jump to selection end
-    if (activeLabelConfig === null && selectionRegion !== null) {
+    // Any active selection (free or bound): jump to selection end
+    if (selectionRegion !== null) {
       onSeek(selectionRegion.end);
       scrollToAnnotation(selectionRegion.end);
       return;
@@ -576,7 +576,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(duration);
       scrollToAnnotation(duration);
     }
-  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation, activeLabelConfig, selectionRegion]);
+  }, [sortedLabels, currentTime, duration, onSeek, scrollToAnnotation, selectionRegion]);
 
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
@@ -604,6 +604,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [onSelectionChange, onBoundAnnotationChange]);
 
   // --- Interaction Handlers ---
+
+  // Shared: create a label from the active config, commit it, and enter bound-selection state.
+  const commitNewLabel = useCallback((start: number, end: number) => {
+    if (!activeLabelConfig) return;
+    const newLabel = makeLabelFromConfig(activeLabelConfig, start, end);
+    onLabelsCommit([...labels, newLabel]);
+    onSelectLabel(newLabel.id);
+    onBoundAnnotationChange(newLabel.id);
+    onSelectionChange({ start, end });
+  }, [activeLabelConfig, labels, onLabelsCommit, onSelectLabel, onBoundAnnotationChange, onSelectionChange]);
 
   const getPointerTime = (e: React.MouseEvent) => {
     if (!containerRef.current) return 0;
@@ -655,6 +665,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         setCreatingSelection({ start: t, current: t });
       } else {
         // Label Mode
+
+        // Shift+click while paused: drop a label spanning playhead↔click and bind selection
+        if (e.shiftKey && !isPlaying && activeLabelConfig !== null) {
+          const selStart = Math.min(currentTime, t);
+          const selEnd = Math.max(currentTime, t);
+          if (selEnd - selStart > 0.05) {
+            commitNewLabel(selStart, selEnd);
+          }
+          return;
+        }
 
         // Click inside existing selection: seek only, preserve selection
         if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
@@ -786,19 +806,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const start = Math.min(creatingLabel.start, creatingLabel.current);
       const end = Math.max(creatingLabel.start, creatingLabel.current);
       if (end - start > 0.05 && activeLabelConfig !== null) {
-        const id = Math.random().toString(36).substr(2, 9);
-        const isActiveCustom = activeLabelConfig.key === "0";
-        const newLabel: Label = {
-            id,
-            configId: activeLabelConfig.key,
-            start,
-            end,
-            text: isActiveCustom ? "" : activeLabelConfig.text,
-            color: activeLabelConfig.color
-        };
-        const committed = [...labels, newLabel];
-        onLabelsCommit(committed);
-        onSelectLabel(id);
+        commitNewLabel(start, end);
       }
       setCreatingLabel(null);
     }

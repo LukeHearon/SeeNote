@@ -1,4 +1,4 @@
-import { Label } from '../types';
+import { Label, LabelConfig } from '../types';
 import { saveFileDialog, writeTextFile } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
@@ -16,6 +16,15 @@ export const formatTime = (seconds: number): string => {
 export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };
+
+export const makeLabelFromConfig = (config: LabelConfig, start: number, end: number): Label => ({
+  id: generateId(),
+  configId: config.key,
+  start,
+  end,
+  text: config.key === '0' ? '' : config.text,
+  color: config.color,
+});
 
 // Calculate vertical dodging for overlapping labels
 export const calculateLabelLayers = (labels: Label[]): Label[] => {

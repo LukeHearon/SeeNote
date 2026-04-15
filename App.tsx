@@ -7,7 +7,7 @@ import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { Label, SpectrogramSettings, LabelConfig, FrequencyScale, Project } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_LABEL_CONFIGS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
-import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent } from './utils/helpers';
+import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeLabelFromConfig } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
@@ -842,18 +842,11 @@ export default function App() {
                   }
                   // If in selection mode with a free selection, drop a new label onto it
                   else if (activeLabelKey === null && selectionRegion !== null) {
-                      const id = Math.random().toString(36).substr(2, 9);
-                      const newLabel: Label = {
-                          id,
-                          configId: config.key,
-                          start: selectionRegion.start,
-                          end: selectionRegion.end,
-                          text: isCustom ? '' : config.text,
-                          color: config.color,
-                      };
+                      const newLabel = makeLabelFromConfig(config, selectionRegion.start, selectionRegion.end);
                       handleLabelsCommit([...labels, newLabel]);
-                      setSelectedLabelId(id);
-                      setSelectionRegion(null);
+                      setSelectedLabelId(newLabel.id);
+                      setBoundAnnotationId(newLabel.id);
+                      // Selection stays — now bound to the new label
                       setActiveLabelKey(key);
                   } else {
                       setActiveLabelKey(prev => prev === key ? null : key);
