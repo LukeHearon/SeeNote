@@ -2,6 +2,8 @@
 
 SeeNote is a **Tauri v2 + React/TypeScript desktop app** for annotating audio/video files to build machine learning training datasets. Users open a project (audio directory + annotation output directory), navigate tracks via a file panel, view spectrograms, and drag to create time-range annotations. Annotations are automatically saved as Audacity-compatible `.txt`, `.csv`, or `.json` files mirroring the audio directory structure.
 
+**Terminology**: For definitions of domain terms used throughout this codebase (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.md`](TERMS.md).
+
 ## CRITICAL: Sample-level synchrony is the cornerstone invariant
 
 **Every visual element that lives on the time axis must be in exact 1:1 correspondence with the underlying audio samples, and with each other.** This is essential to SeeNote's functionality. Users are determining ML label boundaries by eye and ear against the spectrogram; any drift between what they see and what they hear corrupts the ground truth.

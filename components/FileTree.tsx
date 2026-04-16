@@ -317,7 +317,7 @@ function FileTree({
 
   if (collapsed) {
     return (
-      <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col items-center pt-2 gap-2">
+      <div className="flex flex-col items-center pt-2 gap-2 h-full">
         <button
           onClick={onToggleCollapse}
           className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
@@ -330,7 +330,7 @@ function FileTree({
   }
 
   return (
-    <div className="flex-none w-56 bg-slate-900 border-r border-slate-700 flex flex-col select-none h-full">
+    <div className="flex flex-col select-none h-full bg-slate-900 w-full">
       {/* Header */}
       <div
         className="flex items-center justify-between px-2 py-2 bg-slate-800 border-b border-slate-700 flex-none gap-1"

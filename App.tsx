@@ -14,6 +14,37 @@ import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 
+// Compact tool button used in the left-panel tool grid.
+// Always renders w-full — callers are responsible for constraining the container width.
+function ToolCell({
+  isActive, color, dotColor, label, hotkey, onClick, dotted,
+}: {
+  isActive: boolean; color: string; dotColor: string; label: string;
+  hotkey: string; onClick: () => void; dotted?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-xs transition-all border
+        ${isActive ? 'opacity-100' : 'opacity-60 hover:opacity-100'}
+        ${!dotted && isActive ? 'ring-1 ring-white/50' : ''}
+        ${dotted ? 'border-dashed' : 'border-transparent hover:border-slate-600'}`}
+      style={{
+        backgroundColor: isActive ? color + '40' : color + '18',
+        // dotted: brighten border when active instead of adding a ring
+        borderColor: dotted
+          ? (isActive ? 'rgba(255,255,255,0.6)' : '#6b7280')
+          : (isActive ? color : undefined),
+      }}
+      title={label}
+    >
+      <span className="w-2 h-2 rounded-full flex-none" style={{ backgroundColor: dotColor }} />
+      <span className="flex-1 min-w-0 truncate text-left text-slate-100 leading-tight">{label}</span>
+      <span className="font-mono text-slate-500 text-[10px] flex-none">{hotkey}</span>
+    </button>
+  );
+}
+
 export default function App() {
   // Track State
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
@@ -134,7 +165,9 @@ export default function App() {
 
   // UI State
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [splitRatio, setSplitRatio] = useState(0.5); 
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  const [leftPanelRatio, setLeftPanelRatio] = useState(0.6);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(224);
   const [showSettings, setShowSettings] = useState(false);
   const [showHotkeysHelp, setShowHotkeysHelp] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -980,14 +1013,55 @@ export default function App() {
       e.preventDefault();
       const startY = e.clientY;
       const startRatio = splitRatio;
-      
+
       const onMove = (moveEvent: MouseEvent) => {
           const delta = moveEvent.clientY - startY;
-          const totalHeight = window.innerHeight - 64; 
+          const totalHeight = window.innerHeight - 64;
           const newRatio = Math.max(0.2, Math.min(0.8, startRatio + (delta / totalHeight)));
           setSplitRatio(newRatio);
       };
-      
+
+      const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+  };
+
+  const handleLeftPanelDrag = (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startRatio = leftPanelRatio;
+
+      const onMove = (moveEvent: MouseEvent) => {
+          const delta = moveEvent.clientY - startY;
+          const totalHeight = window.innerHeight - 64;
+          let newRatio = Math.max(0.15, Math.min(0.85, startRatio + (delta / totalHeight)));
+          // Soft snap: shift up by one divider height (h-2 = 8px) so tops align visually
+          const dividerOffset = 8 / totalHeight;
+          if (Math.abs(newRatio - (splitRatio - dividerOffset)) < 0.025) newRatio = splitRatio - dividerOffset;
+          setLeftPanelRatio(newRatio);
+      };
+
+      const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+  };
+
+  const handleLeftPanelWidthDrag = (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = leftPanelWidth;
+
+      const onMove = (moveEvent: MouseEvent) => {
+          const delta = moveEvent.clientX - startX;
+          setLeftPanelWidth(Math.max(160, Math.min(480, startWidth + delta)));
+      };
+
       const onUp = () => {
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
@@ -1342,29 +1416,218 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex relative overflow-hidden">
-        {/* File Panel */}
-        {currentDirectory && (
-            <FileTree
-                rootDirectory={currentDirectory}
-                allFiles={displayQueue}
-                currentFile={trackPath}
-                onFileSelect={handleOpenFile}
-                collapsed={filePanelCollapsed}
-                onToggleCollapse={() => setFilePanelCollapsed(c => !c)}
-                onNavigatePrev={() => navigateFile('prev')}
-                onNavigateNext={() => navigateFile('next')}
-                canNavigatePrev={currentFileIndex > 0}
-                canNavigateNext={currentFileIndex < displayQueue.length - 1}
-                shuffleMode={shuffleMode}
-                onToggleShuffle={toggleShuffle}
-                annotatedFiles={annotatedFiles}
-                hideAnnotated={activeProject?.hideAnnotated ?? false}
-                onToggleHideAnnotated={handleToggleHideAnnotated}
-                onRevealInFinder={handleRevealInFinder}
-                onRevealAnnotations={handleRevealAnnotations}
-                onRefresh={handleRefreshFiles}
-            />
-        )}
+        {/* Left Panel: File Tree (top) + Labels Panel (bottom) */}
+        {currentDirectory && (() => {
+          const canAddTool = annotationTools.length < 10 && !isAddingTool;
+
+          const fileTreeProps = {
+            rootDirectory: currentDirectory,
+            allFiles: displayQueue,
+            currentFile: trackPath,
+            onFileSelect: handleOpenFile,
+            onToggleCollapse: () => setFilePanelCollapsed(c => !c),
+            onNavigatePrev: () => navigateFile('prev'),
+            onNavigateNext: () => navigateFile('next'),
+            canNavigatePrev: currentFileIndex > 0,
+            canNavigateNext: currentFileIndex < displayQueue.length - 1,
+            shuffleMode,
+            onToggleShuffle: toggleShuffle,
+            annotatedFiles,
+            hideAnnotated: activeProject?.hideAnnotated ?? false,
+            onToggleHideAnnotated: handleToggleHideAnnotated,
+            onRevealInFinder: handleRevealInFinder,
+            onRevealAnnotations: handleRevealAnnotations,
+            onRefresh: handleRefreshFiles,
+          };
+
+          if (filePanelCollapsed) {
+            return (
+              <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col h-full">
+                <FileTree {...fileTreeProps} collapsed={true} />
+              </div>
+            );
+          }
+
+          return (
+            <div
+              className="flex-none bg-slate-900 border-r border-slate-700 flex flex-col h-full relative"
+              style={{ width: leftPanelWidth }}
+            >
+              {/* File Tree portion */}
+              <div style={{ height: `${leftPanelRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
+                <FileTree {...fileTreeProps} collapsed={false} />
+              </div>
+
+              {/* Horizontal divider — matches video/spectrogram divider */}
+              <div
+                className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors flex-none z-10 flex justify-center items-center"
+                onMouseDown={handleLeftPanelDrag}
+              >
+                <div className="w-12 h-1 bg-slate-600 rounded-full" />
+              </div>
+
+              {/* Tool Panel */}
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {/* Header */}
+                <div className="flex items-center px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-none">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Labels</span>
+                </div>
+
+                {/* Tool Grid */}
+                <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
+
+                  {/* Row 1: Select (top-left) + Custom (top-right) — always 50:50 */}
+                  <div className="flex gap-1">
+                    {/* Select — wrapper provides the flex-1 so ToolCell's w-full fills half */}
+                    <div className="flex-1 min-w-0">
+                      <ToolCell
+                        isActive={activeToolKey === null}
+                        color="#374151"
+                        dotColor="#94a3b8"
+                        label="Select"
+                        hotkey="Esc"
+                        dotted
+                        onClick={() => setActiveToolKey(null)}
+                      />
+                    </div>
+                    {/* Custom (annotationTools[0]) */}
+                    {(() => {
+                      const custom = annotationTools[0];
+                      const isActive = custom.key === activeToolKey;
+                      const isEditing = editingToolIndex === 0;
+                      if (isEditing) {
+                        return (
+                          <div className="flex-1 min-w-0 flex flex-col bg-slate-800 p-1 rounded border border-slate-600">
+                            <input
+                              autoFocus
+                              className="bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded w-full outline-none border border-slate-600 focus:border-[#e65161]"
+                              value={editingToolText}
+                              onChange={e => setEditingToolText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveEditingTool();
+                                if (e.key === 'Escape') setEditingToolIndex(null);
+                              }}
+                              onBlur={saveEditingTool}
+                            />
+                            <span className="text-[8px] text-orange-400 mt-0.5">Updates all matching</span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="flex-1 min-w-0">
+                          <ToolCell
+                            isActive={isActive}
+                            color={custom.color}
+                            dotColor="#94a3b8"
+                            label="Custom"
+                            hotkey={custom.key}
+                            onClick={() => setActiveToolKey(prev => prev === custom.key ? null : custom.key)}
+                          />
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Defined labels — single scrollable column */}
+                  <div className="flex flex-col gap-1">
+                    {annotationTools.slice(1).map((tool, i) => {
+                      const idx = i + 1;
+                      const isActive = tool.key === activeToolKey;
+                      const isEditing = editingToolIndex === idx;
+
+                      if (isEditing) {
+                        return (
+                          <div key={tool.key} className="flex flex-col bg-slate-800 p-1 rounded border border-slate-600">
+                            <input
+                              autoFocus
+                              className="bg-slate-700 text-white text-xs px-1.5 py-0.5 rounded w-full outline-none border border-slate-600 focus:border-[#e65161]"
+                              value={editingToolText}
+                              onChange={e => setEditingToolText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveEditingTool();
+                                if (e.key === 'Escape') setEditingToolIndex(null);
+                              }}
+                              onBlur={saveEditingTool}
+                            />
+                            <span className="text-[8px] text-orange-400 mt-0.5">Updates all matching</span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={tool.key} className="relative group/cell overflow-hidden">
+                          <ToolCell
+                            isActive={isActive}
+                            color={tool.color}
+                            dotColor={tool.color}
+                            label={tool.text}
+                            hotkey={tool.key}
+                            onClick={() => setActiveToolKey(prev => prev === tool.key ? null : tool.key)}
+                          />
+                          <div className="absolute top-0 right-0 flex opacity-0 group-hover/cell:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); startEditingTool(idx); }}
+                              className="text-blue-400 hover:text-blue-300 bg-slate-900/90 p-0.5 rounded-bl"
+                              title="Rename"
+                            >
+                              <Pencil size={9} />
+                            </button>
+                            <button
+                              onClick={(e) => handleDeleteTool(idx, e)}
+                              className="text-red-500 hover:text-red-400 bg-slate-900/90 p-0.5 rounded-tr"
+                              title="Delete"
+                            >
+                              <X size={9} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Add label */}
+                    {isAddingTool ? (
+                      <div className="flex items-center bg-slate-800 rounded border border-slate-600 px-1.5 py-1 gap-1">
+                        <div
+                          className="w-3 h-3 rounded-full flex-none flex items-center justify-center"
+                          style={{ backgroundColor: HOTKEY_COLORS[annotationTools.length] }}
+                        >
+                          <span className="text-white text-[8px] font-bold">{annotationTools.length}</span>
+                        </div>
+                        <input
+                          autoFocus
+                          type="text"
+                          className="bg-transparent text-white text-xs outline-none flex-1 min-w-0"
+                          placeholder="Name…"
+                          value={newToolText}
+                          onChange={(e) => setNewToolText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleAddTool();
+                            if (e.key === 'Escape') setIsAddingTool(false);
+                          }}
+                          onBlur={handleAddTool}
+                        />
+                      </div>
+                    ) : canAddTool ? (
+                      <button
+                        onClick={() => setIsAddingTool(true)}
+                        className="w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all opacity-50 hover:opacity-100"
+                        title="Add Label"
+                      >
+                        <Plus size={11} />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right-edge width resize handle */}
+              <div
+                className="absolute top-0 right-0 bottom-0 w-1 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-20"
+                onMouseDown={handleLeftPanelWidthDrag}
+              />
+            </div>
+          );
+        })()}
 
         {/* Right: video + spectrogram stacked */}
         <div className="flex-1 flex flex-col relative overflow-hidden">
@@ -1394,126 +1657,6 @@ export default function App() {
                  )}
              </div>
 
-             {/* Right-Side Annotation Tool Palette */}
-             <div className="absolute top-4 right-4 bottom-4 w-64 flex flex-col items-end pointer-events-none z-30 space-y-2">
-                 {/* Tool List */}
-                 <div className="w-full flex flex-col items-end space-y-2 pointer-events-auto overflow-y-auto pr-2 custom-scrollbar max-h-full py-2">
-                     {annotationTools.map((tool, idx) => {
-                         const isActive = tool.key === activeToolKey;
-                         const isDefault = idx === 0;
-                         const isEditing = editingToolIndex === idx;
-
-                         if (isEditing) {
-                            return (
-                                <div key={tool.key} className="flex flex-col items-end animate-in fade-in slide-in-from-right-2 mb-2 bg-slate-800 p-2 rounded border border-slate-600 shadow-xl z-50 w-full max-w-[220px]">
-                                    <input
-                                       autoFocus
-                                       className="bg-slate-700 text-white text-sm px-2 py-1 rounded w-full outline-none border border-slate-600 focus:border-[#e65161]"
-                                       value={editingToolText}
-                                       onChange={e => setEditingToolText(e.target.value)}
-                                       onKeyDown={(e) => {
-                                           if (e.key === 'Enter') saveEditingTool();
-                                           if (e.key === 'Escape') setEditingToolIndex(null);
-                                       }}
-                                       onBlur={saveEditingTool}
-                                    />
-                                    <span className="text-[10px] text-orange-400 mt-1 w-full text-right font-medium">Renaming updates all matching annotations</span>
-                                </div>
-                            );
-                         }
-
-                         return (
-                            <div key={tool.key} className="flex items-center justify-end group/item gap-2 w-full">
-                                {/* Buttons container - appear to the left of tool */}
-                                {!isDefault && (
-                                     <div className="flex items-center gap-1 opacity-0 group-hover/item:opacity-100 transition-opacity">
-                                         <button
-                                            onClick={(e) => handleDeleteTool(idx, e)}
-                                            className="text-red-500 hover:text-red-400 bg-black/80 rounded-full p-1.5 shadow-md hover:scale-110 transition-transform"
-                                            title="Delete Tool"
-                                        >
-                                            <X size={14} />
-                                        </button>
-                                         <button
-                                            onClick={(e) => { e.stopPropagation(); startEditingTool(idx); }}
-                                            className="text-blue-400 hover:text-blue-300 bg-black/80 rounded-full p-1.5 shadow-md hover:scale-110 transition-transform"
-                                            title="Rename Tool"
-                                        >
-                                            <Pencil size={14} />
-                                        </button>
-                                    </div>
-                                )}
-
-                                <button
-                                    onClick={() => setActiveToolKey(prev => prev === tool.key ? null : tool.key)}
-                                    className={`
-                                        relative flex items-center justify-between px-3 py-1.5 rounded-lg transition-all border
-                                        ${isActive ? 'opacity-100 ring-2 ring-white scale-105' : 'opacity-70 hover:opacity-100'}
-                                    `}
-                                    style={{
-                                        backgroundColor: tool.color,
-                                        borderColor: isDefault ? '#4b5563' : tool.color,
-                                        minWidth: '100px', // Minimum width for touch target
-                                        maxWidth: '100%'     // Allow growing based on text
-                                    }}
-                                >
-                                    <span
-                                        className={`text-sm font-medium ${isDefault ? 'text-black' : 'text-white'} truncate text-left mr-2`}
-                                        title={isDefault ? "Custom Annotation Tool" : tool.text}
-                                    >
-                                        {tool.text}
-                                    </span>
-                                    <span className={`text-xs font-mono opacity-80 ${isDefault ? 'text-black' : 'text-white'}`}>
-                                        {tool.key}
-                                    </span>
-                                </button>
-                            </div>
-                         );
-                     })}
-
-                     {/* Add Tool Button */}
-                     {annotationTools.length < 10 && (
-                         <div className="flex items-center justify-end w-full pt-2">
-                             {isAddingTool ? (
-                                 <div className="flex items-center bg-slate-800 rounded-full border border-slate-600 p-1 shadow-lg animate-in fade-in slide-in-from-right-4">
-                                     <div
-                                        className="w-6 h-6 rounded-full flex items-center justify-center mr-2"
-                                        style={{ backgroundColor: HOTKEY_COLORS[annotationTools.length] }}
-                                     >
-                                        <span className="text-white text-xs font-bold">{annotationTools.length}</span>
-                                     </div>
-                                     <input
-                                        autoFocus
-                                        type="text"
-                                        className="bg-transparent text-white text-sm outline-none w-24 mr-2"
-                                        placeholder="Tool Name"
-                                        value={newToolText}
-                                        onChange={(e) => setNewToolText(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if(e.key === 'Enter') handleAddTool();
-                                            if(e.key === 'Escape') setIsAddingTool(false);
-                                        }}
-                                        onBlur={handleAddTool}
-                                     />
-                                 </div>
-                             ) : (
-                                 <button
-                                    onClick={() => setIsAddingTool(true)}
-                                    className="flex items-center space-x-2 group"
-                                 >
-                                    <span className="text-slate-400 text-sm font-medium group-hover:text-white transition-colors">Add Tool</span>
-                                    <div
-                                        className="w-8 h-8 rounded-full flex items-center justify-center transition-transform group-hover:scale-110 shadow-lg"
-                                        style={{ backgroundColor: HOTKEY_COLORS[annotationTools.length] }}
-                                    >
-                                        <Plus size={16} className="text-white" />
-                                    </div>
-                                 </button>
-                             )}
-                         </div>
-                     )}
-                 </div>
-             </div>
         </div>
 
         {/* Resizer Handle */}
