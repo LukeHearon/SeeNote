@@ -30,6 +30,7 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
       if (!video) return;
       video.muted = true;
       video.volume = 0;
+      video.playbackRate = 1;
     }, [ref, src]);
 
     useEffect(() => {
@@ -89,7 +90,7 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
           className={`w-full h-full object-contain ${isAudio ? 'opacity-0' : ''}`}
           controls={false}
           muted
-          preload="metadata"
+          preload="auto"
         />
       </div>
     );

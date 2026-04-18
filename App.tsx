@@ -207,26 +207,63 @@ export default function App() {
   useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
 
   // Video-frame sync loop — video tracks only.
-  // The AudioEngine's onTimeUpdate callback drives setCurrentTime for all tracks.
-  // This loop keeps video.currentTime in sync with the engine's audio clock so
-  // that video frames align with the audio the engine is producing.
+  //
+  // The AudioEngine is the canonical clock. Instead of seeking the <video>
+  // element whenever it drifts (which triggers an expensive keyframe decode
+  // and can cascade into multi-second freezes), we nudge playbackRate
+  // proportionally to the drift. A hard seek is only used as a last resort
+  // when drift exceeds HARD_SEEK_THRESHOLD, and is gated on 'seeked' so we
+  // never issue overlapping seeks.
   useEffect(() => {
     if (isAudioTrack || !isPlaying) return;
+    const video = videoRef.current;
+    const engine = engineRef.current;
+    if (!video || !engine) return;
 
-    let rAF: number;
+    // s — below this drift we let the clocks be; above it we correct via rate
+    const DEADBAND_SEC = 0.005;
+    // s — if drift exceeds this we give up on rate correction and hard-seek
+    const HARD_SEEK_THRESHOLD = 0.5;
+    // ± fraction — clamp on playbackRate delta (|rate - 1|)
+    const MAX_RATE_DELTA = 0.05;
+    // Gain on proportional controller: drift(s) * gain = rate delta
+    const CORRECTION_GAIN = 0.5;
+
+    let rAF: number | null = null;
+    let hardSeekInFlight = false;
+    const onSeeked = () => { hardSeekInFlight = false; };
+    video.addEventListener('seeked', onSeeked);
+
     const loop = () => {
-        if (!videoRef.current || !engineRef.current) return;
-        const engineTime = engineRef.current.getMediaTime();
-        if (Math.abs(videoRef.current.currentTime - engineTime) > 0.05) {
-            videoRef.current.currentTime = engineTime;
-        }
-        rAF = requestAnimationFrame(loop);
-    };
+      const engineTime = engine.getMediaTime();
+      const drift = engineTime - video.currentTime; // >0: video behind audio
 
-    loop();
+      if (Math.abs(drift) > HARD_SEEK_THRESHOLD) {
+        if (!hardSeekInFlight) {
+          hardSeekInFlight = true;
+          video.playbackRate = 1;
+          video.currentTime = engineTime;
+        }
+      } else if (Math.abs(drift) > DEADBAND_SEC) {
+        const delta = Math.max(
+          -MAX_RATE_DELTA,
+          Math.min(MAX_RATE_DELTA, drift * CORRECTION_GAIN),
+        );
+        const target = 1 + delta;
+        if (Math.abs(video.playbackRate - target) > 0.002) {
+          video.playbackRate = target;
+        }
+      } else if (video.playbackRate !== 1) {
+        video.playbackRate = 1;
+      }
+      rAF = requestAnimationFrame(loop);
+    };
+    rAF = requestAnimationFrame(loop);
 
     return () => {
-        if (rAF) cancelAnimationFrame(rAF);
+      if (rAF !== null) cancelAnimationFrame(rAF);
+      video.removeEventListener('seeked', onSeeked);
+      video.playbackRate = 1;
     };
   }, [isPlaying, isAudioTrack]);
 
