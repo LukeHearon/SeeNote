@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
+import CanvasVideoPlayer from './components/CanvasVideoPlayer';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
@@ -13,6 +14,7 @@ import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
+import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 
 // Compact tool button used in the left-panel tool grid.
 // Always renders w-full — callers are responsible for constraining the container width.
@@ -138,17 +140,56 @@ export default function App() {
 
   // Create engine on mount, destroy on unmount
   useEffect(() => {
+    // Kick a video prefetch chunk starting at prevBufferedTo. Chains immediately
+    // when the chunk finishes so decode pipelines ahead of the playhead even when
+    // VideoToolbox takes longer than the chunk's playback duration (dense GOPs).
+    const kickVideoPrefetch = (prevBufferedTo: number) => {
+      const src = frameSourceRef.current;
+      if (!src || videoPrefetchBusyRef.current) return;
+      const t = currentTimeRef.current;
+      // Always start from the buffer edge, not max(edge, t). Starting from t
+      // when t > prevBufferedTo causes ensureRange to overlap the just-completed
+      // chunk, forcing a re-decode of already-cached frames through VideoToolbox.
+      // The allCached fast-path in ensureRange handles the case where frames
+      // at prevBufferedTo are already in cache.
+      const chunkStart = prevBufferedTo;
+      const dur = durationRef.current || chunkStart + 5;
+      const chunkEnd = Math.min(chunkStart + 5, dur);
+      if (chunkStart >= chunkEnd) return;
+      videoPrefetchBusyRef.current = true;
+      videoPrefetchEndRef.current = chunkEnd;
+      src.ensureRange(chunkStart, chunkEnd)
+        .catch(() => { videoPrefetchEndRef.current = prevBufferedTo; })
+        .finally(() => {
+          videoPrefetchBusyRef.current = false;
+          // Chain immediately: don't wait for the next onTimeUpdate tick.
+          // If the decode took longer than playback, the playhead may already
+          // be close to the new buffer edge — kick the next chunk now.
+          const buf = videoPrefetchEndRef.current;
+          if (currentTimeRef.current + 6 >= buf) kickVideoPrefetch(buf);
+        });
+    };
+
     engineRef.current = new AudioEngine({
-      onTimeUpdate: (t) => setCurrentTime(t),
+      onTimeUpdate: (t) => {
+        setCurrentTime(t);
+        currentTimeRef.current = t;
+        // Rolling video prefetch: keep frames decoded 5 s ahead of the playhead.
+        // We use refs (stable objects) so this closure — captured once at mount —
+        // always reads current values without being recreated on every render.
+        if (!videoPrefetchBusyRef.current) {
+          const bufferedTo = videoPrefetchEndRef.current;
+          if (t + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
+        }
+      },
       onPlaying: () => { setIsPlaying(true); setIsBuffering(false); },
       onPaused: () => setIsPlaying(false),
       onEnded: () => {
         // Stop playback and return playhead to selection start (matching old behavior).
-        // For video files, also pause the video element (which plays frames).
+        // For legacy <video>-path video files, also pause the video element. The
+        // frame-source path has no playing element to pause — the canvas rAF
+        // loop naturally freezes on the last-drawn frame.
         const sel = selectionRegionRef.current;
-        if (!isAudioTrackRef.current) {
-          videoRef.current?.pause();
-        }
         if (sel) {
           seek(sel.start, true);
         }
@@ -164,7 +205,23 @@ export default function App() {
   }, []);
 
   // UI State
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // VideoFrameSource for frame-perfect playback on MP4/MOV video tracks.
+  // When non-null, CanvasVideoPlayer drives the display; the <video> element
+  // is not used. For audio tracks or non-ISOBMFF containers, this stays null
+  // and we fall back to the legacy <video>-based path.
+  const frameSourceRef = useRef<VideoFrameSource | null>(null);
+  // Rolling prefetch state for the frame-source path. Tracks how far ahead
+  // frames have been decoded so onTimeUpdate knows when to fetch the next chunk.
+  const videoPrefetchEndRef = useRef(0);
+  const videoPrefetchBusyRef = useRef(false);
+  // Trigger re-render of the video pane when frameSource is created/torn down.
+  // We don't put the VideoFrameSource itself in state because it owns mutable
+  // GPU resources; a simple version counter is enough to switch components.
+  const [frameSourceVersion, setFrameSourceVersion] = useState(0);
+  // Monotonic token invalidated whenever user interrupts playback. Async
+  // preroll awaits check this so stale resolutions don't start the engine
+  // after the user has pressed pause or triggered a new play.
+  const playTokenRef = useRef(0);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [leftPanelRatio, setLeftPanelRatio] = useState(0.6);
   const [leftPanelWidth, setLeftPanelWidth] = useState(224);
@@ -173,6 +230,7 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
+  const [debugCopied, setDebugCopied] = useState(false);
   const [isAddingTool, setIsAddingTool] = useState(false);
   const [newToolText, setNewToolText] = useState("");
   
@@ -189,13 +247,24 @@ export default function App() {
   // Set of audio file paths that have an annotation file
   const [annotatedFiles, setAnnotatedFiles] = useState<Set<string>>(new Set());
 
-  const addLog = (msg: string, type: 'info'|'error' = 'info') => {
+  // Memoized so children whose effects depend on it (e.g. CanvasVideoPlayer's
+  // rAF loop) don't tear down on every parent re-render.
+  const addLog = useCallback((msg: string, type: 'info'|'error' = 'info') => {
       const time = new Date().toLocaleTimeString();
       setDebugLogs(prev => [...prev, { time, msg, type }]);
-  };
+  }, []);
 
   // Keep selectionRegionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRegionRef.current = selectionRegion; }, [selectionRegion]);
+
+  // Warm the frame-source cache whenever the selection region changes so
+  // frames inside the range are decoded ahead of play. Cheap to call — if
+  // the range is already cached, ensureRange returns without re-decoding.
+  useEffect(() => {
+    const source = frameSourceRef.current;
+    if (!source || !selectionRegion) return;
+    source.ensureRange(selectionRegion.start, selectionRegion.end).catch(() => {});
+  }, [selectionRegion, frameSourceVersion]);
 
   // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
   useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
@@ -203,69 +272,25 @@ export default function App() {
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
+  const currentTimeRef = useRef(0);
+
   // Keep isAudioTrackRef in sync so the onEnded closure (created once on mount) reads the current value
   useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
 
-  // Video-frame sync loop — video tracks only.
-  //
-  // The AudioEngine is the canonical clock. Instead of seeking the <video>
-  // element whenever it drifts (which triggers an expensive keyframe decode
-  // and can cascade into multi-second freezes), we nudge playbackRate
-  // proportionally to the drift. A hard seek is only used as a last resort
-  // when drift exceeds HARD_SEEK_THRESHOLD, and is gated on 'seeked' so we
-  // never issue overlapping seeks.
-  useEffect(() => {
-    if (isAudioTrack || !isPlaying) return;
-    const video = videoRef.current;
-    const engine = engineRef.current;
-    if (!video || !engine) return;
-
-    // s — below this drift we let the clocks be; above it we correct via rate
-    const DEADBAND_SEC = 0.005;
-    // s — if drift exceeds this we give up on rate correction and hard-seek
-    const HARD_SEEK_THRESHOLD = 0.5;
-    // ± fraction — clamp on playbackRate delta (|rate - 1|)
-    const MAX_RATE_DELTA = 0.05;
-    // Gain on proportional controller: drift(s) * gain = rate delta
-    const CORRECTION_GAIN = 0.5;
-
-    let rAF: number | null = null;
-    let hardSeekInFlight = false;
-    const onSeeked = () => { hardSeekInFlight = false; };
-    video.addEventListener('seeked', onSeeked);
-
-    const loop = () => {
-      const engineTime = engine.getMediaTime();
-      const drift = engineTime - video.currentTime; // >0: video behind audio
-
-      if (Math.abs(drift) > HARD_SEEK_THRESHOLD) {
-        if (!hardSeekInFlight) {
-          hardSeekInFlight = true;
-          video.playbackRate = 1;
-          video.currentTime = engineTime;
-        }
-      } else if (Math.abs(drift) > DEADBAND_SEC) {
-        const delta = Math.max(
-          -MAX_RATE_DELTA,
-          Math.min(MAX_RATE_DELTA, drift * CORRECTION_GAIN),
-        );
-        const target = 1 + delta;
-        if (Math.abs(video.playbackRate - target) > 0.002) {
-          video.playbackRate = target;
-        }
-      } else if (video.playbackRate !== 1) {
-        video.playbackRate = 1;
-      }
-      rAF = requestAnimationFrame(loop);
-    };
-    rAF = requestAnimationFrame(loop);
-
-    return () => {
-      if (rAF !== null) cancelAnimationFrame(rAF);
-      video.removeEventListener('seeked', onSeeked);
-      video.playbackRate = 1;
-    };
-  }, [isPlaying, isAudioTrack]);
+  // Pre-roll the frame-source cache so the first frame at startSec is decoded
+  // before the audio engine begins emitting samples. Critical for short-selection
+  // replays: without this the engine starts audio ~200ms ahead of the first
+  // rendered frame, so a ~1s selection ends before most frames appear.
+  const prerollVideo = useCallback(async (startSec: number, endSec?: number): Promise<void> => {
+    const source = frameSourceRef.current;
+    if (!source) return;
+    const end = endSec ?? Math.min(startSec + 5, durationRef.current || startSec + 5);
+    try { await source.ensureRange(startSec, end); } catch { /* canvas shows stale frame on error */ }
+    // Don't overwrite progress the rolling prefetch made past our end. Use
+    // Math.max so preroll can still advance the pointer forward from 0, but
+    // can't reset it backward if kickVideoPrefetch already buffered further.
+    videoPrefetchEndRef.current = Math.max(videoPrefetchEndRef.current, end);
+  }, []);
 
   // Open a track by absolute path (called from button or file panel)
   const handleOpenFile = useCallback(async (absolutePath: string) => {
@@ -277,6 +302,15 @@ export default function App() {
       return;
     }
 
+    // Tear down any prior frame source — VideoFrame handles hold GPU memory.
+    if (frameSourceRef.current) {
+      frameSourceRef.current.close();
+      frameSourceRef.current = null;
+      setFrameSourceVersion(v => v + 1);
+    }
+    videoPrefetchEndRef.current = 0;
+    videoPrefetchBusyRef.current = false;
+
     setAnnotations([]);
     setIsPlaying(false);
     setIsBuffering(false);
@@ -287,7 +321,6 @@ export default function App() {
     setTrackPath(absolutePath);
     // Reset playhead to beginning of track
     setCurrentTime(0);
-    if (videoRef.current) videoRef.current.currentTime = 0;
     // Reset undo/redo history for new track
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
@@ -340,6 +373,26 @@ export default function App() {
         // Kick off first viewport prefetch immediately
         cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
         addLog('Spectrogram loading...');
+
+        // Frame-perfect video path: MP4/MOV only. WebCodecs + mp4box.js
+        // demuxes the file and feeds a VideoDecoder; frames are cached by
+        // timestamp for instant replay at sample boundaries. Other containers
+        // fall back to the <video> element below.
+        if (!isAudio && canUseFrameSource(absolutePath)) {
+            try {
+                const source = new VideoFrameSource({ onDebugLog: addLog });
+                await source.open(assetUrl);
+                frameSourceRef.current = source;
+                setFrameSourceVersion(v => v + 1);
+                // Warm the cache around t=0 so the first frame is ready to draw.
+                source.ensureRange(0, Math.min(5, dur)).catch(() => {});
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                addLog(`[video] frame source unavailable, falling back: ${msg}`, 'error');
+                frameSourceRef.current = null;
+                setFrameSourceVersion(v => v + 1);
+            }
+        }
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         addLog(`Error opening file: ${errMsg}`, 'error');
@@ -354,10 +407,30 @@ export default function App() {
         setIsAudioTrack(false);
         chunkCacheRef.current = null;
         setCacheVersion(v => v + 1);
+        if (frameSourceRef.current) {
+            frameSourceRef.current.close();
+            frameSourceRef.current = null;
+            setFrameSourceVersion(v => v + 1);
+        }
     } finally {
         setIsProcessing(false);
     }
   }, [settings.fftSize]);
+
+  // Tear down frame source on unmount — VideoFrame handles hold GPU memory.
+  useEffect(() => () => {
+    if (frameSourceRef.current) {
+      frameSourceRef.current.close();
+      frameSourceRef.current = null;
+    }
+  }, []);
+
+  // Stable callback passed to CanvasVideoPlayer's rAF loop. Reading from the
+  // engine directly (rather than the currentTime state) avoids a frame of
+  // lag: React commits on rAF, so currentTime is always one tick behind.
+  const getMediaTime = useCallback((): number => {
+    return engineRef.current?.getMediaTime() ?? 0;
+  }, []);
 
   // Rebuild cache when FFT size changes while a track is open
   useEffect(() => {
@@ -748,14 +821,13 @@ export default function App() {
     }
   }, [allMediaFiles, getAnnotationPath, annotationDirectory]);
 
-  const togglePlay = useCallback(() => {
+  const togglePlay = useCallback(async () => {
       if (isPlaying || isBuffering) {
+          // Invalidate any in-flight preroll so its resolution can't start engine
+          playTokenRef.current += 1;
           engineRef.current?.pause();
           setIsPlaying(false);
           setIsBuffering(false);
-          // For video files, also pause the video element (audio engine fires onPaused
-          // which sets isPlaying=false; we stop the frame track here).
-          if (!isAudioTrack) videoRef.current?.pause();
       } else {
           const sel = selectionRegionRef.current;
           let startSec = currentTime;
@@ -769,25 +841,33 @@ export default function App() {
               seek(0, true);
           }
           setIsBuffering(true);
+          const token = ++playTokenRef.current;
+          // For video tracks, pre-roll so the first frame at startSec is decoded
+          // BEFORE the engine schedules audio. Otherwise short selections may end
+          // before any frames render. Audio tracks skip the wait entirely.
+          if (!isAudioTrack) {
+              await prerollVideo(startSec, sel?.end);
+              if (token !== playTokenRef.current) return; // user interrupted
+          }
           // isPlaying is set to true only when onPlaying fires (first sample emitted).
           // endSec enables sample-accurate selection stop.
           engineRef.current?.play(startSec, sel ? sel.end : undefined);
-          // For video files, start the video element for frame display (muted — audio
-          // comes from the engine). Seek it to startSec first for frame sync.
-          if (!isAudioTrack && videoRef.current) {
-              videoRef.current.currentTime = startSec;
-              videoRef.current.play().catch(() => {});
-          }
       }
-  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration]);
+  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration, prerollVideo]);
 
-  const seek = useCallback((time: number, scrollView = false) => {
+  const seek = useCallback(async (time: number, scrollView = false) => {
       const wasPlaying = engineRef.current?.isPlaying ?? false;
       engineRef.current?.seek(time);
       setCurrentTime(time);
-      // Keep video frames in sync for video tracks
-      if (!isAudioTrack && videoRef.current) {
-          videoRef.current.currentTime = time;
+      // Notify the frame source so its eviction window follows the scrub position.
+      // Kick a small ensureRange while paused so a scrub shows the correct frame
+      // (rather than a stale one from the prior window).
+      if (!isAudioTrack && frameSourceRef.current) {
+          frameSourceRef.current.notifyPlayhead(time);
+          if (!wasPlaying) {
+              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5))
+                .catch(() => {});
+          }
       }
       if (scrollView) spectrogramRef.current?.scrollToTime(time);
       // If playback was active, restart from the new position (stop if at/past end)
@@ -795,18 +875,18 @@ export default function App() {
           if (time < durationRef.current) {
               const sel = selectionRegionRef.current;
               setIsBuffering(true);
-              engineRef.current?.play(time, sel ? sel.end : undefined);
-              if (!isAudioTrack && videoRef.current) {
-                  videoRef.current.currentTime = time;
-                  videoRef.current.play().catch(() => {});
+              const token = ++playTokenRef.current;
+              if (!isAudioTrack) {
+                  await prerollVideo(time, sel?.end);
+                  if (token !== playTokenRef.current) return;
               }
+              engineRef.current?.play(time, sel ? sel.end : undefined);
           } else {
               // Seeked to/past end — stop cleanly rather than hanging
               setIsPlaying(false);
-              if (!isAudioTrack) videoRef.current?.pause();
           }
       }
-  }, [isAudioTrack]);
+  }, [isAudioTrack, prerollVideo]);
 
   // Global Hotkeys
   useEffect(() => {
@@ -1242,7 +1322,22 @@ export default function App() {
               >
                    <div className="flex justify-between items-center mb-4">
                        <h3 className="text-xl font-bold flex items-center gap-2"><Bug size={20} className="text-[#e65161]" /> Debug Console</h3>
-                       <button onClick={() => setShowDebug(false)} className="text-slate-400 hover:text-white"><X size={20}/></button>
+                       <div className="flex items-center gap-2">
+                           <button
+                               onClick={() => {
+                                   const text = debugLogs.map(l => `[${l.time}] ${l.msg}`).join('\n');
+                                   navigator.clipboard.writeText(text);
+                                   setDebugCopied(true);
+                                   setTimeout(() => setDebugCopied(false), 1500);
+                               }}
+                               className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
+                               title="Copy logs"
+                               disabled={debugLogs.length === 0}
+                           >
+                               {debugCopied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
+                           </button>
+                           <button onClick={() => setShowDebug(false)} className="text-slate-400 hover:text-white"><X size={20}/></button>
+                       </div>
                    </div>
                    <div className="flex-1 bg-slate-900 rounded p-4 overflow-y-auto font-mono text-sm border border-slate-700">
                        {debugLogs.length === 0 ? <span className="text-slate-500 italic">No logs yet...</span> : (
@@ -1672,19 +1767,26 @@ export default function App() {
         {/* Video Pane */}
         <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex">
              <div className="flex-1 relative bg-black flex justify-center items-center">
-                 <VideoPlayer
-                    ref={videoRef}
-                    src={videoSrc}
-                    volume={volume}
-                    muted={true}          // engine handles all audio; video element is frames-only
-                    isAudio={isAudioTrack}
-                    onTimeUpdate={() => {}}
-                    onDurationChange={setDuration}
-                    onLoadedMetadata={() => {}}
-                    onPlaying={() => {}}
-                    onWaiting={() => {}}
-                    onDebugLog={addLog}
-                 />
+                 {/* MP4/MOV video tracks use the frame-source path: a canvas driven
+                     by the audio engine clock, with frames decoded via WebCodecs and
+                     cached by timestamp. All other cases (audio tracks, non-ISOBMFF
+                     video containers, or a failed frame-source open) fall back to the
+                     original <video>-element player. */}
+                 {frameSourceRef.current && !isAudioTrack ? (
+                    <CanvasVideoPlayer
+                       key={frameSourceVersion}
+                       frameSource={frameSourceRef.current}
+                       getMediaTime={getMediaTime}
+                       onDebugLog={addLog}
+                    />
+                 ) : (
+                    <VideoPlayer
+                       src={videoSrc}
+                       isAudio={isAudioTrack}
+                       onDurationChange={setDuration}
+                       onDebugLog={addLog}
+                    />
+                 )}
                  {isProcessing && (
                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
                          <Loader2 className="animate-spin text-[#e65161] mb-2" size={48} />

@@ -191,6 +191,7 @@ export class AudioEngine {
     const myPlayId = ++this.playId;
     this.isPlayingState = false;
     this.onPlayingFired = false;
+    this.pausedAt = startSec;       // keep pausedAt in sync so getMediaTime() is correct during start delay
     this.playStartMedia = startSec;
     this.schedCursor = startSec;
     this.endSec = endSec ?? null;
@@ -274,11 +275,9 @@ export class AudioEngine {
 
   private _computeMediaTime(): number {
     if (!this.ctx || !this.isPlayingState) {
-      // Before first sample emitted: return the scheduled start position
-      // so the playhead doesn't sit at pausedAt during the start delay.
-      if (this.ctx && this.ctx.currentTime > this.playStartCtx - START_DELAY_SEC) {
-        return this.playStartMedia;
-      }
+      // Not playing: return the last known position. pausedAt is kept in sync
+      // by play() (set to startSec), pause() and seek() so this is always correct
+      // whether we're paused, between play() and first sample, or at rest.
       return this.pausedAt;
     }
     const elapsed = this.ctx.currentTime - this.playStartCtx;
