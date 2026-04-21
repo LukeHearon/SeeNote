@@ -61,15 +61,42 @@ interface ScheduledNode {
   ctxEnd: number;
 }
 
+/** Cached decoded PCM for a range, keyed by (filePath, startSec, endSec). */
+interface PcmCacheEntry {
+  /** Deinterleaved channel data — index by channel, then frame. */
+  channels: Float32Array[];
+  totalFrames: number;
+  startSec: number;
+  endSec: number;
+}
+
+/** A subrange of a cache entry — what to actually play on a cache hit. */
+interface PcmCacheSlice {
+  entry: PcmCacheEntry;
+  /** First frame to play, as an offset into the entry's channels. */
+  startFrame: number;
+  frameCount: number;
+  /** Media time of the first frame (what we tell the playhead). */
+  startSec: number;
+  endSec: number;
+}
+
 /** How many frames to fetch per IPC call (~1 second of audio). */
 const CHUNK_FRAMES_SEC = 1.0;
 /** How many seconds of audio to keep scheduled ahead of the play position. */
 const HORIZON_SEC = 4.0;
 /** How long to sleep (ms) when the buffer is full before checking again. */
 const SLEEP_MS = 250;
-/** How far in the future (seconds) to schedule the first sample. Gives the
- *  first IPC fetch time to complete before audio starts. */
-const START_DELAY_SEC = 0.2;
+/** Minimum future-scheduling margin (seconds) required for `source.start(when)`
+ *  to be sample-accurate rather than falling back to "ASAP" mode. Covers one
+ *  render quantum (~3ms) plus a small safety buffer. Used in two places:
+ *  - Cache hit: PCM is already in memory, so this is the full delay.
+ *  - Uncached: applied AFTER the first chunk arrives from Rust (dynamic anchor),
+ *    so we never block on a fixed IPC budget — we start as soon as samples are
+ *    ready, with just enough lead time to schedule precisely. */
+const START_MARGIN_SEC = 0.005;
+/** Maximum number of preloaded regions to keep in the PCM replay cache. */
+const MAX_PCM_CACHE_ENTRIES = 8;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
@@ -92,7 +119,8 @@ export class AudioEngine {
   private isPlayingState = false;   // true once first sample emitted
   private onPlayingFired = false;   // guard so onPlaying fires exactly once
   private pausedAt = 0;             // last known media position while paused
-  private playStartCtx = 0;        // ctx time of first scheduled sample
+  private playStartCtx = 0;        // ctx time of first scheduled sample (valid iff playStartCtxSet)
+  private playStartCtxSet = false; // false while waiting for first chunk (or on cache hit, until set)
   private playStartMedia = 0;      // media time of first scheduled sample
   private endSec: number | null = null;
 
@@ -110,6 +138,15 @@ export class AudioEngine {
   private stuckWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   private callbacks: AudioEngineCallbacks;
+
+  // ── PCM replay cache ────────────────────────────────────────────────────────
+  // Decoded PCM for preloaded regions. On a cache hit, play() bypasses all
+  // Rust IPC and schedules directly from the stored Float32Arrays.
+  // Keyed by "filePath:startSec:endSec" (6 decimal places each).
+  private _pcmCache = new Map<string, PcmCacheEntry>();
+  private _pcmCacheOrder: string[] = [];  // front = LRU (oldest)
+  /** Incremented on every preloadRange()/loadFile()/dispose(); stale preload loops exit. */
+  private preloadId = 0;
 
   private _log(msg: string, type: 'info' | 'error' = 'info'): void {
     this.callbacks.onDebugLog?.(`[audio] ${msg}`, type);
@@ -138,6 +175,10 @@ export class AudioEngine {
       this.ctx = null;
       this.gainNode = null;
     }
+
+    this._pcmCache.clear();
+    this._pcmCacheOrder = [];
+    this.preloadId++;  // cancel any ongoing preload from the previous file
 
     const info = await getFileInfo(path);
     this.filePath = path;
@@ -191,21 +232,34 @@ export class AudioEngine {
     const myPlayId = ++this.playId;
     this.isPlayingState = false;
     this.onPlayingFired = false;
-    this.pausedAt = startSec;       // keep pausedAt in sync so getMediaTime() is correct during start delay
+    this.pausedAt = startSec;       // keep pausedAt in sync so getMediaTime() is correct during buffering
     this.playStartMedia = startSec;
+    this.playStartCtxSet = false;   // anchored later: on first chunk (uncached) or immediately (cache hit)
     this.schedCursor = startSec;
     this.endSec = endSec ?? null;
     this.queue = [];
     this.chunksScheduled = 0;
 
-    // Schedule the first sample slightly in the future so the prefetch loop
-    // has time to fetch the first chunk before playback begins.
-    this.playStartCtx = this.ctx.currentTime + START_DELAY_SEC;
-
     this._log(
       `play start=${startSec.toFixed(3)}s ${endSec !== undefined ? `end=${endSec.toFixed(3)}s ` : ''}`
       + `ctx.sr=${this.ctx.sampleRate} file.sr=${this.fileSampleRate} ch=${this.fileChannels} ctx.state=${this.ctx.state}`,
     );
+
+    // ── PCM cache fast path ───────────────────────────────────────────────────
+    // For bounded plays, skip Rust IPC entirely if we have cached decoded PCM
+    // covering [startSec, endSec] (preload may have cached a larger range).
+    if (this.endSec !== null) {
+      const slice = this._pcmCacheFind(startSec, this.endSec);
+      if (slice) {
+        // PCM is already in memory — anchor immediately with minimum scheduling margin.
+        this.playStartCtx = this.ctx.currentTime + START_MARGIN_SEC;
+        this.playStartCtxSet = true;
+        this._log(`cache hit: ${startSec.toFixed(3)}s–${this.endSec.toFixed(3)}s (${slice.frameCount} frames)`);
+        this._playCached(slice, myPlayId);
+        this._rafLoop(myPlayId);
+        return;
+      }
+    }
 
     // ── Stuck-play watchdog ───────────────────────────────────────────────────
     // If no PCM chunks are scheduled within STUCK_PLAY_TIMEOUT_MS we assume
@@ -263,6 +317,7 @@ export class AudioEngine {
   /** Fully tear down the engine. Call on component unmount. */
   dispose(): void {
     this._cancelPlayback();
+    this.preloadId++;
     if (this.ctx) {
       this.ctx.close().catch(() => {});
       this.ctx = null;
@@ -361,8 +416,8 @@ export class AudioEngine {
     this.streamId = handle.stream_id;
 
     // `expectedNextCtxStart` tracks where the next chunk should be scheduled.
-    // It starts at playStartCtx and advances by each chunk's duration.
-    let expectedNextCtxStart = this.playStartCtx;
+    // It's anchored when the first chunk arrives and advances by each chunk's duration.
+    let expectedNextCtxStart = 0;
     let reachedEnd = false;
 
     while (this.playId === myPlayId) {
@@ -400,6 +455,18 @@ export class AudioEngine {
         break;
       }
 
+      const chunkMediaStart = chunk.start_frame / sr;
+
+      // ── Anchor playStartCtx on first chunk ─────────────────────────────────
+      // Defer setting the time origin until PCM is actually in hand. This lets
+      // audio start as soon as the IPC completes, with just enough lead time
+      // for sample-accurate scheduling — no fixed pre-IPC delay.
+      if (!this.playStartCtxSet) {
+        this.playStartCtx = ctx.currentTime + START_MARGIN_SEC - (chunkMediaStart - this.playStartMedia);
+        this.playStartCtxSet = true;
+        expectedNextCtxStart = this.playStartCtx;
+      }
+
       // ── Underrun detection and correction ──────────────────────────────────
       // If we couldn't schedule the chunk in time, bump the time origin forward
       // so mediaTime() stays continuous instead of jumping.
@@ -413,7 +480,6 @@ export class AudioEngine {
       // ── Compute context start time for this chunk ──────────────────────────
       // The chunk's media position is start_frame / sample_rate. We map that
       // to context time via: ctxTime = playStartCtx + (mediaSec - playStartMedia)
-      const chunkMediaStart = chunk.start_frame / sr;
       const ctxStart = this.playStartCtx + (chunkMediaStart - this.playStartMedia);
       const chunkDurationSec = chunk.frames_read / sr;
       let ctxEnd = ctxStart + chunkDurationSec;
@@ -482,6 +548,172 @@ export class AudioEngine {
     }
   }
 
+  // ── PCM cache helpers ────────────────────────────────────────────────────────
+
+  private _pcmCacheKey(start: number, end: number): string {
+    return `${this.filePath}:${start.toFixed(6)}:${end.toFixed(6)}`;
+  }
+
+  private _pcmCacheStore(start: number, end: number, channels: Float32Array[], totalFrames: number): void {
+    const key = this._pcmCacheKey(start, end);
+    if (this._pcmCache.has(key)) return;
+    while (this._pcmCacheOrder.length >= MAX_PCM_CACHE_ENTRIES) {
+      const oldest = this._pcmCacheOrder.shift()!;
+      this._pcmCache.delete(oldest);
+    }
+    this._pcmCache.set(key, { channels, totalFrames, startSec: start, endSec: end });
+    this._pcmCacheOrder.push(key);
+  }
+
+  /**
+   * Find a cached entry whose range *contains* [reqStart, reqEnd] and return the
+   * subrange to play. Searches MRU-first so the freshest entry wins when multiple
+   * contain the request. Returns null on miss.
+   */
+  private _pcmCacheFind(reqStart: number, reqEnd: number): PcmCacheSlice | null {
+    if (reqEnd <= reqStart) return null;
+    const EPS = 1e-6;
+    const sr = this.fileSampleRate;
+    for (let i = this._pcmCacheOrder.length - 1; i >= 0; i--) {
+      const key = this._pcmCacheOrder[i];
+      const entry = this._pcmCache.get(key);
+      if (!entry) continue;
+      if (entry.startSec - EPS <= reqStart && entry.endSec + EPS >= reqEnd) {
+        const startFrame = Math.max(0, Math.round((reqStart - entry.startSec) * sr));
+        const endFrame = Math.min(entry.totalFrames, Math.round((reqEnd - entry.startSec) * sr));
+        const frameCount = endFrame - startFrame;
+        if (frameCount <= 0) continue;
+        // Promote to MRU
+        this._pcmCacheOrder.splice(i, 1);
+        this._pcmCacheOrder.push(key);
+        return { entry, startFrame, frameCount, startSec: reqStart, endSec: reqEnd };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Pre-decode and cache the PCM for [startSec, endSec] so subsequent plays in
+   * that range start instantaneously. Safe to call repeatedly — if the range is
+   * already covered by a cached entry, returns without decoding. Rapid calls
+   * supersede each other via `preloadId`, so only the latest request completes.
+   */
+  async preloadRange(startSec: number, endSec: number): Promise<void> {
+    if (!this.filePath || endSec <= startSec) return;
+    if (this._pcmCacheFind(startSec, endSec)) return;
+
+    const myPreloadId = ++this.preloadId;
+    const path = this.filePath;
+    const ch = this.fileChannels;
+    const sr = this.fileSampleRate;
+    const chunkFrames = Math.floor(CHUNK_FRAMES_SEC * sr);
+
+    let handle;
+    try {
+      handle = await startPcmStream(path, startSec);
+    } catch (err) {
+      this._log(`preload startPcmStream failed: ${String(err)}`, 'error');
+      return;
+    }
+    if (this.preloadId !== myPreloadId) {
+      closePcmStream(handle.stream_id).catch(() => {});
+      return;
+    }
+
+    const cacheChunks: Array<{ samples: number[]; frames: number }> = [];
+    let cacheTotalFrames = 0;
+    let reachedEnd = false;
+
+    while (this.preloadId === myPreloadId) {
+      let chunk;
+      try {
+        chunk = await readPcmChunk(handle.stream_id, chunkFrames);
+      } catch (err) {
+        this._log(`preload readPcmChunk failed: ${String(err)}`, 'error');
+        closePcmStream(handle.stream_id).catch(() => {});
+        return;
+      }
+      if (this.preloadId !== myPreloadId) break;
+      if (chunk.frames_read === 0) { reachedEnd = true; break; }
+
+      const chunkMediaStart = chunk.start_frame / sr;
+      const chunkDurationSec = chunk.frames_read / sr;
+      const chunkMediaEnd = chunkMediaStart + chunkDurationSec;
+
+      let framesToCache = chunk.frames_read;
+      if (chunkMediaEnd >= endSec) {
+        framesToCache = Math.max(0, Math.min(Math.round((endSec - chunkMediaStart) * sr), chunk.frames_read));
+        reachedEnd = true;
+      }
+
+      if (framesToCache > 0) {
+        cacheChunks.push({ samples: chunk.samples.slice(0, framesToCache * ch), frames: framesToCache });
+        cacheTotalFrames += framesToCache;
+      }
+
+      if (reachedEnd) break;
+    }
+
+    closePcmStream(handle.stream_id).catch(() => {});
+    if (this.preloadId !== myPreloadId) return;
+
+    if (reachedEnd && cacheChunks.length > 0) {
+      const channels: Float32Array[] = Array.from({ length: ch }, () => new Float32Array(cacheTotalFrames));
+      let frameOffset = 0;
+      for (const { samples, frames } of cacheChunks) {
+        for (let c = 0; c < ch; c++) {
+          const dest = channels[c];
+          for (let i = 0; i < frames; i++) {
+            dest[frameOffset + i] = samples[i * ch + c];
+          }
+        }
+        frameOffset += frames;
+      }
+      this._pcmCacheStore(startSec, endSec, channels, cacheTotalFrames);
+      this._log(`preloaded ${startSec.toFixed(3)}s–${endSec.toFixed(3)}s (${cacheTotalFrames} frames)`);
+    }
+  }
+
+  /**
+   * Schedule a cached PCM slice directly, bypassing all Rust IPC.
+   * Called from play() on a cache hit. Does NOT start the rAF loop — caller does that.
+   */
+  private _playCached(slice: PcmCacheSlice, myPlayId: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const sr = this.fileSampleRate;
+    const { entry, startFrame, frameCount, startSec, endSec } = slice;
+
+    const audioBuffer = ctx.createBuffer(entry.channels.length, frameCount, sr);
+    for (let c = 0; c < entry.channels.length; c++) {
+      audioBuffer.getChannelData(c).set(entry.channels[c].subarray(startFrame, startFrame + frameCount));
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(this.gainNode!);
+    source.start(this.playStartCtx);
+
+    const ctxEnd = this.playStartCtx + frameCount / sr;
+    this.queue.push({
+      source,
+      mediaStart: startSec,
+      mediaEnd: endSec,
+      ctxStart: this.playStartCtx,
+      ctxEnd,
+    });
+    this.schedCursor = endSec;
+    this.chunksScheduled = 1;
+
+    // Fire onEnded after the buffer finishes playing
+    const waitMs = Math.max(0, (ctxEnd - ctx.currentTime) * 1000 + 50);
+    setTimeout(() => {
+      if (this.playId !== myPlayId) return;
+      this._cancelPlayback();
+      this.callbacks.onEnded();
+    }, waitMs);
+  }
+
   /** rAF loop: drives onTimeUpdate and fires onPlaying once audio starts. */
   private _rafLoop(myPlayId: number): void {
     if (this.playId !== myPlayId) return;
@@ -489,8 +721,9 @@ export class AudioEngine {
     if (this.ctx) {
       const ctxNow = this.ctx.currentTime;
 
-      // Fire onPlaying the first time audio is actually being emitted
-      if (!this.onPlayingFired && ctxNow >= this.playStartCtx) {
+      // Fire onPlaying the first time audio is actually being emitted. Guarded
+      // by playStartCtxSet so we don't fire while waiting for the first chunk.
+      if (!this.onPlayingFired && this.playStartCtxSet && ctxNow >= this.playStartCtx) {
         this.onPlayingFired = true;
         this.isPlayingState = true;
         this.callbacks.onPlaying();

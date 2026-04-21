@@ -266,6 +266,14 @@ export default function App() {
     source.ensureRange(selectionRegion.start, selectionRegion.end).catch(() => {});
   }, [selectionRegion, frameSourceVersion]);
 
+  // Pre-decode PCM for the selection so repeat plays are instant. AudioEngine
+  // skips the call if the range is already covered by its cache.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || !selectionRegion) return;
+    engine.preloadRange(selectionRegion.start, selectionRegion.end).catch(() => {});
+  }, [selectionRegion]);
+
   // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
   useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
 
