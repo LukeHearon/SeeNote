@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, Settings, Loader2, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, AlertCircle, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import CanvasVideoPlayer from './components/CanvasVideoPlayer';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
@@ -286,10 +286,11 @@ export default function App() {
     if (!source) return;
     const end = endSec ?? Math.min(startSec + 5, durationRef.current || startSec + 5);
     try { await source.ensureRange(startSec, end); } catch { /* canvas shows stale frame on error */ }
-    // Don't overwrite progress the rolling prefetch made past our end. Use
-    // Math.max so preroll can still advance the pointer forward from 0, but
-    // can't reset it backward if kickVideoPrefetch already buffered further.
-    videoPrefetchEndRef.current = Math.max(videoPrefetchEndRef.current, end);
+    // Always reset to the preroll end so the rolling prefetch restarts from
+    // here after a seek. Math.max caused the pointer to stay at the old
+    // far-ahead position after seeking backward, so kickVideoPrefetch never
+    // triggered and video frames ran out seconds into playback.
+    videoPrefetchEndRef.current = end;
   }, []);
 
   // Open a track by absolute path (called from button or file panel)
@@ -1792,6 +1793,19 @@ export default function App() {
                          <Loader2 className="animate-spin text-[#e65161] mb-2" size={48} />
                          <p className="text-[#e65161] font-medium">Processing Media...</p>
                          <p className="text-slate-400 text-sm mt-1">Generating Spectrogram</p>
+                     </div>
+                 )}
+                 {isBuffering && videoSrc && (
+                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 pointer-events-none">
+                         <Loader2 className="animate-spin text-white" size={40} />
+                     </div>
+                 )}
+                 {videoSrc && !isAudioTrack && !frameSourceRef.current && (
+                     <div
+                         className="absolute top-2 right-2 z-30 text-[#e65161] cursor-default"
+                         title="This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect."
+                     >
+                         <AlertCircle size={20} />
                      </div>
                  )}
              </div>
