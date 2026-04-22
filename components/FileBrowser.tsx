@@ -52,19 +52,19 @@ export default function FileBrowser({
             <button
               onClick={handleGoUp}
               className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
-              title="Go up"
+              data-tooltip="Go up"
             >
               <ChevronLeft size={14} />
             </button>
           )}
-          <span className="text-xs text-slate-400 truncate" title={currentDirectory || ''}>
+          <span className="text-xs text-slate-400 truncate" data-tooltip={currentDirectory || ''}>
             {dirName || 'No folder open'}
           </span>
         </div>
         <button
           onClick={handleOpenFolder}
           className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none ml-1"
-          title="Open folder"
+          data-tooltip="Open folder"
         >
           <FolderInput size={14} />
         </button>
@@ -110,7 +110,7 @@ export default function FileBrowser({
                   ? 'bg-[#e65161]/20 text-[#e65161]'
                   : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
               }`}
-              title={entry.name}
+              data-tooltip={entry.name}
             >
               {entry.is_audio
                 ? <Music size={13} className="flex-none opacity-70" />

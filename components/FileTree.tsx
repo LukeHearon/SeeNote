@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye } from 'lucide-react';
+import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
 
 interface TreeNode {
   name: string;
@@ -23,8 +23,8 @@ interface FileTreeProps {
   shuffleMode: boolean;
   onToggleShuffle: () => void;
   annotatedFiles: Set<string>;
-  hideAnnotated: boolean;
-  onToggleHideAnnotated: () => void;
+  fileFilter: 'all' | 'annotated' | 'unannotated';
+  onToggleFileFilter: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
   onRefresh: () => void;
@@ -126,6 +126,7 @@ interface TreeItemProps {
   expandedDirs: Set<string>;
   toggleDir: (path: string) => void;
   annotatedFiles: Set<string>;
+  ancestorPaths: Set<string>;
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
 }
 
@@ -137,25 +138,31 @@ const TreeItem: React.FC<TreeItemProps> = ({
   expandedDirs,
   toggleDir,
   annotatedFiles,
+  ancestorPaths,
   onContextMenu,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
+    const isClosedAncestor = !isExpanded && ancestorPaths.has(node.path);
     return (
       <div>
         <button
           onClick={() => toggleDir(node.path)}
           onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, true); }}
-          className="flex items-center gap-1 w-full px-2 py-1 text-left hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors group"
+          className={`flex items-center gap-1 w-full px-2 py-1 text-left transition-colors group ${
+            isClosedAncestor
+              ? 'bg-[#e65161]/10 hover:bg-[#e65161]/20 text-[#e65161]'
+              : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
+          }`}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
           {isExpanded
             ? <ChevronDown size={12} className="flex-none opacity-60" />
             : <ChevronRight size={12} className="flex-none opacity-60" />
           }
-          <FolderOpen size={13} className="flex-none text-slate-500 group-hover:text-slate-300" />
+          <FolderOpen size={13} className={`flex-none ${isClosedAncestor ? 'text-[#e65161]/70' : 'text-slate-500 group-hover:text-slate-300'}`} />
           <span className="text-xs truncate">{node.name}</span>
-          <span className="text-[10px] text-slate-600 ml-auto flex-none">{node.fileCount}</span>
+          <span className={`text-[10px] ml-auto flex-none ${isClosedAncestor ? 'text-[#e65161]/50' : 'text-slate-600'}`}>{node.fileCount}</span>
         </button>
         {isExpanded && node.children.map(child => (
           <TreeItem
@@ -167,6 +174,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
             expandedDirs={expandedDirs}
             toggleDir={toggleDir}
             annotatedFiles={annotatedFiles}
+            ancestorPaths={ancestorPaths}
             onContextMenu={onContextMenu}
           />
         ))}
@@ -185,7 +193,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
         onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
         className="flex items-center gap-2 w-full py-1 text-left text-slate-600 cursor-not-allowed"
         style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
-        title={`${node.name} (unsupported file type)`}
+        data-tooltip={`${node.name} (unsupported file type)`}
       >
         {isAudio
           ? <Music size={12} className="flex-none opacity-40" />
@@ -209,7 +217,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
             : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
       }`}
       style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
-      title={node.name}
+      data-tooltip={node.name}
     >
       {isAudio
         ? <Music size={12} className="flex-none opacity-70" />
@@ -234,8 +242,8 @@ function FileTree({
   shuffleMode,
   onToggleShuffle,
   annotatedFiles,
-  hideAnnotated,
-  onToggleHideAnnotated,
+  fileFilter,
+  onToggleFileFilter,
   onRevealInFinder,
   onRevealAnnotations,
   onRefresh,
@@ -299,7 +307,17 @@ function FileTree({
   };
 
   const collapseAll = () => {
-    setExpandedDirs(getAncestorPaths(currentFile, rootDirectory));
+    // Collapse everything — ancestor dirs of the active file are highlighted
+    // rather than auto-expanded, so the user still knows where it lives.
+    setExpandedDirs(new Set());
+  };
+
+  const allDirPaths = useMemo(() => getAllDirPaths(tree), [tree]);
+  const isAnyExpanded = expandedDirs.size > 0;
+
+  const toggleExpandCollapse = () => {
+    if (isAnyExpanded) collapseAll();
+    else expandAll();
   };
 
   const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
@@ -321,7 +339,7 @@ function FileTree({
         <button
           onClick={onToggleCollapse}
           className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-          title="Show file tree"
+          data-tooltip="Show file tree"
         >
           <PanelLeft size={16} />
         </button>
@@ -338,55 +356,46 @@ function FileTree({
       >
         <div className="flex items-center gap-1 min-w-0 flex-1">
           <FolderOpen size={13} className="flex-none text-slate-500" />
-          <span className="text-xs text-slate-400 truncate" title={rootDirectory || ''}>
+          <span className="text-xs text-slate-400 truncate" data-tooltip={rootDirectory || ''}>
             {dirName}
           </span>
           <span className="text-[10px] text-slate-600 flex-none">({allFiles.length})</span>
         </div>
         <div className="flex items-center gap-0.5 flex-none">
           {!shuffleMode && (
-            <>
-              <button
-                onClick={expandAll}
-                className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                title="Expand all"
-              >
-                <UnfoldVertical size={13} />
-              </button>
-              <button
-                onClick={collapseAll}
-                className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                title="Collapse all"
-              >
-                <FoldVertical size={13} />
-              </button>
-            </>
+            <button
+              onClick={toggleExpandCollapse}
+              className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+              data-tooltip={isAnyExpanded ? 'Collapse all' : 'Expand all'}
+            >
+              {isAnyExpanded ? <FoldVertical size={13} /> : <UnfoldVertical size={13} />}
+            </button>
           )}
           <button
             onClick={onRefresh}
             className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            title="Refresh file list"
+            data-tooltip="Refresh file list"
           >
             <RefreshCw size={13} />
           </button>
           <button
-            onClick={onToggleHideAnnotated}
-            className={`p-1 rounded hover:bg-slate-700 ${hideAnnotated ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-            title={hideAnnotated ? 'Show all files' : 'Hide annotated files'}
+            onClick={onToggleFileFilter}
+            className={`p-1 rounded hover:bg-slate-700 ${fileFilter !== 'all' ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+            data-tooltip={fileFilter === 'all' ? 'Show all files' : fileFilter === 'unannotated' ? 'Showing: unannotated only' : 'Showing: annotated only'}
           >
-            {hideAnnotated ? <EyeOff size={13} /> : <Eye size={13} />}
+            {fileFilter === 'all' ? <Eye size={13} /> : fileFilter === 'unannotated' ? <EyeOff size={13} /> : <Filter size={13} />}
           </button>
           <button
             onClick={onToggleShuffle}
             className={`p-1 rounded hover:bg-slate-700 ${shuffleMode ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-            title={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
+            data-tooltip={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
           >
             {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
           </button>
           <button
             onClick={onToggleCollapse}
             className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            title="Collapse panel"
+            data-tooltip="Collapse panel"
           >
             <PanelLeftClose size={14} />
           </button>
@@ -442,7 +451,7 @@ function FileTree({
                       onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
                       className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-slate-600 cursor-not-allowed"
                       style={{ opacity }}
-                      title={`${filePath} (unsupported file type)`}
+                      data-tooltip={`${filePath} (unsupported file type)`}
                     >
                       {isAudio
                         ? <Music size={12} className="flex-none opacity-40" />
@@ -466,7 +475,7 @@ function FileTree({
                           : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
                     }`}
                     style={{ opacity }}
-                    title={filePath}
+                    data-tooltip={filePath}
                   >
                     {isAudio
                       ? <Music size={12} className="flex-none opacity-70" />
@@ -486,19 +495,23 @@ function FileTree({
         })()}
 
         {/* Normal tree mode */}
-        {!shuffleMode && tree.map(node => (
-          <TreeItem
-            key={node.path}
-            node={node}
-            currentFile={currentFile}
-            onFileSelect={onFileSelect}
-            depth={0}
-            expandedDirs={expandedDirs}
-            toggleDir={toggleDir}
-            annotatedFiles={annotatedFiles}
-            onContextMenu={handleContextMenu}
-          />
-        ))}
+        {!shuffleMode && (() => {
+          const ancestorPaths = getAncestorPaths(currentFile, rootDirectory);
+          return tree.map(node => (
+            <TreeItem
+              key={node.path}
+              node={node}
+              currentFile={currentFile}
+              onFileSelect={onFileSelect}
+              depth={0}
+              expandedDirs={expandedDirs}
+              toggleDir={toggleDir}
+              annotatedFiles={annotatedFiles}
+              ancestorPaths={ancestorPaths}
+              onContextMenu={handleContextMenu}
+            />
+          ));
+        })()}
       </div>
 
       {/* Context menu */}

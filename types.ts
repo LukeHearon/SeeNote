@@ -37,10 +37,12 @@ export interface Project {
   audioDirectory: string;
   annotationDirectory: string;
   outputFormat: 'json' | 'csv' | 'txt';
+  outputRoundingDecimals?: number; // decimal places for start/end in output files; default 4
   createdAt: string;
   lastOpened: string;
   annotationTools: AnnotationTool[];
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
-  hideAnnotated?: boolean;
+  fileFilter?: 'all' | 'annotated' | 'unannotated';
+  hideAnnotated?: boolean; // legacy; superseded by fileFilter
 }

@@ -21,6 +21,10 @@ interface ProjectRecord {
   last_opened: string;
   label_configs: AnnotationToolRecord[];
   spectrogram_settings?: SpectrogramSettings; // stored as-is (camelCase) via serde_json::Value
+  name_gradient_colors?: [string, string];
+  output_rounding_decimals?: number;
+  file_filter?: string;
+  hide_annotated?: boolean;
 }
 
 interface CopyResultRaw {
@@ -42,6 +46,10 @@ function toProject(r: ProjectRecord): Project {
     lastOpened: r.last_opened,
     annotationTools: r.label_configs,
     spectrogramSettings: r.spectrogram_settings,
+    nameGradientColors: r.name_gradient_colors,
+    outputRoundingDecimals: r.output_rounding_decimals,
+    fileFilter: r.file_filter as 'all' | 'annotated' | 'unannotated' | undefined,
+    hideAnnotated: r.hide_annotated,
   };
 }
 
@@ -56,6 +64,10 @@ function toRecord(p: Project): ProjectRecord {
     last_opened: p.lastOpened,
     label_configs: p.annotationTools,
     spectrogram_settings: p.spectrogramSettings,
+    name_gradient_colors: p.nameGradientColors,
+    output_rounding_decimals: p.outputRoundingDecimals,
+    file_filter: p.fileFilter,
+    hide_annotated: p.hideAnnotated,
   };
 }
 

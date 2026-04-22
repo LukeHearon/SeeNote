@@ -1,20 +1,22 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, Settings, Loader2, AlertCircle, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, AlertCircle, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check, FolderOpen } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import CanvasVideoPlayer from './components/CanvasVideoPlayer';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
+import GradientProjectName from './components/GradientProjectName';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, listDirectory, openDirectoryDialog, openDirectoryDialogAt, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
+import TooltipLayer from './components/TooltipLayer';
 
 // Compact tool button used in the left-panel tool grid.
 // Always renders w-full — callers are responsible for constraining the container width.
@@ -38,13 +40,25 @@ function ToolCell({
           ? (isActive ? 'rgba(255,255,255,0.6)' : '#6b7280')
           : (isActive ? color : undefined),
       }}
-      title={label}
+      data-tooltip={label}
     >
       <span className="w-2 h-2 rounded-full flex-none" style={{ backgroundColor: dotColor }} />
       <span className="flex-1 min-w-0 truncate text-left text-slate-100 leading-tight">{label}</span>
       <span className="font-mono text-slate-500 text-[10px] flex-none">{hotkey}</span>
     </button>
   );
+}
+
+async function findFirstValidAncestor(path: string): Promise<string> {
+  const sep = path.includes('/') ? '/' : '\\';
+  let current = path;
+  while (true) {
+    const exists = await listDirectory(current).then(() => true).catch(() => false);
+    if (exists) return current;
+    const lastSep = current.lastIndexOf(sep);
+    if (lastSep <= 0) return '';
+    current = current.substring(0, lastSep);
+  }
 }
 
 export default function App() {
@@ -67,6 +81,15 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const { projects, isLoading, loadError, projectsFilePath, createProject, updateProject, deleteProject, touchLastOpened } = useProjects();
+
+  // Broken-path repair modal: set when a project's audio/annotation dir is missing
+  const [repairProject, setRepairProject] = useState<{
+    project: Project;
+    audioMissing: boolean;
+    annotationMissing: boolean;
+    repairedAudio: string;
+    repairedAnnotation: string;
+  } | null>(null);
 
   // Derived from active project
   const annotationDirectory = activeProject?.annotationDirectory ?? null;
@@ -185,13 +208,12 @@ export default function App() {
       onPlaying: () => { setIsPlaying(true); setIsBuffering(false); },
       onPaused: () => setIsPlaying(false),
       onEnded: () => {
-        // Stop playback and return playhead to selection start (matching old behavior).
-        // For legacy <video>-path video files, also pause the video element. The
-        // frame-source path has no playing element to pause — the canvas rAF
-        // loop naturally freezes on the last-drawn frame.
+        // Return playhead to selection start. Do NOT auto-scroll — when playing
+        // within a selection the user positioned the canvas intentionally; jumping
+        // it on every loop is disorienting.
         const sel = selectionRegionRef.current;
         if (sel) {
-          seek(sel.start, true);
+          seek(sel.start, false);
         }
         setIsPlaying(false);
       },
@@ -456,12 +478,14 @@ export default function App() {
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
   }, [settings.fftSize]);
 
-  // The ordered list used for navigation (respects shuffle mode and hideAnnotated filter)
+  // The ordered list used for navigation (respects shuffle mode and fileFilter)
   const displayQueue = useMemo(() => {
     const base = shuffleMode ? shuffledFiles : allMediaFiles;
-    if (activeProject?.hideAnnotated) return base.filter(f => !annotatedFiles.has(f));
+    const filter = activeProject?.fileFilter ?? (activeProject?.hideAnnotated ? 'unannotated' : 'all');
+    if (filter === 'annotated') return base.filter(f => annotatedFiles.has(f));
+    if (filter === 'unannotated') return base.filter(f => !annotatedFiles.has(f));
     return base;
-  }, [shuffleMode, shuffledFiles, allMediaFiles, activeProject?.hideAnnotated, annotatedFiles]);
+  }, [shuffleMode, shuffledFiles, allMediaFiles, activeProject?.fileFilter, activeProject?.hideAnnotated, annotatedFiles]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {
@@ -616,10 +640,11 @@ export default function App() {
           });
           return;
         }
+        const decimals = activeProjectRef.current?.outputRoundingDecimals ?? 4;
         let content: string;
-        if (exportFormat === 'json') content = generateJSONContent(annotations);
-        else if (exportFormat === 'csv') content = generateCSVContent(annotations);
-        else content = generateAudacityContent(annotations);
+        if (exportFormat === 'json') content = generateJSONContent(annotations, decimals);
+        else if (exportFormat === 'csv') content = generateCSVContent(annotations, decimals);
+        else content = generateAudacityContent(annotations, decimals);
         await writeTextFile(annotPath, content);
         setAnnotatedFiles(prev => {
             const next = new Set(prev);
@@ -707,6 +732,21 @@ export default function App() {
 
   const handleOpenProject = useCallback(async (project: Project) => {
     await touchLastOpened(project.id);
+
+    // Check that both directories still exist before opening.
+    const audioExists = await listDirectory(project.audioDirectory).then(() => true).catch(() => false);
+    const annotationExists = await listDirectory(project.annotationDirectory).then(() => true).catch(() => false);
+    if (!audioExists || !annotationExists) {
+      setRepairProject({
+        project,
+        audioMissing: !audioExists,
+        annotationMissing: !annotationExists,
+        repairedAudio: project.audioDirectory,
+        repairedAnnotation: project.annotationDirectory,
+      });
+      return;
+    }
+
     // Set activeProject in the same React batch as annotationTools/settings so the
     // persist-effect guard (prevProjectIdRef) sees the new project immediately and
     // correctly skips the load-triggered changes.
@@ -805,9 +845,11 @@ export default function App() {
     setActiveProject(null);
   }, []);
 
-  const handleToggleHideAnnotated = useCallback(() => {
+  const handleToggleFileFilter = useCallback(() => {
     if (!activeProject) return;
-    updateProject({ ...activeProject, hideAnnotated: !activeProject.hideAnnotated });
+    const current = activeProject.fileFilter ?? (activeProject.hideAnnotated ? 'unannotated' : 'all');
+    const next = ({ all: 'unannotated', unannotated: 'annotated', annotated: 'all' } as const)[current];
+    updateProject({ ...activeProject, fileFilter: next, hideAnnotated: next === 'unannotated' });
   }, [activeProject, updateProject]);
 
   const handleRevealInFinder = useCallback((path: string) => {
@@ -967,6 +1009,10 @@ export default function App() {
                   if (selectedAnnotationId) {
                       handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
                       setSelectedAnnotationId(null);
+                      if (selectedAnnotationId === boundAnnotationId) {
+                          setSelectionRegion(null);
+                          setBoundAnnotationId(null);
+                      }
                   }
                   break;
           }
@@ -1021,12 +1067,13 @@ export default function App() {
 
   const performExport = async () => {
       if (annotations.length === 0) return;
+      const decimals = activeProject?.outputRoundingDecimals ?? 4;
       if (exportFormat === 'json') {
-          await exportToJSON(annotations, trackName, trackPath);
+          await exportToJSON(annotations, trackName, trackPath, decimals);
       } else if (exportFormat === 'csv') {
-          await exportToCSV(annotations, trackName, trackPath);
+          await exportToCSV(annotations, trackName, trackPath, decimals);
       } else {
-          await exportToAudacity(annotations, trackName, trackPath);
+          await exportToAudacity(annotations, trackName, trackPath, decimals);
       }
       addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
   };
@@ -1201,17 +1248,45 @@ export default function App() {
     engineRef.current?.setGain(muted ? 0 : volume);
   }, [volume, muted]);
 
+  // Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
+  // Lower half [0,0.5] covers gain 0→1 (finer resolution for quieting);
+  // upper half [0.5,1] covers gain 1→4 (coarser resolution for boosting).
+  const gainToSlider = (gain: number): number =>
+    gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 6;
+  const sliderToGain = (s: number): number =>
+    s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 6;
+
+  // Refs for use in the non-React wheel event handler (attached once, reads live values)
+  const volumeRef = useRef(volume);
+  const mutedRef = useRef(muted);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  const [volumeControlEl, setVolumeControlEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!volumeControlEl) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const cur = gainToSlider(mutedRef.current ? 0 : volumeRef.current);
+      const delta = -Math.sign(e.deltaY) * 0.03;
+      const newSlider = Math.max(0, Math.min(1, cur + delta));
+      setVolume(sliderToGain(newSlider));
+      setMuted(false);
+    };
+    volumeControlEl.addEventListener('wheel', handler, { passive: false });
+    return () => volumeControlEl.removeEventListener('wheel', handler);
+  }, [volumeControlEl]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Handle volume slider change
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      let val = parseFloat(e.target.value);
-      // Snap to 1.0 if close (tighter detent during drag)
-      if (val > 0.97 && val < 1.03) val = 1.0;
-      setVolume(val);
+      let sliderVal = parseFloat(e.target.value);
+      // Snap to center (gain=1.0) when close
+      if (Math.abs(sliderVal - 0.5) < 0.01) sliderVal = 0.5;
+      setVolume(sliderToGain(sliderVal));
       setMuted(false);
   };
 
   // Calculate volume slider background
-  const volPercent = Math.min(100, (volume / 4) * 100);
+  const sliderPct = gainToSlider(muted ? 0 : volume) * 100;
   const isBoosted = volume > 1;
 
   // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45", "1:23:45"
@@ -1231,15 +1306,41 @@ export default function App() {
 
   const commitTimeEdit = (raw: string) => {
     if (!editingTimeField) return;
+
+    // selDur without selection: allow negative durations (playhead ± dur), handled before parseTimestamp
+    if (editingTimeField === 'selDur' && !selectionRegion && !isPlaying) {
+      const dur = parseFloat(raw.trim());
+      if (!isNaN(dur)) {
+        const a = Math.max(0, Math.min(duration, Math.min(currentTime, currentTime + dur)));
+        const b = Math.max(0, Math.min(duration, Math.max(currentTime, currentTime + dur)));
+        if (a !== b) setSelectionRegion({ start: a, end: b });
+      }
+      setEditingTimeField(null);
+      setEditingTimeRaw("");
+      return;
+    }
+
     const parsed = parseTimestamp(raw);
     if (parsed !== null) {
       const clamped = Math.max(0, Math.min(duration, parsed));
       if (editingTimeField === 'time') {
         seek(clamped, true);
-      } else if (editingTimeField === 'selStart' && selectionRegion) {
-        setSelectionRegion({ start: clamped, end: Math.max(clamped, selectionRegion.end) });
-      } else if (editingTimeField === 'selEnd' && selectionRegion) {
-        setSelectionRegion({ start: selectionRegion.start, end: Math.max(selectionRegion.start, clamped) });
+      } else if (editingTimeField === 'selStart') {
+        if (selectionRegion) {
+          setSelectionRegion({ start: clamped, end: Math.max(clamped, selectionRegion.end) });
+        } else if (!isPlaying) {
+          const a = Math.min(clamped, currentTime);
+          const b = Math.max(clamped, currentTime);
+          if (a !== b) setSelectionRegion({ start: a, end: b });
+        }
+      } else if (editingTimeField === 'selEnd') {
+        if (selectionRegion) {
+          setSelectionRegion({ start: selectionRegion.start, end: Math.max(selectionRegion.start, clamped) });
+        } else if (!isPlaying) {
+          const a = Math.min(clamped, currentTime);
+          const b = Math.max(clamped, currentTime);
+          if (a !== b) setSelectionRegion({ start: a, end: b });
+        }
       } else if (editingTimeField === 'selDur' && selectionRegion) {
         setSelectionRegion({ start: selectionRegion.start, end: Math.min(duration, selectionRegion.start + Math.max(0, parsed)) });
       }
@@ -1250,16 +1351,107 @@ export default function App() {
 
   if (!activeProject) {
     return (
-      <LaunchScreen
-        projects={projects}
-        isLoading={isLoading}
-        loadError={loadError}
-        projectsFilePath={projectsFilePath}
-        onOpenProject={handleOpenProject}
-        createProject={createProject}
-        updateProject={updateProject}
-        deleteProject={deleteProject}
-      />
+      <>
+        <LaunchScreen
+          projects={projects}
+          isLoading={isLoading}
+          loadError={loadError}
+          projectsFilePath={projectsFilePath}
+          onOpenProject={handleOpenProject}
+          createProject={createProject}
+          updateProject={updateProject}
+          deleteProject={deleteProject}
+        />
+        {repairProject && (
+          <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+            <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
+                <div>
+                  <h3 className="text-white font-semibold text-base">Project directory not found</h3>
+                  <p className="text-slate-400 text-sm mt-1">
+                    One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
+                  </p>
+                </div>
+              </div>
+
+              {repairProject.audioMissing && (
+                <div>
+                  <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={repairProject.repairedAudio}
+                      onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
+                      className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+                    />
+                    <button
+                      onClick={async () => {
+                        const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
+                        const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                        if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
+                      }}
+                      className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+                    >
+                      <FolderOpen size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {repairProject.annotationMissing && (
+                <div>
+                  <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={repairProject.repairedAnnotation}
+                      onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
+                      className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+                    />
+                    <button
+                      onClick={async () => {
+                        const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
+                        const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                        if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
+                      }}
+                      className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+                    >
+                      <FolderOpen size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button
+                  onClick={() => setRepairProject(null)}
+                  className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!repairProject) return;
+                    const updated = {
+                      ...repairProject.project,
+                      audioDirectory: repairProject.repairedAudio,
+                      annotationDirectory: repairProject.repairedAnnotation,
+                    };
+                    await updateProject(updated);
+                    setRepairProject(null);
+                    handleOpenProject(updated);
+                  }}
+                  className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
+                >
+                  Save & Open
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        <TooltipLayer />
+      </>
     );
   }
 
@@ -1271,22 +1463,17 @@ export default function App() {
             <button
                 onClick={handleCloseProject}
                 className="flex items-center space-x-1 text-slate-400 hover:text-white hover:bg-slate-700 px-2 py-1.5 rounded transition-colors"
-                title="Back to projects"
+                data-tooltip="Back to projects"
             >
                 <ArrowLeft size={18} />
             </button>
             <button
                 onClick={() => setShowProjectSettings(true)}
                 className="flex items-center space-x-2 px-2 py-1.5 rounded hover:bg-slate-700 transition-colors group"
-                title="Project Settings"
+                data-tooltip="Project Settings"
             >
-                <h1
-                    className="text-xl font-bold bg-clip-text text-transparent"
-                    style={{
-                      backgroundImage: `linear-gradient(to right, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(activeProject.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`
-                    }}
-                >
-                    {activeProject.name}
+                <h1 className="text-xl font-bold">
+                    <GradientProjectName name={activeProject.name} nameGradientColors={activeProject.nameGradientColors} />
                 </h1>
                 <Settings size={15} className="text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
             </button>
@@ -1298,21 +1485,21 @@ export default function App() {
              <button
                 onClick={() => setShowDebug(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                title="Debug Console"
+                data-tooltip="Debug Console"
             >
                 <Bug size={18} />
             </button>
              <button
                 onClick={() => setShowHelp(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                title="Help Guide"
+                data-tooltip="Help Guide"
             >
                 <HelpCircle size={18} />
             </button>
              <button
                 onClick={() => setShowHotkeysHelp(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                title="Keyboard Shortcuts"
+                data-tooltip="Keyboard Shortcuts"
             >
                 <Keyboard size={18} />
             </button>
@@ -1340,7 +1527,7 @@ export default function App() {
                                    setTimeout(() => setDebugCopied(false), 1500);
                                }}
                                className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
-                               title="Copy logs"
+                               data-tooltip="Copy logs"
                                disabled={debugLogs.length === 0}
                            >
                                {debugCopied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
@@ -1555,8 +1742,98 @@ export default function App() {
           </div>
       )}
 
+      {/* Broken project dir repair modal */}
+      {repairProject && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
+              <div>
+                <h3 className="text-white font-semibold text-base">Project directory not found</h3>
+                <p className="text-slate-400 text-sm mt-1">
+                  One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
+                </p>
+              </div>
+            </div>
+
+            {repairProject.audioMissing && (
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={repairProject.repairedAudio}
+                    onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+                  />
+                  <button
+                    onClick={async () => {
+                      const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
+                      const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                      if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
+                    }}
+                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+                  >
+                    <FolderOpen size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {repairProject.annotationMissing && (
+              <div>
+                <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={repairProject.repairedAnnotation}
+                    onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+                  />
+                  <button
+                    onClick={async () => {
+                      const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
+                      const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                      if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
+                    }}
+                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+                  >
+                    <FolderOpen size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setRepairProject(null)}
+                className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!repairProject) return;
+                  const updated = {
+                    ...repairProject.project,
+                    audioDirectory: repairProject.repairedAudio,
+                    annotationDirectory: repairProject.repairedAnnotation,
+                  };
+                  await updateProject(updated);
+                  setRepairProject(null);
+                  handleOpenProject(updated);
+                }}
+                className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
+              >
+                Save & Open
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
-      <div className="flex-1 flex relative overflow-hidden">
+      <div className="flex-1 flex relative overflow-hidden select-none">
         {/* Left Panel: File Tree (top) + Labels Panel (bottom) */}
         {currentDirectory && (() => {
           const canAddTool = annotationTools.length < 10 && !isAddingTool;
@@ -1574,8 +1851,8 @@ export default function App() {
             shuffleMode,
             onToggleShuffle: toggleShuffle,
             annotatedFiles,
-            hideAnnotated: activeProject?.hideAnnotated ?? false,
-            onToggleHideAnnotated: handleToggleHideAnnotated,
+            fileFilter: (activeProject?.fileFilter ?? (activeProject?.hideAnnotated ? 'unannotated' : 'all')) as 'all' | 'annotated' | 'unannotated',
+            onToggleFileFilter: handleToggleFileFilter,
             onRevealInFinder: handleRevealInFinder,
             onRevealAnnotations: handleRevealAnnotations,
             onRefresh: handleRefreshFiles,
@@ -1709,14 +1986,14 @@ export default function App() {
                             <button
                               onClick={(e) => { e.stopPropagation(); startEditingTool(idx); }}
                               className="text-blue-400 hover:text-blue-300 bg-slate-900/90 p-0.5 rounded-bl"
-                              title="Rename"
+                              data-tooltip="Rename"
                             >
                               <Pencil size={9} />
                             </button>
                             <button
                               onClick={(e) => handleDeleteTool(idx, e)}
                               className="text-red-500 hover:text-red-400 bg-slate-900/90 p-0.5 rounded-tr"
-                              title="Delete"
+                              data-tooltip="Delete"
                             >
                               <X size={9} />
                             </button>
@@ -1752,7 +2029,7 @@ export default function App() {
                       <button
                         onClick={() => setIsAddingTool(true)}
                         className="w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all opacity-50 hover:opacity-100"
-                        title="Add Label"
+                        data-tooltip="Add Label"
                       >
                         <Plus size={11} />
                       </button>
@@ -1811,7 +2088,7 @@ export default function App() {
                  {videoSrc && !isAudioTrack && !frameSourceRef.current && (
                      <div
                          className="absolute top-2 right-2 z-30 text-[#e65161] cursor-default"
-                         title="This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect."
+                         data-tooltip="This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect."
                      >
                          <AlertCircle size={20} />
                      </div>
@@ -1921,10 +2198,10 @@ export default function App() {
              <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
                  {/* Transport controls: [Start] [PrevAnnot] [Play] [NextAnnot] [End] */}
                  <button
-                    onClick={() => seek(0, true)}
+                    onClick={() => { seek(0, true); setSelectionRegion(null); setBoundAnnotationId(null); }}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-                    title="Skip to start"
+                    data-tooltip="Skip to start"
                 >
                     <SkipBack size={15} />
                 </button>
@@ -1932,7 +2209,7 @@ export default function App() {
                     onClick={() => spectrogramRef.current?.goToPrevAnnotation()}
                     disabled={!videoSrc || !canGoPrevAnnotation}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-                    title="Previous annotation (Cmd+←  or  ;)"
+                    data-tooltip="Previous annotation (Cmd+←  or  ;)"
                 >
                     <ChevronLeft size={15} />
                 </button>
@@ -1954,51 +2231,51 @@ export default function App() {
                     onClick={() => spectrogramRef.current?.goToNextAnnotation()}
                     disabled={!videoSrc || !canGoNextAnnotation}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-                    title="Next annotation (Cmd+→  or  ')"
+                    data-tooltip="Next annotation (Cmd+→  or  ')"
                 >
                     <ChevronRight size={15} />
                 </button>
                 <button
-                    onClick={() => seek(duration, true)}
+                    onClick={() => { seek(duration, true); setSelectionRegion(null); setBoundAnnotationId(null); }}
                     disabled={!videoSrc}
                     className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-                    title="Skip to end"
+                    data-tooltip="Skip to end"
                 >
                     <SkipForward size={15} />
                 </button>
 
                 {/* Volume Control */}
-                <div className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1">
+                <div ref={setVolumeControlEl} className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1">
                     <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
                         {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
                     </button>
                     <div className="relative w-20 h-5 flex items-center">
                         <input
-                            type="range" min="0" max="4" step="0.05"
-                            value={muted ? 0 : volume}
+                            type="range" min="0" max="1" step="0.005"
+                            value={gainToSlider(muted ? 0 : volume)}
                             onChange={handleVolumeChange}
                             onPointerUp={(e) => {
-                                const val = parseFloat((e.target as HTMLInputElement).value);
-                                if (val > 0.9 && val < 1.1) { setVolume(1.0); setMuted(false); }
+                                const sliderVal = parseFloat((e.target as HTMLInputElement).value);
+                                if (Math.abs(sliderVal - 0.5) < 0.015) { setVolume(1.0); setMuted(false); }
                             }}
-                            className={`w-full h-1 bg-slate-500 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
+                            className={`w-full h-1 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
                             style={{
-                                background: `linear-gradient(to right, ${isBoosted ? '#ef4444' : '#e65161'} 0%, ${isBoosted ? '#ef4444' : '#e65161'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(Math.min(1, volume) / 4) * 100}%, ${isBoosted ? '#ef4444' : 'transparent'} ${(volume / 4) * 100}%, #64748b ${(volume / 4) * 100}%, #64748b 100%)`
+                                background: isBoosted
+                                  ? `linear-gradient(to right, #e65161 0%, #e65161 50%, #ef4444 50%, #ef4444 ${sliderPct}%, #64748b ${sliderPct}%, #64748b 100%)`
+                                  : `linear-gradient(to right, #e65161 0%, #e65161 ${sliderPct}%, #64748b ${sliderPct}%, #64748b 100%)`
                             }}
                         />
-                        {/* Hash mark at 1.0 (default volume). Positioned to match the thumb center:
-                            left = (1/4) * (trackWidth - thumbWidth) + thumbRadius
-                                 = (trackWidth - 12px) * 0.25 + 6px = calc(25% - 3px + 6px) */}
-                        <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.25 + 6px)' }}></div>
+                        {/* Hash mark at center = gain 1.0 (50% of slider range) */}
+                        <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }}></div>
                     </div>
                 </div>
 
-                {/* Time display — click any value to edit */}
-                <div className="flex flex-col justify-center flex-none ml-2 tabular-nums leading-tight gap-0.5">
+                {/* Time display — current time + selection fields to the right */}
+                <div className="flex items-center gap-2 ml-2 tabular-nums">
                     {editingTimeField === 'time' ? (
                         <input
                             autoFocus
-                            className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded px-1 w-20 outline-none"
+                            className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded-md px-2 py-1 w-[5rem] outline-none"
                             value={editingTimeRaw}
                             onChange={e => setEditingTimeRaw(e.target.value)}
                             onKeyDown={e => {
@@ -2009,71 +2286,60 @@ export default function App() {
                         />
                     ) : (
                         <button
-                            className="text-sm font-mono font-medium text-slate-300 hover:text-white text-left"
-                            title="Click to jump to time"
+                            className="flex items-center justify-end px-2 py-1 w-[5rem] bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+                            data-tooltip="Click to jump to time"
                             onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTime.toFixed(2)); }}
                         >
                             {currentTime.toFixed(2)}s
                         </button>
                     )}
-                    {selectionRegion && (
-                        <div className="flex items-center gap-1 text-[10px] font-mono text-slate-400">
-                            {editingTimeField === 'selStart' ? (
-                                <input
-                                    autoFocus
-                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
-                                    value={editingTimeRaw}
-                                    onChange={e => setEditingTimeRaw(e.target.value)}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
-                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
-                                    }}
-                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
-                                />
-                            ) : (
-                                <button className="hover:text-white" title="Edit selection start" onClick={() => { setEditingTimeField('selStart'); setEditingTimeRaw(selectionRegion.start.toFixed(2)); }}>
-                                    {selectionRegion.start.toFixed(2)}
-                                </button>
-                            )}
-                            <span>→</span>
-                            {editingTimeField === 'selEnd' ? (
-                                <input
-                                    autoFocus
-                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
-                                    value={editingTimeRaw}
-                                    onChange={e => setEditingTimeRaw(e.target.value)}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
-                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
-                                    }}
-                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
-                                />
-                            ) : (
-                                <button className="hover:text-white" title="Edit selection end" onClick={() => { setEditingTimeField('selEnd'); setEditingTimeRaw(selectionRegion.end.toFixed(2)); }}>
-                                    {selectionRegion.end.toFixed(2)}
-                                </button>
-                            )}
-                            <span>(</span>
-                            {editingTimeField === 'selDur' ? (
-                                <input
-                                    autoFocus
-                                    className="text-[10px] font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1 w-14 outline-none"
-                                    value={editingTimeRaw}
-                                    onChange={e => setEditingTimeRaw(e.target.value)}
-                                    onKeyDown={e => {
-                                        if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
-                                        if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
-                                    }}
-                                    onBlur={() => commitTimeEdit(editingTimeRaw)}
-                                />
-                            ) : (
-                                <button className="hover:text-white" title="Edit selection duration" onClick={() => { setEditingTimeField('selDur'); setEditingTimeRaw((selectionRegion.end - selectionRegion.start).toFixed(2)); }}>
-                                    {(selectionRegion.end - selectionRegion.start).toFixed(2)}s
-                                </button>
-                            )}
-                            <span>)</span>
-                        </div>
-                    )}
+
+                    <div className="w-px bg-slate-600/50 self-stretch my-0.5" />
+
+                    {/* Selection fields — always visible, blank when no selection active */}
+                    {(() => {
+                        const region = selectionRegion ?? { start: 0, end: 0 };
+                        const has = !!selectionRegion;
+                        // Allow editing when paused and no selection to create one from the playhead
+                        const canCreate = !has && !isPlaying;
+                        const fieldInput = (
+                            <input
+                                autoFocus
+                                className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-[4.5rem] outline-none text-right"
+                                value={editingTimeRaw}
+                                onChange={e => setEditingTimeRaw(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') { e.preventDefault(); commitTimeEdit(editingTimeRaw); }
+                                    if (e.key === 'Escape') { e.preventDefault(); setEditingTimeField(null); setEditingTimeRaw(""); }
+                                }}
+                                onBlur={() => commitTimeEdit(editingTimeRaw)}
+                            />
+                        );
+                        const renderField = (field: TimeField, display: string, label: string, editVal: string) => (
+                            <div key={field} className="flex items-center gap-1.5">
+                                {editingTimeField === field ? fieldInput : (
+                                    <button
+                                        className={`text-xs font-mono px-1.5 h-5 w-[3.8rem] bg-slate-700/50 rounded text-center transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
+                                        onClick={() => {
+                                            if (has) { setEditingTimeField(field); setEditingTimeRaw(editVal); }
+                                            else if (canCreate) { setEditingTimeField(field); setEditingTimeRaw(''); }
+                                        }}
+                                        data-tooltip={has ? `Edit selection ${label}` : canCreate ? `Set selection ${label}` : undefined}
+                                    >
+                                        {has ? display : ''}
+                                    </button>
+                                )}
+                                <span className="text-[10px] text-slate-500 select-none w-6">{label}</span>
+                            </div>
+                        );
+                        return (
+                            <div className="flex flex-col justify-center gap-0.5">
+                                {renderField('selStart', region.start.toFixed(2), 'from', region.start.toFixed(2))}
+                                {renderField('selEnd', region.end.toFixed(2), 'to', region.end.toFixed(2))}
+                                {renderField('selDur', (region.end - region.start).toFixed(2), 'dur', (region.end - region.start).toFixed(2))}
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* Spectrogram Settings */}
@@ -2081,7 +2347,7 @@ export default function App() {
                     <button
                         onClick={() => setShowSettings(!showSettings)}
                         className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-                        title="Spectrogram Settings"
+                        data-tooltip="Spectrogram Settings"
                     >
                         <Settings size={16} />
                     </button>
@@ -2136,6 +2402,7 @@ export default function App() {
           onClose={() => setShowProjectSettings(false)}
         />
       )}
+      <TooltipLayer />
     </div>
   );
 }

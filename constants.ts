@@ -32,6 +32,8 @@ export const MIN_ZOOM_SEC = 1;
 export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 10;
 export const SCROLL_SENSITIVITY = 1.0;
+// Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
+export const DRAG_INTENT_HOLD_MS = 250;
 
 // Multi-resolution spectrogram tier configuration.
 // Each tier defines a temporal resolution for a range of zoom levels.

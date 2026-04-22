@@ -81,7 +81,7 @@ export default function GradientPicker({ value, onChange }: Props) {
         className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center w-5 h-5 rounded border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
         style={{ left: tToPercent(tStart), backgroundColor: color0 }}
         onMouseDown={e => handleBarMouseDown(e, 0)}
-        title="Drag to change start color"
+        data-tooltip="Drag to change start color"
       >
         <ChevronRight size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>
@@ -90,7 +90,7 @@ export default function GradientPicker({ value, onChange }: Props) {
         className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center w-5 h-5 rounded border-2 border-white shadow-md cursor-grab active:cursor-grabbing ring-1 ring-black/50"
         style={{ left: tToPercent(tEnd), backgroundColor: color1 }}
         onMouseDown={e => handleBarMouseDown(e, 1)}
-        title="Drag to change end color"
+        data-tooltip="Drag to change end color"
       >
         <ChevronLeft size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>

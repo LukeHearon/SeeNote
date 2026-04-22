@@ -4,6 +4,7 @@ import { Project } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
+import GradientProjectName from './GradientProjectName';
 
 interface Props {
   projects: Project[];
@@ -71,16 +72,16 @@ export default function LaunchScreen({
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
+    <div className="h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
       {/* Logo / title */}
-      <div className="flex items-center gap-3 mb-10">
+      <div className="flex items-center gap-3 mb-10 shrink-0">
         <AudioWaveform size={36} className="text-blue-400" />
         <span className="text-white text-3xl font-semibold tracking-tight">SeeNote</span>
       </div>
 
-      <div className="w-full max-w-xl">
+      <div className="w-full max-w-xl flex flex-col min-h-0">
         {/* Header row */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 shrink-0">
           <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">Projects</h2>
           <button
             onClick={() => setShowCreate(true)}
@@ -93,7 +94,7 @@ export default function LaunchScreen({
 
         {/* Load error */}
         {loadError && (
-          <div className="mb-4 flex items-start gap-2 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm">
+          <div className="mb-4 shrink-0 flex items-start gap-2 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm">
             <AlertCircle size={16} className="flex-none mt-0.5" />
             <div>
               <p className="font-medium">Failed to load projects</p>
@@ -104,12 +105,12 @@ export default function LaunchScreen({
 
         {/* Project list */}
         {isLoading ? (
-          <div className="flex items-center justify-center py-16 text-gray-500">
+          <div className="flex items-center justify-center py-16 text-gray-500 shrink-0">
             <Loader2 size={24} className="animate-spin mr-2" />
             <span className="text-sm">Loading projects…</span>
           </div>
         ) : projects.length === 0 ? (
-          <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center">
+          <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
             <p className="text-gray-500 text-sm mb-3">No projects yet.</p>
             <button
               onClick={() => setShowCreate(true)}
@@ -119,7 +120,7 @@ export default function LaunchScreen({
             </button>
           </div>
         ) : (
-          <ul className="space-y-2">
+          <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
             {projects.map(project => (
               <li
                 key={project.id}
@@ -129,15 +130,7 @@ export default function LaunchScreen({
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="font-bold truncate">
-                      <span
-                        className="bg-clip-text text-transparent"
-                        style={{
-                          backgroundImage: `linear-gradient(to right, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[0]}, ${(project.nameGradientColors ?? ['#e65161', '#f9c387'])[1]})`,
-                          display: 'inline-block',
-                        }}
-                      >
-                        {project.name}
-                      </span>
+                      <GradientProjectName name={project.name} nameGradientColors={project.nameGradientColors} />
                     </p>
                     <p className="text-gray-500 text-xs mt-1 truncate">{project.audioDirectory}</p>
                     <p className="text-gray-600 text-xs truncate">{project.annotationDirectory}</p>
@@ -146,14 +139,14 @@ export default function LaunchScreen({
                     <button
                       onClick={e => handleGear(e, project)}
                       className="text-gray-400 hover:text-white p-1 rounded transition-colors"
-                      title="Project settings"
+                      data-tooltip="Project settings"
                     >
                       <Settings size={15} />
                     </button>
                     <button
                       onClick={e => handleDelete(e, project)}
                       className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                      title="Delete project"
+                      data-tooltip="Delete project"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -173,12 +166,12 @@ export default function LaunchScreen({
             <button
               onClick={handleShowDataFolder}
               className="flex items-center gap-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors"
-              title="Open the folder where projects are stored"
+              data-tooltip="Open the folder where projects are stored"
             >
               <FolderOpen size={12} />
               Show data folder
             </button>
-            <span className="text-gray-700 text-xs font-mono truncate" title={projectsFilePath}>
+            <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={projectsFilePath}>
               {projectsFilePath}
             </span>
           </div>

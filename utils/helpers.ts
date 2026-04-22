@@ -96,39 +96,46 @@ const defaultSavePath = (trackPath: string | null, filename: string, suffix: str
 // If you ever need sample-exact CSV round-trip, bump toFixed(4) to toFixed(6)
 // or export frame indices alongside. Do not confuse these format choices with
 // the internal precision of the pipeline.
-export const generateCSVContent = (annotations: Annotation[]): string => {
+export const generateCSVContent = (annotations: Annotation[], decimals: number = 4): string => {
     let content = "Label,Start,End\n";
     annotations.forEach(a => {
         const safeText = `"${a.text.replace(/"/g, '""')}"`;
-        content += `${safeText},${a.start.toFixed(4)},${a.end.toFixed(4)}\n`;
+        content += `${safeText},${a.start.toFixed(decimals)},${a.end.toFixed(decimals)}\n`;
     });
     return content;
 };
 
-export const generateAudacityContent = (annotations: Annotation[]): string => {
+export const generateAudacityContent = (annotations: Annotation[], decimals: number = 4): string => {
     let content = "";
     annotations.forEach(a => {
-        content += `${a.start.toFixed(6)}\t${a.end.toFixed(6)}\t${a.text}\n`;
+        content += `${a.start.toFixed(decimals)}\t${a.end.toFixed(decimals)}\t${a.text}\n`;
     });
     return content;
 };
 
-export const generateJSONContent = (annotations: Annotation[]): string =>
-    JSON.stringify(annotations, null, 2);
+export const generateJSONContent = (annotations: Annotation[], decimals: number = 4): string => {
+    const factor = Math.pow(10, decimals);
+    const rounded = annotations.map(a => ({
+        ...a,
+        start: Math.round(a.start * factor) / factor,
+        end: Math.round(a.end * factor) / factor,
+    }));
+    return JSON.stringify(rounded, null, 2);
+};
 
 // Export to CSV
-export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
     const path = defaultSavePath(trackPath, trackName, '_annotations', '.csv');
-    await saveFile(generateCSVContent(annotations), path, '.csv');
+    await saveFile(generateCSVContent(annotations, decimals), path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
     const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
-    await saveFile(generateAudacityContent(annotations), path, '.txt');
+    await saveFile(generateAudacityContent(annotations, decimals), path, '.txt');
 };
 
-export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null) => {
+export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
     const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
-    await saveFile(generateJSONContent(annotations), path, '.json');
+    await saveFile(generateJSONContent(annotations, decimals), path, '.json');
 };

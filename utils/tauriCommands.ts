@@ -77,6 +77,9 @@ export const openFileDialog = (): Promise<string | null> =>
 export const openDirectoryDialog = (): Promise<string | null> =>
   invoke('open_directory_dialog');
 
+export const openDirectoryDialogAt = (startPath: string): Promise<string | null> =>
+  invoke('open_directory_dialog_at', { startPath });
+
 export interface OpenResult {
   path: string;
   is_dir: boolean;
@@ -90,6 +93,9 @@ export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
 
 export const removeFile = (path: string): Promise<void> =>
   invoke('remove_file', { path });
+
+export const checkDirExists = (path: string): Promise<boolean> =>
+  invoke('check_dir_exists', { path });
 
 export const saveFileDialog = (
   defaultPath: string,

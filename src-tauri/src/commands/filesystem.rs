@@ -108,6 +108,21 @@ pub async fn open_directory_dialog(app: tauri::AppHandle) -> Result<Option<Strin
 }
 
 #[tauri::command]
+pub async fn open_directory_dialog_at(app: tauri::AppHandle, start_path: String) -> Result<Option<String>, String> {
+    let mut builder = app.dialog().file();
+    let p = std::path::Path::new(&start_path);
+    if p.is_dir() {
+        builder = builder.set_directory(p);
+    }
+    let result = builder.blocking_pick_folder();
+
+    Ok(result.and_then(|p| match p {
+        FilePath::Path(pb) => Some(pb.to_string_lossy().to_string()),
+        _ => None,
+    }))
+}
+
+#[tauri::command]
 pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, String> {
     let root = std::path::Path::new(&path);
     let mut files = Vec::new();
@@ -214,6 +229,12 @@ pub async fn open_file_or_folder_dialog(app: tauri::AppHandle) -> Result<Option<
             _ => None,
         }))
     }
+}
+
+#[tauri::command]
+pub async fn check_dir_exists(path: String) -> Result<bool, String> {
+    let p = std::path::Path::new(&path);
+    Ok(p.is_dir())
 }
 
 #[tauri::command]

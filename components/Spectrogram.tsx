@@ -3,7 +3,7 @@ import { Annotation, SpectrogramSettings, AnnotationTool } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC } from '../constants';
+import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
 import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
@@ -154,6 +154,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Track mousedown on annotation center to distinguish click vs drag
   const clickDownRef = useRef<{ x: number; y: number; annotationId: string; pointerTime: number } | null>(null);
 
+  // Pending drag intent: recorded at mousedown but not promoted to visible state until
+  // the pointer has moved ≥1% of the canvas width OR been held ≥DRAG_INTENT_HOLD_MS.
+  // Using refs (not state) so no re-render/gray-out happens until the threshold is crossed.
+  const pendingSelectionRef = useRef<{ start: number; startX: number; startTime: number } | null>(null);
+  const pendingAnnotationRef = useRef<{ start: number; startX: number; startTime: number } | null>(null);
+
   const requestRef = useRef<number | null>(null);
   const pendingAnnotationsRef = useRef<Annotation[]>(annotations);
 
@@ -168,10 +174,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [fileIdent]);
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
-  // currently-visible window. The trigger is proportional (center of screen), so it
-  // behaves identically regardless of zoom level.
+  // currently-visible window. Disabled when a selection is active: the user positioned
+  // the canvas intentionally relative to the selection and auto-scroll disrupts that.
   useEffect(() => {
-      if (isPlaying && containerRef.current) {
+      if (isPlaying && !selectionRegion && containerRef.current) {
           const containerWidth = containerRef.current.clientWidth;
           const pps = containerWidth / zoomSec;
           const curScroll = scrollLeftRef.current;
@@ -181,7 +187,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               setScrollLeft(Math.max(0, targetScroll));
           }
       }
-  }, [isPlaying, currentTime, zoomSec]);
+  }, [isPlaying, currentTime, zoomSec, selectionRegion]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
@@ -312,7 +318,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
+    // Use the container's CSS width rather than canvas.width/dpr to avoid
+    // 1-physical-pixel rounding fluctuations that shift tick positions during playback.
+    const width = containerRef.current?.clientWidth ?? canvas.width / dpr;
     const height = canvas.height / dpr;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -436,6 +444,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
+    let lastLabelY: number | null = null;
+    const MIN_LABEL_SPACING = 13;
+
     const renderTick = (freq: number) => {
       let y = 0;
       if (settings.frequencyScale === 'linear') {
@@ -453,19 +464,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         y = height - (pct * height);
       }
 
-      if (y >= 0 && y <= height) {
-        ctx.beginPath();
-        ctx.moveTo(width - 5, y);
-        ctx.lineTo(width - 1, y);
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.stroke();
+      if (y < 0 || y > height) return;
+      if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
+      lastLabelY = y;
 
-        let label = freq.toString();
-        if (freq >= 1000) {
-          label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
-        }
-        ctx.fillText(label, width - 7, y);
+      ctx.beginPath();
+      ctx.moveTo(width - 5, y);
+      ctx.lineTo(width - 1, y);
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.stroke();
+
+      let label = freq.toString();
+      if (freq >= 1000) {
+        label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
       }
+      ctx.fillText(label, width - 7, y);
     };
 
     if (settings.frequencyScale === 'log') {
@@ -658,12 +671,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           return;
         }
 
-        // Click outside selection: clear selection, seek, start tracking for drag
+        // Click outside selection: clear selection, seek, record pending drag intent
         onSelectAnnotation(null);
         onBoundAnnotationChange(null);
         onSelectionChange(null);
         onSeek(t);
-        setCreatingSelection({ start: t, current: t });
+        pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
       } else {
         // Annotation Tool Mode
 
@@ -683,12 +696,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           return;
         }
 
-        // Click outside selection: clear any active selection, start annotation creation
+        // Click outside selection: clear any active selection, record pending annotation intent
         onSelectAnnotation(null);
         onBoundAnnotationChange(null);
         onSelectionChange(null);
-        setCreatingAnnotation({ start: t, current: t });
         onSeek(t);
+        pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
       }
     }
     // Annotation center clicks are handled in the annotation onMouseDown handler
@@ -727,6 +740,30 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       return;
     }
 
+    // Promote pending drag intents once the pointer has moved far enough or been held long enough
+    const containerWidth = containerRef.current?.clientWidth || 0;
+    const thresholdPx = containerWidth * 0.01;
+
+    if (pendingAnnotationRef.current) {
+      const dx = Math.abs(e.clientX - pendingAnnotationRef.current.startX);
+      const heldMs = Date.now() - pendingAnnotationRef.current.startTime;
+      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+        setCreatingAnnotation({ start: pendingAnnotationRef.current.start, current: t });
+        pendingAnnotationRef.current = null;
+      }
+      return;
+    }
+
+    if (pendingSelectionRef.current) {
+      const dx = Math.abs(e.clientX - pendingSelectionRef.current.startX);
+      const heldMs = Date.now() - pendingSelectionRef.current.startTime;
+      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+        setCreatingSelection({ start: pendingSelectionRef.current.start, current: t });
+        pendingSelectionRef.current = null;
+      }
+      return;
+    }
+
     if (creatingAnnotation) {
       setCreatingAnnotation({ ...creatingAnnotation, current: t });
       return;
@@ -734,6 +771,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     if (creatingSelection) {
       setCreatingSelection({ ...creatingSelection, current: t });
+      const liveStart = Math.min(creatingSelection.start, t);
+      const liveEnd = Math.max(creatingSelection.start, t);
+      if (liveEnd - liveStart > 0.05) onSelectionChange({ start: liveStart, end: liveEnd });
       return;
     }
 
@@ -806,6 +846,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       clickDownRef.current = null;
     }
 
+    // If the drag never crossed the threshold, discard the pending intent (treat as plain click)
+    pendingAnnotationRef.current = null;
+    pendingSelectionRef.current = null;
+
     if (creatingAnnotation) {
       const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
       const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
@@ -822,7 +866,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         onSelectionChange({ start, end });
         onBoundAnnotationChange(null);
       } else {
-        // Very small drag = treat as click; selection already cleared in mousedown
         onSelectionChange(null);
       }
       setCreatingSelection(null);
@@ -992,7 +1035,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
              if (left + width < 0 || left > (containerRef.current?.clientWidth || 1000)) return null;
 
-             const top = 10 + ((annotation.layerIndex || 0) * 35);
+             const top = 22 + ((annotation.layerIndex || 0) * 35);
 
              const baseColor = annotation.color || "#ffffff";
              const isWhite = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
@@ -1148,7 +1191,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             setEditingInputId(annotation.id);
                             setPencilClickedId(annotation.id);
                           }}
-                          title="Edit annotation name"
+                          data-tooltip="Edit annotation name"
                         >
                           <Pencil size={10} className="text-white drop-shadow" />
                         </button>
@@ -1165,7 +1208,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             setEditingInputId(annotation.id);
                             setPencilClickedId(annotation.id);
                           }}
-                          title="Edit annotation name"
+                          data-tooltip="Edit annotation name"
                         >
                           <Pencil size={10} className="text-white" />
                         </button>

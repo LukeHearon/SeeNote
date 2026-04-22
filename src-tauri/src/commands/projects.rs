@@ -27,6 +27,14 @@ pub struct ProjectRecord {
     pub label_configs: Vec<AnnotationToolRecord>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub spectrogram_settings: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name_gradient_colors: Option<[String; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_rounding_decimals: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub file_filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hide_annotated: Option<bool>,
 }
 
 #[derive(Deserialize)]

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
-import { openDirectoryDialog } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
 import GradientPicker from './GradientPicker';
 
@@ -19,6 +19,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [audioDir, setAudioDir] = useState(project.audioDirectory);
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
   const [outputFormat, setOutputFormat] = useState(project.outputFormat);
+  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? 4);
   const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
   const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
 
@@ -51,6 +52,16 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     if (!audioDir) { setError('Audio directory is required.'); return; }
     if (!annotationDir) { setError('Annotations directory is required.'); return; }
 
+    setIsBusy(true);
+    const [audioDirOk, annotationDirOk] = await Promise.all([
+      checkDirExists(audioDir),
+      checkDirExists(annotationDir),
+    ]);
+    setIsBusy(false);
+
+    if (!audioDirOk) { setError('Audio directory does not exist.'); return; }
+    if (!annotationDirOk) { setError('Annotations directory does not exist.'); return; }
+
     setError('');
     const updated: Project = {
       ...project,
@@ -58,6 +69,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       audioDirectory: audioDir,
       annotationDirectory: annotationDir,
       outputFormat,
+      outputRoundingDecimals,
       nameGradientColors: gradientColors,
     };
     pendingRef.current = updated;
@@ -235,6 +247,27 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   <option value="csv">CSV (.csv)</option>
                   <option value="json">JSON (.json)</option>
                 </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-gray-400 text-sm block">Output Decimal Places</label>
+                    <p className="text-gray-600 text-xs">for start/end timestamps</p>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max="9"
+                    step="1"
+                    value={outputRoundingDecimals}
+                    onChange={e => {
+                      const v = parseInt(e.target.value);
+                      if (!isNaN(v)) setOutputRoundingDecimals(Math.min(9, Math.max(0, v)));
+                    }}
+                    className="w-16 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

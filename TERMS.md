@@ -25,14 +25,34 @@ A named instrument for creating annotations. Has a hotkey, a default name, and a
 ## Active Annotation Tool
 The annotation tool currently selected by the user. When no annotation tool is active, dragging on the spectrogram creates a Selection rather than an annotation.
 
+## Selection Mode
+When a selection is active. Modifies playback behavior and behavior of annotation tools.
+
 ---
 
-# App Regions
+# Windows
 
-## File Panel
+## Project Window
+The opening window of SeeNote that lists projects by recency.
+
+## Annotation Window
+The window that shows when the user opens a project for creating annotations.
+
+---
+
+# Annotation Window Regions
+
+## Header (top extent)
+Shows back button to return to Project Window, project name, project settings, debug, help modal buttons
+
+## File Panel (top left)
 The sidebar listing the project's media files in their source directory structure.
 
-## Timeline Panel
+##  Annotation Tools Panel (bottom right)
+Shows all defined annotation tools.
+Header is "LABELS" for clarity, even though these are properly called Annotation Tools.
+
+## Timeline Panel (bottom right)
 The main content area containing the spectrogram, axes, and toolbar.
 
 ### Spectrogram
@@ -48,7 +68,7 @@ The control strip above the spectrogram. Contains transport controls, time field
 ### Spectrogram Settings
 Display settings for the spectrogram: frequency range, intensity, FFT size, and frequency scale.
 
-## Video Panel
+## Video Panel (top right)
 Shows video frames when the current track is a video file.
 
 ---
