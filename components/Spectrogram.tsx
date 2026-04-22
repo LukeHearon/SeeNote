@@ -163,10 +163,41 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const requestRef = useRef<number | null>(null);
   const pendingAnnotationsRef = useRef<Annotation[]>(annotations);
 
+  // Refs for out-of-bounds drag handling (auto-pan + window-level events)
+  // These mirror state/props so the RAF loop can read them without stale closures.
+  const pixelsPerSecondRef = useRef(0);
+  const durationRef = useRef(duration);
+  const creatingSelectionRef = useRef(creatingSelection);
+  const creatingAnnotationRef = useRef(creatingAnnotation);
+  const resizingAnnotationRef = useRef(resizingAnnotation);
+  const draggedAnnotationRef = useRef(draggedAnnotation);
+  const resizingSelectionHandleRef = useRef(resizingSelectionHandle);
+  const annotationsRef = useRef(annotations);
+  const boundAnnotationIdRef = useRef(boundAnnotationId);
+  const selectionRegionRef = useRef(selectionRegion);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  const onAnnotationsChangeRef = useRef(onAnnotationsChange);
+  const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const autoPanRafRef = useRef<number | null>(null);
+
   const pixelsPerSecond = useMemo(() => {
      if (!containerRef.current) return 100;
      return containerRef.current.clientWidth / zoomSec;
   }, [zoomSec, containerRef.current?.clientWidth]);
+
+  // Keep refs in sync so RAF/window handlers read current values without stale closures.
+  pixelsPerSecondRef.current = pixelsPerSecond;
+  durationRef.current = duration;
+  creatingSelectionRef.current = creatingSelection;
+  creatingAnnotationRef.current = creatingAnnotation;
+  resizingAnnotationRef.current = resizingAnnotation;
+  draggedAnnotationRef.current = draggedAnnotation;
+  resizingSelectionHandleRef.current = resizingSelectionHandle;
+  annotationsRef.current = annotations;
+  boundAnnotationIdRef.current = boundAnnotationId;
+  selectionRegionRef.current = selectionRegion;
+  onSelectionChangeRef.current = onSelectionChange;
+  onAnnotationsChangeRef.current = onAnnotationsChange;
 
   // Reset scroll position to 0 when switching tracks
   useEffect(() => {
@@ -638,6 +669,140 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     return Math.max(0, Math.min(t, duration));
   };
 
+  // Updates drag state using only refs — safe to call from a RAF loop or window handler.
+  const processDragAtClientX = useCallback((clientX: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const t = Math.max(0, Math.min(
+      (clientX - rect.left + scrollLeftRef.current) / pixelsPerSecondRef.current,
+      durationRef.current
+    ));
+
+    const ca = creatingAnnotationRef.current;
+    if (ca) { setCreatingAnnotation({ ...ca, current: t }); return; }
+
+    const cs = creatingSelectionRef.current;
+    if (cs) {
+      setCreatingSelection({ ...cs, current: t });
+      const liveStart = Math.min(cs.start, t);
+      const liveEnd = Math.max(cs.start, t);
+      if (liveEnd - liveStart > 0.05) onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
+      return;
+    }
+
+    const ra = resizingAnnotationRef.current;
+    if (ra) {
+      const updated = annotationsRef.current.map(a => {
+        if (a.id !== ra.id) return a;
+        if (ra.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
+        return { ...a, end: Math.max(t, a.start + 0.05) };
+      });
+      pendingAnnotationsRef.current = updated;
+      onAnnotationsChangeRef.current(updated);
+      if (ra.id === boundAnnotationIdRef.current) {
+        const updated2 = updated.find(a => a.id === ra.id);
+        if (updated2) onSelectionChangeRef.current({ start: updated2.start, end: updated2.end });
+      }
+      return;
+    }
+
+    const da = draggedAnnotationRef.current;
+    if (da) {
+      const updated = annotationsRef.current.map(a => {
+        if (a.id !== da.id) return a;
+        const dur = a.end - a.start;
+        const newStart = Math.max(0, t - da.startOffset);
+        return { ...a, start: newStart, end: newStart + dur };
+      });
+      pendingAnnotationsRef.current = updated;
+      onAnnotationsChangeRef.current(updated);
+      return;
+    }
+
+    const rsh = resizingSelectionHandleRef.current;
+    const sel = selectionRegionRef.current;
+    if (rsh && sel) {
+      let newStart = sel.start;
+      let newEnd = sel.end;
+      if (rsh === 'start') newStart = Math.min(t, sel.end - 0.05);
+      else newEnd = Math.max(t, sel.start + 0.05);
+      onSelectionChangeRef.current({ start: newStart, end: newEnd });
+      if (boundAnnotationIdRef.current) {
+        const updated = annotationsRef.current.map(a =>
+          a.id === boundAnnotationIdRef.current ? { ...a, start: newStart, end: newEnd } : a
+        );
+        pendingAnnotationsRef.current = updated;
+        onAnnotationsChangeRef.current(updated);
+      }
+    }
+  }, []); // reads only from refs — stable
+
+  // Whether any selection/annotation drag is currently active
+  const isAnyDragActive =
+    creatingSelection !== null || creatingAnnotation !== null ||
+    resizingAnnotation !== null || draggedAnnotation !== null ||
+    resizingSelectionHandle !== null;
+
+  // Keep a ref so window handlers can check without a stale closure
+  const isAnyDragActiveRef = useRef(isAnyDragActive);
+  isAnyDragActiveRef.current = isAnyDragActive;
+
+  // Always track mouse position so the RAF can use it even when mouse is outside the spectrogram
+  useEffect(() => {
+    const trackMouse = (e: MouseEvent) => { mousePosRef.current = { clientX: e.clientX, clientY: e.clientY }; };
+    window.addEventListener('mousemove', trackMouse, { passive: true });
+    return () => window.removeEventListener('mousemove', trackMouse);
+  }, []);
+
+  // Prevent text selection in all panels while a drag is in progress
+  useEffect(() => {
+    if (!isAnyDragActive) return;
+    const prev = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+    return () => { document.body.style.userSelect = prev; };
+  }, [isAnyDragActive]);
+
+  // Auto-pan: while a drag is active and the mouse is outside the spectrogram bounds,
+  // scroll the view and update the drag endpoint based on mouse overflow distance.
+  useEffect(() => {
+    if (!isAnyDragActive) return;
+
+    const tick = () => {
+      const pos = mousePosRef.current;
+      const container = containerRef.current;
+      if (pos && container) {
+        const rect = container.getBoundingClientRect();
+        const containerWidth = rect.width;
+        let overflow = 0;
+        if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
+        else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+
+        if (overflow !== 0) {
+          const absOverflow = Math.abs(overflow);
+          // Gentle acceleration: slow start (~1px/frame at edge), ramps up, capped at 40px/frame
+          const speed = Math.sign(overflow) * Math.min(Math.pow(absOverflow / 40, 1.5), 40);
+          const pps = pixelsPerSecondRef.current;
+          const dur = durationRef.current;
+          const overrunPixels = containerWidth * 0.4;
+          const maxScroll = Math.max(0, dur * pps - containerWidth + overrunPixels);
+          const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
+
+          if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
+            scrollLeftRef.current = newScroll;
+            setScrollLeft(newScroll);
+            processDragAtClientX(pos.clientX);
+          }
+        }
+      }
+      autoPanRafRef.current = requestAnimationFrame(tick);
+    };
+
+    autoPanRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (autoPanRafRef.current) { cancelAnimationFrame(autoPanRafRef.current); autoPanRafRef.current = null; }
+    };
+  }, [isAnyDragActive, processDragAtClientX]);
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
       e.preventDefault();
@@ -708,6 +873,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    mousePosRef.current = { clientX: e.clientX, clientY: e.clientY };
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     const elUnder = document.elementFromPoint(e.clientX, e.clientY);
@@ -889,6 +1055,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   };
 
+  // Handle mouseup outside the spectrogram (e.g. mouse released over another panel)
+  const handleMouseUpRef = useRef(handleMouseUp);
+  handleMouseUpRef.current = handleMouseUp;
+  useEffect(() => {
+    const onWindowMouseUp = () => { if (isAnyDragActiveRef.current) handleMouseUpRef.current(); };
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  }, []);
+
   const handleWheel = (e: React.WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -1000,7 +1175,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={() => { handleMouseUp(); setCursorPos(null); }}
+          onMouseLeave={() => {
+            setCursorPos(null);
+            // Don't terminate the drag — window mouseup handler cleans up when the button is released.
+            // Only end non-drag interactions (e.g. right-click pan) on leave.
+            if (!isAnyDragActiveRef.current) handleMouseUp();
+          }}
           onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
       >
