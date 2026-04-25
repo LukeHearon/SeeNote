@@ -756,6 +756,8 @@ export default function App() {
     if (touched.spectrogramSettings) {
       setSettings(touched.spectrogramSettings);
     }
+    setShuffleMode(false);
+    setShuffledFiles([]);
     setCurrentDirectory(touched.audioDirectory);
     setAnnotatedFiles(new Set());
     setAnnotations([]);
@@ -843,6 +845,21 @@ export default function App() {
     engineRef.current?.pause();
     setIsPlaying(false);
     setIsBuffering(false);
+    setShuffleMode(false);
+    setShuffledFiles([]);
+    setAllMediaFiles([]);
+    setTrackPath(null);
+    setTrackName("video");
+    setVideoSrc(null);
+    setCurrentTime(0);
+    setCurrentDirectory(null);
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    setSelectionRegion(null);
+    setBoundAnnotationId(null);
+    setAnnotatedFiles(new Set());
+    annotationsHistoryRef.current = [[]];
+    historyIndexRef.current = 0;
     setActiveProject(null);
   }, []);
 
