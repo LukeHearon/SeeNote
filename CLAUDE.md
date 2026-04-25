@@ -1,3 +1,15 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Dev commands
+
+```bash
+npm run tauri:dev   # start Tauri dev server (hot-reload frontend + Rust recompile on change)
+npm run dev         # frontend only (no Tauri — useful for pure UI work)
+npx tsc --noEmit   # type-check without building
+```
+
 # SeeNote — Agent Orientation
 
 SeeNote is a **Tauri v2 + React/TypeScript desktop app** for annotating audio/video files to build machine learning training datasets. Users open a project (audio directory + annotation output directory), navigate tracks via a file panel, view spectrograms, and drag to create time-range annotations. Annotations are automatically saved as Audacity-compatible `.txt`, `.csv`, or `.json` files mirroring the audio directory structure.

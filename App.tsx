@@ -7,6 +7,7 @@ import FileTree from './components/FileTree';
 import LaunchScreen from './components/LaunchScreen';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
+import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
@@ -248,8 +249,8 @@ export default function App() {
   const [leftPanelRatio, setLeftPanelRatio] = useState(0.6);
   const [leftPanelWidth, setLeftPanelWidth] = useState(224);
   const [showSettings, setShowSettings] = useState(false);
-  const [showHotkeysHelp, setShowHotkeysHelp] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
   const [debugCopied, setDebugCopied] = useState(false);
@@ -731,18 +732,18 @@ export default function App() {
   }, [trackPath, annotationDirectory]);
 
   const handleOpenProject = useCallback(async (project: Project) => {
-    await touchLastOpened(project.id);
+    const touched = await touchLastOpened(project.id) ?? project;
 
     // Check that both directories still exist before opening.
-    const audioExists = await listDirectory(project.audioDirectory).then(() => true).catch(() => false);
-    const annotationExists = await listDirectory(project.annotationDirectory).then(() => true).catch(() => false);
+    const audioExists = await listDirectory(touched.audioDirectory).then(() => true).catch(() => false);
+    const annotationExists = await listDirectory(touched.annotationDirectory).then(() => true).catch(() => false);
     if (!audioExists || !annotationExists) {
       setRepairProject({
-        project,
+        project: touched,
         audioMissing: !audioExists,
         annotationMissing: !annotationExists,
-        repairedAudio: project.audioDirectory,
-        repairedAnnotation: project.annotationDirectory,
+        repairedAudio: touched.audioDirectory,
+        repairedAnnotation: touched.annotationDirectory,
       });
       return;
     }
@@ -750,12 +751,12 @@ export default function App() {
     // Set activeProject in the same React batch as annotationTools/settings so the
     // persist-effect guard (prevProjectIdRef) sees the new project immediately and
     // correctly skips the load-triggered changes.
-    setActiveProject(project);
-    setAnnotationTools(project.annotationTools.length > 0 ? project.annotationTools : DEFAULT_ANNOTATION_TOOLS);
-    if (project.spectrogramSettings) {
-      setSettings(project.spectrogramSettings);
+    setActiveProject(touched);
+    setAnnotationTools(touched.annotationTools.length > 0 ? touched.annotationTools : DEFAULT_ANNOTATION_TOOLS);
+    if (touched.spectrogramSettings) {
+      setSettings(touched.spectrogramSettings);
     }
-    setCurrentDirectory(project.audioDirectory);
+    setCurrentDirectory(touched.audioDirectory);
     setAnnotatedFiles(new Set());
     setAnnotations([]);
     setTrackPath(null);
@@ -763,13 +764,13 @@ export default function App() {
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
     try {
-      const files = await listMediaFilesRecursive(project.audioDirectory);
+      const files = await listMediaFilesRecursive(touched.audioDirectory);
       setAllMediaFiles(files);
       if (files.length > 0) handleOpenFile(files[0]);
       // Load annotation file existence in the background
-      listAnnotationFiles(project.annotationDirectory, project.outputFormat)
+      listAnnotationFiles(touched.annotationDirectory, touched.outputFormat)
         .then(relPaths => {
-          const audioRoot = project.audioDirectory;
+          const audioRoot = touched.audioDirectory;
           // Build a map from rel path (no ext) → full audio path for O(1) lookup
           const relToFull = new Map<string, string>();
           for (const f of files) {
@@ -943,6 +944,33 @@ export default function App() {
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
           if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+          // Help panel
+          if (e.key === 'F1' || e.key === '?') {
+              e.preventDefault();
+              setShowHelp(prev => !prev);
+              return;
+          }
+
+          // Select entire track (or drop annotation spanning full track if a tool is active)
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+              e.preventDefault();
+              if (duration > 0) {
+                  if (activeToolKey !== null) {
+                      const tool = annotationTools.find(t => t.key === activeToolKey);
+                      if (tool) {
+                          const newAnnotation = makeAnnotationFromTool(tool, 0, duration);
+                          handleAnnotationsCommit([...annotations, newAnnotation]);
+                          setSelectedAnnotationId(newAnnotation.id);
+                          setBoundAnnotationId(newAnnotation.id);
+                          setSelectionRegion({ start: 0, end: duration });
+                      }
+                  } else {
+                      setSelectionRegion({ start: 0, end: duration });
+                  }
+              }
+              return;
+          }
 
           // Undo / Redo
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -1456,9 +1484,12 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
+    <div
+      className="flex flex-col h-screen bg-slate-900 text-slate-200"
+      style={{ marginRight: showHelp ? '320px' : '0', transition: 'margin-right 300ms ease-in-out' }}
+    >
       {/* Header */}
-      <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative">
+      <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative" data-help-target="toolbar">
         <div className="flex items-center space-x-4">
             <button
                 onClick={handleCloseProject}
@@ -1471,6 +1502,7 @@ export default function App() {
                 onClick={() => setShowProjectSettings(true)}
                 className="flex items-center space-x-2 px-2 py-1.5 rounded hover:bg-slate-700 transition-colors group"
                 data-tooltip="Project Settings"
+                data-help-target="project-settings-btn"
             >
                 <h1 className="text-xl font-bold">
                     <GradientProjectName name={activeProject.name} nameGradientColors={activeProject.nameGradientColors} />
@@ -1490,14 +1522,14 @@ export default function App() {
                 <Bug size={18} />
             </button>
              <button
-                onClick={() => setShowHelp(true)}
-                className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                data-tooltip="Help Guide"
+                onClick={() => { setHelpTab('guide'); setShowHelp(prev => !prev); }}
+                className={`p-2 rounded hover:bg-slate-700 transition-colors ${showHelp ? 'text-[#e65161] bg-slate-700' : 'text-slate-400 hover:text-white'}`}
+                data-tooltip="Help Guide (F1)"
             >
                 <HelpCircle size={18} />
             </button>
              <button
-                onClick={() => setShowHotkeysHelp(true)}
+                onClick={() => { setHelpTab('shortcuts'); setShowHelp(true); }}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 data-tooltip="Keyboard Shortcuts"
             >
@@ -1549,198 +1581,12 @@ export default function App() {
           </div>
       )}
 
-      {/* Help Modal */}
-      {showHelp && (
-        <div
-          className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-          onClick={() => setShowHelp(false)}
-        >
-          <div
-            className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-2xl w-full flex flex-col relative"
-            style={{ maxHeight: '90vh' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex-none flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-700">
-              <h3 className="text-xl font-bold text-[#e65161]">SeeNote Guide</h3>
-              <button onClick={() => setShowHelp(false)} className="text-slate-400 hover:text-white">
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6 text-sm text-slate-300">
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Projects</h4>
-                <p>
-                  SeeNote is organized around <span className="text-white">projects</span>. Each project links an
-                  <span className="text-white"> audio/video directory</span> (the files you want to annotate) to an
-                  <span className="text-white"> annotation output directory</span> where label files are saved.
-                </p>
-                <p>
-                  Create a project from the launch screen. You can configure the output format (Audacity .txt, CSV, or JSON) and
-                  label categories in <span className="font-mono bg-slate-700 px-1 rounded">Project → Settings</span>.
-                  All settings—including annotation tools and spectrogram display—persist per project.
-                </p>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">File Panel</h4>
-                <p>
-                  The left panel lists every audio/video track in the project directory. Tracks with existing annotations show a
-                  count badge. Click any track to open it, or use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↑</kbd> /
-                  <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+↓</kbd> to step through tracks in order.
-                  Right-click a track for options: reveal in Finder, reveal annotation file, or toggle shuffle mode.
-                </p>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Spectrogram Navigation</h4>
-                <ul className="space-y-1 list-none">
-                  <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
-                  <li><span className="text-white">Zoom:</span> Cmd/Ctrl + scroll wheel.</li>
-                  <li><span className="text-white">Seek:</span> Left-click on the spectrogram (in Selection Mode) to move the playhead.</li>
-                  <li><span className="text-white">Play/Pause:</span> <kbd className="font-mono bg-slate-700 px-1 rounded">Space</kbd>.</li>
-                </ul>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Two Modes: Selection vs. Annotation Tool</h4>
-                <p>
-                  The active annotation tool in the right-side palette controls the current mode.
-                </p>
-                <ul className="space-y-1.5 list-none">
-                  <li>
-                    <span className="text-white">Selection Mode</span> (no tool active — press <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to enter):
-                    left-click &amp; drag creates a <span className="italic">selection region</span> shown as a shaded band.
-                    Playback is bounded to that region. While a selection is active, pressing a tool key
-                    (<kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>) instantly
-                    drops an annotation onto it.
-                  </li>
-                  <li>
-                    <span className="text-white">Annotation Tool Mode</span> (a tool is active):
-                    left-click &amp; drag directly creates an annotation with that tool's color and name.
-                    Press a number key to switch tools, or <kbd className="font-mono bg-slate-700 px-1 rounded">Esc</kbd> to return to Selection Mode.
-                  </li>
-                </ul>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Annotations</h4>
-                <ul className="space-y-1.5 list-none">
-                  <li><span className="text-white">Create:</span> drag on the spectrogram while a category is active.</li>
-                  <li><span className="text-white">Resize:</span> drag the left or right edge handle of any annotation.</li>
-                  <li>
-                    <span className="text-white">Bound selection:</span> click the center of an annotation to bind the selection region to it.
-                    The playhead will loop within that annotation. Use <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+←</kbd> /
-                    <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd+→</kbd> (or the ‹ › buttons on the spectrogram) to jump between annotations.
-                  </li>
-                  <li><span className="text-white">Rename:</span> click the annotation's text to edit it inline. Key 0 (Custom Annotation Tool) annotations open for editing automatically.</li>
-                  <li><span className="text-white">Delete:</span> select an annotation and press <kbd className="font-mono bg-slate-700 px-1 rounded">Delete</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Backspace</kbd>, or middle-click it directly.</li>
-                  <li><span className="text-white">Undo/Redo:</span> <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Z</kbd> / <kbd className="font-mono bg-slate-700 px-1 rounded">Cmd/Ctrl+Shift+Z</kbd>.</li>
-                </ul>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Annotation Tools</h4>
-                <p>
-                  Annotation tools are named instruments bound to hotkeys <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd>–<kbd className="font-mono bg-slate-700 px-1 rounded">9</kbd>.
-                  Key <kbd className="font-mono bg-slate-700 px-1 rounded">0</kbd> is always the Custom Annotation Tool—
-                  annotations created with it open immediately for you to type a one-off name.
-                </p>
-                <p>
-                  Click a tool name in the palette to rename it; all existing annotations created with that tool update automatically.
-                  Use the <span className="font-mono bg-slate-700 px-1 rounded">+</span> button to add a tool, or the trash icon to remove one
-                  (you can choose to convert its annotations to Custom or delete them outright).
-                  Annotation tool configuration is saved per project.
-                </p>
-              </section>
-
-              <section className="space-y-2">
-                <h4 className="font-semibold text-white text-base">Auto-save &amp; Export</h4>
-                <p>
-                  Annotations are saved automatically to the project's annotation directory every time you make a change.
-                  The file structure mirrors the audio directory. You can also export manually via the export button, which
-                  writes the current file's annotations in the project's chosen format (Audacity .txt, CSV, or JSON).
-                  Clearing all annotations from a file removes its annotation file.
-                </p>
-              </section>
-
-            </div>
-
-            {/* Footer */}
-            <div className="flex-none px-6 py-3 border-t border-slate-700 flex justify-end">
-              <button
-                onClick={() => { setShowHelp(false); setShowHotkeysHelp(true); }}
-                className="text-xs text-slate-400 hover:text-white transition-colors"
-              >
-                View keyboard shortcuts →
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Hotkey Help Modal */}
-      {showHotkeysHelp && (
-          <div
-            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-            onClick={() => setShowHotkeysHelp(false)}
-          >
-              <div
-                className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-sm w-full flex flex-col relative"
-                onClick={(e) => e.stopPropagation()}
-              >
-                  <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-700">
-                    <h3 className="text-lg font-bold">Keyboard Shortcuts</h3>
-                    <button onClick={() => setShowHotkeysHelp(false)} className="text-slate-400 hover:text-white">
-                      <X size={20} />
-                    </button>
-                  </div>
-
-                  <div className="px-6 py-4 space-y-4 text-sm">
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Playback</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Space</span><span>Play / Pause</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">M</span><span>Mute / Unmute</span></div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Spectrogram</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Right-drag / Scroll</span><span>Pan</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl + Scroll</span><span>Zoom</span></div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Navigation</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">← / →</span><span>Scrub playhead ±10% zoom</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+← / →</span><span>Previous / Next annotation</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd+↑ / ↓</span><span>Previous / Next file</span></div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">Annotations</p>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">0 – 9</span><span>Set active annotation tool</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Esc</span><span>Selection Mode / clear selection</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Delete / Backspace</span><span>Delete selected annotation</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Middle-click</span><span>Delete annotation instantly</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Z</span><span>Undo</span></div>
-                      <div className="flex justify-between"><span className="font-mono text-slate-400">Cmd/Ctrl+Shift+Z</span><span>Redo</span></div>
-                    </div>
-                  </div>
-
-                  <div className="px-6 py-3 border-t border-slate-700 flex justify-end">
-                    <button
-                      onClick={() => { setShowHotkeysHelp(false); setShowHelp(true); }}
-                      className="text-xs text-slate-400 hover:text-white transition-colors"
-                    >
-                      Guide →
-                    </button>
-                  </div>
-              </div>
-          </div>
-      )}
+      <HelpPanel
+        open={showHelp}
+        tab={helpTab}
+        onTabChange={setHelpTab}
+        onClose={() => setShowHelp(false)}
+      />
 
       {/* Broken project dir repair modal */}
       {repairProject && (
@@ -1870,6 +1716,7 @@ export default function App() {
             <div
               className="flex-none bg-slate-900 border-r border-slate-700 flex flex-col h-full relative"
               style={{ width: leftPanelWidth }}
+              data-help-target="file-panel"
             >
               {/* File Tree portion */}
               <div style={{ height: `${leftPanelRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
@@ -1885,7 +1732,7 @@ export default function App() {
               </div>
 
               {/* Tool Panel */}
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden" data-help-target="tool-palette">
                 {/* Header */}
                 <div className="flex items-center px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-none">
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Labels</span>
@@ -2051,7 +1898,7 @@ export default function App() {
         <div className="flex-1 flex flex-col relative overflow-hidden">
 
         {/* Video Pane */}
-        <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex">
+        <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex" data-help-target="video-panel">
              <div className="flex-1 relative bg-black flex justify-center items-center">
                  {/* MP4/MOV video tracks use the frame-source path: a canvas driven
                      by the audio engine clock, with frames decoded via WebCodecs and
@@ -2106,7 +1953,7 @@ export default function App() {
         </div>
 
         {/* Spectrogram Pane */}
-        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700 flex flex-col">
+        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700 flex flex-col" data-help-target="spectrogram-canvas">
              
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
@@ -2195,8 +2042,9 @@ export default function App() {
              )}
 
              {/* Playback toolbar */}
-             <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40">
+             <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40" data-help-target="playback-controls">
                  {/* Transport controls: [Start] [PrevAnnot] [Play] [NextAnnot] [End] */}
+                 <div className="flex items-center gap-1" data-help-target="transport-buttons">
                  <button
                     onClick={() => { seek(0, true); setSelectionRegion(null); setBoundAnnotationId(null); }}
                     disabled={!videoSrc}
@@ -2243,9 +2091,10 @@ export default function App() {
                 >
                     <SkipForward size={15} />
                 </button>
+                </div>
 
                 {/* Volume Control */}
-                <div ref={setVolumeControlEl} className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1">
+                <div ref={setVolumeControlEl} className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1" data-help-target="volume-control">
                     <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
                         {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
                     </button>
@@ -2271,7 +2120,8 @@ export default function App() {
                 </div>
 
                 {/* Time display — current time + selection fields to the right */}
-                <div className="flex items-center gap-2 ml-2 tabular-nums">
+                <div className="flex items-center gap-2 ml-2 tabular-nums" data-help-target="time-display">
+                    <div data-help-target="current-time">
                     {editingTimeField === 'time' ? (
                         <input
                             autoFocus
@@ -2293,6 +2143,7 @@ export default function App() {
                             {currentTime.toFixed(2)}s
                         </button>
                     )}
+                    </div>
 
                     <div className="w-px bg-slate-600/50 self-stretch my-0.5" />
 
@@ -2333,7 +2184,7 @@ export default function App() {
                             </div>
                         );
                         return (
-                            <div className="flex flex-col justify-center gap-0.5">
+                            <div className="flex flex-col justify-center gap-0.5" data-help-target="selection-time">
                                 {renderField('selStart', region.start.toFixed(2), 'from', region.start.toFixed(2))}
                                 {renderField('selEnd', region.end.toFixed(2), 'to', region.end.toFixed(2))}
                                 {renderField('selDur', (region.end - region.start).toFixed(2), 'dur', (region.end - region.start).toFixed(2))}
@@ -2348,6 +2199,7 @@ export default function App() {
                         onClick={() => setShowSettings(!showSettings)}
                         className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
                         data-tooltip="Spectrogram Settings"
+                        data-help-target="spectrogram-settings"
                     >
                         <Settings size={16} />
                     </button>

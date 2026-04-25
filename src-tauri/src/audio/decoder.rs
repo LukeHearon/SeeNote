@@ -44,7 +44,7 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
         .context("Unsupported format")?;
 
     let mut format = probed.format;
-    let (track_id, initial_sr, initial_channels, n_frames) = {
+    let (track_id, initial_sr, initial_channels, n_frames, delay, padding) = {
         let track = find_audio_track(format.as_ref())
             .context("No decodable audio track found")?;
         let p = &track.codec_params;
@@ -53,6 +53,8 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
             p.sample_rate.unwrap_or(44100),
             p.channels.map(|c| c.count() as u16).unwrap_or(1),
             p.n_frames,
+            p.delay.unwrap_or(0) as u64,
+            p.padding.unwrap_or(0) as u64,
         )
     };
 
@@ -73,8 +75,12 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
 
     // n_frames is reported in *base-rate* frames (same units as time_base), so
     // dividing by initial_sr gives correct seconds regardless of SBR.
+    //
+    // Subtract encoder delay and padding (LAME header for MP3, equivalents for
+    // other lossy formats) so the reported duration reflects audible content
+    // only — matching what Audacity and most players show.
     let duration_secs = if let Some(n) = n_frames {
-        n as f64 / initial_sr as f64
+        n.saturating_sub(delay + padding) as f64 / initial_sr as f64
     } else {
         0.0
     };
@@ -138,6 +144,14 @@ pub struct PcmStream {
     track_id: u32,
     sample_rate: u32,
     channels: u16,
+    /// Encoder delay (in container frames) declared by the codec — e.g. the
+    /// LAME tag's enc_delay for MP3. These leading frames are inaudible
+    /// padding and must be skipped so that audible-frame 0 lines up with the
+    /// first real sample. Audible-frame N <-> container-frame N + delay_frames.
+    delay_frames: u64,
+    /// `desired_start_frame` is stored in *container* frame coords (i.e.
+    /// includes `delay_frames`) so the existing alignment logic that compares
+    /// against `abs_frame` (also container-frame) works unchanged.
     desired_start_frame: u64,
     /// Fallback frame position when no time_base is available (estimated from
     /// the seek target). Used only for the first-packet abs_frame assignment.
@@ -175,7 +189,7 @@ impl PcmStream {
         let mut format = probed.format;
         // See find_audio_track: must not rely on default_track() for MP4/MKV,
         // where it may point at the video stream.
-        let (track_id, initial_sr, initial_channels, time_base) = {
+        let (track_id, initial_sr, initial_channels, time_base, delay) = {
             let track = find_audio_track(format.as_ref())
                 .context("No decodable audio track found")?;
             (
@@ -187,6 +201,7 @@ impl PcmStream {
                     .map(|c| c.count() as u16)
                     .unwrap_or(1),
                 track.codec_params.time_base,
+                track.codec_params.delay.unwrap_or(0) as u64,
             )
         };
 
@@ -199,6 +214,13 @@ impl PcmStream {
 
         // Seek using the *base* sample rate; symphonia's seek is in seconds,
         // so SBR doesn't affect the seek target calculation.
+        //
+        // Note on encoder delay: symphonia's seek interprets time in container
+        // frames (gapless mode is off). The delay is small relative to the
+        // 0.5s seek margin (typical MP3 LAME delay ≈ 26ms at 44.1 kHz), so
+        // seeking to (start_sec - 0.5) container-seconds reliably lands before
+        // the desired audible position. The alignment phase below skips the
+        // remaining frames, including any encoder padding when start_sec is 0.
         let seek_margin_sec = 0.5;
         let seek_target = (start_sec - seek_margin_sec).max(0.0);
 
@@ -258,7 +280,13 @@ impl PcmStream {
             break;
         }
 
-        let desired_start_frame = (start_sec * sample_rate as f64).round() as u64;
+        // desired_start_frame is in container-frame coords (audible + delay)
+        // so the alignment phase in read() skips both the seek-overshoot and
+        // any encoder delay padding when start_sec falls in or near the delay
+        // region. start_frame_audible is the same position expressed in
+        // audible-frame coords, which is what we report to the frontend.
+        let start_frame_audible = (start_sec * sample_rate as f64).round() as u64;
+        let desired_start_frame = start_frame_audible + delay;
         let seek_target_frame = (seek_target * sample_rate as f64).round() as u64;
 
         Ok(PcmStream {
@@ -267,6 +295,7 @@ impl PcmStream {
             track_id,
             sample_rate,
             channels,
+            delay_frames: delay,
             desired_start_frame,
             seek_target_frame,
             abs_frame: first_abs_frame,
@@ -278,7 +307,9 @@ impl PcmStream {
             pending,
             pending_pos: 0,
             eof,
-            next_output_frame: desired_start_frame,
+            // next_output_frame tracks position in *audible* frames (what the
+            // frontend treats as time = frame / sample_rate).
+            next_output_frame: start_frame_audible,
         })
     }
 
@@ -373,15 +404,17 @@ impl PcmStream {
             // and we haven't emitted anything yet for this stream, prepend silence
             // so that output[0] always corresponds to desired_start_frame.
             //
-            // Gated on `next_output_frame == desired_start_frame` — i.e. this is
-            // the first-ever emission from the stream. Without this gate the
-            // correction misfires on every subsequent read() call (output is a
-            // fresh local Vec, so output.is_empty() is always true at call entry,
-            // and pending_frame is always > desired_start_frame once we've moved
-            // past the start), silently filling the chunk with max_frames of
-            // zeros.
+            // Gated on `next_output_frame + delay_frames == desired_start_frame` —
+            // i.e. this is the first-ever emission from the stream.
+            // (next_output_frame is in audible coords; desired_start_frame is in
+            // container coords; they differ by delay_frames.) Without this gate
+            // the correction misfires on every subsequent read() call (output is
+            // a fresh local Vec, so output.is_empty() is always true at call
+            // entry, and pending_frame is always > desired_start_frame once
+            // we've moved past the start), silently filling the chunk with
+            // max_frames of zeros.
             if output.is_empty()
-                && self.next_output_frame == self.desired_start_frame
+                && self.next_output_frame + self.delay_frames == self.desired_start_frame
                 && pending_frame > self.desired_start_frame
             {
                 let gap_frames = ((pending_frame - self.desired_start_frame) as usize).min(max_frames);

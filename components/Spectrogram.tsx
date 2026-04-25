@@ -974,6 +974,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
        });
        pendingAnnotationsRef.current = updated;
        onAnnotationsChange(updated);
+       if (boundAnnotationId === draggedAnnotation.id) {
+         const moved = updated.find(a => a.id === draggedAnnotation.id);
+         if (moved) onSelectionChange({ start: moved.start, end: moved.end });
+       }
        return;
     }
 
