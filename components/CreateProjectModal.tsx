@@ -11,6 +11,13 @@ interface Props {
   createProject: (draft: Omit<Project, 'id' | 'createdAt' | 'lastOpened'>) => Promise<Project>;
 }
 
+function validateDirectoryPair(audioDir: string, annotationDir: string): string | null {
+  if (audioDir === annotationDir) return 'Audio and annotation directories must be different.';
+  if (annotationDir.startsWith(audioDir + '/') || annotationDir.startsWith(audioDir + '\\'))
+    return 'Annotation directory must not be inside the audio directory.';
+  return null;
+}
+
 export default function CreateProjectModal({ onCreated, onClose, createProject }: Props) {
   const [name, setName] = useState('');
   const [audioDir, setAudioDir] = useState('');
@@ -34,6 +41,9 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
     if (!name.trim()) { setError('Project name is required.'); return; }
     if (!audioDir) { setError('Audio directory is required.'); return; }
     if (!annotationDir) { setError('Annotations directory is required.'); return; }
+
+    const dirError = validateDirectoryPair(audioDir, annotationDir);
+    if (dirError) { setError(dirError); return; }
 
     setError('');
     setIsCreating(true);
@@ -147,7 +157,9 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
             </select>
           </div>
 
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {(error || (audioDir && annotationDir && validateDirectoryPair(audioDir, annotationDir))) && (
+            <p className="text-red-400 text-sm">{error || validateDirectoryPair(audioDir, annotationDir)}</p>
+          )}
         </div>
 
         <div className="flex gap-3 mt-6 justify-end">
@@ -159,7 +171,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
           </button>
           <button
             onClick={handleCreate}
-            disabled={isCreating}
+            disabled={isCreating || !!(audioDir && annotationDir && validateDirectoryPair(audioDir, annotationDir))}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
           >
             {isCreating ? 'Creating…' : 'Create Project'}

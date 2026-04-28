@@ -4,6 +4,8 @@ mod commands;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // manage() after plugin registration is fine — Tauri inserts state into the
+        // app container regardless of call order relative to plugins.
         .manage(commands::audio::PcmStreamState::default())
         .invoke_handler(tauri::generate_handler![
             commands::audio::get_file_info,

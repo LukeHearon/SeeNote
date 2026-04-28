@@ -82,7 +82,7 @@ interface PcmCacheSlice {
 }
 
 /** How many frames to fetch per IPC call (~1 second of audio). */
-const CHUNK_FRAMES_SEC = 1.0;
+const CHUNK_DURATION_SEC = 1.0;
 /** How many seconds of audio to keep scheduled ahead of the play position. */
 const HORIZON_SEC = 4.0;
 /** How long to sleep (ms) when the buffer is full before checking again. */
@@ -206,6 +206,12 @@ export class AudioEngine {
 
     this._cancelPlayback();
 
+    // Reset time-origin fields so _computeMediaTime() never reads a stale
+    // playStartCtx from the previous play() during the brief window between
+    // _cancelPlayback() and the first chunk arriving (finding 3).
+    this.playStartCtx = 0;
+    this.playStartCtxSet = false;
+
     // ── Create or reuse AudioContext ────────────────────────────────────────
     // Creating the context inside play() (a user gesture) ensures it starts
     // in 'running' state on WKWebView/Safari. If we already have a running
@@ -294,6 +300,8 @@ export class AudioEngine {
   seek(sec: number): void {
     this.pausedAt = Math.max(0, Math.min(sec, this.fileDurationSec));
     this._cancelPlayback();
+    // Cancel any in-flight preload for the old position (finding 6).
+    this.preloadId++;
   }
 
   setGain(gain: number): void {
@@ -389,7 +397,7 @@ export class AudioEngine {
     const path = this.filePath;
     const ch = this.fileChannels;
     const sr = this.fileSampleRate;
-    const chunkFrames = Math.floor(CHUNK_FRAMES_SEC * sr);
+    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
 
     // Open the Rust PcmStream at the playback start position
     let handle;
@@ -420,7 +428,11 @@ export class AudioEngine {
     let expectedNextCtxStart = 0;
     let reachedEnd = false;
 
-    while (this.playId === myPlayId) {
+    // Generation token: if a concurrent play() cancels this stream and opens a new
+    // one, `this.streamId` will no longer match `handle.stream_id`.  Combined with
+    // the `this.playId === myPlayId` guard, this prevents a stale loop from
+    // scheduling onto the wrong generation's queue or state (finding 1).
+    while (this.playId === myPlayId && this.streamId === handle.stream_id) {
       // Don't over-buffer: wait while we have HORIZON_SEC of audio scheduled
       // ahead of the current play position.
       const currentMedia = this.isPlayingState
@@ -504,8 +516,8 @@ export class AudioEngine {
       if (this.endSec !== null) {
         const chunkMediaEnd = chunkMediaStart + chunkDurationSec;
         if (chunkMediaStart < this.endSec && chunkMediaEnd >= this.endSec) {
-          const secIntoChunk = this.endSec - chunkMediaStart;
-          const stopCtxTime = ctxStart + secIntoChunk;
+          // Round to the nearest sample to avoid float-arithmetic drift (finding 2).
+          const stopCtxTime = ctxStart + Math.round((this.endSec - chunkMediaStart) * sr) / sr;
           source.stop(stopCtxTime);
           ctxEnd = stopCtxTime;
           reachedEnd = true; // don't schedule more chunks
@@ -551,7 +563,13 @@ export class AudioEngine {
   // ── PCM cache helpers ────────────────────────────────────────────────────────
 
   private _pcmCacheKey(start: number, end: number): string {
-    return `${this.filePath}:${start.toFixed(6)}:${end.toFixed(6)}`;
+    // Key on integer frame indices rather than fractional seconds: at 48 kHz,
+    // .toFixed(6) only has ~0.048-sample resolution, so adjacent sample-distinct
+    // seek targets can collide on the same key (finding 4).
+    const sr = this.fileSampleRate;
+    const startFrame = Math.round(start * sr);
+    const endFrame = Math.round(end * sr);
+    return `${this.filePath}:${startFrame}:${endFrame}`;
   }
 
   private _pcmCacheStore(start: number, end: number, channels: Float32Array[], totalFrames: number): void {
@@ -606,7 +624,7 @@ export class AudioEngine {
     const path = this.filePath;
     const ch = this.fileChannels;
     const sr = this.fileSampleRate;
-    const chunkFrames = Math.floor(CHUNK_FRAMES_SEC * sr);
+    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
 
     let handle;
     try {

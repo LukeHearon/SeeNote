@@ -19,6 +19,7 @@ export default function FileBrowser({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setError(null);
     if (!currentDirectory) {
       setEntries([]);
       return;
@@ -35,12 +36,13 @@ export default function FileBrowser({
 
   const handleGoUp = () => {
     if (!currentDirectory) return;
-    const parent = currentDirectory.substring(0, currentDirectory.lastIndexOf('/'));
+    const lastSep = Math.max(currentDirectory.lastIndexOf('/'), currentDirectory.lastIndexOf('\\'));
+    const parent = currentDirectory.substring(0, lastSep);
     if (parent) onDirectoryChange(parent);
   };
 
   const dirName = currentDirectory
-    ? currentDirectory.split('/').pop() || currentDirectory
+    ? currentDirectory.split(/[\\/]/).pop() || currentDirectory
     : null;
 
   return (

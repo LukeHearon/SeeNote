@@ -1,14 +1,32 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use crate::audio::{decoder, fft};
 
 // ── PCM stream state ──────────────────────────────────────────────────────────
 
+/// How long a stream may be idle before it is reaped on the next registry
+/// access. 60 seconds covers any reasonable frontend stall or reconnect.
+const STREAM_TTL: Duration = Duration::from_secs(60);
+
+/// Per-stream registry entry. Each stream has its own `Mutex` so concurrent
+/// reads on *different* streams run in parallel without contending on the
+/// global `streams` map lock.
+pub(crate) struct StreamEntry {
+    /// The actual stream, independently locked so reads on different streams
+    /// don't serialize against each other (fixing the race from the old design
+    /// where the global `streams` MutexGuard was held for the full read).
+    stream: Arc<Mutex<decoder::PcmStream>>,
+    /// Wall-clock time of the last `read_pcm_chunk` call. Updated under the
+    /// global `streams` lock; used to evict idle entries (Finding 4 TTL).
+    last_used: Instant,
+}
+
 /// Managed Tauri state for open PCM streams.
 pub struct PcmStreamState {
-    pub streams: Mutex<HashMap<u64, decoder::PcmStream>>,
+    pub(crate) streams: Mutex<HashMap<u64, StreamEntry>>,
     pub next_id: AtomicU64,
 }
 
@@ -19,6 +37,19 @@ impl Default for PcmStreamState {
             next_id: AtomicU64::new(0),
         }
     }
+}
+
+/// Evict registry entries that have been idle longer than `STREAM_TTL`.
+/// Must be called with `streams` already locked (the caller passes the guard).
+fn reap_idle_streams(streams: &mut HashMap<u64, StreamEntry>) {
+    let now = Instant::now();
+    streams.retain(|id, entry| {
+        let keep = now.duration_since(entry.last_used) < STREAM_TTL;
+        if !keep {
+            eprintln!("PcmStream {id}: evicted after idle TTL ({STREAM_TTL:?})");
+        }
+        keep
+    });
 }
 
 // ── File info ─────────────────────────────────────────────────────────────────
@@ -258,11 +289,16 @@ pub async fn start_pcm_stream(
     let total_frames = (info.duration_secs * sample_rate as f64).round() as u64;
 
     let stream_id = state.next_id.fetch_add(1, Ordering::Relaxed);
-    state
-        .streams
-        .lock()
-        .map_err(|e| e.to_string())?
-        .insert(stream_id, stream);
+    {
+        let mut streams = state.streams.lock().map_err(|e| e.to_string())?;
+        // Reap idle streams on each open so the registry doesn't grow unboundedly
+        // if the frontend crashes without calling close_pcm_stream.
+        reap_idle_streams(&mut streams);
+        streams.insert(stream_id, StreamEntry {
+            stream: Arc::new(Mutex::new(stream)),
+            last_used: Instant::now(),
+        });
+    }
 
     Ok(PcmStreamHandle { stream_id, sample_rate, channels, total_frames })
 }
@@ -279,11 +315,24 @@ pub async fn read_pcm_chunk(
     max_frames: u32,
     state: tauri::State<'_, PcmStreamState>,
 ) -> Result<PcmChunkResult, String> {
-    let mut streams = state.streams.lock().map_err(|e| e.to_string())?;
-    let stream = streams
-        .get_mut(&stream_id)
-        .ok_or_else(|| format!("No stream with id {stream_id}"))?;
+    // Step 1: under the global lock, look up the per-stream Arc and update
+    // `last_used`. We release the global lock immediately so other streams
+    // can be accessed concurrently while this stream is reading.
+    let stream_arc = {
+        let mut streams = state.streams.lock().map_err(|e| e.to_string())?;
+        // Opportunistically reap idle entries each read so they don't linger.
+        reap_idle_streams(&mut streams);
+        let entry = streams
+            .get_mut(&stream_id)
+            .ok_or_else(|| format!("No stream with id {stream_id}"))?;
+        entry.last_used = Instant::now();
+        Arc::clone(&entry.stream)
+        // global lock released here
+    };
 
+    // Step 2: lock only *this* stream for the duration of the read. Reads on
+    // different streams now run fully in parallel.
+    let mut stream = stream_arc.lock().map_err(|e| e.to_string())?;
     let start_frame = stream.position_frames();
     let (samples, frames_read) = stream.read(max_frames as usize).map_err(|e| e.to_string())?;
 

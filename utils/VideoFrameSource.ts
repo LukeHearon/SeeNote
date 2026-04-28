@@ -464,7 +464,7 @@ export class VideoFrameSource {
 
     // ── DIAGNOSTIC ──
     const evicted = before - kept.length;
-    if (evicted > 0 || before > 0) {
+    if (evicted > 0) {
       const minTs = kept.length ? (kept[0].timestamp ?? 0) / 1e6 : 0;
       const maxTs = kept.length ? (kept[kept.length - 1].timestamp ?? 0) / 1e6 : 0;
       this.opts.onDebugLog?.(

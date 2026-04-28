@@ -1,4 +1,4 @@
-import { Annotation, AnnotationTool } from '../types';
+import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
@@ -26,31 +26,28 @@ export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end:
   color: tool.color,
 });
 
-// Calculate vertical dodging for overlapping annotations
-export const calculateAnnotationLayers = (annotations: Annotation[]): Annotation[] => {
-  // Sort by start time
+// Calculate vertical dodging for overlapping annotations.
+// Returns new objects (inputs are never mutated) sorted by start time,
+// each with a layerIndex assigned by a greedy earliest-available-layer pass.
+export const calculateAnnotationLayers = (annotations: Annotation[]): AnnotationWithLayer[] => {
   const sorted = [...annotations].sort((a, b) => a.start - b.start);
-  const processed: Annotation[] = [];
-  const layers: number[] = []; // Stores the end time of the last annotation in each layer
 
-  sorted.forEach((annotation) => {
-    let placed = false;
-    for (let i = 0; i < layers.length; i++) {
-      // Add a small buffer for visual spacing
-      if (layers[i] + 0.1 <= annotation.start) {
-        annotation.layerIndex = i;
-        layers[i] = annotation.end;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
-      annotation.layerIndex = layers.length;
+  // layers[i] = end time of the most recent annotation placed in layer i.
+  const layers: number[] = [];
+  const result: AnnotationWithLayer[] = [];
+
+  for (const annotation of sorted) {
+    let layerIndex = layers.findIndex(end => end <= annotation.start);
+    if (layerIndex === -1) {
+      layerIndex = layers.length;
       layers.push(annotation.end);
+    } else {
+      layers[layerIndex] = annotation.end;
     }
-    processed.push(annotation);
-  });
-  return processed;
+    result.push({ ...annotation, layerIndex });
+  }
+
+  return result;
 };
 
 const getBaseName = (filename: string) => {
@@ -77,7 +74,10 @@ const defaultSavePath = (trackPath: string | null, filename: string, suffix: str
     const base = getBaseName(filename);
     const outName = `${base}${suffix}${ext}`;
     if (trackPath) {
-        const dir = trackPath.substring(0, trackPath.lastIndexOf('/'));
+        // Split on either separator so this works on Windows paths too
+        const parts = trackPath.split(/[\\/]/);
+        parts.pop();
+        const dir = parts.join('/');
         return `${dir}/${outName}`;
     }
     return outName;
@@ -87,55 +87,55 @@ const defaultSavePath = (trackPath: string | null, filename: string, suffix: str
 //
 // Precision note: annotation start/end are stored in seconds as JS floats
 // (IEEE 754 double, ~15 significant digits — easily sample-accurate for any
-// audio sample rate and file length we care about). The `toFixed(4)` / `(6)`
-// calls below only control the *text* representation:
-//   - CSV: 4 decimal places = 100µs, ~4.4 samples at 44.1kHz. Convenient for
-//     spreadsheet workflows; NOT intended for sample-exact re-import.
-//   - Audacity label: 6 decimal places = 1µs, < 0.05 sample at 44.1kHz —
-//     effectively lossless round-trip.
-// If you ever need sample-exact CSV round-trip, bump toFixed(4) to toFixed(6)
-// or export frame indices alongside. Do not confuse these format choices with
-// the internal precision of the pipeline.
-export const generateCSVContent = (annotations: Annotation[], decimals: number = 4): string => {
+// audio sample rate and file length we care about). The default of 7 decimal
+// places = 100ns covers 192 kHz with sub-sample margin (1e-7 * 192000 ≈ 0.02
+// samples). This is a good balance between human-readable output and re-import
+// fidelity, but is NOT a bit-exact lossless round-trip; the internal pipeline
+// double precision is higher.
+const roundToDecimals = (v: number, decimals: number): number => {
+    const factor = Math.pow(10, decimals);
+    return Math.round(v * factor) / factor;
+};
+
+export const generateCSVContent = (annotations: Annotation[], decimals: number = 7): string => {
     let content = "Label,Start,End\n";
     annotations.forEach(a => {
         const safeText = `"${a.text.replace(/"/g, '""')}"`;
-        content += `${safeText},${a.start.toFixed(decimals)},${a.end.toFixed(decimals)}\n`;
+        content += `${safeText},${roundToDecimals(a.start, decimals).toFixed(decimals)},${roundToDecimals(a.end, decimals).toFixed(decimals)}\n`;
     });
     return content;
 };
 
-export const generateAudacityContent = (annotations: Annotation[], decimals: number = 4): string => {
+export const generateAudacityContent = (annotations: Annotation[], decimals: number = 7): string => {
     let content = "";
     annotations.forEach(a => {
-        content += `${a.start.toFixed(decimals)}\t${a.end.toFixed(decimals)}\t${a.text}\n`;
+        content += `${roundToDecimals(a.start, decimals).toFixed(decimals)}\t${roundToDecimals(a.end, decimals).toFixed(decimals)}\t${a.text}\n`;
     });
     return content;
 };
 
-export const generateJSONContent = (annotations: Annotation[], decimals: number = 4): string => {
-    const factor = Math.pow(10, decimals);
+export const generateJSONContent = (annotations: Annotation[], decimals: number = 7): string => {
     const rounded = annotations.map(a => ({
         ...a,
-        start: Math.round(a.start * factor) / factor,
-        end: Math.round(a.end * factor) / factor,
+        start: roundToDecimals(a.start, decimals),
+        end: roundToDecimals(a.end, decimals),
     }));
     return JSON.stringify(rounded, null, 2);
 };
 
 // Export to CSV
-export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
+export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
     const path = defaultSavePath(trackPath, trackName, '_annotations', '.csv');
     await saveFile(generateCSVContent(annotations, decimals), path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
+export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
     const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
     await saveFile(generateAudacityContent(annotations, decimals), path, '.txt');
 };
 
-export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 4) => {
+export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
     const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
     await saveFile(generateJSONContent(annotations, decimals), path, '.json');
 };

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, SpectrogramSettings, AnnotationTool } from '../types';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
@@ -180,10 +180,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const autoPanRafRef = useRef<number | null>(null);
 
+  const [containerWidth, setContainerWidth] = useState(0);
+
   const pixelsPerSecond = useMemo(() => {
-     if (!containerRef.current) return 100;
-     return containerRef.current.clientWidth / zoomSec;
-  }, [zoomSec, containerRef.current?.clientWidth]);
+     if (containerWidth === 0) return 100;
+     return containerWidth / zoomSec;
+  }, [zoomSec, containerWidth]);
 
   // Keep refs in sync so RAF/window handlers read current values without stale closures.
   pixelsPerSecondRef.current = pixelsPerSecond;
@@ -210,7 +212,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   useEffect(() => {
       if (isPlaying && !selectionRegion && containerRef.current) {
           const containerWidth = containerRef.current.clientWidth;
-          const pps = containerWidth / zoomSec;
+          const pps = pixelsPerSecondRef.current;
           const curScroll = scrollLeftRef.current;
           const visibleCenterTime = (curScroll + containerWidth / 2) / pps;
           if (currentTime >= visibleCenterTime) {
@@ -412,9 +414,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
+    const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
     const firstTimeTick = Math.floor(startTime / timeStep) * timeStep;
-    for (let s = firstTimeTick; s <= endTime; s += timeStep) {
-        if (s < 0) continue;
+    for (let s = firstTimeTick; s <= tickEndTime; s += timeStep) {
+        if (s <= 0) continue;
         const x = (s * pixelsPerSecond) - scrollLeft;
         if (x >= 0 && x <= width) {
             ctx.beginPath();
@@ -443,7 +446,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, currentTime, fileIdent, selectionRegion, creatingSelection]);
+  }, [scrollLeft, pixelsPerSecond, currentTime, fileIdent, selectionRegion, creatingSelection, duration]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -550,6 +553,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
+        setContainerWidth(Math.max(1, width));
         const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
           canvasRef.current.width = Math.max(1, width);
@@ -650,6 +654,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // --- Interaction Handlers ---
 
+  // Minimum drag duration (seconds) required to commit or live-preview a selection/annotation.
+  // Used in both the live-update path and the commit path to keep behaviour consistent:
+  // a drag that is too short to commit will never flash a visible selection band.
+  const MIN_DRAG_DURATION_SEC = 0.05;
+
   // Shared: create an annotation from the active tool, commit it, and enter annotation-bound selection state.
   const commitNewAnnotation = useCallback((start: number, end: number) => {
     if (!activeAnnotationTool) return;
@@ -686,7 +695,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setCreatingSelection({ ...cs, current: t });
       const liveStart = Math.min(cs.start, t);
       const liveEnd = Math.max(cs.start, t);
-      if (liveEnd - liveStart > 0.05) onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
+      if (liveEnd - liveStart > MIN_DRAG_DURATION_SEC) onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
       return;
     }
 
@@ -753,6 +762,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     window.addEventListener('mousemove', trackMouse, { passive: true });
     return () => window.removeEventListener('mousemove', trackMouse);
   }, []);
+
+  // Re-sync pendingAnnotationsRef when the annotations prop changes externally (e.g. undo/redo).
+  // If a drag is in flight, discard any pending edit — the undo intentionally rewinds state.
+  useEffect(() => {
+    if (!isAnyDragActive) {
+      pendingAnnotationsRef.current = annotations;
+    }
+  }, [annotations, isAnyDragActive]);
 
   // Prevent text selection in all panels while a drag is in progress
   useEffect(() => {
@@ -939,7 +956,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setCreatingSelection({ ...creatingSelection, current: t });
       const liveStart = Math.min(creatingSelection.start, t);
       const liveEnd = Math.max(creatingSelection.start, t);
-      if (liveEnd - liveStart > 0.05) onSelectionChange({ start: liveStart, end: liveEnd });
+      if (liveEnd - liveStart > MIN_DRAG_DURATION_SEC) onSelectionChange({ start: liveStart, end: liveEnd });
       return;
     }
 
@@ -1023,7 +1040,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (creatingAnnotation) {
       const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
       const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
-      if (end - start > 0.05 && activeAnnotationTool !== null) {
+      if (end - start > MIN_DRAG_DURATION_SEC && activeAnnotationTool !== null) {
         commitNewAnnotation(start, end);
       }
       setCreatingAnnotation(null);
@@ -1032,7 +1049,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (creatingSelection) {
       const start = Math.min(creatingSelection.start, creatingSelection.current);
       const end = Math.max(creatingSelection.start, creatingSelection.current);
-      if (end - start > 0.05) {
+      if (end - start > MIN_DRAG_DURATION_SEC) {
         onSelectionChange({ start, end });
         onBoundAnnotationChange(null);
       } else {
@@ -1059,7 +1076,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   };
 
-  // Handle mouseup outside the spectrogram (e.g. mouse released over another panel)
+  // Handle mouseup outside the spectrogram (e.g. mouse released over another panel).
+  // handleMouseUpRef is reassigned to the latest handleMouseUp on every render, so the
+  // window-level handler always sees the most recent state — no stale-closure risk.
   const handleMouseUpRef = useRef(handleMouseUp);
   handleMouseUpRef.current = handleMouseUp;
   useEffect(() => {
@@ -1076,7 +1095,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
         const rect = containerRef.current.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
-        const timeAtMouse = (scrollLeft + mouseX) / pixelsPerSecond;
+        const containerWidth = containerRef.current.clientWidth;
+
+        // Compute timeAtMouse from live DOM dimensions (not the potentially-stale
+        // pixelsPerSecond closure value) so the anchor stays exact on every tick.
+        const currentPps = containerWidth / zoomSec;
+        const timeAtMouse = (scrollLeft + mouseX) / currentPps;
 
         const zoomFactor = 1.1;
         const direction = e.deltaY > 0 ? 1 : -1;
@@ -1084,9 +1108,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
         newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
 
-        const containerWidth = containerRef.current.clientWidth;
         const newPixelsPerSecond = containerWidth / newZoomSec;
 
+        // Keep timeAtMouse under the same pixel after zoom:
+        // newScrollPx = timeAtMouse * newPixelsPerSecond - mousePxFromCanvasLeft
         let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
         // Allow scrolling 40% of the view past the end of the file so the user can
         // center late events or zoom out with the end visible.
@@ -1219,7 +1244,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
              if (left + width < 0 || left > (containerRef.current?.clientWidth || 1000)) return null;
 
-             const top = 22 + ((annotation.layerIndex || 0) * 35);
+             const top = 22 + (annotation.layerIndex * 35);
 
              const baseColor = annotation.color || "#ffffff";
              const isWhite = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";

@@ -25,6 +25,8 @@ export class MultiTierSpectrogramCache {
   private pending = new Set<string>(); // "tier:chunkIdx"
   private activeTierIndex: number = -1; // for hysteresis
   private ultraOverview: CachedChunk | null = null;
+  // Bumped on every invalidate() so in-flight fetches can detect staleness.
+  private generationId: number = 0;
 
   constructor(
     private readonly filePath: string,
@@ -105,7 +107,10 @@ export class MultiTierSpectrogramCache {
     if (!cache) return null;
     const chunk = cache.get(idx);
     if (chunk) {
+      // Move to end of insertion order so Map iteration gives true LRU at front.
       chunk.lastAccessed = Date.now();
+      cache.delete(idx);
+      cache.set(idx, chunk);
       return chunk;
     }
     return null;
@@ -168,6 +173,7 @@ export class MultiTierSpectrogramCache {
     if (startSec >= this.duration) return;
 
     this.pending.add(key);
+    const generation = this.generationId;
 
     getSpectrogramChunk(
       this.filePath,
@@ -177,6 +183,9 @@ export class MultiTierSpectrogramCache {
       tierConfig.hopSize,
     )
       .then(result => {
+        // Discard result if invalidate() was called while this fetch was in flight.
+        if (this.generationId !== generation) return;
+
         const chunk: CachedChunk = {
           data: new Uint8Array(result.data),
           nCols: result.n_cols,
@@ -204,24 +213,25 @@ export class MultiTierSpectrogramCache {
     const cache = this.caches.get(tier);
     if (!tierConfig || !cache || cache.size < tierConfig.maxChunks) return;
 
-    let oldestTime = Infinity;
-    let oldestKey = -1;
-    for (const [k, v] of cache) {
-      if (v.lastAccessed < oldestTime) {
-        oldestTime = v.lastAccessed;
-        oldestKey = k;
-      }
-    }
-    if (oldestKey >= 0) cache.delete(oldestKey);
+    // Because getChunkForTime() moves every hit to the end of the Map via
+    // delete+set, the first key in insertion order is always the true LRU.
+    const lruKey = cache.keys().next().value;
+    if (lruKey !== undefined) cache.delete(lruKey);
   }
 
   private async loadUltraOverview(): Promise<void> {
+    const generation = this.generationId;
     try {
-      // Request ~1200 columns for the whole file — enough for any screen width
-      const nColumns = Math.min(1200, Math.ceil(this.duration));
+      // Request 1200 columns for the whole file — enough for any screen width.
+      // The Rust side caps to available samples so this is always safe.
+      const nColumns = 1200;
       if (nColumns <= 0) return;
 
       const result = await getOverviewSpectrogram(this.filePath, nColumns, this.fftSize);
+
+      // Discard result if invalidate() was called while this fetch was in flight.
+      if (this.generationId !== generation) return;
+
       this.ultraOverview = {
         data: new Uint8Array(result.data),
         nCols: result.n_cols,
@@ -239,6 +249,8 @@ export class MultiTierSpectrogramCache {
 
   /** Clears all cached data (call when fftSize changes). */
   invalidate(): void {
+    // Bump generation so any in-flight fetches discard their results.
+    this.generationId += 1;
     for (const cache of this.caches.values()) {
       cache.clear();
     }

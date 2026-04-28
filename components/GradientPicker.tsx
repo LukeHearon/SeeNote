@@ -37,8 +37,10 @@ export default function GradientPicker({ value, onChange }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
   const [tStart, setTStart] = useState(() => hexToMagmaT(value[0]));
   const [tEnd, setTEnd] = useState(() => hexToMagmaT(value[1]));
+  const mountedRef = useRef(false);
 
   useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; }
     onChange([interpolateMagmaHex(tStart), interpolateMagmaHex(tEnd)]);
   }, [tStart, tEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -48,6 +50,17 @@ export default function GradientPicker({ value, onChange }: Props) {
     if (!barRef.current) return 0;
     const rect = barRef.current.getBoundingClientRect();
     return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }, []);
+
+  // Refs to track active drag listeners so we can remove them on unmount.
+  const activeMoveRef = useRef<((ev: MouseEvent) => void) | null>(null);
+  const activeUpRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (activeMoveRef.current) window.removeEventListener('mousemove', activeMoveRef.current);
+      if (activeUpRef.current) window.removeEventListener('mouseup', activeUpRef.current);
+    };
   }, []);
 
   const handleBarMouseDown = useCallback((e: React.MouseEvent, handle: 0 | 1) => {
@@ -60,7 +73,11 @@ export default function GradientPicker({ value, onChange }: Props) {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      activeMoveRef.current = null;
+      activeUpRef.current = null;
     };
+    activeMoveRef.current = onMove;
+    activeUpRef.current = onUp;
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [getBarT]);

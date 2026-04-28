@@ -32,3 +32,6 @@ local/
 
 # Claude Code
 .claude/
+
+# Docker (local dev tooling, not for CI)
+docker/

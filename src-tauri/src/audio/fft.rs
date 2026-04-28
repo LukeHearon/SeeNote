@@ -1,5 +1,33 @@
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::{Arc, Mutex};
+
+/// Per-`fft_size` cache: (FFT plan, Hann window coefficients).
+/// Both are pure functions of `fft_size`, so we compute them once and reuse.
+/// The `FftPlanner` and its output plans are `Send + Sync`, making a global
+/// `Mutex<HashMap>` safe from any thread.
+static FFT_CACHE: std::sync::OnceLock<Mutex<HashMap<usize, (Arc<dyn Fft<f32>>, Vec<f32>)>>> =
+    std::sync::OnceLock::new();
+
+fn get_fft_and_window(fft_size: usize) -> (Arc<dyn Fft<f32>>, Vec<f32>) {
+    let cache = FFT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap();
+    if let Some(entry) = map.get(&fft_size) {
+        return entry.clone();
+    }
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(fft_size);
+    // Symmetric (N-1) Hann window — matches the JS frontend in audioProcessing.ts
+    // which uses `(2 * PI * i) / (fftSize - 1)`. Do NOT switch to periodic (N)
+    // form without updating the JS side to match.
+    let window: Vec<f32> = (0..fft_size)
+        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
+        .collect();
+    let entry = (fft, window);
+    map.insert(fft_size, entry.clone());
+    entry
+}
 
 /// Runs STFT on `samples` and returns a flat Vec<u8> of shape [n_cols * n_freq_bins],
 /// column-major. Each column stores bins from low-to-high frequency (index 0 = highest freq,
@@ -23,13 +51,7 @@ pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8
 
     let mut output = vec![0u8; n_cols * n_freq_bins];
 
-    // Build Hanning window
-    let window: Vec<f32> = (0..fft_size)
-        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
-        .collect();
-
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(fft_size);
+    let (fft, window) = get_fft_and_window(fft_size);
     let mut scratch = vec![Complex::new(0.0f32, 0.0f32); fft.get_outofplace_scratch_len()];
 
     let mut buf_in = vec![Complex::new(0.0f32, 0.0f32); fft_size];

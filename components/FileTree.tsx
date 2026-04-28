@@ -38,9 +38,7 @@ interface ContextMenuState {
   isAudioRoot?: boolean;
 }
 
-import { isSupportedMediaFile } from '../constants';
-
-const AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma']);
+import { isSupportedMediaFile, SUPPORTED_AUDIO_EXTS } from '../constants';
 
 // OS-aware label for the system file browser
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
@@ -63,7 +61,7 @@ function buildTree(rootDir: string, files: string[]): TreeNode[] {
 
   for (const file of files) {
     const rel = file.substring(rootDir.length + 1);
-    const parts = rel.split('/');
+    const parts = rel.split(/[\\/]/);
 
     let node = root;
     for (let i = 0; i < parts.length; i++) {
@@ -109,7 +107,7 @@ function getAncestorPaths(currentFile: string | null, rootDirectory: string | nu
   const paths = new Set<string>();
   if (!currentFile || !rootDirectory) return paths;
   const rel = currentFile.substring(rootDirectory.length + 1);
-  const parts = rel.split('/');
+  const parts = rel.split(/[\\/]/);
   let path = rootDirectory;
   for (let i = 0; i < parts.length - 1; i++) {
     path += '/' + parts[i];
@@ -183,7 +181,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
   }
 
   const isActive = node.path === currentFile;
-  const isAudio = AUDIO_EXTS.has(getExt(node.name));
+  const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(node.name));
   const hasAnnotation = annotatedFiles.has(node.path);
   const isSupported = isSupportedMediaFile(node.path);
 
@@ -269,7 +267,7 @@ function FileTree({
   useEffect(() => {
     if (!currentFile || !rootDirectory) return;
     const rel = currentFile.substring(rootDirectory.length + 1);
-    const parts = rel.split('/');
+    const parts = rel.split(/[\\/]/);
     setExpandedDirs(prev => {
       const next = new Set(prev);
       let path = rootDirectory;
@@ -441,7 +439,7 @@ function FileTree({
                 const rel = filePath.substring(rootDirectory.length + 1);
                 const relNoExt = rel.replace(/\.[^/.]+$/, '');
                 const isActive = filePath === currentFile;
-                const isAudio = AUDIO_EXTS.has(getExt(filePath));
+                const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(filePath));
                 const hasAnnotation = annotatedFiles.has(filePath);
                 const isSupported = isSupportedMediaFile(filePath);
                 if (!isSupported) {
@@ -530,7 +528,7 @@ function FileTree({
           >
             {contextMenu.isDir
               ? `Show Folder in ${finderLabel}`
-              : AUDIO_EXTS.has(getExt(contextMenu.path.split('/').pop() ?? ''))
+              : SUPPORTED_AUDIO_EXTS.has(getExt(contextMenu.path.split('/').pop() ?? ''))
                 ? `Show Audio in ${finderLabel}`
                 : `Show Video in ${finderLabel}`}
           </button>

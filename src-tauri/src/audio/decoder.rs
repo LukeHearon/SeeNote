@@ -5,7 +5,7 @@ use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::units::{Time, TimeBase};
+use symphonia::core::units::Time;
 use std::fs::File;
 
 pub struct FileInfo {
@@ -153,14 +153,9 @@ pub struct PcmStream {
     /// includes `delay_frames`) so the existing alignment logic that compares
     /// against `abs_frame` (also container-frame) works unchanged.
     desired_start_frame: u64,
-    /// Fallback frame position when no time_base is available (estimated from
-    /// the seek target). Used only for the first-packet abs_frame assignment.
-    seek_target_frame: u64,
     /// Absolute frame index corresponding to `pending[0]` (the start of the
     /// current decoded packet's samples).
     abs_frame: u64,
-    first_packet: bool,
-    time_base: Option<TimeBase>,
     /// Interleaved f32 samples from the most recently decoded packet.
     pending: Vec<f32>,
     /// Offset (in samples, not frames) into `pending` for the next unread sample.
@@ -168,6 +163,10 @@ pub struct PcmStream {
     eof: bool,
     /// Running count of frames returned via `read()`. Used to track position.
     next_output_frame: u64,
+    /// Reusable scratch SampleBuffer for the decode hot path (avoids a new
+    /// allocation on every `fill_next_packet` call). Capacity grows as needed
+    /// but is never shrunk, so steady-state decoding is allocation-free here.
+    sample_buf: Option<SampleBuffer<f32>>,
 }
 
 impl PcmStream {
@@ -206,7 +205,11 @@ impl PcmStream {
         };
 
         let mut decoder = {
-            let track = format.tracks().iter().find(|t| t.id == track_id).unwrap();
+            let track = format
+                .tracks()
+                .iter()
+                .find(|t| t.id == track_id)
+                .ok_or_else(|| anyhow::anyhow!("Audio track {track_id} not found after probing"))?;
             symphonia::default::get_codecs()
                 .make(&track.codec_params, &DecoderOptions::default())
                 .context("Failed to create decoder")?
@@ -280,14 +283,48 @@ impl PcmStream {
             break;
         }
 
+        if eof {
+            return Err(anyhow::anyhow!("No decodable audio packets found in first 16 packets"));
+        }
+
+        // Validate start_sec before casting to u64 — a NaN, Infinity, or
+        // negative value would silently wrap to a garbage frame index.
+        if !start_sec.is_finite() || start_sec < 0.0 {
+            return Err(anyhow::anyhow!(
+                "start_sec must be a finite non-negative number, got {start_sec}"
+            ));
+        }
+        let start_sec_frames = start_sec * sample_rate as f64;
+        if start_sec_frames >= u64::MAX as f64 {
+            return Err(anyhow::anyhow!(
+                "start_sec {start_sec} is too large to represent as a frame index"
+            ));
+        }
+
         // desired_start_frame is in container-frame coords (audible + delay)
         // so the alignment phase in read() skips both the seek-overshoot and
         // any encoder delay padding when start_sec falls in or near the delay
         // region. start_frame_audible is the same position expressed in
         // audible-frame coords, which is what we report to the frontend.
-        let start_frame_audible = (start_sec * sample_rate as f64).round() as u64;
+        let start_frame_audible = start_sec_frames.round() as u64;
         let desired_start_frame = start_frame_audible + delay;
-        let seek_target_frame = (seek_target * sample_rate as f64).round() as u64;
+
+        // Sanity-check the encoder delay. Values above ~4096 frames are
+        // implausible (the largest known LAME delay is ~2257 at 44.1 kHz; AAC
+        // gapless padding is typically ≤ 2048). A vastly larger value almost
+        // certainly means a corrupt or unusual container and would cause us to
+        // skip the first seconds of audio silently.
+        const MAX_SANE_DELAY: u64 = 4096;
+        if delay > MAX_SANE_DELAY {
+            eprintln!(
+                "PcmStream::open: encoder delay {delay} frames exceeds sanity bound \
+                 {MAX_SANE_DELAY} — possibly corrupt container metadata for {path}"
+            );
+        }
+        debug_assert!(
+            delay <= MAX_SANE_DELAY,
+            "encoder delay {delay} frames is implausibly large"
+        );
 
         Ok(PcmStream {
             format,
@@ -297,19 +334,15 @@ impl PcmStream {
             channels,
             delay_frames: delay,
             desired_start_frame,
-            seek_target_frame,
             abs_frame: first_abs_frame,
-            // first_packet is already consumed — fill_next_packet must NOT
-            // re-assign abs_frame from packet.ts() on its next call, and
-            // SHOULD advance abs_frame by prev_frames like any other packet.
-            first_packet: false,
-            time_base,
             pending,
             pending_pos: 0,
             eof,
             // next_output_frame tracks position in *audible* frames (what the
             // frontend treats as time = frame / sample_rate).
             next_output_frame: start_frame_audible,
+            // Initialised to None; lazily created on first fill_next_packet call.
+            sample_buf: None,
         })
     }
 
@@ -322,13 +355,14 @@ impl PcmStream {
     /// Decode and buffer the next packet. Updates `abs_frame` to the packet's
     /// starting position. Returns `false` on EOF or unrecoverable read error.
     fn fill_next_packet(&mut self) -> Result<bool> {
-        // Advance abs_frame past the frames consumed from the previous packet.
-        // (This is only called when pending_pos >= pending.len(), so all of
-        // the previous packet has been consumed or skipped.)
-        if !self.first_packet {
-            let prev_frames = self.pending.len() / self.channels as usize;
-            self.abs_frame += prev_frames as u64;
-        }
+        // Advance abs_frame past the *full* previous packet before clearing it.
+        // Using pending.len() / channels (the full packet size) is correct here
+        // because abs_frame tracks the start of the *next* packet, not the
+        // consumed-up-to position. pending_pos (the read cursor) is not used
+        // because that would drift abs_frame by the alignment-skipped head on
+        // the first packet.
+        let prev_frames = self.pending.len() / self.channels as usize;
+        self.abs_frame += prev_frames as u64;
         self.pending.clear();
         self.pending_pos = 0;
 
@@ -342,29 +376,29 @@ impl PcmStream {
                 continue;
             }
 
-            if self.first_packet {
-                self.first_packet = false;
-                // Determine the absolute frame of this packet from its timestamp.
-                // The packet timestamp is more accurate than the seek return value,
-                // especially for compressed formats where seeks land imprecisely.
-                if let Some(tb) = self.time_base {
-                    let t = tb.calc_time(packet.ts());
-                    let pkt_secs = t.seconds as f64 + t.frac;
-                    self.abs_frame = (pkt_secs * self.sample_rate as f64).round() as u64;
-                } else {
-                    // No time_base: fall back to the estimated seek position.
-                    self.abs_frame = self.seek_target_frame;
-                }
-            }
-
             let decoded = match self.decoder.decode(&packet) {
                 Ok(d) => d,
                 Err(_) => continue,
             };
 
-            let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+            let spec = *decoded.spec();
+            let capacity = decoded.capacity() as u64;
+
+            // Reuse the scratch SampleBuffer if it already fits; otherwise
+            // (re-)allocate. In steady state the packet size is constant, so
+            // this branch is taken only once per stream.
+            let buf = match &mut self.sample_buf {
+                Some(b) if b.capacity() >= capacity as usize => b,
+                slot => {
+                    *slot = Some(SampleBuffer::<f32>::new(capacity, spec));
+                    slot.as_mut().unwrap()
+                }
+            };
             buf.copy_interleaved_ref(decoded);
-            self.pending = buf.samples().to_vec();
+
+            // Reuse pending's allocation: clear + extend avoids a fresh Vec.
+            self.pending.clear();
+            self.pending.extend_from_slice(buf.samples());
             return Ok(!self.pending.is_empty());
         }
     }
@@ -451,11 +485,24 @@ impl PcmStream {
 /// This is guaranteed by `PcmStream`, which this function uses internally.
 /// See the `PcmStream` doc comment and the module-level comment for the full
 /// explanation of the 500ms seek-margin + first-packet timestamp approach.
+///
+/// ── EOF / short-read behavior ────────────────────────────────────────────────
+/// If the file ends before `duration_sec` seconds of audio have been decoded,
+/// the function returns whatever samples were available **without padding**.
+/// The caller must treat `output.len() < ceil(duration_sec * sample_rate)` as
+/// a normal end-of-file condition, not an error. No silence is appended.
 pub fn decode_audio_range(
     path: &str,
     start_sec: f64,
     duration_sec: f64,
 ) -> Result<(Vec<f32>, u32)> {
+    // PcmStream::open validates start_sec, but catch bad duration here too so
+    // the target_frames cast below is always safe.
+    if !duration_sec.is_finite() || duration_sec < 0.0 {
+        return Err(anyhow::anyhow!(
+            "duration_sec must be a finite non-negative number, got {duration_sec}"
+        ));
+    }
     let mut stream = PcmStream::open(path, start_sec)?;
     let sample_rate = stream.sample_rate();
     let ch = stream.channels() as usize;
@@ -529,5 +576,194 @@ mod tests {
                 "sample mismatch at frame {i}: chunked={a}, oneshot={b}"
             );
         }
+    }
+
+    // ── Encoder-delay gate unit tests ─────────────────────────────────────────
+    //
+    // These tests exercise the overshoot-correction gate in PcmStream::read()
+    // using a synthetic PcmStream built entirely from in-memory data, so they
+    // run without any real audio file and are always-on (not #[ignore]).
+    //
+    // The gate condition is:
+    //   output.is_empty()
+    //   && next_output_frame + delay_frames == desired_start_frame   ← "first call"
+    //   && pending_frame > desired_start_frame                       ← "seek overshot"
+    //
+    // delay=0 path: desired_start_frame == next_output_frame (start_sec == 0),
+    //               seek overshoot by `gap` frames → gap frames of silence prepended.
+    //
+    // delay>0 path: desired_start_frame == start_frame_audible + delay,
+    //               same overshoot scenario.
+
+    /// Build a minimal PcmStream whose first pending[] buffer starts at
+    /// `abs_frame_start` and contains `n_frames` frames of a known ramp signal
+    /// (sample value == frame_index as f32), with `delay_frames` and
+    /// `desired_start_frame` configured so the gate fires when
+    /// `pending_frame > desired_start_frame`.
+    fn make_test_stream(
+        delay_frames: u64,
+        desired_start_frame: u64,
+        abs_frame_start: u64,
+        n_frames: usize,
+    ) -> PcmStream {
+        let channels = 1u16;
+        let sample_rate = 44100u32;
+
+        // Build a ramp: sample[i] = (abs_frame_start + i) as f32 so we can
+        // verify which frames ended up in the output.
+        let pending: Vec<f32> = (0..n_frames)
+            .map(|i| (abs_frame_start + i as u64) as f32)
+            .collect();
+
+        // next_output_frame = desired_start_frame - delay_frames  (audible coords)
+        let next_output_frame = desired_start_frame.saturating_sub(delay_frames);
+
+        PcmStream {
+            // These fields are never exercised by read() in the pure in-memory path
+            // because pending is pre-filled and we won't call fill_next_packet.
+            format: {
+                // We need a FormatReader. Open /dev/null via symphonia's raw format
+                // as a throw-away handle — the stream is pre-filled so next_packet
+                // is never called in practice for these tests.  If /dev/null isn't
+                // available on the target platform the test is marked ignore anyway.
+                // Use a static silence WAV bytes as an alternative fallback.
+                // Build a valid minimal WAV (44 bytes) to avoid probe failure.
+                use symphonia::core::io::ReadOnlySource;
+                static SILENT_WAV: &[u8] = &[
+                    b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
+                    b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
+                    0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
+                    b'd', b'a', b't', b'a',  0,0,0,0,
+                ];
+                let cursor = std::io::Cursor::new(SILENT_WAV);
+                let mss = symphonia::core::io::MediaSourceStream::new(
+                    Box::new(ReadOnlySource::new(cursor)),
+                    Default::default(),
+                );
+                let mut hint = symphonia::core::probe::Hint::new();
+                hint.with_extension("wav");
+                symphonia::default::get_probe()
+                    .format(&hint, mss, &Default::default(), &Default::default())
+                    .expect("probe silent wav")
+                    .format
+            },
+            decoder: {
+                use symphonia::core::codecs::DecoderOptions;
+                static SILENT_WAV: &[u8] = &[
+                    b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
+                    b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
+                    0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
+                    b'd', b'a', b't', b'a',  0,0,0,0,
+                ];
+                let cursor = std::io::Cursor::new(SILENT_WAV);
+                let mss = symphonia::core::io::MediaSourceStream::new(
+                    Box::new(symphonia::core::io::ReadOnlySource::new(cursor)),
+                    Default::default(),
+                );
+                let mut hint = symphonia::core::probe::Hint::new();
+                hint.with_extension("wav");
+                let mut fmt = symphonia::default::get_probe()
+                    .format(&hint, mss, &Default::default(), &Default::default())
+                    .expect("probe silent wav")
+                    .format;
+                let track = fmt.default_track().expect("wav has a track");
+                symphonia::default::get_codecs()
+                    .make(&track.codec_params, &DecoderOptions::default())
+                    .expect("make pcm decoder")
+            },
+            track_id: 0,
+            sample_rate,
+            channels,
+            delay_frames,
+            desired_start_frame,
+            abs_frame: abs_frame_start,
+            pending,
+            pending_pos: 0,
+            eof: true, // pre-filled; fill_next_packet will see eof and stop
+            next_output_frame,
+            sample_buf: None,
+        }
+    }
+
+    /// delay=0, seek overshoot of 10 frames:
+    /// The gate should prepend 10 silence frames, then copy real audio.
+    #[test]
+    fn encoder_delay_zero_with_overshoot() {
+        let gap = 10usize;
+        let desired: u64 = 100; // desired_start_frame in container coords
+        let abs_start: u64 = desired + gap as u64; // seek landed 10 frames past desired
+
+        // delay=0 → desired_start_frame == next_output_frame (start_sec=desired/sr)
+        let mut stream = make_test_stream(0, desired, abs_start, 50);
+
+        let (samples, frames_read) = stream.read(60).expect("read");
+        // First gap frames should be silence (0.0)
+        for i in 0..gap {
+            assert_eq!(
+                samples[i], 0.0,
+                "frame {i} should be silence (overshoot padding)"
+            );
+        }
+        // Remaining frames should be the ramp starting at abs_start
+        for i in gap..frames_read {
+            let expected = (abs_start + (i - gap) as u64) as f32;
+            assert_eq!(
+                samples[i], expected,
+                "frame {i}: expected ramp value {expected}, got {}",
+                samples[i]
+            );
+        }
+        // Total: gap silence + 50 ramp frames, capped at max_frames=60
+        assert_eq!(frames_read, gap + 50);
+    }
+
+    /// delay>0 (e.g. MP3-like delay of 576 frames), seek exactly at desired:
+    /// No overshoot — no silence should be prepended, and the gate should NOT
+    /// fire. All returned samples should be real audio from the ramp.
+    #[test]
+    fn encoder_delay_nonzero_no_overshoot() {
+        let delay: u64 = 576;
+        let start_audible: u64 = 44100; // 1 second into audible content
+        let desired_start_frame = start_audible + delay; // container coords
+
+        // seek lands exactly at desired_start_frame (no overshoot)
+        let abs_start: u64 = desired_start_frame;
+        let n_frames = 100usize;
+        let mut stream = make_test_stream(delay, desired_start_frame, abs_start, n_frames);
+
+        let (samples, frames_read) = stream.read(n_frames).expect("read");
+        assert_eq!(frames_read, n_frames);
+        for i in 0..frames_read {
+            let expected = (abs_start + i as u64) as f32;
+            assert_eq!(
+                samples[i], expected,
+                "frame {i}: expected {expected}, got {}",
+                samples[i]
+            );
+        }
+    }
+
+    /// delay>0, seek overshoot of 5 frames:
+    /// Gate fires; 5 frames of silence prepended, then ramp.
+    #[test]
+    fn encoder_delay_nonzero_with_overshoot() {
+        let delay: u64 = 576;
+        let start_audible: u64 = 44100;
+        let desired_start_frame = start_audible + delay;
+
+        let gap = 5usize;
+        let abs_start: u64 = desired_start_frame + gap as u64;
+        let n_frames = 50usize;
+        let mut stream = make_test_stream(delay, desired_start_frame, abs_start, n_frames);
+
+        let (samples, frames_read) = stream.read(60).expect("read");
+        for i in 0..gap {
+            assert_eq!(samples[i], 0.0, "frame {i} should be silence");
+        }
+        for i in gap..frames_read {
+            let expected = (abs_start + (i - gap) as u64) as f32;
+            assert_eq!(samples[i], expected, "frame {i}: expected {expected}");
+        }
+        assert_eq!(frames_read, gap + n_frames);
     }
 }

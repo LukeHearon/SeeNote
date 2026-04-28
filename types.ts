@@ -7,8 +7,11 @@ export interface Annotation {
   end: number;   // Seconds
   text: string;
   color?: string; // Hex color
-  layerIndex?: number; // Calculated for UI dodge
 }
+
+// Annotation with UI-only vertical-dodge layer assigned by calculateAnnotationLayers.
+// Never persisted — only used inside Spectrogram rendering.
+export type AnnotationWithLayer = Annotation & { layerIndex: number };
 
 export interface SpectrogramSettings {
   minFreq: number;
@@ -44,5 +47,6 @@ export interface Project {
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
   fileFilter?: 'all' | 'annotated' | 'unannotated';
-  hideAnnotated?: boolean; // legacy; superseded by fileFilter
+  /** @deprecated Use `fileFilter` instead. Kept for backward-compatible reads of old project files. */
+  hideAnnotated?: boolean;
 }

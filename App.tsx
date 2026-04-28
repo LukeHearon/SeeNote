@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, Settings, Loader2, AlertCircle, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, AudioWaveform, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check, FolderOpen } from 'lucide-react';
+import { Play, Pause, Settings, Loader2, AlertCircle, Volume2, VolumeX, Keyboard, Plus, X, HelpCircle, Bug, Pencil, ArrowLeft, ChevronLeft, ChevronRight, SkipBack, SkipForward, Copy, Check, FolderOpen } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
 import CanvasVideoPlayer from './components/CanvasVideoPlayer';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
@@ -18,6 +18,7 @@ import { revealInFileManager, listAnnotationFiles } from './utils/projectCommand
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
+import BrightnessContrastPad from './components/BrightnessContrastPad';
 
 // Compact tool button used in the left-panel tool grid.
 // Always renders w-full — callers are responsible for constraining the container width.
@@ -47,6 +48,114 @@ function ToolCell({
       <span className="flex-1 min-w-0 truncate text-left text-slate-100 leading-tight">{label}</span>
       <span className="font-mono text-slate-500 text-[10px] flex-none">{hotkey}</span>
     </button>
+  );
+}
+
+type RepairProjectState = {
+  project: Project;
+  audioMissing: boolean;
+  annotationMissing: boolean;
+  repairedAudio: string;
+  repairedAnnotation: string;
+};
+
+function RepairProjectModal({
+  repairProject,
+  setRepairProject,
+  updateProject,
+  onOpenProject,
+}: {
+  repairProject: RepairProjectState;
+  setRepairProject: React.Dispatch<React.SetStateAction<RepairProjectState | null>>;
+  updateProject: (p: Project) => Promise<void> | void;
+  onOpenProject: (p: Project) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+      <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
+          <div>
+            <h3 className="text-white font-semibold text-base">Project directory not found</h3>
+            <p className="text-slate-400 text-sm mt-1">
+              One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
+            </p>
+          </div>
+        </div>
+
+        {repairProject.audioMissing && (
+          <div>
+            <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={repairProject.repairedAudio}
+                onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
+                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+              />
+              <button
+                onClick={async () => {
+                  const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
+                  const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                  if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
+                }}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+              >
+                <FolderOpen size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {repairProject.annotationMissing && (
+          <div>
+            <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={repairProject.repairedAnnotation}
+                onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
+                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+              />
+              <button
+                onClick={async () => {
+                  const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
+                  const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                  if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
+                }}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+              >
+                <FolderOpen size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-3 justify-end pt-2">
+          <button
+            onClick={() => setRepairProject(null)}
+            className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={async () => {
+              const updated = {
+                ...repairProject.project,
+                audioDirectory: repairProject.repairedAudio,
+                annotationDirectory: repairProject.repairedAnnotation,
+              };
+              await updateProject(updated);
+              setRepairProject(null);
+              onOpenProject(updated);
+            }}
+            className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
+          >
+            Save & Open
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -161,6 +270,8 @@ export default function App() {
   const engineRef = useRef<AudioEngine | null>(null);
   // Ref so the onEnded closure (created once on mount) can read current isAudioTrack
   const isAudioTrackRef = useRef(false);
+  // Ref so the onEnded closure (created once on mount) can read the latest seek function
+  const seekRef = useRef<typeof seek | null>(null);
 
   // Create engine on mount, destroy on unmount
   useEffect(() => {
@@ -214,7 +325,7 @@ export default function App() {
         // it on every loop is disorienting.
         const sel = selectionRegionRef.current;
         if (sel) {
-          seek(sel.start, false);
+          seekRef.current?.(sel.start, false);
         }
         setIsPlaying(false);
       },
@@ -302,6 +413,10 @@ export default function App() {
 
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
+
+  // Keep trackPathRef in sync so async callbacks can guard against stale closures
+  const trackPathRef = useRef<string | null>(null);
+  useEffect(() => { trackPathRef.current = trackPath; }, [trackPath]);
 
   const currentTimeRef = useRef(0);
 
@@ -553,11 +668,6 @@ export default function App() {
     historyIndexRef.current = annotationsHistoryRef.current.length - 1;
   }, []);
 
-  // Intermediate update — no history entry (called during drags/resizes/text edits)
-  const handleAnnotationsChange = useCallback((newAnnotations: Annotation[]) => {
-    setAnnotations(newAnnotations);
-  }, []);
-
   // Final update — pushes to history (called on mouse release, delete, etc.)
   const handleAnnotationsCommit = useCallback((newAnnotations: Annotation[]) => {
     setAnnotations(newAnnotations);
@@ -626,17 +736,23 @@ export default function App() {
     if (!trackPath || !annotationDirectory) return;
     const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
+    // Snapshot the identity at effect time so the async callback can verify
+    // it's still relevant after the debounce delay.
+    const savedTrackPath = trackPath;
+    const savedAnnotPath = annotPath;
 
     // Debounce saves by 300ms
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     autoSaveTimeoutRef.current = setTimeout(async () => {
       if (skipAutoSaveRef.current) return;
+      // Guard: bail if the track changed while we were waiting.
+      if (savedTrackPath !== trackPathRef.current) return;
       try {
         if (annotations.length === 0) {
-          await removeFile(annotPath);
+          await removeFile(savedAnnotPath);
           setAnnotatedFiles(prev => {
             const next = new Set(prev);
-            next.delete(trackPath);
+            next.delete(savedTrackPath);
             return next;
           });
           return;
@@ -646,10 +762,10 @@ export default function App() {
         if (exportFormat === 'json') content = generateJSONContent(annotations, decimals);
         else if (exportFormat === 'csv') content = generateCSVContent(annotations, decimals);
         else content = generateAudacityContent(annotations, decimals);
-        await writeTextFile(annotPath, content);
+        await writeTextFile(savedAnnotPath, content);
         setAnnotatedFiles(prev => {
             const next = new Set(prev);
-            next.add(trackPath);
+            next.add(savedTrackPath);
             return next;
           });
       } catch (err) {
@@ -660,17 +776,22 @@ export default function App() {
     return () => {
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
-  }, [annotations, trackPath, annotationDirectory, getAnnotationPath]);
+  }, [annotations, trackPath, annotationDirectory, exportFormat, getAnnotationPath]);
 
   // Auto-load annotations when the current track or annotation directory changes
   useEffect(() => {
     if (!trackPath || !annotationDirectory || !currentDirectory) return;
     const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
+    // Snapshot identity at effect-schedule time so async resolution can verify
+    // the track hasn't changed while we were awaiting I/O.
+    const expectedTrackPath = trackPath;
 
     (async () => {
       try {
         const content = await readTextFile(annotPath);
+        // Drop result if the user switched tracks while we were reading.
+        if (trackPathRef.current !== expectedTrackPath) return;
         if (!content) return;
 
         const loaded: Annotation[] = [];
@@ -687,13 +808,66 @@ export default function App() {
             });
           });
         } else if (exportFormat === 'csv') {
-          const lines = content.trim().split('\n').slice(1); // skip header
-          for (const line of lines) {
-            const match = line.match(/^"?(.*?)"?,([0-9.]+),([0-9.]+)$/);
-            if (match) {
-              const text = match[1].replace(/""/g, '"');
-              const start = parseFloat(match[2]);
-              const end = parseFloat(match[3]);
+          // Proper CSV tokenizer: handles commas and newlines inside quoted fields
+          // and "" as an escaped double-quote (RFC 4180 compatible).
+          const parseCSVRow = (row: string): string[] => {
+            const fields: string[] = [];
+            let field = '';
+            let inQuotes = false;
+            for (let i = 0; i < row.length; i++) {
+              const ch = row[i];
+              if (inQuotes) {
+                if (ch === '"') {
+                  // Peek ahead: "" = escaped quote
+                  if (i + 1 < row.length && row[i + 1] === '"') {
+                    field += '"';
+                    i++;
+                  } else {
+                    inQuotes = false;
+                  }
+                } else {
+                  field += ch;
+                }
+              } else {
+                if (ch === '"') {
+                  inQuotes = true;
+                } else if (ch === ',') {
+                  fields.push(field);
+                  field = '';
+                } else {
+                  field += ch;
+                }
+              }
+            }
+            fields.push(field);
+            return fields;
+          };
+          // Re-join lines that belong to a single quoted field (embedded newlines).
+          const reassembleRows = (raw: string): string[] => {
+            const rows: string[] = [];
+            let current = '';
+            let openQuotes = 0;
+            for (const ch of raw) {
+              if (ch === '"') openQuotes ^= 1;
+              if (ch === '\n' && openQuotes === 0) {
+                rows.push(current);
+                current = '';
+              } else {
+                current += ch;
+              }
+            }
+            if (current) rows.push(current);
+            return rows;
+          };
+          const allRows = reassembleRows(content.trim());
+          // Skip header row
+          for (const row of allRows.slice(1)) {
+            if (!row.trim()) continue;
+            const fields = parseCSVRow(row);
+            if (fields.length >= 3) {
+              const text = fields[0];
+              const start = parseFloat(fields[1]);
+              const end = parseFloat(fields[2]);
               if (!isNaN(start) && !isNaN(end)) {
                 const matchedTool = annotationTools.find(t => t.text === text);
                 loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
@@ -729,7 +903,7 @@ export default function App() {
         addLog(`Error loading annotations: ${err}`, 'error');
       }
     })();
-  }, [trackPath, annotationDirectory]);
+  }, [trackPath, annotationDirectory, exportFormat, annotationTools]);
 
   const handleOpenProject = useCallback(async (project: Project) => {
     const touched = await touchLastOpened(project.id) ?? project;
@@ -957,6 +1131,41 @@ export default function App() {
       }
   }, [isAudioTrack, prerollVideo]);
 
+  // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
+  useEffect(() => { seekRef.current = seek; }, [seek]);
+
+  // Shared handler for activating an annotation tool by key — used by both number hotkeys and palette clicks.
+  const handleToolActivate = useCallback((key: string) => {
+      const tool = annotationTools.find(t => t.key === key);
+      if (!tool) return;
+      const isCustom = tool.key === '0';
+      if (boundAnnotationId !== null) {
+          const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
+          if (currentAnnotation) {
+              reassignBufferRef.current = {
+                  ...reassignBufferRef.current,
+                  [currentAnnotation.toolKey]: currentAnnotation.text,
+              };
+              const savedText = reassignBufferRef.current[tool.key];
+              const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
+              const updated = annotations.map(a => a.id === boundAnnotationId
+                  ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
+                  : a
+              );
+              handleAnnotationsCommit(updated);
+              setActiveToolKey(key);
+          }
+      } else if (activeToolKey === null && selectionRegion !== null) {
+          const newAnnotation = makeAnnotationFromTool(tool, selectionRegion.start, selectionRegion.end);
+          handleAnnotationsCommit([...annotations, newAnnotation]);
+          setSelectedAnnotationId(newAnnotation.id);
+          setBoundAnnotationId(newAnnotation.id);
+          setActiveToolKey(key);
+      } else {
+          setActiveToolKey(prev => prev === key ? null : key);
+      }
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selectionRegion, handleAnnotationsCommit, reassignBufferRef]);
+
   // Global Hotkeys
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -1064,43 +1273,10 @@ export default function App() {
 
           // Hotkey Numbers (0-9): select or switch active annotation tool
           if (/^[0-9]$/.test(e.key)) {
-              const key = e.key;
-              const tool = annotationTools.find(t => t.key === key);
+              const tool = annotationTools.find(t => t.key === e.key);
               if (tool) {
-                  e.preventDefault(); // Prevent the digit from being typed into the new custom tool input
-                  const isCustom = tool.key === '0';
-                  // If a bound annotation is selected: reassign its tool, don't create a new one
-                  if (boundAnnotationId !== null) {
-                      const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
-                      if (currentAnnotation) {
-                          // Save the annotation's current text before overwriting, so it can be
-                          // restored if the user switches back to this toolKey later.
-                          reassignBufferRef.current = {
-                              ...reassignBufferRef.current,
-                              [currentAnnotation.toolKey]: currentAnnotation.text,
-                          };
-                          // Restore saved text for the new toolKey, or fall back to the default.
-                          const savedText = reassignBufferRef.current[tool.key];
-                          const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
-                          const updated = annotations.map(a => a.id === boundAnnotationId
-                              ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
-                              : a
-                          );
-                          handleAnnotationsCommit(updated);
-                          setActiveToolKey(key);
-                      }
-                  }
-                  // If in selection mode with a free selection, drop a new annotation onto it
-                  else if (activeToolKey === null && selectionRegion !== null) {
-                      const newAnnotation = makeAnnotationFromTool(tool, selectionRegion.start, selectionRegion.end);
-                      handleAnnotationsCommit([...annotations, newAnnotation]);
-                      setSelectedAnnotationId(newAnnotation.id);
-                      setBoundAnnotationId(newAnnotation.id);
-                      // Selection stays — now bound to the new annotation
-                      setActiveToolKey(key);
-                  } else {
-                      setActiveToolKey(prev => prev === key ? null : key);
-                  }
+                  e.preventDefault();
+                  handleToolActivate(e.key);
               }
           }
 
@@ -1108,7 +1284,7 @@ export default function App() {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedAnnotationId, annotationTools, navigateFile, undoAnnotations, redoAnnotations, handleAnnotationsCommit, annotations, activeToolKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
+  }, [togglePlay, selectedAnnotationId, annotationTools, navigateFile, undoAnnotations, redoAnnotations, handleAnnotationsCommit, handleToolActivate, annotations, activeToolKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
 
   const performExport = async () => {
       if (annotations.length === 0) return;
@@ -1176,7 +1352,7 @@ export default function App() {
               }
               return a;
           });
-          setAnnotations(updatedAnnotations);
+          handleAnnotationsCommit(updatedAnnotations);
           addLog(`Renamed tool ${tool.text} -> ${newName}. Updated linked annotations.`);
       }
 
@@ -1207,12 +1383,12 @@ export default function App() {
                   }
                   return a;
               });
-              setAnnotations(updatedAnnotations);
+              handleAnnotationsCommit(updatedAnnotations);
               addLog(`Deleted tool ${tool.text}. Converted annotations to Custom.`);
           } else {
               // Delete
               const updatedAnnotations = annotations.filter(a => a.toolKey !== tool.key);
-              setAnnotations(updatedAnnotations);
+              handleAnnotationsCommit(updatedAnnotations);
               addLog(`Deleted tool ${tool.text} and all linked annotations.`);
           }
       } else {
@@ -1408,92 +1584,12 @@ export default function App() {
           deleteProject={deleteProject}
         />
         {repairProject && (
-          <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
-            <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
-                <div>
-                  <h3 className="text-white font-semibold text-base">Project directory not found</h3>
-                  <p className="text-slate-400 text-sm mt-1">
-                    One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
-                  </p>
-                </div>
-              </div>
-
-              {repairProject.audioMissing && (
-                <div>
-                  <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={repairProject.repairedAudio}
-                      onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
-                      className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-                    />
-                    <button
-                      onClick={async () => {
-                        const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
-                        const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                        if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
-                      }}
-                      className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-                    >
-                      <FolderOpen size={16} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {repairProject.annotationMissing && (
-                <div>
-                  <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={repairProject.repairedAnnotation}
-                      onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
-                      className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-                    />
-                    <button
-                      onClick={async () => {
-                        const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
-                        const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                        if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
-                      }}
-                      className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-                    >
-                      <FolderOpen size={16} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-3 justify-end pt-2">
-                <button
-                  onClick={() => setRepairProject(null)}
-                  className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={async () => {
-                    if (!repairProject) return;
-                    const updated = {
-                      ...repairProject.project,
-                      audioDirectory: repairProject.repairedAudio,
-                      annotationDirectory: repairProject.repairedAnnotation,
-                    };
-                    await updateProject(updated);
-                    setRepairProject(null);
-                    handleOpenProject(updated);
-                  }}
-                  className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
-                >
-                  Save & Open
-                </button>
-              </div>
-            </div>
-          </div>
+          <RepairProjectModal
+            repairProject={repairProject}
+            setRepairProject={setRepairProject}
+            updateProject={updateProject}
+            onOpenProject={handleOpenProject}
+          />
         )}
         <TooltipLayer />
       </>
@@ -1607,92 +1703,12 @@ export default function App() {
 
       {/* Broken project dir repair modal */}
       {repairProject && (
-        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
-              <div>
-                <h3 className="text-white font-semibold text-base">Project directory not found</h3>
-                <p className="text-slate-400 text-sm mt-1">
-                  One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
-                </p>
-              </div>
-            </div>
-
-            {repairProject.audioMissing && (
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={repairProject.repairedAudio}
-                    onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
-                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-                  />
-                  <button
-                    onClick={async () => {
-                      const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
-                      const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                      if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
-                    }}
-                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <FolderOpen size={16} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {repairProject.annotationMissing && (
-              <div>
-                <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={repairProject.repairedAnnotation}
-                    onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
-                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-                  />
-                  <button
-                    onClick={async () => {
-                      const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
-                      const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                      if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
-                    }}
-                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <FolderOpen size={16} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-3 justify-end pt-2">
-              <button
-                onClick={() => setRepairProject(null)}
-                className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!repairProject) return;
-                  const updated = {
-                    ...repairProject.project,
-                    audioDirectory: repairProject.repairedAudio,
-                    annotationDirectory: repairProject.repairedAnnotation,
-                  };
-                  await updateProject(updated);
-                  setRepairProject(null);
-                  handleOpenProject(updated);
-                }}
-                className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
-              >
-                Save & Open
-              </button>
-            </div>
-          </div>
-        </div>
+        <RepairProjectModal
+          repairProject={repairProject}
+          setRepairProject={setRepairProject}
+          updateProject={updateProject}
+          onOpenProject={handleOpenProject}
+        />
       )}
 
       {/* Main Content Area */}
@@ -1803,7 +1819,7 @@ export default function App() {
                             dotColor="#94a3b8"
                             label="Custom"
                             hotkey={custom.key}
-                            onClick={() => setActiveToolKey(prev => prev === custom.key ? null : custom.key)}
+                            onClick={() => handleToolActivate(custom.key)}
                           />
                         </div>
                       );
@@ -1844,7 +1860,7 @@ export default function App() {
                             dotColor={tool.color}
                             label={tool.text}
                             hotkey={tool.key}
-                            onClick={() => setActiveToolKey(prev => prev === tool.key ? null : tool.key)}
+                            onClick={() => handleToolActivate(tool.key)}
                           />
                           <div className="absolute top-0 right-0 flex opacity-0 group-hover/cell:opacity-100 transition-opacity">
                             <button
@@ -1941,7 +1957,7 @@ export default function App() {
                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
                          <Loader2 className="animate-spin text-[#e65161] mb-2" size={48} />
                          <p className="text-[#e65161] font-medium">Processing Media...</p>
-                         <p className="text-slate-400 text-sm mt-1">Generating Spectrogram</p>
+                         <p className="text-slate-400 text-sm mt-1">Loading file...</p>
                      </div>
                  )}
                  {isBuffering && videoSrc && (
@@ -1975,34 +1991,15 @@ export default function App() {
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
                 <div className="absolute top-10 right-4 z-40 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                    <div className="p-4 border-b border-slate-700 flex justify-between items-center sticky top-0 bg-slate-800 z-10">
-                        <h3 className="font-semibold text-slate-200 flex items-center gap-2">
-                            <AudioWaveform size={16} /> Spectrogram Settings
-                        </h3>
-                    </div>
-                    
                     <div className="p-4 space-y-6">
                         {/* Visuals */}
                         <div className="space-y-3">
                             <h4 className="text-xs font-bold text-slate-500 uppercase">Visuals</h4>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">Brightness</label>
-                                <input
-                                    type="range" min="0.2" max="3.0" step="0.1"
-                                    value={settings.intensity}
-                                    onChange={(e) => setSettings({...settings, intensity: parseFloat(e.target.value)})}
-                                    className="w-full accent-[#e65161]"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">Contrast</label>
-                                <input
-                                    type="range" min="0.4" max="2.4" step="0.1"
-                                    value={settings.contrast}
-                                    onChange={(e) => setSettings({...settings, contrast: parseFloat(e.target.value)})}
-                                    className="w-full accent-[#e65161]"
-                                />
-                            </div>
+                            <BrightnessContrastPad
+                                brightness={settings.intensity}
+                                contrast={settings.contrast}
+                                onChange={(b, c) => setSettings(s => ({...s, intensity: b, contrast: c}))}
+                            />
                         </div>
 
                         {/* Frequency */}
@@ -2012,7 +2009,7 @@ export default function App() {
                                 <label className="text-xs text-slate-400 mb-1 block">FFT Window Size</label>
                                 <select
                                     value={settings.fftSize}
-                                    onChange={(e) => setSettings({...settings, fftSize: parseInt(e.target.value)})}
+                                    onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
                                 >
                                     {[256, 512, 1024, 2048, 4096, 8192].map(n => (
@@ -2024,7 +2021,7 @@ export default function App() {
                                 <label className="text-xs text-slate-400 mb-1 block">Scale</label>
                                 <select
                                     value={settings.frequencyScale}
-                                    onChange={(e) => setSettings({...settings, frequencyScale: e.target.value as FrequencyScale})}
+                                    onChange={(e) => setSettings(s => ({...s, frequencyScale: e.target.value as FrequencyScale}))}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
                                 >
                                     <option value="linear">Linear</option>
@@ -2039,7 +2036,7 @@ export default function App() {
                                     <input
                                         type="number"
                                         value={settings.minFreq}
-                                        onChange={(e) => setSettings({...settings, minFreq: Math.max(0, parseInt(e.target.value))})}
+                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
                                         className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
                                     />
                                 </div>
@@ -2048,7 +2045,7 @@ export default function App() {
                                     <input
                                         type="number"
                                         value={settings.maxFreq}
-                                        onChange={(e) => setSettings({...settings, maxFreq: parseInt(e.target.value)})}
+                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
                                         className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
                                     />
                                 </div>
@@ -2243,7 +2240,7 @@ export default function App() {
                 selectionRegion={selectionRegion}
                 boundAnnotationId={boundAnnotationId}
                 onSeek={seek}
-                onAnnotationsChange={handleAnnotationsChange}
+                onAnnotationsChange={setAnnotations}
                 onAnnotationsCommit={handleAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
                 onSelectionChange={setSelectionRegion}

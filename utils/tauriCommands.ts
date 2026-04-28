@@ -91,6 +91,10 @@ export const openFileOrFolderDialog = (): Promise<OpenResult | null> =>
 export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_media_files_recursive', { path });
 
+/** Recursively list annotation files with the given extension (e.g. '.txt', '.csv', '.json'). Returns absolute paths. */
+export const listAnnotationFilesRecursive = (dir: string, ext: string): Promise<string[]> =>
+  invoke('list_txt_files_recursive', { path: dir, ext });
+
 export const removeFile = (path: string): Promise<void> =>
   invoke('remove_file', { path });
 

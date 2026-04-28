@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
-import { openDirectoryDialog, checkDirExists } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
 import GradientPicker from './GradientPicker';
 
@@ -120,14 +120,18 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     if (annotationDirChanged) {
       setStep('annotationCopyConfirm');
     } else {
-      onSave(pendingRef.current!);
+      const pending = pendingRef.current;
+      if (!pending) return;
+      onSave(pending);
     }
   };
 
   // User chose whether to copy annotations to new dir
   const handleCopyDecision = (shouldCopy: boolean) => {
     if (!shouldCopy) {
-      onSave(pendingRef.current!);
+      const pending = pendingRef.current;
+      if (!pending) return;
+      onSave(pending);
       return;
     }
     setStep('conflictConfirm');
@@ -141,7 +145,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setIsBusy(true);
     try {
       // Build copies list: scan old dir for .txt files
-      const copies = await buildCopiesList(oldDir, newDir);
+      const copies = await buildCopiesList(oldDir, newDir, outputFormat);
       const result = await copyAnnotationFiles(copies, resolution);
       if (result.errors.length > 0) {
         setError(`Copy completed with errors:\n${result.errors.join('\n')}`);
@@ -155,7 +159,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     }
 
     setIsBusy(false);
-    onSave(pendingRef.current!);
+    const pending = pendingRef.current;
+    if (!pending) return;
+    onSave(pending);
   };
 
   return (
@@ -185,7 +191,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                     onPaste={e => {
                       e.preventDefault();
                       const text = e.clipboardData.getData('text/plain');
-                      document.execCommand('insertText', false, text);
+                      const sel = window.getSelection();
+                      if (!sel || !sel.rangeCount) return;
+                      const range = sel.getRangeAt(0);
+                      range.deleteContents();
+                      range.insertNode(document.createTextNode(text));
+                      range.collapse(false);
+                      sel.removeAllRanges();
+                      sel.addRange(range);
                     }}
                     className="text-xl font-bold bg-clip-text text-transparent outline-none cursor-text"
                     style={{
@@ -378,19 +391,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
 }
 
-// Scan oldDir recursively and build copy specs mapping to newDir
+// Scan oldDir recursively and build copy specs mapping to newDir.
+// Uses the project's outputFormat to determine which file extension to scan for.
 async function buildCopiesList(
   oldDir: string,
   newDir: string,
+  outputFormat: string,
 ): Promise<{ src: string; dst: string }[]> {
-  // Use the Tauri readTextFile indirectly — we need a directory listing.
-  // We'll use a simple approach: invoke list_media_files_recursive is audio-only,
-  // so we call the raw Tauri invoke for listing .txt files.
-  const { invoke } = await import('@tauri-apps/api/core');
+  const ext = outputFormat === 'csv' ? '.csv' : outputFormat === 'json' ? '.json' : '.txt';
+  const files = await listAnnotationFilesRecursive(oldDir, ext);
 
-  const txtFiles = await invoke<string[]>('list_txt_files_recursive', { path: oldDir }).catch(() => [] as string[]);
-
-  return txtFiles.map(src => {
+  return files.map(src => {
     const rel = src.startsWith(oldDir) ? src.slice(oldDir.length) : src;
     const dst = newDir + rel;
     return { src, dst };

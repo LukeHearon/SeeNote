@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { X, BookOpen, Keyboard, Layers } from 'lucide-react';
 import { HelpAnchor } from './HelpAnchor';
 
@@ -49,16 +49,40 @@ function ShortcutGroup({ title, rows }: { title: string; rows: { keys: string; l
 }
 
 export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
-  const activeTab = tab;
-
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'guide', label: 'Guide', icon: <BookOpen size={13} /> },
     { id: 'annotations', label: 'Annotations', icon: <Layers size={13} /> },
     { id: 'shortcuts', label: 'Shortcuts', icon: <Keyboard size={13} /> },
   ];
 
+  // Close on Esc when the panel is open.
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+      // ArrowLeft / ArrowRight cycle through tabs.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const idx = tabs.findIndex(t => t.id === tab);
+        const next = e.key === 'ArrowRight'
+          ? (idx + 1) % tabs.length
+          : (idx - 1 + tabs.length) % tabs.length;
+        onTabChange(tabs[next].id);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, tab, onClose, onTabChange]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tabPanelId = `help-tabpanel-${tab}`;
+
   return (
     <div
+      role="dialog"
+      aria-label="SeeNote Help"
+      aria-modal="true"
       className={`fixed top-0 right-0 bottom-0 z-50 w-80 bg-slate-800 border-l border-slate-700 shadow-2xl flex flex-col transition-transform duration-300 ease-in-out ${open ? 'translate-x-0' : 'translate-x-full'}`}
     >
         {/* Header */}
@@ -70,13 +94,17 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
         </div>
 
         {/* Tabs */}
-        <div className="flex-none flex border-b border-slate-700">
+        <div role="tablist" aria-label="Help sections" className="flex-none flex border-b border-slate-700">
           {tabs.map(t => (
             <button
               key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              aria-controls={`help-tabpanel-${t.id}`}
+              id={`help-tab-${t.id}`}
               onClick={() => onTabChange(t.id)}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors border-b-2 ${
-                activeTab === t.id
+                tab === t.id
                   ? 'border-[#e65161] text-white'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
@@ -88,9 +116,14 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 text-sm text-slate-300">
+        <div
+          role="tabpanel"
+          id={tabPanelId}
+          aria-labelledby={`help-tab-${tab}`}
+          className="flex-1 overflow-y-auto px-4 py-4 space-y-5 text-sm text-slate-300"
+        >
 
-          {activeTab === 'guide' && (
+          {tab === 'guide' && (
             <>
               <Section title="Projects">
                 <p>
@@ -179,7 +212,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
             </>
           )}
 
-          {activeTab === 'annotations' && (
+          {tab === 'annotations' && (
             <>
               <Section title="Annotation Tools" target="tool-palette">
                 <p>
@@ -215,7 +248,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
             </>
           )}
 
-          {activeTab === 'shortcuts' && (
+          {tab === 'shortcuts' && (
             <>
               <ShortcutGroup title="Playback" rows={[
                 { keys: 'Space', label: 'Play / Pause' },
