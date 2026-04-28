@@ -49,4 +49,5 @@ export interface Project {
   fileFilter?: 'all' | 'annotated' | 'unannotated';
   /** @deprecated Use `fileFilter` instead. Kept for backward-compatible reads of old project files. */
   hideAnnotated?: boolean;
+  shuffleMode?: boolean;
 }

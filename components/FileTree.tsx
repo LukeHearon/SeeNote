@@ -385,7 +385,7 @@ function FileTree({
           </button>
           <button
             onClick={onToggleShuffle}
-            className={`p-1 rounded hover:bg-slate-700 ${shuffleMode ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
             data-tooltip={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
           >
             {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
@@ -409,10 +409,10 @@ function FileTree({
           </div>
         )}
 
-        {/* Shuffle mode: windowed flat list (±105 files around current, with fade at edges) */}
+        {/* Shuffle mode: windowed flat list (±105 files around current, fade at edges only when files are hidden there) */}
         {shuffleMode && rootDirectory && (() => {
           const WINDOW = 105;
-          const FADE_FROM = 100; // items at distance 100–104 fade out
+          const FADE_ZONE = 5; // items at each edge that fade, but only when files are hidden on that side
 
           const currentIdx = allFiles.findIndex(f => f === currentFile);
           const startIdx = Math.max(0, currentIdx >= 0 ? currentIdx - WINDOW : 0);
@@ -430,10 +430,14 @@ function FileTree({
               )}
               {visible.map((filePath, i) => {
                 const absoluteIdx = startIdx + i;
-                const distFromCurrent = currentIdx >= 0 ? Math.abs(absoluteIdx - currentIdx) : 0;
+                const distFromTop = absoluteIdx - startIdx;
+                const distFromBottom = endIdx - absoluteIdx;
                 let opacity = 1;
-                if (distFromCurrent > FADE_FROM) {
-                  opacity = Math.max(0, 1 - (distFromCurrent - FADE_FROM) / 5);
+                if (hasMoreBefore && distFromTop < FADE_ZONE) {
+                  opacity = Math.min(opacity, (distFromTop + 1) / (FADE_ZONE + 1));
+                }
+                if (hasMoreAfter && distFromBottom < FADE_ZONE) {
+                  opacity = Math.min(opacity, (distFromBottom + 1) / (FADE_ZONE + 1));
                 }
 
                 const rel = filePath.substring(rootDirectory.length + 1);

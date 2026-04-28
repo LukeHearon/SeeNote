@@ -4,6 +4,7 @@ import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
+import { useHotkeys } from '../hooks/useHotkeys';
 import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
@@ -639,25 +640,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     scrollToTime,
   }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime]);
 
-  // Keyboard shortcuts: Escape = clear bound/selection
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      if (e.key === 'Escape') {
-        onBoundAnnotationChange(null);
-        onSelectionChange(null);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onSelectionChange, onBoundAnnotationChange]);
+  // Keyboard shortcuts: Escape = clear bound annotation; also clear selection
+  // when not playing. Fires alongside App.tsx's Esc binding (which deactivates
+  // the active annotation tool). Both are window-level and complementary.
+  useHotkeys([
+    { key: 'Escape', allowInInput: true, preventDefault: false, handler: () => {
+      onBoundAnnotationChange(null);
+      if (!isPlaying) onSelectionChange(null);
+    }},
+  ]);
 
   // --- Interaction Handlers ---
-
-  // Minimum drag duration (seconds) required to commit or live-preview a selection/annotation.
-  // Used in both the live-update path and the commit path to keep behaviour consistent:
-  // a drag that is too short to commit will never flash a visible selection band.
-  const MIN_DRAG_DURATION_SEC = 0.05;
 
   // Shared: create an annotation from the active tool, commit it, and enter annotation-bound selection state.
   const commitNewAnnotation = useCallback((start: number, end: number) => {
@@ -695,7 +688,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setCreatingSelection({ ...cs, current: t });
       const liveStart = Math.min(cs.start, t);
       const liveEnd = Math.max(cs.start, t);
-      if (liveEnd - liveStart > MIN_DRAG_DURATION_SEC) onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
+      onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
       return;
     }
 
@@ -834,55 +827,39 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // Clicking bare spectrogram
       const t = getPointerTime(e);
 
-      if (activeAnnotationTool === null) {
-        // Selection Mode
-
-        // Shift+click while paused: extend selection from playhead to click point
-        if (e.shiftKey && !isPlaying) {
-          const selStart = Math.min(currentTime, t);
-          const selEnd = Math.max(currentTime, t);
-          if (selEnd - selStart > 0.001) {
+      // Shift+click while paused: extend/create from playhead to click point
+      if (e.shiftKey && !isPlaying) {
+        const selStart = Math.min(currentTime, t);
+        const selEnd = Math.max(currentTime, t);
+        if (selEnd - selStart > 0.001) {
+          if (activeAnnotationTool === null) {
             onSelectionChange({ start: selStart, end: selEnd });
-          }
-          return;
-        }
-
-        // Click inside existing selection: seek only, preserve selection
-        if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
-          onSeek(t);
-          return;
-        }
-
-        // Click outside selection: clear selection, seek, record pending drag intent
-        onSelectAnnotation(null);
-        onBoundAnnotationChange(null);
-        onSelectionChange(null);
-        onSeek(t);
-        pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
-      } else {
-        // Annotation Tool Mode
-
-        // Shift+click while paused: drop an annotation spanning playhead↔click and bind selection
-        if (e.shiftKey && !isPlaying && activeAnnotationTool !== null) {
-          const selStart = Math.min(currentTime, t);
-          const selEnd = Math.max(currentTime, t);
-          if (selEnd - selStart > 0.05) {
+          } else {
             commitNewAnnotation(selStart, selEnd);
           }
-          return;
         }
+        return;
+      }
 
-        // Click inside existing selection: seek only, preserve selection
-        if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
-          onSeek(t);
-          return;
-        }
-
-        // Click outside selection: clear any active selection, record pending annotation intent
-        onSelectAnnotation(null);
-        onBoundAnnotationChange(null);
-        onSelectionChange(null);
+      // Click inside existing selection: seek, then allow drag to replace it
+      if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
         onSeek(t);
+        if (activeAnnotationTool === null) {
+          pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
+        } else {
+          pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
+        }
+        return;
+      }
+
+      // Click outside selection: clear state, seek, record pending drag intent
+      onSelectAnnotation(null);
+      onBoundAnnotationChange(null);
+      onSelectionChange(null);
+      onSeek(t);
+      if (activeAnnotationTool === null) {
+        pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
+      } else {
         pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
       }
     }
@@ -931,6 +908,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const dx = Math.abs(e.clientX - pendingAnnotationRef.current.startX);
       const heldMs = Date.now() - pendingAnnotationRef.current.startTime;
       if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+        onSelectAnnotation(null);
+        onBoundAnnotationChange(null);
+        onSelectionChange(null);
         setCreatingAnnotation({ start: pendingAnnotationRef.current.start, current: t });
         pendingAnnotationRef.current = null;
       }
@@ -941,6 +921,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const dx = Math.abs(e.clientX - pendingSelectionRef.current.startX);
       const heldMs = Date.now() - pendingSelectionRef.current.startTime;
       if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+        onSelectAnnotation(null);
+        onBoundAnnotationChange(null);
+        onSelectionChange(null);
         setCreatingSelection({ start: pendingSelectionRef.current.start, current: t });
         pendingSelectionRef.current = null;
       }
@@ -956,7 +939,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setCreatingSelection({ ...creatingSelection, current: t });
       const liveStart = Math.min(creatingSelection.start, t);
       const liveEnd = Math.max(creatingSelection.start, t);
-      if (liveEnd - liveStart > MIN_DRAG_DURATION_SEC) onSelectionChange({ start: liveStart, end: liveEnd });
+      onSelectionChange({ start: liveStart, end: liveEnd });
       return;
     }
 
@@ -1040,7 +1023,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (creatingAnnotation) {
       const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
       const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
-      if (end - start > MIN_DRAG_DURATION_SEC && activeAnnotationTool !== null) {
+      if (end > start && activeAnnotationTool !== null) {
         commitNewAnnotation(start, end);
       }
       setCreatingAnnotation(null);
@@ -1049,7 +1032,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (creatingSelection) {
       const start = Math.min(creatingSelection.start, creatingSelection.current);
       const end = Math.max(creatingSelection.start, creatingSelection.current);
-      if (end - start > MIN_DRAG_DURATION_SEC) {
+      if (end > start) {
         onSelectionChange({ start, end });
         onBoundAnnotationChange(null);
       } else {

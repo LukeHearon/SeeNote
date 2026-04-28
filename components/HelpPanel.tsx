@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { X, BookOpen, Keyboard, Layers } from 'lucide-react';
 import { HelpAnchor } from './HelpAnchor';
+import { useHotkeys } from '../hooks/useHotkeys';
 
 type Tab = 'guide' | 'annotations' | 'shortcuts';
 
@@ -55,26 +56,19 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
     { id: 'shortcuts', label: 'Shortcuts', icon: <Keyboard size={13} /> },
   ];
 
-  // Close on Esc when the panel is open.
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-      // ArrowLeft / ArrowRight cycle through tabs.
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        const idx = tabs.findIndex(t => t.id === tab);
-        const next = e.key === 'ArrowRight'
-          ? (idx + 1) % tabs.length
-          : (idx - 1 + tabs.length) % tabs.length;
-        onTabChange(tabs[next].id);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, tab, onClose, onTabChange]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Close on Esc when the panel is open. `stop: true` blocks other hotkey
+  // listeners so Esc doesn't also deactivate the active annotation tool.
+  // Arrow keys cycle through the tabs (no stop — they're scoped enough that
+  // other Arrow handlers don't matter while this panel is open).
+  const cycleTab = (delta: number) => {
+    const idx = tabs.findIndex(t => t.id === tab);
+    onTabChange(tabs[(idx + delta + tabs.length) % tabs.length].id);
+  };
+  useHotkeys([
+    { key: 'Escape', allowInInput: true, stop: true, handler: onClose },
+    { key: 'ArrowLeft', allowInInput: true, handler: () => cycleTab(-1) },
+    { key: 'ArrowRight', allowInInput: true, handler: () => cycleTab(1) },
+  ], open);
 
   const tabPanelId = `help-tabpanel-${tab}`;
 

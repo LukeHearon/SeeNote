@@ -9,10 +9,11 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
 import { formatTime, exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, listDirectory, openDirectoryDialog, openDirectoryDialogAt, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useProjects } from './hooks/useProjects';
+import { useHotkeys } from './hooks/useHotkeys';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -414,6 +415,9 @@ export default function App() {
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
+  const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
+  useEffect(() => { zoomSecRef.current = zoomSec; }, [zoomSec]);
+
   // Keep trackPathRef in sync so async callbacks can guard against stale closures
   const trackPathRef = useRef<string | null>(null);
   useEffect(() => { trackPathRef.current = trackPath; }, [trackPath]);
@@ -506,6 +510,10 @@ export default function App() {
         if (dur > 0) setDuration(dur);
         setSettings(s => ({ ...s, maxFreq: sr / 2 }));
 
+        // Fit zoom to file if the file is shorter than the current zoom window.
+        const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
+        if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
+
         // Create new multi-tier chunk cache for this file
         const cache = new MultiTierSpectrogramCache(
             absolutePath,
@@ -518,7 +526,7 @@ export default function App() {
         setCacheVersion(0);
 
         // Kick off first viewport prefetch immediately
-        cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
+        cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
         addLog('Spectrogram loading...');
 
         // Frame-perfect video path: MP4/MOV only. WebCodecs + mp4box.js
@@ -642,7 +650,8 @@ export default function App() {
   // Toggle shuffle: randomise current allMediaFiles order
   const toggleShuffle = useCallback(() => {
     setShuffleMode(prev => {
-      if (!prev) {
+      const next = !prev;
+      if (next) {
         const shuffled = [...allMediaFiles];
         for (let i = shuffled.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
@@ -650,9 +659,12 @@ export default function App() {
         }
         setShuffledFiles(shuffled);
       }
-      return !prev;
+      if (activeProjectRef.current) {
+        updateProject({ ...activeProjectRef.current, shuffleMode: next });
+      }
+      return next;
     });
-  }, [allMediaFiles]);
+  }, [allMediaFiles, updateProject]);
 
   // Ident: relative path from audio root to track, without extension
   const fileIdent = useMemo(() => {
@@ -930,7 +942,7 @@ export default function App() {
     if (touched.spectrogramSettings) {
       setSettings(touched.spectrogramSettings);
     }
-    setShuffleMode(false);
+    setShuffleMode(touched.shuffleMode ?? false);
     setShuffledFiles([]);
     setCurrentDirectory(touched.audioDirectory);
     setAnnotatedFiles(new Set());
@@ -942,7 +954,17 @@ export default function App() {
     try {
       const files = await listMediaFilesRecursive(touched.audioDirectory);
       setAllMediaFiles(files);
-      if (files.length > 0) handleOpenFile(files[0]);
+      let firstFile = files[0];
+      if (touched.shuffleMode && files.length > 0) {
+        const shuffled = [...files];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        setShuffledFiles(shuffled);
+        firstFile = shuffled[0];
+      }
+      if (firstFile) handleOpenFile(firstFile);
       // Load annotation file existence in the background
       listAnnotationFiles(touched.annotationDirectory, touched.outputFormat)
         .then(relPaths => {
@@ -1101,6 +1123,7 @@ export default function App() {
   const seek = useCallback(async (time: number, scrollView = false) => {
       const wasPlaying = engineRef.current?.isPlaying ?? false;
       engineRef.current?.seek(time);
+      currentTimeRef.current = time;
       setCurrentTime(time);
       // Notify the frame source so its eviction window follows the scrub position.
       // Kick a small ensureRange while paused so a scrub shows the correct frame
@@ -1166,125 +1189,72 @@ export default function App() {
       }
   }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selectionRegion, handleAnnotationsCommit, reassignBufferRef]);
 
-  // Global Hotkeys
-  useEffect(() => {
-      const handleKeyDown = (e: KeyboardEvent) => {
-          if ((e.target as HTMLElement).tagName === 'INPUT') return;
-
-          // Help panel
-          if (e.key === 'F1' || e.key === '?') {
-              e.preventDefault();
-              setShowHelp(prev => !prev);
-              return;
+  // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
+  // render's state (the bindings array is read from a ref refreshed each render),
+  // so we don't need to manage a dep list here.
+  const selectAllOrAnnotateFullTrack = () => {
+      if (duration <= 0) return;
+      if (activeToolKey !== null) {
+          const tool = annotationTools.find(t => t.key === activeToolKey);
+          if (tool) {
+              const newAnnotation = makeAnnotationFromTool(tool, 0, duration);
+              handleAnnotationsCommit([...annotations, newAnnotation]);
+              setSelectedAnnotationId(newAnnotation.id);
+              setBoundAnnotationId(newAnnotation.id);
+              setSelectionRegion({ start: 0, end: duration });
           }
+      } else {
+          setSelectionRegion({ start: 0, end: duration });
+      }
+  };
+  const deleteSelectedAnnotation = () => {
+      if (!selectedAnnotationId) return;
+      handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
+      const wasBound = selectedAnnotationId === boundAnnotationId;
+      setSelectedAnnotationId(null);
+      if (wasBound) {
+          setSelectionRegion(null);
+          setBoundAnnotationId(null);
+      }
+  };
+  useHotkeys([
+      // Help panel — also fires inside text inputs, since help is universal.
+      { key: 'F1', allowInInput: true, handler: () => setShowHelp(prev => !prev) },
+      { key: '?', mods: ['shift'], allowInInput: true, handler: () => setShowHelp(prev => !prev) },
 
-          // Select entire track (or drop annotation spanning full track if a tool is active)
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-              e.preventDefault();
-              if (duration > 0) {
-                  if (activeToolKey !== null) {
-                      const tool = annotationTools.find(t => t.key === activeToolKey);
-                      if (tool) {
-                          const newAnnotation = makeAnnotationFromTool(tool, 0, duration);
-                          handleAnnotationsCommit([...annotations, newAnnotation]);
-                          setSelectedAnnotationId(newAnnotation.id);
-                          setBoundAnnotationId(newAnnotation.id);
-                          setSelectionRegion({ start: 0, end: duration });
-                      }
-                  } else {
-                      setSelectionRegion({ start: 0, end: duration });
-                  }
-              }
-              return;
-          }
+      // Mod+key bindings. Order matters: more specific (mod+shift+z) before mod+z.
+      { key: 'a', mods: ['mod'], handler: selectAllOrAnnotateFullTrack },
+      { key: 'z', mods: ['mod', 'shift'], handler: () => redoAnnotations() },
+      { key: 'z', mods: ['mod'], handler: () => undoAnnotations() },
+      { key: 'y', mods: ['mod'], handler: () => redoAnnotations() },
+      { key: 'ArrowLeft', mods: ['mod'], handler: () => spectrogramRef.current?.goToPrevAnnotation() },
+      { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
+      { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
+      { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
 
-          // Undo / Redo
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-              e.preventDefault();
-              if (e.shiftKey) redoAnnotations();
-              else undoAnnotations();
-              return;
-          }
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-              e.preventDefault();
-              redoAnnotations();
-              return;
-          }
+      // Plain arrow keys: scrub playhead ±10% of visible window.
+      { key: 'ArrowLeft', handler: () => seek(Math.max(0, currentTimeRef.current - zoomSecRef.current * 0.1)) },
+      { key: 'ArrowRight', handler: () => seek(Math.min(durationRef.current, currentTimeRef.current + zoomSecRef.current * 0.1)) },
 
-          // CMD+Arrow: annotation navigation and file navigation
-          if (e.metaKey || e.ctrlKey) {
-              if (e.key === 'ArrowLeft') {
-                  e.preventDefault();
-                  spectrogramRef.current?.goToPrevAnnotation();
-                  return;
-              }
-              if (e.key === 'ArrowRight') {
-                  e.preventDefault();
-                  spectrogramRef.current?.goToNextAnnotation();
-                  return;
-              }
-              if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  navigateFile('prev');
-                  return;
-              }
-              if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  navigateFile('next');
-                  return;
-              }
-          }
+      // Plain keys.
+      { key: ' ', handler: togglePlay },
+      { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
+      // Escape fires even when a text input has focus — see CLAUDE.md / fix:
+      // the legacy `tagName === 'INPUT'` guard meant Esc was swallowed any time
+      // an annotation-text input was auto-focused, so the Select tool couldn't
+      // be activated during playback. Local input onKeyDown handlers can still
+      // run first (and call stopImmediatePropagation if they want to suppress
+      // this).
+      { key: 'Escape', allowInInput: true, handler: () => setActiveToolKey(null) },
+      { key: 'Delete', handler: deleteSelectedAnnotation, preventDefault: false },
+      { key: 'Backspace', handler: deleteSelectedAnnotation, preventDefault: false },
 
-          // Arrow keys: scrub playhead ±10% of visible window
-          if (e.key === 'ArrowLeft' && !e.metaKey && !e.ctrlKey) {
-              e.preventDefault();
-              seek(Math.max(0, currentTime - zoomSec * 0.1));
-              return;
-          }
-          if (e.key === 'ArrowRight' && !e.metaKey && !e.ctrlKey) {
-              e.preventDefault();
-              seek(Math.min(duration, currentTime + zoomSec * 0.1));
-              return;
-          }
-
-          switch(e.key.toLowerCase()) {
-              case ' ':
-                  e.preventDefault();
-                  togglePlay();
-                  break;
-              case 'm':
-                  setMuted(prev => !prev);
-                  break;
-              case 'escape':
-                  setActiveToolKey(null);
-                  break;
-              case 'delete':
-              case 'backspace':
-                  if (selectedAnnotationId) {
-                      handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
-                      setSelectedAnnotationId(null);
-                      if (selectedAnnotationId === boundAnnotationId) {
-                          setSelectionRegion(null);
-                          setBoundAnnotationId(null);
-                      }
-                  }
-                  break;
-          }
-
-          // Hotkey Numbers (0-9): select or switch active annotation tool
-          if (/^[0-9]$/.test(e.key)) {
-              const tool = annotationTools.find(t => t.key === e.key);
-              if (tool) {
-                  e.preventDefault();
-                  handleToolActivate(e.key);
-              }
-          }
-
-      };
-
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, selectedAnnotationId, annotationTools, navigateFile, undoAnnotations, redoAnnotations, handleAnnotationsCommit, handleToolActivate, annotations, activeToolKey, selectionRegion, boundAnnotationId, seek, currentTime, zoomSec, duration]);
+      // 0-9: activate annotation tool by key, if defined.
+      { key: 'Digit', handler: (e) => {
+          const tool = annotationTools.find(t => t.key === e.key);
+          if (tool) handleToolActivate(e.key);
+      }},
+  ]);
 
   const performExport = async () => {
       if (annotations.length === 0) return;
