@@ -657,6 +657,12 @@ export default function App() {
           const j = Math.floor(Math.random() * (i + 1));
           [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
+        // Pin the currently open file at the front of the queue
+        const cur = trackPathRef.current;
+        if (cur) {
+          const idx = shuffled.indexOf(cur);
+          if (idx > 0) { shuffled.splice(idx, 1); shuffled.unshift(cur); }
+        }
         setShuffledFiles(shuffled);
       }
       if (activeProjectRef.current) {

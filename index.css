@@ -23,6 +23,9 @@ body {
   overflow: hidden;
 }
 
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+
 .help-highlight-overlay {
   position: fixed;
   pointer-events: none;

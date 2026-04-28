@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { ChevronRight, ChevronDown, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
 
 interface TreeNode {
@@ -211,11 +211,12 @@ const TreeItem: React.FC<TreeItemProps> = ({
         isActive
           ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
           : hasAnnotation
-            ? 'hover:bg-slate-800 text-sky-400 hover:text-sky-300'
+            ? 'hover:bg-slate-800 text-sky-600 hover:text-sky-500'
             : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
       }`}
       style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
       data-tooltip={node.name}
+      data-active-file={isActive ? '' : undefined}
     >
       {isAudio
         ? <Music size={12} className="flex-none opacity-70" />
@@ -313,6 +314,93 @@ function FileTree({
   const allDirPaths = useMemo(() => getAllDirPaths(tree), [tree]);
   const isAnyExpanded = expandedDirs.size > 0;
 
+  // ── Custom scrollbar ──────────────────────────────────────────────────────
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [scrollState, setScrollState] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
+  const [activeItemFraction, setActiveItemFraction] = useState<number | null>(null);
+  const activeItemFractionRef = useRef<number | null>(null);
+  const isDraggingThumb = useRef(false);
+  const thumbDragStartY = useRef(0);
+  const thumbDragStartScrollTop = useRef(0);
+
+  useEffect(() => { activeItemFractionRef.current = activeItemFraction; }, [activeItemFraction]);
+
+  const syncScrollbar = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    setScrollState({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
+    const activeEl = el.querySelector('[data-active-file]') as HTMLElement | null;
+    if (activeEl && el.scrollHeight > 0) {
+      const containerRect = el.getBoundingClientRect();
+      const elRect = activeEl.getBoundingClientRect();
+      const relTop = elRect.top - containerRect.top + el.scrollTop;
+      const frac = (relTop + elRect.height / 2) / el.scrollHeight;
+      setActiveItemFraction(Math.max(0, Math.min(1, frac)));
+    } else {
+      setActiveItemFraction(null);
+    }
+  }, []);
+
+  useLayoutEffect(syncScrollbar, [currentFile, allFiles, expandedDirs, shuffleMode, syncScrollbar]);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(syncScrollbar);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncScrollbar]);
+
+  const { scrollTop, scrollHeight, clientHeight } = scrollState;
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  const showScrollbar = scrollHeight > clientHeight + 2;
+  const thumbHeight = Math.max(20, (clientHeight / scrollHeight) * clientHeight);
+  const thumbTop = maxScrollTop > 0 ? (scrollTop / maxScrollTop) * (clientHeight - thumbHeight) : 0;
+  const SNAP_THRESHOLD = 50;
+
+  const handleThumbMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDraggingThumb.current = true;
+    thumbDragStartY.current = e.clientY;
+    thumbDragStartScrollTop.current = scrollContainerRef.current?.scrollTop ?? 0;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const container = scrollContainerRef.current;
+      if (!isDraggingThumb.current || !container) return;
+      const { scrollHeight: sh, clientHeight: ch } = container;
+      const maxST = Math.max(0, sh - ch);
+      const thumbH = Math.max(20, (ch / sh) * ch);
+      const trackH = ch - thumbH;
+      if (trackH <= 0) return;
+      let newScrollTop = thumbDragStartScrollTop.current + ((ev.clientY - thumbDragStartY.current) / trackH) * maxST;
+      const frac = activeItemFractionRef.current;
+      if (frac !== null) {
+        const snapST = Math.max(0, Math.min(frac * sh - ch / 2, maxST));
+        if (Math.abs(newScrollTop - snapST) < SNAP_THRESHOLD) newScrollTop = snapST;
+      }
+      container.scrollTop = Math.max(0, Math.min(newScrollTop, maxST));
+    };
+
+    const onMouseUp = () => {
+      isDraggingThumb.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleTrackMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const track = e.currentTarget.getBoundingClientRect();
+    const frac = (e.clientY - track.top) / track.height;
+    container.scrollTop = frac * (container.scrollHeight - container.clientHeight);
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   const toggleExpandCollapse = () => {
     if (isAnyExpanded) collapseAll();
     else expandAll();
@@ -401,7 +489,12 @@ function FileTree({
       </div>
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <div
+          ref={scrollContainerRef}
+          className="h-full overflow-y-scroll no-scrollbar"
+          onScroll={syncScrollbar}
+        >
         {!rootDirectory && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <FolderOpen size={28} className="mb-2 opacity-50" />
@@ -473,11 +566,12 @@ function FileTree({
                       isActive
                         ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
                         : hasAnnotation
-                          ? 'hover:bg-slate-800 text-sky-400 hover:text-sky-300'
+                          ? 'hover:bg-slate-800 text-sky-600 hover:text-sky-500'
                           : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
                     }`}
                     style={{ opacity }}
                     data-tooltip={filePath}
+                    data-active-file={isActive ? '' : undefined}
                   >
                     {isAudio
                       ? <Music size={12} className="flex-none opacity-70" />
@@ -514,6 +608,27 @@ function FileTree({
             />
           ));
         })()}
+        </div>{/* end scroll container */}
+
+        {/* Custom scrollbar */}
+        {showScrollbar && (
+          <div
+            className="absolute right-0 top-0 bottom-0 w-2 cursor-ns-resize"
+            onMouseDown={handleTrackMouseDown}
+          >
+            <div
+              className="absolute inset-x-0 rounded-full bg-slate-600 hover:bg-slate-500 transition-colors cursor-ns-resize"
+              style={{ top: `${thumbTop}px`, height: `${thumbHeight}px` }}
+              onMouseDown={handleThumbMouseDown}
+            />
+            {activeItemFraction !== null && (
+              <div
+                className="absolute inset-x-0 pointer-events-none rounded-sm"
+                style={{ top: `${activeItemFraction * 100}%`, height: '3px', background: '#e65161', transform: 'translateY(-50%)' }}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Context menu */}
