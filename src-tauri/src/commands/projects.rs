@@ -3,11 +3,13 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 use tauri::Manager;
 
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a", "opus", "wma"];
+const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
+/// Wire-format record for an annotation tool, kept as `label_configs` in the
+/// JSON for backward compatibility with existing project files.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct LabelConfigRecord {
+pub struct AnnotationToolRecord {
     pub key: String,
     pub text: String,
     pub color: String,
@@ -22,9 +24,19 @@ pub struct ProjectRecord {
     pub output_format: String,
     pub created_at: String,
     pub last_opened: String,
-    pub label_configs: Vec<LabelConfigRecord>,
+    pub label_configs: Vec<AnnotationToolRecord>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub spectrogram_settings: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name_gradient_colors: Option<[String; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_rounding_decimals: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub file_filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hide_annotated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub shuffle_mode: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -68,7 +80,28 @@ pub async fn save_projects(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
-    std::fs::write(path, content).map_err(|e| e.to_string())
+
+    // Atomic write: write to a sibling .tmp file then rename over the target
+    // so that a crash mid-write never leaves projects.json truncated/corrupt.
+    let tmp_path = {
+        let mut t = path.to_path_buf();
+        let mut name = t.file_name().unwrap_or_default().to_os_string();
+        name.push(".tmp");
+        t.set_file_name(name);
+        t
+    };
+
+    std::fs::write(&tmp_path, &content).map_err(|e| {
+        format!("failed to write temp file '{}': {}", tmp_path.display(), e)
+    })?;
+
+    if let Err(rename_err) = std::fs::rename(&tmp_path, path) {
+        // Best-effort cleanup before returning the error.
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(format!("failed to rename '{}' to '{}': {}", tmp_path.display(), path.display(), rename_err));
+    }
+
+    Ok(())
 }
 
 fn has_media_file_with_stem(dir: &Path, stem: &str) -> bool {
@@ -148,18 +181,19 @@ pub async fn delete_files(paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn list_txt_files_recursive(path: String) -> Result<Vec<String>, String> {
+pub async fn list_txt_files_recursive(path: String, ext: Option<String>) -> Result<Vec<String>, String> {
     let root = Path::new(&path);
     if !root.exists() {
         return Ok(vec![]);
     }
+    let extension = ext.as_deref().unwrap_or("txt").trim_start_matches('.');
     let mut results = vec![];
-    collect_txt_files(root, &mut results);
+    collect_ext_files(root, extension, &mut results);
     results.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     Ok(results)
 }
 
-fn collect_txt_files(dir: &Path, results: &mut Vec<String>) {
+fn collect_ext_files(dir: &Path, ext: &str, results: &mut Vec<String>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -167,8 +201,8 @@ fn collect_txt_files(dir: &Path, results: &mut Vec<String>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_txt_files(&path, results);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("txt") {
+            collect_ext_files(&path, ext, results);
+        } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
             results.push(path.to_string_lossy().to_string());
         }
     }
@@ -211,7 +245,7 @@ pub async fn copy_annotation_files(
 // ── Reveal in Finder / Explorer ──────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
     #[cfg(target_os = "macos")]
     {

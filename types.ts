@@ -1,14 +1,22 @@
 export type FrequencyScale = 'linear' | 'log' | 'mel';
 
-export interface Label {
+export interface Selection {
+  start: number; // seconds
+  end: number;   // seconds
+}
+
+export interface Annotation {
   id: string;
-  configId: string; // The ID of the configuration (e.g., "0", "1") this label belongs to
+  toolKey: string; // The key of the annotation tool (e.g., "0", "1") used to create this annotation
   start: number; // Seconds
   end: number;   // Seconds
   text: string;
   color?: string; // Hex color
-  layerIndex?: number; // Calculated for UI dodge
 }
+
+// Annotation with UI-only vertical-dodge layer assigned by calculateAnnotationLayers.
+// Never persisted — only used inside Spectrogram rendering.
+export type AnnotationWithLayer = Annotation & { layerIndex: number };
 
 export interface SpectrogramSettings {
   minFreq: number;
@@ -25,7 +33,7 @@ export interface AudioMetadata {
   channels: number;
 }
 
-export interface LabelConfig {
+export interface AnnotationTool {
   key: string;
   text: string;
   color: string;
@@ -37,8 +45,14 @@ export interface Project {
   audioDirectory: string;
   annotationDirectory: string;
   outputFormat: 'json' | 'csv' | 'txt';
+  outputRoundingDecimals?: number; // decimal places for start/end in output files; default 4
   createdAt: string;
   lastOpened: string;
-  labelConfigs: LabelConfig[];
+  annotationTools: AnnotationTool[];
   spectrogramSettings?: SpectrogramSettings;
+  nameGradientColors?: [string, string];
+  fileFilter?: 'all' | 'annotated' | 'unannotated';
+  /** @deprecated Use `fileFilter` instead. Kept for backward-compatible reads of old project files. */
+  hideAnnotated?: boolean;
+  shuffleMode?: boolean;
 }

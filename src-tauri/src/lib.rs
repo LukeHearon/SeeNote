@@ -4,19 +4,27 @@ mod commands;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // manage() after plugin registration is fine — Tauri inserts state into the
+        // app container regardless of call order relative to plugins.
+        .manage(commands::audio::PcmStreamState::default())
         .invoke_handler(tauri::generate_handler![
             commands::audio::get_file_info,
             commands::audio::get_spectrogram_chunk,
             commands::audio::get_overview_spectrogram,
+            commands::audio::start_pcm_stream,
+            commands::audio::read_pcm_chunk,
+            commands::audio::close_pcm_stream,
             commands::filesystem::list_directory,
             commands::filesystem::list_media_files_recursive,
             commands::filesystem::write_text_file,
             commands::filesystem::read_text_file,
             commands::filesystem::open_file_dialog,
             commands::filesystem::open_directory_dialog,
+            commands::filesystem::open_directory_dialog_at,
             commands::filesystem::open_file_or_folder_dialog,
             commands::filesystem::save_file_dialog,
             commands::filesystem::remove_file,
+            commands::filesystem::check_dir_exists,
             commands::projects::get_app_data_dir,
             commands::projects::load_projects,
             commands::projects::save_projects,
@@ -24,7 +32,7 @@ pub fn run() {
             commands::projects::delete_files,
             commands::projects::copy_annotation_files,
             commands::projects::list_txt_files_recursive,
-            commands::projects::reveal_in_finder,
+            commands::projects::reveal_in_file_manager,
             commands::projects::list_annotation_files,
         ])
         .run(tauri::generate_context!())

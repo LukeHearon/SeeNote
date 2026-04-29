@@ -4,14 +4,14 @@ import { listDirectory, openDirectoryDialog, DirEntry } from '../utils/tauriComm
 
 interface FileBrowserProps {
   currentDirectory: string | null;
-  currentFile: string | null;
+  currentTrack: string | null;
   onFileSelect: (absolutePath: string) => void;
   onDirectoryChange: (absolutePath: string) => void;
 }
 
 export default function FileBrowser({
   currentDirectory,
-  currentFile,
+  currentTrack,
   onFileSelect,
   onDirectoryChange,
 }: FileBrowserProps) {
@@ -19,6 +19,7 @@ export default function FileBrowser({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setError(null);
     if (!currentDirectory) {
       setEntries([]);
       return;
@@ -35,12 +36,13 @@ export default function FileBrowser({
 
   const handleGoUp = () => {
     if (!currentDirectory) return;
-    const parent = currentDirectory.substring(0, currentDirectory.lastIndexOf('/'));
+    const lastSep = Math.max(currentDirectory.lastIndexOf('/'), currentDirectory.lastIndexOf('\\'));
+    const parent = currentDirectory.substring(0, lastSep);
     if (parent) onDirectoryChange(parent);
   };
 
   const dirName = currentDirectory
-    ? currentDirectory.split('/').pop() || currentDirectory
+    ? currentDirectory.split(/[\\/]/).pop() || currentDirectory
     : null;
 
   return (
@@ -52,19 +54,19 @@ export default function FileBrowser({
             <button
               onClick={handleGoUp}
               className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
-              title="Go up"
+              data-tooltip="Go up"
             >
               <ChevronLeft size={14} />
             </button>
           )}
-          <span className="text-xs text-slate-400 truncate" title={currentDirectory || ''}>
+          <span className="text-xs text-slate-400 truncate" data-tooltip={currentDirectory || ''}>
             {dirName || 'No folder open'}
           </span>
         </div>
         <button
           onClick={handleOpenFolder}
           className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none ml-1"
-          title="Open folder"
+          data-tooltip="Open folder"
         >
           <FolderInput size={14} />
         </button>
@@ -82,7 +84,7 @@ export default function FileBrowser({
           </div>
         )}
         {entries.map(entry => {
-          const isActive = entry.path === currentFile;
+          const isActive = entry.path === currentTrack;
           const isMedia = entry.is_audio || entry.is_video;
 
           if (entry.is_dir) {
@@ -110,7 +112,7 @@ export default function FileBrowser({
                   ? 'bg-[#e65161]/20 text-[#e65161]'
                   : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
               }`}
-              title={entry.name}
+              data-tooltip={entry.name}
             >
               {entry.is_audio
                 ? <Music size={13} className="flex-none opacity-70" />

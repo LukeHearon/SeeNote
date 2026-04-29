@@ -1,0 +1,519 @@
+/**
+ * VideoFrameSource — frame-perfect video playback via MP4Box.js + WebCodecs.
+ *
+ * ── Why ────────────────────────────────────────────────────────────────────────
+ * The <video> element can't keep up with an external audio clock at the frame
+ * level: seeking triggers keyframe decodes (slow) and playbackRate nudging
+ * drifts. For ML label boundaries, users need to see the *exact* frame that
+ * corresponds to the audio under the playhead.
+ *
+ * This class demuxes an MP4/MOV into encoded samples, feeds them to a
+ * VideoDecoder, and caches the resulting VideoFrames keyed by microsecond
+ * timestamp. A canvas rAF loop draws the newest cached frame at or before
+ * the engine's current media time — no <video> element involved.
+ *
+ * ── Data flow ──────────────────────────────────────────────────────────────────
+ *   asset bytes → MP4Box.js → VideoDecoder → VideoFrame cache → canvas.drawImage
+ *
+ * ── Critical implementation note: buffer lifecycle ─────────────────────────────
+ * mp4box's appendBuffer() calls stream.cleanBuffers() before returning, destroying
+ * the raw sample byte data. This means seek()+start() called *after* appendBuffer
+ * returns will find getSample() returning null for every sample (no data).
+ *
+ * Solution: for each ensureRange() call, create a fresh ISOFile, re-append the
+ * stored rawBuffer, and call seek()+start() from *inside* the onReady callback —
+ * while appendBuffer is still on the stack and the stream data is live.
+ * mp4box's processSamples loop is synchronous, so all onSamples batches fire
+ * before appendBuffer returns and cleans the buffers.
+ *
+ * ── Invariants ─────────────────────────────────────────────────────────────────
+ * - One VideoFrameSource per opened track.
+ * - Frame cache is sorted ascending by timestamp (μs).
+ * - drawAt is O(log N) and never stalls — if the exact frame isn't cached, we
+ *   draw the nearest frame whose timestamp ≤ t.
+ * - VideoFrame holds a GPU resource; .close() MUST be called on every evicted
+ *   or superseded frame.
+ *
+ * ── Limitations ────────────────────────────────────────────────────────────────
+ * - MP4/MOV (ISOBMFF) only. WebM/MKV/AVI require different demuxers.
+ * - Whole-file load into memory. For >2 GB files we'd need to stream via range
+ *   reads; not implemented.
+ */
+
+import { createFile, DataStream, Endianness, type ISOFile, type Sample, type Track, type MP4BoxBuffer } from 'mp4box';
+
+const DEFAULT_WINDOW_BEFORE_SEC = 2;
+const DEFAULT_WINDOW_AFTER_SEC = 30;
+const MEMORY_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+
+export interface VideoFrameSourceOptions {
+  onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
+}
+
+export class VideoFrameSource {
+  /** Raw file bytes retained for re-feeding fresh mp4box instances per ensureRange(). */
+  private rawBuffer: ArrayBuffer | null = null;
+  private trackId = 0;
+  private trackTimescale = 0;
+  private width = 0;
+  private height = 0;
+  /** Sample metadata (no byte data) — used for allCached checks and range math. */
+  private samples: Sample[] = [];
+  private decoder: VideoDecoder | null = null;
+  /** Cached frames, sorted ascending by timestamp (μs). */
+  private frameCache: VideoFrame[] = [];
+  private opened = false;
+  private closed = false;
+  private currentPlayheadSec = 0;
+  private activeRange: { start: number; end: number } | null = null;
+  /** Bumped on every ensureRange() call; stale in-flight decode phases ignore
+   *  their results when this no longer matches their captured token. */
+  private rangeToken = 0;
+  private approxCacheBytes = 0;
+  private bytesPerFrame = 0;
+  private opts: VideoFrameSourceOptions;
+
+  constructor(opts: VideoFrameSourceOptions = {}) {
+    this.opts = opts;
+  }
+
+  // ── Public API ──────────────────────────────────────────────────────────────
+
+  async open(assetUrl: string): Promise<{ width: number; height: number; durationSec: number }> {
+    if (this.opened) throw new Error('VideoFrameSource already opened');
+    if (typeof VideoDecoder === 'undefined') {
+      throw new Error('WebCodecs VideoDecoder not supported in this environment');
+    }
+
+    const resp = await fetch(assetUrl);
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status} ${resp.statusText}`);
+    this.rawBuffer = await resp.arrayBuffer();
+
+    return new Promise((resolve, reject) => {
+      const file = createFile();
+
+      file.onError = (_module: string, msg: string) => {
+        const err = new Error(`mp4box: ${msg}`);
+        this.opts.onDebugLog?.(`[video] ${err.message}`, 'error');
+        if (!this.opened) reject(err);
+      };
+
+      file.onReady = (info) => {
+        try {
+          const track = info.videoTracks[0];
+          if (!track) throw new Error('no video track in file');
+          this.trackId = track.id;
+          this.trackTimescale = track.timescale;
+          this.width = track.video?.width ?? track.track_width;
+          this.height = track.video?.height ?? track.track_height;
+          this.bytesPerFrame = this.width * this.height * 4;
+          this.samples = file.getTrackSamplesInfo(track.id);
+
+          const description = this.buildDecoderDescription(file, track);
+          if (!description) throw new Error(`unsupported codec: ${track.codec}`);
+
+          this.decoder = new VideoDecoder({
+            output: (frame) => this.onDecodedFrame(frame),
+            error: (e) => {
+              this.opts.onDebugLog?.(`[video] decoder error: ${e.message}`, 'error');
+            },
+          });
+          this.decoder.configure({
+            codec: track.codec,
+            description,
+            codedWidth: this.width,
+            codedHeight: this.height,
+            optimizeForLatency: false,
+          });
+
+          this.opened = true;
+          this.opts.onDebugLog?.(
+            `[video] opened codec=${track.codec} size=${this.width}x${this.height} samples=${this.samples.length}`,
+          );
+          resolve({
+            width: this.width,
+            height: this.height,
+            durationSec: track.duration / track.timescale,
+          });
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      const mp4buf = this.rawBuffer as MP4BoxBuffer;
+      (mp4buf as unknown as { fileStart: number }).fileStart = 0;
+      try {
+        file.appendBuffer(mp4buf);
+        // Do NOT call file.flush() here. flush() calls stream.cleanBuffers()
+        // which would destroy the byte data needed by future ensureRange() calls.
+        // appendBuffer itself also calls cleanBuffers() at the end, but we store
+        // rawBuffer separately and re-append it in each ensureRange().
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  /** Decode every frame whose timestamp falls in [startSec, endSec], starting
+   *  from the nearest prior keyframe. Resolves when the decoder has flushed.
+   *
+   *  Implementation: creates a fresh ISOFile per call and appends rawBuffer.
+   *  The key insight is that mp4box's processSamples loop runs synchronously
+   *  within appendBuffer() before cleanBuffers() destroys the stream data.
+   *  We call seek()+start() inside onReady so extraction happens while the
+   *  data is still live. */
+  async ensureRange(startSec: number, endSec: number): Promise<void> {
+    if (!this.opened || !this.decoder || this.closed || !this.rawBuffer) return;
+    if (endSec < startSec) return;
+
+    this.activeRange = { start: startSec, end: endSec };
+
+    const ts = this.trackTimescale;
+    const startCts = startSec * ts;
+    const endCts = endSec * ts;
+
+    // Find the RAP at/before startSec and the last sample at/before endSec.
+    let keyIdx = -1;
+    for (let i = 0; i < this.samples.length; i++) {
+      const s = this.samples[i];
+      if (s.cts > startCts) break;
+      if (s.is_sync) keyIdx = i;
+    }
+    if (keyIdx === -1) keyIdx = 0;
+
+    let endIdx = keyIdx;
+    for (let i = keyIdx; i < this.samples.length; i++) {
+      if (this.samples[i].cts > endCts) break;
+      endIdx = i;
+    }
+
+    // Skip if all frames in this range are already cached — and don't bump the
+    // token so any in-flight decode of an adjacent range isn't cancelled.
+    let allCached = true;
+    for (let i = keyIdx; i <= endIdx; i++) {
+      const tsMicros = Math.round((this.samples[i].cts / ts) * 1e6);
+      if (!this.hasFrameAt(tsMicros)) { allCached = false; break; }
+    }
+    if (allCached) {
+      this.evictOutsideWindow();
+      return;
+    }
+
+    // Only bump the token (cancelling any previous in-flight decode) when we
+    // actually need to do work.
+    const token = ++this.rangeToken;
+
+    const endSampleNumber = this.samples[endIdx].number;
+    const wallStart = performance.now();
+    this.opts.onDebugLog?.(
+      `[video] ensureRange ${startSec.toFixed(2)}–${endSec.toFixed(2)}s samples [${keyIdx}..${endIdx}] (${endIdx - keyIdx + 1}) playhead=${this.currentPlayheadSec.toFixed(3)}s`,
+    );
+
+    let fed = 0;
+
+    // Each ensureRange creates a fresh ISOFile and re-appends rawBuffer.
+    // start() is called inside onReady — while appendBuffer is still on the
+    // call stack — so getSample can find the stream bytes before cleanBuffers
+    // runs. Everything in this block is synchronous within appendBuffer().
+    await new Promise<void>((resolve, reject) => {
+      const file = createFile();
+
+      file.onError = (_module: string, msg: string) => {
+        reject(new Error(`mp4box: ${msg}`));
+      };
+
+      file.onReady = (_info) => {
+        if (token !== this.rangeToken || this.closed) return;
+
+        // Large nbSamples so the whole range fits in one onSamples callback.
+        file.setExtractionOptions(this.trackId, null, { nbSamples: 100000 });
+
+        file.onSamples = (_id: number, _user: unknown, samples: Sample[]) => {
+          if (token !== this.rangeToken || this.closed) { file.stop(); return; }
+          for (const sample of samples) {
+            if (sample.cts > endCts) { file.stop(); return; }
+            if (!sample.data) {
+              this.opts.onDebugLog?.(`[video] sample ${sample.number} has no data`, 'error');
+              continue;
+            }
+            if (this.decoder && this.decoder.state === 'configured') {
+              try {
+                this.decoder.decode(new EncodedVideoChunk({
+                  type: sample.is_sync ? 'key' : 'delta',
+                  timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
+                  duration: Math.round((sample.duration / sample.timescale) * 1e6),
+                  data: sample.data,
+                }));
+                fed++;
+              } catch (err) {
+                this.opts.onDebugLog?.(
+                  `[video] decode() threw on sample ${sample.number}: ${String(err)}`, 'error',
+                );
+              }
+            }
+            if (sample.number >= endSampleNumber) { file.stop(); return; }
+          }
+        };
+
+        // Seek positions trak.nextSample at the RAP at/before startSec.
+        // Must be called after setExtractionOptions so the extractedTrack
+        // entry exists when processSamples starts.
+        file.seek(startSec, true);
+        // start() triggers the synchronous processSamples loop, which calls
+        // onSamples before returning. Buffer data is still live here.
+        file.start();
+      };
+
+      // Re-attach fileStart before each appendBuffer call.
+      (this.rawBuffer as unknown as { fileStart: number }).fileStart = 0;
+      try {
+        const t0 = performance.now();
+        file.appendBuffer(this.rawBuffer as MP4BoxBuffer);
+        // ── DIAGNOSTIC: appendBuffer is synchronous; if this takes >16ms it
+        // blocks the rAF loop and causes a visible freeze on the canvas. ──
+        this.opts.onDebugLog?.(
+          `[video] appendBuffer ${startSec.toFixed(2)}s: ${(performance.now() - t0).toFixed(1)}ms sync block, fed=${fed}`,
+        );
+        // appendBuffer has returned; onReady + onSamples have already fired
+        // and decoder.decode() has been called fed times.
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    if (token !== this.rangeToken || this.closed) return;
+
+    // decoder.decode() is async; flush() waits for all pending frames to arrive
+    // via onDecodedFrame before resolving.
+    const flushStart = performance.now();
+    try {
+      await this.decoder!.flush();
+    } catch (err) {
+      this.opts.onDebugLog?.(`[video] flush() threw: ${String(err)}`, 'error');
+    }
+
+    if (token !== this.rangeToken || this.closed) return;
+    const flushMs = performance.now() - flushStart;
+    const totalMs = performance.now() - wallStart;
+    this.opts.onDebugLog?.(
+      `[video] ensureRange done ${startSec.toFixed(2)}–${endSec.toFixed(2)}s: flush=${flushMs.toFixed(0)}ms total=${totalMs.toFixed(0)}ms fed=${fed} cached=${this.frameCache.length}`,
+    );
+    this.evictOutsideWindow();
+  }
+
+  /** Draw the cached frame nearest to (but not after) tSec into ctx. If no
+   *  suitable frame is cached, we draw the earliest frame we have to avoid
+   *  a blank canvas — better stale than empty. */
+  drawAt(ctx: CanvasRenderingContext2D, tSec: number): void {
+    this.currentPlayheadSec = tSec;
+    if (this.frameCache.length === 0) return;
+
+    const tsMicros = tSec * 1e6;
+    const idx = this.findFrameIdxAtOrBefore(tsMicros);
+    const frame = idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
+
+    // ── DIAGNOSTIC: log when the drawn frame is significantly behind the
+    // requested time — indicates a cache miss during a freeze. ──
+    const frameTs = (frame.timestamp ?? 0) / 1e6;
+    const staleSec = tSec - frameTs;
+    if (staleSec > 0.5) {
+      const minTs = (this.frameCache[0]?.timestamp ?? 0) / 1e6;
+      const maxTs = (this.frameCache[this.frameCache.length - 1]?.timestamp ?? 0) / 1e6;
+      this.opts.onDebugLog?.(
+        `[video] stale draw: want=${tSec.toFixed(3)}s have=${frameTs.toFixed(3)}s gap=${staleSec.toFixed(3)}s cache=${this.frameCache.length} span=[${minTs.toFixed(3)}–${maxTs.toFixed(3)}s]`,
+      );
+    }
+    const canvas = ctx.canvas;
+    const frameW = frame.displayWidth || this.width;
+    const frameH = frame.displayHeight || this.height;
+    const scale = Math.min(canvas.width / frameW, canvas.height / frameH);
+    const drawW = frameW * scale;
+    const drawH = frameH * scale;
+    const dx = (canvas.width - drawW) / 2;
+    const dy = (canvas.height - drawH) / 2;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(frame, dx, dy, drawW, drawH);
+  }
+
+  getDimensions(): { width: number; height: number } {
+    return { width: this.width, height: this.height };
+  }
+
+  notifyPlayhead(tSec: number): void {
+    this.currentPlayheadSec = tSec;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.rangeToken++;
+    for (const f of this.frameCache) {
+      try { f.close(); } catch { /* already closed */ }
+    }
+    this.frameCache = [];
+    this.approxCacheBytes = 0;
+    if (this.decoder && this.decoder.state !== 'closed') {
+      try { this.decoder.close(); } catch { /* already closed */ }
+    }
+    this.decoder = null;
+    this.rawBuffer = null;
+    this.samples = [];
+    this.opened = false;
+  }
+
+  // ── Private ─────────────────────────────────────────────────────────────────
+
+  private buildDecoderDescription(file: ISOFile, track: Track): Uint8Array | undefined {
+    const trak = file.moov?.traks?.find(
+      (t) => (t.tkhd as unknown as { track_id: number })?.track_id === track.id,
+    );
+    const entries = (trak as unknown as {
+      mdia?: { minf?: { stbl?: { stsd?: { entries?: unknown[] } } } };
+    } | undefined)?.mdia?.minf?.stbl?.stsd?.entries;
+    const entry = entries?.[0] as {
+      avcC?: { write: (s: DataStream) => void };
+      hvcC?: { write: (s: DataStream) => void };
+      vpcC?: { write: (s: DataStream) => void };
+      av1C?: { write: (s: DataStream) => void };
+    } | undefined;
+    const box = entry?.avcC ?? entry?.hvcC ?? entry?.vpcC ?? entry?.av1C;
+    if (!box) return undefined;
+
+    const stream = new DataStream(undefined, 0, Endianness.BIG_ENDIAN);
+    box.write(stream);
+    return new Uint8Array(stream.buffer.slice(8));
+  }
+
+  private onDecodedFrame(frame: VideoFrame): void {
+    if (this.closed || frame.timestamp === null) {
+      try { frame.close(); } catch { /* */ }
+      return;
+    }
+    if (this.frameCache.length === 0) {
+      this.opts.onDebugLog?.(
+        `[video] first decoded frame ts=${frame.timestamp}μs size=${frame.displayWidth}x${frame.displayHeight}`,
+      );
+    }
+    const ts = frame.timestamp;
+    if (this.hasFrameAt(ts)) {
+      try { frame.close(); } catch { /* */ }
+      return;
+    }
+    let lo = 0;
+    let hi = this.frameCache.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((this.frameCache[mid].timestamp ?? 0) < ts) lo = mid + 1;
+      else hi = mid;
+    }
+    this.frameCache.splice(lo, 0, frame);
+    this.approxCacheBytes += this.bytesPerFrame;
+
+    if (this.approxCacheBytes > MEMORY_BUDGET_BYTES) {
+      this.enforceMemoryBudget();
+    }
+  }
+
+  private hasFrameAt(tsMicros: number): boolean {
+    let lo = 0;
+    let hi = this.frameCache.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      const v = this.frameCache[mid].timestamp ?? 0;
+      if (v === tsMicros) return true;
+      if (v < tsMicros) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return false;
+  }
+
+  private findFrameIdxAtOrBefore(tsMicros: number): number {
+    let lo = 0;
+    let hi = this.frameCache.length - 1;
+    let result = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      const v = this.frameCache[mid].timestamp ?? 0;
+      if (v <= tsMicros) { result = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return result;
+  }
+
+  private evictOutsideWindow(): void {
+    const keepBefore = (this.currentPlayheadSec - DEFAULT_WINDOW_BEFORE_SEC) * 1e6;
+    const keepAfter = (this.currentPlayheadSec + DEFAULT_WINDOW_AFTER_SEC) * 1e6;
+    const selStart = this.activeRange ? this.activeRange.start * 1e6 : Infinity;
+    const selEnd = this.activeRange ? this.activeRange.end * 1e6 : -Infinity;
+
+    const before = this.frameCache.length;
+    const kept: VideoFrame[] = [];
+    for (const f of this.frameCache) {
+      const t = f.timestamp ?? 0;
+      const inPlayWindow = t >= keepBefore && t <= keepAfter;
+      const inSel = t >= selStart && t <= selEnd;
+      if (inPlayWindow || inSel) {
+        kept.push(f);
+      } else {
+        try { f.close(); } catch { /* */ }
+        this.approxCacheBytes -= this.bytesPerFrame;
+      }
+    }
+    this.frameCache = kept;
+    if (this.approxCacheBytes < 0) this.approxCacheBytes = 0;
+
+    // ── DIAGNOSTIC ──
+    const evicted = before - kept.length;
+    if (evicted > 0) {
+      const minTs = kept.length ? (kept[0].timestamp ?? 0) / 1e6 : 0;
+      const maxTs = kept.length ? (kept[kept.length - 1].timestamp ?? 0) / 1e6 : 0;
+      this.opts.onDebugLog?.(
+        `[video] evict: playhead=${this.currentPlayheadSec.toFixed(3)}s keepBefore=${(keepBefore/1e6).toFixed(3)}s evicted=${evicted}/${before} remain=${kept.length} span=[${minTs.toFixed(3)}–${maxTs.toFixed(3)}s]`,
+      );
+    }
+  }
+
+  private enforceMemoryBudget(): void {
+    const playMicros = this.currentPlayheadSec * 1e6;
+    // Evict past frames first (already played, safe to drop), then future frames
+    // only if we must. The original farthest-from-playhead order was backwards:
+    // it dropped upcoming frames first, leaving the cache stuck in the past.
+    //
+    // Sort key (ascending = evicted first):
+    //   Past frames  (ts < playMicros): key = ts            → small positive, oldest = smallest
+    //   Future frames (ts >= playMicros): key = MAX_SAFE_INT − ts  → very large, farthest = smallest within group
+    // Past keys (~0..playMicros) are always much smaller than future keys (~MAX_SAFE_INT) so past
+    // frames are always evicted before future frames.
+    const sortKey = (ts: number): number =>
+      ts < playMicros ? ts : Number.MAX_SAFE_INTEGER - ts;
+    const idxByEvictPriority = this.frameCache
+      .map((f, i) => ({ i, key: sortKey(f.timestamp ?? 0) }))
+      .sort((a, b) => a.key - b.key);  // ascending: lowest key evicted first
+    const drop = new Set<number>();
+    let i = 0;
+    while (this.approxCacheBytes > MEMORY_BUDGET_BYTES && i < idxByEvictPriority.length) {
+      drop.add(idxByEvictPriority[i].i);
+      this.approxCacheBytes -= this.bytesPerFrame;
+      i++;
+    }
+    if (drop.size === 0) return;
+    const kept: VideoFrame[] = [];
+    for (let j = 0; j < this.frameCache.length; j++) {
+      const f = this.frameCache[j];
+      if (drop.has(j)) {
+        try { f.close(); } catch { /* */ }
+      } else {
+        kept.push(f);
+      }
+    }
+    this.frameCache = kept;
+  }
+}
+
+/** Rough detection: only ISOBMFF containers (MP4/MOV/m4v) can be demuxed by
+ *  mp4box.js. Other extensions fall back to the <video> element. */
+export function canUseFrameSource(path: string): boolean {
+  if (typeof VideoDecoder === 'undefined') return false;
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return ext === 'mp4' || ext === 'mov' || ext === 'm4v';
+}

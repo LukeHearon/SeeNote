@@ -10,7 +10,7 @@ pub struct DirEntry {
     pub is_video: bool,
 }
 
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a", "opus", "wma"];
+const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
 fn classify_ext(path: &std::path::Path) -> (bool, bool) {
@@ -25,10 +25,31 @@ fn classify_ext(path: &std::path::Path) -> (bool, bool) {
     }
 }
 
+/// Canonicalize `path` and verify it is a descendant of at least one root in
+/// `allowed_roots`.  Returns `Err` if any canonicalization fails or if the path
+/// escapes all roots.  When `allowed_roots` is empty the check is skipped so
+/// that call-sites that haven't yet been migrated remain functional.
+fn assert_within_roots(path: &std::path::Path, allowed_roots: &[String]) -> Result<std::path::PathBuf, String> {
+    let canonical = path.canonicalize().map_err(|e| format!("cannot resolve path '{}': {}", path.display(), e))?;
+    if allowed_roots.is_empty() {
+        return Ok(canonical);
+    }
+    for root_str in allowed_roots {
+        let root = std::path::Path::new(root_str);
+        let canonical_root = root.canonicalize().map_err(|e| format!("cannot resolve root '{}': {}", root_str, e))?;
+        if canonical.starts_with(&canonical_root) {
+            return Ok(canonical);
+        }
+    }
+    Err(format!("path '{}' is outside the allowed project directories", path.display()))
+}
+
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
-    let dir = std::path::Path::new(&path);
-    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+pub async fn list_directory(path: String, allowed_roots: Option<Vec<String>>) -> Result<Vec<DirEntry>, String> {
+    let roots = allowed_roots.unwrap_or_default();
+    let dir_path = std::path::Path::new(&path);
+    let dir = assert_within_roots(dir_path, &roots)?;
+    let entries = std::fs::read_dir(&dir).map_err(|e| e.to_string())?;
 
     let mut result: Vec<DirEntry> = entries
         .filter_map(|e| e.ok())
@@ -60,17 +81,59 @@ pub async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    // Ensure parent directories exist
-    if let Some(parent) = std::path::Path::new(&path).parent() {
+pub async fn write_text_file(path: String, content: String, allowed_roots: Option<Vec<String>>) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+
+    // Ensure parent directories exist before we try to canonicalize the target
+    // (the file itself may not exist yet).
+    if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+
+    // Sandboxing: canonicalize the parent (the file doesn't exist yet) and
+    // verify it descends from an allowed root.
+    let roots = allowed_roots.unwrap_or_default();
+    if !roots.is_empty() {
+        // Use the parent directory for the existence check since the file may be new.
+        let check_path = if target.exists() {
+            target.to_path_buf()
+        } else {
+            target.parent()
+                .unwrap_or(target)
+                .to_path_buf()
+        };
+        assert_within_roots(&check_path, &roots)?;
+    }
+
+    // Atomic write: write to a sibling .tmp file then rename over the target.
+    let tmp_path = {
+        let mut t = target.to_path_buf();
+        let mut name = t.file_name().unwrap_or_default().to_os_string();
+        name.push(".tmp");
+        t.set_file_name(name);
+        t
+    };
+
+    std::fs::write(&tmp_path, &content).map_err(|e| {
+        format!("failed to write temp file '{}': {}", tmp_path.display(), e)
+    })?;
+
+    if let Err(rename_err) = std::fs::rename(&tmp_path, target) {
+        // Best-effort cleanup of the temp file before returning the error.
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(format!("failed to rename '{}' to '{}': {}", tmp_path.display(), target.display(), rename_err));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn read_text_file(path: String) -> Result<Option<String>, String> {
+pub async fn read_text_file(path: String, allowed_roots: Option<Vec<String>>) -> Result<Option<String>, String> {
     let p = std::path::Path::new(&path);
+    let roots = allowed_roots.unwrap_or_default();
+    if !roots.is_empty() && p.exists() {
+        assert_within_roots(p, &roots)?;
+    }
     if p.exists() {
         std::fs::read_to_string(p)
             .map(Some)
@@ -108,6 +171,21 @@ pub async fn open_directory_dialog(app: tauri::AppHandle) -> Result<Option<Strin
 }
 
 #[tauri::command]
+pub async fn open_directory_dialog_at(app: tauri::AppHandle, start_path: String) -> Result<Option<String>, String> {
+    let mut builder = app.dialog().file();
+    let p = std::path::Path::new(&start_path);
+    if p.is_dir() {
+        builder = builder.set_directory(p);
+    }
+    let result = builder.blocking_pick_folder();
+
+    Ok(result.and_then(|p| match p {
+        FilePath::Path(pb) => Some(pb.to_string_lossy().to_string()),
+        _ => None,
+    }))
+}
+
+#[tauri::command]
 pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, String> {
     let root = std::path::Path::new(&path);
     let mut files = Vec::new();
@@ -117,15 +195,30 @@ pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, Str
 }
 
 fn collect_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let read_dir_iter = match std::fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(e) => {
+            eprintln!("[SeeNote] collect_media_files: cannot read dir '{}': {}", dir.display(), e);
+            return Ok(());
+        }
+    };
+    for entry_result in read_dir_iter {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[SeeNote] collect_media_files: error reading entry in '{}': {}", dir.display(), e);
+                continue;
+            }
+        };
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if name.starts_with('.') {
             continue;
         }
         if path.is_dir() {
-            collect_media_files(&path, files)?;
+            if let Err(e) = collect_media_files(&path, files) {
+                eprintln!("[SeeNote] collect_media_files: error descending into '{}': {}", path.display(), e);
+            }
         } else {
             let (is_audio, is_video) = classify_ext(&path);
             if is_audio || is_video {
@@ -139,13 +232,14 @@ fn collect_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::i
 /// Opens a dialog that allows selecting either a file or a folder.
 /// Returns `{ path, is_dir }`.
 #[tauri::command]
-pub async fn open_file_or_folder_dialog(_app: tauri::AppHandle) -> Result<Option<OpenResult>, String> {
+pub async fn open_file_or_folder_dialog(app: tauri::AppHandle) -> Result<Option<OpenResult>, String> {
     // On macOS we can use NSOpenPanel with both canChooseFiles and canChooseDirectories.
     // The tauri dialog plugin doesn't expose this, so we use the file picker with a
     // workaround: first try picking a file. If the user cancels, we could offer a
     // directory picker, but for simplicity we configure the native panel directly.
     #[cfg(target_os = "macos")]
     {
+        let _ = app; // not needed on macOS; NSOpenPanel is used directly
         use std::path::PathBuf;
         use std::sync::mpsc;
 
@@ -213,6 +307,12 @@ pub async fn open_file_or_folder_dialog(_app: tauri::AppHandle) -> Result<Option
             _ => None,
         }))
     }
+}
+
+#[tauri::command]
+pub async fn check_dir_exists(path: String) -> Result<bool, String> {
+    let p = std::path::Path::new(&path);
+    Ok(p.is_dir())
 }
 
 #[tauri::command]

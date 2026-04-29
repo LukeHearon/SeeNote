@@ -11,10 +11,29 @@ export const MAGMA_STOPS = [
   { pos: 1.0, r: 250, g: 251, b: 198 },  // White-Yellow      
 ];
 
+// Extensions that the Rust symphonia decoder can actually decode.
+// Files with other extensions are still scanned and shown in the file panel,
+// but marked "(unsupported)" and disabled — we can't produce audio or a
+// spectrogram for them. Keep in sync with src-tauri/Cargo.toml symphonia
+// features and VideoPlayer's <video> capability.
+// ogg intentionally omitted: symphonia 0.5's ogg/vorbis path hangs on decode
+// in our environment (play button never unsticks). Revisit if/when we swap
+// decoders or upgrade symphonia. Ogg files are still scanned and shown, just
+// grayed as (unsupported) so users aren't surprised by silent failures.
+export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a']);
+export const SUPPORTED_VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm']);
+
+export function isSupportedMediaFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return SUPPORTED_AUDIO_EXTS.has(ext) || SUPPORTED_VIDEO_EXTS.has(ext);
+}
+
 export const MIN_ZOOM_SEC = 1;
 export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 10;
 export const SCROLL_SENSITIVITY = 1.0;
+// Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
+export const DRAG_INTENT_HOLD_MS = 250;
 
 // Multi-resolution spectrogram tier configuration.
 // Each tier defines a temporal resolution for a range of zoom levels.
@@ -35,6 +54,33 @@ export const TIER_CONFIGS: TierConfig[] = [
   { tier: 3, hopSamples: 512,      chunkDuration: 15,  maxChunks: 16 },
 ];
 
+// Interpolate the Roseus/Magma colormap at position t in [0, 1] and return a hex color string.
+export function interpolateMagmaHex(t: number): string {
+  t = Math.max(0, Math.min(1, t));
+  let lower = MAGMA_STOPS[0];
+  let upper = MAGMA_STOPS[MAGMA_STOPS.length - 1];
+  for (let i = 0; i < MAGMA_STOPS.length - 1; i++) {
+    if (t >= MAGMA_STOPS[i].pos && t <= MAGMA_STOPS[i + 1].pos) {
+      lower = MAGMA_STOPS[i];
+      upper = MAGMA_STOPS[i + 1];
+      break;
+    }
+  }
+  const range = upper.pos - lower.pos;
+  const localT = range === 0 ? 0 : (t - lower.pos) / range;
+  const r = Math.round(lower.r + localT * (upper.r - lower.r));
+  const g = Math.round(lower.g + localT * (upper.g - lower.g));
+  const b = Math.round(lower.b + localT * (upper.b - lower.b));
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+// Pick two colors independently from the Magma colormap, skipping the dark purple end.
+export function randomMagmaGradient(): [string, string] {
+  const t1 = 0.2 + Math.random() * 0.8;
+  const t2 = 0.2 + Math.random() * 0.8;
+  return [interpolateMagmaHex(t1), interpolateMagmaHex(t2)];
+}
+
 // Default colors for hotkeys 1-9
 export const HOTKEY_COLORS = [
   "#ffffff", // 0 (Default/Custom) - White
@@ -49,16 +95,17 @@ export const HOTKEY_COLORS = [
   "#64748b", // 9 Slate
 ];
 
-// Default label configs for new projects.
+// Default annotation tools for new projects.
 //
-// IMPORTANT: Key "0" is ALWAYS reserved for "Custom Label". When this label
-// is active, new annotations get an empty text field so the user can type a
-// one-off event name without creating a new named category. The autoFocus on
-// the annotation text input is triggered by `text === ""`, which depends on
-// key "0" staying as Custom Label. Do NOT replace key "0" with a species
-// label — doing so silently breaks the custom-label UX.
-export const DEFAULT_LABEL_CONFIGS = [
-  { key: "0", text: "Custom Label",      color: HOTKEY_COLORS[0] },
+// IMPORTANT: Key "0" is ALWAYS reserved for the Custom Annotation Tool. When
+// this tool is active, new annotations get an empty text field so the user can
+// type a one-off name without creating a new named annotation tool. The
+// autoFocus on the annotation text input is triggered by `text === ""`, which
+// depends on key "0" staying as the Custom Annotation Tool. Do NOT replace
+// key "0" with a defined annotation tool — doing so silently breaks the
+// custom annotation UX.
+export const DEFAULT_ANNOTATION_TOOLS = [
+  { key: "0", text: "Custom",            color: HOTKEY_COLORS[0] },
   { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1] },
   { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2] },
   { key: "3", text: "ins_buzz_low",      color: HOTKEY_COLORS[3] },

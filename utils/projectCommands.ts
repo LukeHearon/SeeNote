@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Project, LabelConfig, SpectrogramSettings } from '../types';
+import { Project, AnnotationTool, SpectrogramSettings } from '../types';
 
 // ── Rust-side snake_case shape ────────────────────────────────────────────────
 
-interface LabelConfigRecord {
+// Wire format matching the Rust ProjectRecord struct (uses snake_case and the
+// legacy `label_configs` field name for backward compatibility with saved files).
+interface AnnotationToolRecord {
   key: string;
   text: string;
   color: string;
@@ -17,8 +19,12 @@ interface ProjectRecord {
   output_format: string;
   created_at: string;
   last_opened: string;
-  label_configs: LabelConfigRecord[];
+  label_configs: AnnotationToolRecord[];
   spectrogram_settings?: SpectrogramSettings; // stored as-is (camelCase) via serde_json::Value
+  name_gradient_colors?: [string, string];
+  output_rounding_decimals?: number;
+  file_filter?: string;
+  hide_annotated?: boolean;
 }
 
 interface CopyResultRaw {
@@ -38,8 +44,12 @@ function toProject(r: ProjectRecord): Project {
     outputFormat: r.output_format as 'json' | 'csv' | 'txt',
     createdAt: r.created_at,
     lastOpened: r.last_opened,
-    labelConfigs: r.label_configs,
+    annotationTools: r.label_configs,
     spectrogramSettings: r.spectrogram_settings,
+    nameGradientColors: r.name_gradient_colors,
+    outputRoundingDecimals: r.output_rounding_decimals,
+    fileFilter: r.file_filter as 'all' | 'annotated' | 'unannotated' | undefined,
+    hideAnnotated: r.hide_annotated,
   };
 }
 
@@ -52,8 +62,12 @@ function toRecord(p: Project): ProjectRecord {
     output_format: p.outputFormat,
     created_at: p.createdAt,
     last_opened: p.lastOpened,
-    label_configs: p.labelConfigs,
+    label_configs: p.annotationTools,
     spectrogram_settings: p.spectrogramSettings,
+    name_gradient_colors: p.nameGradientColors,
+    output_rounding_decimals: p.outputRoundingDecimals,
+    file_filter: p.fileFilter,
+    hide_annotated: p.hideAnnotated,
   };
 }
 
@@ -85,8 +99,8 @@ export const copyAnnotationFiles = (
 ): Promise<{ copied: number; skipped: number; errors: string[] }> =>
   invoke('copy_annotation_files', { copies, conflictResolution });
 
-export const revealInFinder = (path: string): Promise<void> =>
-  invoke('reveal_in_finder', { path });
+export const revealInFileManager = (path: string): Promise<void> =>
+  invoke('reveal_in_file_manager', { path });
 
 export const listAnnotationFiles = (
   annotationDir: string,

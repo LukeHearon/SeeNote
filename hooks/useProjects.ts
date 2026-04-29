@@ -85,7 +85,7 @@ export function useProjects() {
     await persist(next);
   }, [persist, setProjectsBoth]);
 
-  const touchLastOpened = useCallback(async (id: string): Promise<void> => {
+  const touchLastOpened = useCallback(async (id: string): Promise<Project | undefined> => {
     const now = new Date().toISOString();
     const next = projectsRef.current.map(p =>
       p.id === id ? { ...p, lastOpened: now } : p
@@ -93,6 +93,7 @@ export function useProjects() {
     next.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
     setProjectsBoth(next);
     await persist(next);
+    return next.find(p => p.id === id);
   }, [persist, setProjectsBoth]);
 
   return {

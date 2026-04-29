@@ -77,6 +77,9 @@ export const openFileDialog = (): Promise<string | null> =>
 export const openDirectoryDialog = (): Promise<string | null> =>
   invoke('open_directory_dialog');
 
+export const openDirectoryDialogAt = (startPath: string): Promise<string | null> =>
+  invoke('open_directory_dialog_at', { startPath });
+
 export interface OpenResult {
   path: string;
   is_dir: boolean;
@@ -88,8 +91,15 @@ export const openFileOrFolderDialog = (): Promise<OpenResult | null> =>
 export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_media_files_recursive', { path });
 
+/** Recursively list annotation files with the given extension (e.g. '.txt', '.csv', '.json'). Returns absolute paths. */
+export const listAnnotationFilesRecursive = (dir: string, ext: string): Promise<string[]> =>
+  invoke('list_txt_files_recursive', { path: dir, ext });
+
 export const removeFile = (path: string): Promise<void> =>
   invoke('remove_file', { path });
+
+export const checkDirExists = (path: string): Promise<boolean> =>
+  invoke('check_dir_exists', { path });
 
 export const saveFileDialog = (
   defaultPath: string,
@@ -100,3 +110,33 @@ export const saveFileDialog = (
 /** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src. */
 export const toAssetUrl = (absolutePath: string): string =>
   convertFileSrc(absolutePath);
+
+// ── PCM streaming ─────────────────────────────────────────────────────────────
+
+export interface PcmStreamHandle {
+  stream_id: number;
+  sample_rate: number;
+  channels: number;
+  /** Total frames in the file (duration_secs * sample_rate). */
+  total_frames: number;
+}
+
+export interface PcmChunkResult {
+  /** Interleaved f32 samples. length === frames_read * channels. */
+  samples: number[];
+  frames_read: number;
+  /** Absolute frame index of samples[0] in the file. */
+  start_frame: number;
+}
+
+/** Open a seeked PCM stream at start_sec. Returns a handle for subsequent reads. */
+export const startPcmStream = (path: string, startSec: number): Promise<PcmStreamHandle> =>
+  invoke('start_pcm_stream', { path, startSec });
+
+/** Read up to maxFrames interleaved f32 frames. frames_read === 0 means EOF. */
+export const readPcmChunk = (streamId: number, maxFrames: number): Promise<PcmChunkResult> =>
+  invoke('read_pcm_chunk', { streamId, maxFrames });
+
+/** Close and discard the stream. */
+export const closePcmStream = (streamId: number): Promise<void> =>
+  invoke('close_pcm_stream', { streamId });

@@ -1,5 +1,5 @@
-import { Label } from '../types';
-import { saveFileDialog, writeTextFile } from './tauriCommands';
+import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
+import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
   const h = Math.floor(seconds / 3600);
@@ -17,31 +17,37 @@ export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };
 
-// Calculate vertical dodging for overlapping labels
-export const calculateLabelLayers = (labels: Label[]): Label[] => {
-  // Sort by start time
-  const sorted = [...labels].sort((a, b) => a.start - b.start);
-  const processed: Label[] = [];
-  const layers: number[] = []; // Stores the end time of the last label in each layer
+export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => ({
+  id: generateId(),
+  toolKey: tool.key,
+  start,
+  end,
+  text: tool.key === '0' ? '' : tool.text,
+  color: tool.color,
+});
 
-  sorted.forEach((label) => {
-    let placed = false;
-    for (let i = 0; i < layers.length; i++) {
-      // Add a small buffer for visual spacing
-      if (layers[i] + 0.1 <= label.start) {
-        label.layerIndex = i;
-        layers[i] = label.end;
-        placed = true;
-        break;
-      }
+// Calculate vertical dodging for overlapping annotations.
+// Returns new objects (inputs are never mutated) sorted by start time,
+// each with a layerIndex assigned by a greedy earliest-available-layer pass.
+export const calculateAnnotationLayers = (annotations: Annotation[]): AnnotationWithLayer[] => {
+  const sorted = [...annotations].sort((a, b) => a.start - b.start);
+
+  // layers[i] = end time of the most recent annotation placed in layer i.
+  const layers: number[] = [];
+  const result: AnnotationWithLayer[] = [];
+
+  for (const annotation of sorted) {
+    let layerIndex = layers.findIndex(end => end <= annotation.start);
+    if (layerIndex === -1) {
+      layerIndex = layers.length;
+      layers.push(annotation.end);
+    } else {
+      layers[layerIndex] = annotation.end;
     }
-    if (!placed) {
-      label.layerIndex = layers.length;
-      layers.push(label.end);
-    }
-    processed.push(label);
-  });
-  return processed;
+    result.push({ ...annotation, layerIndex });
+  }
+
+  return result;
 };
 
 const getBaseName = (filename: string) => {
@@ -63,51 +69,88 @@ const saveFile = async (
 };
 
 // Derives the default save path next to the source file.
-// currentFilePath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
-const defaultSavePath = (currentFilePath: string | null, filename: string, suffix: string, ext: string): string => {
+// trackPath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
+const defaultSavePath = (trackPath: string | null, filename: string, suffix: string, ext: string): string => {
     const base = getBaseName(filename);
     const outName = `${base}${suffix}${ext}`;
-    if (currentFilePath) {
-        const dir = currentFilePath.substring(0, currentFilePath.lastIndexOf('/'));
+    if (trackPath) {
+        // Split on either separator so this works on Windows paths too
+        const parts = trackPath.split(/[\\/]/);
+        parts.pop();
+        const dir = parts.join('/');
         return `${dir}/${outName}`;
     }
     return outName;
 };
 
-// Pure content generators (no file dialog — used by auto-save and export alike)
-export const generateCSVContent = (labels: Label[]): string => {
+// Pure content generators (no file dialog — used by auto-save and export alike).
+//
+// Precision note: annotation start/end are stored in seconds as JS floats
+// (IEEE 754 double, ~15 significant digits — easily sample-accurate for any
+// audio sample rate and file length we care about). The default of 7 decimal
+// places = 100ns covers 192 kHz with sub-sample margin (1e-7 * 192000 ≈ 0.02
+// samples). This is a good balance between human-readable output and re-import
+// fidelity, but is NOT a bit-exact lossless round-trip; the internal pipeline
+// double precision is higher.
+const roundToDecimals = (v: number, decimals: number): number => {
+    const factor = Math.pow(10, decimals);
+    return Math.round(v * factor) / factor;
+};
+
+export const generateCSVContent = (annotations: Annotation[], decimals: number = 7): string => {
     let content = "Label,Start,End\n";
-    labels.forEach(l => {
-        const safeText = `"${l.text.replace(/"/g, '""')}"`;
-        content += `${safeText},${l.start.toFixed(4)},${l.end.toFixed(4)}\n`;
+    annotations.forEach(a => {
+        const safeText = `"${a.text.replace(/"/g, '""')}"`;
+        content += `${safeText},${roundToDecimals(a.start, decimals).toFixed(decimals)},${roundToDecimals(a.end, decimals).toFixed(decimals)}\n`;
     });
     return content;
 };
 
-export const generateAudacityContent = (labels: Label[]): string => {
+export const generateAudacityContent = (annotations: Annotation[], decimals: number = 7): string => {
     let content = "";
-    labels.forEach(l => {
-        content += `${l.start.toFixed(6)}\t${l.end.toFixed(6)}\t${l.text}\n`;
+    annotations.forEach(a => {
+        content += `${roundToDecimals(a.start, decimals).toFixed(decimals)}\t${roundToDecimals(a.end, decimals).toFixed(decimals)}\t${a.text}\n`;
     });
     return content;
 };
 
-export const generateJSONContent = (labels: Label[]): string =>
-    JSON.stringify(labels, null, 2);
+export const generateJSONContent = (annotations: Annotation[], decimals: number = 7): string => {
+    const rounded = annotations.map(a => ({
+        ...a,
+        start: roundToDecimals(a.start, decimals),
+        end: roundToDecimals(a.end, decimals),
+    }));
+    return JSON.stringify(rounded, null, 2);
+};
 
 // Export to CSV
-export const exportToCSV = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.csv');
-    await saveFile(generateCSVContent(labels), path, '.csv');
+export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
+    const path = defaultSavePath(trackPath, trackName, '_annotations', '.csv');
+    await saveFile(generateCSVContent(annotations, decimals), path, '.csv');
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_labels', '.txt');
-    await saveFile(generateAudacityContent(labels), path, '.txt');
+export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
+    const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
+    await saveFile(generateAudacityContent(annotations, decimals), path, '.txt');
 };
 
-export const exportToJSON = async (labels: Label[], filename: string, currentFilePath: string | null) => {
-    const path = defaultSavePath(currentFilePath, filename, '_annotations', '.json');
-    await saveFile(generateJSONContent(labels), path, '.json');
+export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
+    const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
+    await saveFile(generateJSONContent(annotations, decimals), path, '.json');
 };
+
+// Walks up a filesystem path to find the first ancestor directory that actually
+// exists. Used to seed the native directory-picker dialog at the nearest valid
+// location when a configured path is missing.
+export async function findFirstValidAncestor(path: string): Promise<string> {
+  const sep = path.includes('/') ? '/' : '\\';
+  let current = path;
+  while (true) {
+    const exists = await listDirectory(current).then(() => true).catch(() => false);
+    if (exists) return current;
+    const lastSep = current.lastIndexOf(sep);
+    if (lastSep <= 0) return '';
+    current = current.substring(0, lastSep);
+  }
+}

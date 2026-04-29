@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
-import { openDirectoryDialog } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
+import GradientPicker from './GradientPicker';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
 
@@ -14,9 +15,18 @@ interface Props {
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
   const [name, setName] = useState(project.name);
+  const nameRef = useRef<HTMLDivElement>(null);
   const [audioDir, setAudioDir] = useState(project.audioDirectory);
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
   const [outputFormat, setOutputFormat] = useState(project.outputFormat);
+  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? 4);
+  const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
+  const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
+
+  // Set initial text content of the contentEditable name field on mount
+  useEffect(() => {
+    if (nameRef.current) nameRef.current.textContent = project.name;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -42,6 +52,16 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     if (!audioDir) { setError('Audio directory is required.'); return; }
     if (!annotationDir) { setError('Annotations directory is required.'); return; }
 
+    setIsBusy(true);
+    const [audioDirOk, annotationDirOk] = await Promise.all([
+      checkDirExists(audioDir),
+      checkDirExists(annotationDir),
+    ]);
+    setIsBusy(false);
+
+    if (!audioDirOk) { setError('Audio directory does not exist.'); return; }
+    if (!annotationDirOk) { setError('Annotations directory does not exist.'); return; }
+
     setError('');
     const updated: Project = {
       ...project,
@@ -49,6 +69,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       audioDirectory: audioDir,
       annotationDirectory: annotationDir,
       outputFormat,
+      outputRoundingDecimals,
+      nameGradientColors: gradientColors,
     };
     pendingRef.current = updated;
 
@@ -98,14 +120,18 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     if (annotationDirChanged) {
       setStep('annotationCopyConfirm');
     } else {
-      onSave(pendingRef.current!);
+      const pending = pendingRef.current;
+      if (!pending) return;
+      onSave(pending);
     }
   };
 
   // User chose whether to copy annotations to new dir
   const handleCopyDecision = (shouldCopy: boolean) => {
     if (!shouldCopy) {
-      onSave(pendingRef.current!);
+      const pending = pendingRef.current;
+      if (!pending) return;
+      onSave(pending);
       return;
     }
     setStep('conflictConfirm');
@@ -119,7 +145,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setIsBusy(true);
     try {
       // Build copies list: scan old dir for .txt files
-      const copies = await buildCopiesList(oldDir, newDir);
+      const copies = await buildCopiesList(oldDir, newDir, outputFormat);
       const result = await copyAnnotationFiles(copies, resolution);
       if (result.errors.length > 0) {
         setError(`Copy completed with errors:\n${result.errors.join('\n')}`);
@@ -133,7 +159,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     }
 
     setIsBusy(false);
-    onSave(pendingRef.current!);
+    const pending = pendingRef.current;
+    if (!pending) return;
+    onSave(pending);
   };
 
   return (
@@ -153,12 +181,36 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             <div className="space-y-4">
               <div>
                 <label className="text-gray-400 text-sm block mb-1">Project Name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                />
+                <div className="border-b border-gray-600 focus-within:border-blue-500 pb-1">
+                  <div
+                    ref={nameRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={e => setName((e.target as HTMLDivElement).textContent || '')}
+                    onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                    onPaste={e => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData('text/plain');
+                      const sel = window.getSelection();
+                      if (!sel || !sel.rangeCount) return;
+                      const range = sel.getRangeAt(0);
+                      range.deleteContents();
+                      range.insertNode(document.createTextNode(text));
+                      range.collapse(false);
+                      sel.removeAllRanges();
+                      sel.addRange(range);
+                    }}
+                    className="text-xl font-bold bg-clip-text text-transparent outline-none cursor-text"
+                    style={{
+                      backgroundImage: `linear-gradient(to right, ${gradientColors[0]}, ${gradientColors[1]})`,
+                      display: 'inline-block',
+                      minWidth: '2ch',
+                    }}
+                  />
+                </div>
+                <div className="mt-3">
+                  <GradientPicker value={gradientColors} onChange={setGradientColors} />
+                </div>
               </div>
 
               <div>
@@ -208,6 +260,27 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   <option value="csv">CSV (.csv)</option>
                   <option value="json">JSON (.json)</option>
                 </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-gray-400 text-sm block">Output Decimal Places</label>
+                    <p className="text-gray-600 text-xs">for start/end timestamps</p>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max="9"
+                    step="1"
+                    value={outputRoundingDecimals}
+                    onChange={e => {
+                      const v = parseInt(e.target.value);
+                      if (!isNaN(v)) setOutputRoundingDecimals(Math.min(9, Math.max(0, v)));
+                    }}
+                    className="w-16 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
@@ -318,19 +391,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
 }
 
-// Scan oldDir recursively and build copy specs mapping to newDir
+// Scan oldDir recursively and build copy specs mapping to newDir.
+// Uses the project's outputFormat to determine which file extension to scan for.
 async function buildCopiesList(
   oldDir: string,
   newDir: string,
+  outputFormat: string,
 ): Promise<{ src: string; dst: string }[]> {
-  // Use the Tauri readTextFile indirectly — we need a directory listing.
-  // We'll use a simple approach: invoke list_media_files_recursive is audio-only,
-  // so we call the raw Tauri invoke for listing .txt files.
-  const { invoke } = await import('@tauri-apps/api/core');
+  const ext = outputFormat === 'csv' ? '.csv' : outputFormat === 'json' ? '.json' : '.txt';
+  const files = await listAnnotationFilesRecursive(oldDir, ext);
 
-  const txtFiles = await invoke<string[]>('list_txt_files_recursive', { path: oldDir }).catch(() => [] as string[]);
-
-  return txtFiles.map(src => {
+  return files.map(src => {
     const rel = src.startsWith(oldDir) ? src.slice(oldDir.length) : src;
     const dst = newDir + rel;
     return { src, dst };
