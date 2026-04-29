@@ -1,5 +1,5 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
-import { saveFileDialog, writeTextFile } from './tauriCommands';
+import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
 
 export const formatTime = (seconds: number): string => {
   const h = Math.floor(seconds / 3600);
@@ -139,3 +139,18 @@ export const exportToJSON = async (annotations: Annotation[], trackName: string,
     const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
     await saveFile(generateJSONContent(annotations, decimals), path, '.json');
 };
+
+// Walks up a filesystem path to find the first ancestor directory that actually
+// exists. Used to seed the native directory-picker dialog at the nearest valid
+// location when a configured path is missing.
+export async function findFirstValidAncestor(path: string): Promise<string> {
+  const sep = path.includes('/') ? '/' : '\\';
+  let current = path;
+  while (true) {
+    const exists = await listDirectory(current).then(() => true).catch(() => false);
+    if (exists) return current;
+    const lastSep = current.lastIndexOf(sep);
+    if (lastSep <= 0) return '';
+    current = current.substring(0, lastSep);
+  }
+}

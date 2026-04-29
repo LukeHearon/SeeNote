@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool } from '../types';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
@@ -29,11 +29,6 @@ function formatRulerTime(s: number, timeStep: number, viewSpan: number): string 
   }
 }
 
-interface SelectionRegion {
-  start: number;
-  end: number;
-}
-
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
@@ -42,7 +37,7 @@ interface SpectrogramProps {
   duration: number;
   isPlaying: boolean;
   isProcessing: boolean;
-  fileIdent: string | null;
+  ident: string | null;
   settings: SpectrogramSettings;
   zoomSec: number;
   annotations: Annotation[];
@@ -50,13 +45,13 @@ interface SpectrogramProps {
   // null = Selection Mode (no annotation tool active)
   activeAnnotationTool: AnnotationTool | null;
   annotationTools: AnnotationTool[];
-  selectionRegion: SelectionRegion | null;
+  selection: Selection | null;
   boundAnnotationId: string | null;
   onSeek: (time: number) => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
-  onSelectionChange: (region: SelectionRegion | null) => void;
+  onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
 }
@@ -78,14 +73,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   duration,
   isPlaying,
   isProcessing,
-  fileIdent,
+  ident,
   settings,
   zoomSec,
   annotations,
   selectedAnnotationId,
   activeAnnotationTool,
   annotationTools,
-  selectionRegion,
+  selection,
   boundAnnotationId,
   onSeek,
   onAnnotationsChange,
@@ -175,7 +170,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const resizingSelectionHandleRef = useRef(resizingSelectionHandle);
   const annotationsRef = useRef(annotations);
   const boundAnnotationIdRef = useRef(boundAnnotationId);
-  const selectionRegionRef = useRef(selectionRegion);
+  const selectionRef = useRef(selection);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onAnnotationsChangeRef = useRef(onAnnotationsChange);
   const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
@@ -198,14 +193,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   resizingSelectionHandleRef.current = resizingSelectionHandle;
   annotationsRef.current = annotations;
   boundAnnotationIdRef.current = boundAnnotationId;
-  selectionRegionRef.current = selectionRegion;
+  selectionRef.current = selection;
   onSelectionChangeRef.current = onSelectionChange;
   onAnnotationsChangeRef.current = onAnnotationsChange;
 
   // Reset scroll position to 0 when switching tracks
   useEffect(() => {
     setScrollLeft(0);
-  }, [fileIdent]);
+  }, [ident]);
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
   // currently-visible window. Disabled when a selection is active: the user positioned
@@ -213,7 +208,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
   // the playhead can travel the full width of the screen without the view moving.
   useEffect(() => {
-      if (isPlaying && !selectionRegion && containerRef.current) {
+      if (isPlaying && !selection && containerRef.current) {
           const containerWidth = containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
@@ -224,7 +219,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               setScrollLeft(Math.max(0, targetScroll));
           }
       }
-  }, [isPlaying, currentTime, zoomSec, selectionRegion, duration]);
+  }, [isPlaying, currentTime, zoomSec, selection, duration]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
@@ -373,7 +368,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const isDraggingSelection = creatingSelection && Math.abs(creatingSelection.current - creatingSelection.start) > 0.001;
     const activeSelection = isDraggingSelection
       ? { start: Math.min(creatingSelection.start, creatingSelection.current), end: Math.max(creatingSelection.start, creatingSelection.current) }
-      : selectionRegion;
+      : selection;
 
     if (activeSelection) {
       const selStartX = Math.max(0, (activeSelection.start * pixelsPerSecond) - scrollLeft);
@@ -441,16 +436,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     // 5. Draw ident text at top of spectrogram
-    if (fileIdent) {
+    if (ident) {
       ctx.font = 'bold 12px monospace';
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText(fileIdent, 8, 6);
+      ctx.fillText(ident, 8, 6);
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, currentTime, fileIdent, selectionRegion, creatingSelection, duration]);
+  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -599,9 +594,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const goToPrevAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection start
-    if (selectionRegion !== null) {
-      onSeek(selectionRegion.start);
-      scrollToAnnotation(selectionRegion.start);
+    if (selection !== null) {
+      onSeek(selection.start);
+      scrollToAnnotation(selection.start);
       return;
     }
     const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTime - 0.05);
@@ -612,13 +607,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedAnnotations, currentTime, onSeek, scrollToAnnotation, selectionRegion]);
+  }, [sortedAnnotations, currentTime, onSeek, scrollToAnnotation, selection]);
 
   const goToNextAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection end
-    if (selectionRegion !== null) {
-      onSeek(selectionRegion.end);
-      scrollToAnnotation(selectionRegion.end);
+    if (selection !== null) {
+      onSeek(selection.end);
+      scrollToAnnotation(selection.end);
       return;
     }
     const next = sortedAnnotations.find(a => a.start > currentTime + 0.05);
@@ -629,7 +624,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(duration);
       scrollToAnnotation(duration);
     }
-  }, [sortedAnnotations, currentTime, duration, onSeek, scrollToAnnotation, selectionRegion]);
+  }, [sortedAnnotations, currentTime, duration, onSeek, scrollToAnnotation, selection]);
 
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
@@ -725,7 +720,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     const rsh = resizingSelectionHandleRef.current;
-    const sel = selectionRegionRef.current;
+    const sel = selectionRef.current;
     if (rsh && sel) {
       let newStart = sel.start;
       let newEnd = sel.end;
@@ -845,7 +840,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
 
       // Click inside existing selection: seek, then allow drag to replace it
-      if (selectionRegion && t >= selectionRegion.start && t <= selectionRegion.end) {
+      if (selection && t >= selection.start && t <= selection.end) {
         onSeek(t);
         if (activeAnnotationTool === null) {
           pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
@@ -984,13 +979,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
        return;
     }
 
-    if (resizingSelectionHandle && selectionRegion) {
-      let newStart = selectionRegion.start;
-      let newEnd = selectionRegion.end;
+    if (resizingSelectionHandle && selection) {
+      let newStart = selection.start;
+      let newEnd = selection.end;
       if (resizingSelectionHandle === 'start') {
-        newStart = Math.min(t, selectionRegion.end - 0.05);
+        newStart = Math.min(t, selection.end - 0.05);
       } else {
-        newEnd = Math.max(t, selectionRegion.start + 0.05);
+        newEnd = Math.max(t, selection.start + 0.05);
       }
       onSelectionChange({ start: newStart, end: newEnd });
       // If there's a bound annotation, update its extent to match
@@ -1139,7 +1134,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // Render selection region handles (draggable)
   const renderSelectionHandles = () => {
-    const activeSelection = selectionRegion;
+    const activeSelection = selection;
     if (!activeSelection || creatingSelection) return null;
 
     const leftX = (activeSelection.start * pixelsPerSecond) - scrollLeft;

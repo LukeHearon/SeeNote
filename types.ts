@@ -1,5 +1,10 @@
 export type FrequencyScale = 'linear' | 'log' | 'mel';
 
+export interface Selection {
+  start: number; // seconds
+  end: number;   // seconds
+}
+
 export interface Annotation {
   id: string;
   toolKey: string; // The key of the annotation tool (e.g., "0", "1") used to create this annotation

@@ -33,10 +33,10 @@ When a selection is active. Modifies playback behavior and behavior of annotatio
 # Windows
 
 ## Project Window
-The opening window of SeeNote that lists projects by recency.
+The opening window of SeeNote that lists projects by recency. Implemented by `LaunchScreen`.
 
 ## Annotation Window
-The window that shows when the user opens a project for creating annotations.
+The window that shows when the user opens a project for creating annotations. Implemented by `AnnotationWindow`. `App.tsx` is the router that switches between Project Window and Annotation Window.
 
 ---
 
@@ -46,10 +46,10 @@ The window that shows when the user opens a project for creating annotations.
 Shows back button to return to Project Window, project name, project settings, debug, help modal buttons
 
 ## File Panel (top left)
-The sidebar listing the project's media files in their source directory structure.
+The sidebar listing the project's media files in their source directory structure. Implemented by `FileTree` (tree logic) wrapped by a layout div in `AnnotationWindow`.
 
-##  Annotation Tools Panel (bottom right)
-Shows all defined annotation tools.
+## Annotation Tools Panel (bottom left)
+Shows all defined annotation tools. Implemented by `AnnotationToolsPanel`.
 Header is "LABELS" for clarity, even though these are properly called Annotation Tools.
 
 ## Timeline Panel (bottom right)
@@ -63,13 +63,13 @@ The time-frequency visualization of the current track. Horizontal axis is time; 
 - **Frequency axis** — shows frequency (Hz or mel) along the vertical dimension.
 
 ### Toolbar
-The control strip above the spectrogram. Contains transport controls, time fields, zoom controls, and access to settings.
+The control strip above the spectrogram. Contains transport controls, time fields, zoom controls, and access to settings. Implemented by `Toolbar`.
 
 ### Spectrogram Settings
 Display settings for the spectrogram: frequency range, intensity, FFT size, and frequency scale.
 
 ## Video Panel (top right)
-Shows video frames when the current track is a video file.
+Shows video frames when the current track is a video file. Implemented by `VideoPane`.
 
 ---
 
@@ -87,10 +87,10 @@ Annotations made with these tools are called "Defined Annotations"
 
 # Selections
 
-A selected region of the track, indicated by two vertical boundary lines and darkening outside the region.
+A `Selection` is a `{ start, end }` interval in seconds on the current track, indicated by two vertical boundary lines and darkening outside the region. A selection may be free-standing (dragged on the spectrogram) or bound to an existing annotation (entered by clicking an annotation's center). The TypeScript type is `Selection` in `types.ts`.
 
-## Annotation Selection
-A selection bound to an existing annotation, entered by clicking the center of that annotation. The selection handles and annotation boundaries move together.
+## Bound Selection
+A selection entered by clicking the center of an existing annotation. The selection handles and annotation boundaries move together.
 
 ---
 

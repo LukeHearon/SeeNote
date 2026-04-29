@@ -12,7 +12,7 @@ interface TreeNode {
 interface FileTreeProps {
   rootDirectory: string | null;
   allFiles: string[];
-  currentFile: string | null;
+  currentTrack: string | null;
   onFileSelect: (path: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -22,7 +22,7 @@ interface FileTreeProps {
   canNavigateNext: boolean;
   shuffleMode: boolean;
   onToggleShuffle: () => void;
-  annotatedFiles: Set<string>;
+  annotatedTracks: Set<string>;
   fileFilter: 'all' | 'annotated' | 'unannotated';
   onToggleFileFilter: () => void;
   onRevealInFinder: (path: string) => void;
@@ -103,10 +103,10 @@ function getAllDirPaths(nodes: TreeNode[]): string[] {
   return paths;
 }
 
-function getAncestorPaths(currentFile: string | null, rootDirectory: string | null): Set<string> {
+function getAncestorPaths(currentTrack: string | null, rootDirectory: string | null): Set<string> {
   const paths = new Set<string>();
-  if (!currentFile || !rootDirectory) return paths;
-  const rel = currentFile.substring(rootDirectory.length + 1);
+  if (!currentTrack || !rootDirectory) return paths;
+  const rel = currentTrack.substring(rootDirectory.length + 1);
   const parts = rel.split(/[\\/]/);
   let path = rootDirectory;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -118,24 +118,24 @@ function getAncestorPaths(currentFile: string | null, rootDirectory: string | nu
 
 interface TreeItemProps {
   node: TreeNode;
-  currentFile: string | null;
+  currentTrack: string | null;
   onFileSelect: (path: string) => void;
   depth: number;
   expandedDirs: Set<string>;
   toggleDir: (path: string) => void;
-  annotatedFiles: Set<string>;
+  annotatedTracks: Set<string>;
   ancestorPaths: Set<string>;
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
   node,
-  currentFile,
+  currentTrack,
   onFileSelect,
   depth,
   expandedDirs,
   toggleDir,
-  annotatedFiles,
+  annotatedTracks,
   ancestorPaths,
   onContextMenu,
 }) => {
@@ -166,12 +166,12 @@ const TreeItem: React.FC<TreeItemProps> = ({
           <TreeItem
             key={child.path}
             node={child}
-            currentFile={currentFile}
+            currentTrack={currentTrack}
             onFileSelect={onFileSelect}
             depth={depth + 1}
             expandedDirs={expandedDirs}
             toggleDir={toggleDir}
-            annotatedFiles={annotatedFiles}
+            annotatedTracks={annotatedTracks}
             ancestorPaths={ancestorPaths}
             onContextMenu={onContextMenu}
           />
@@ -180,9 +180,9 @@ const TreeItem: React.FC<TreeItemProps> = ({
     );
   }
 
-  const isActive = node.path === currentFile;
+  const isActive = node.path === currentTrack;
   const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(node.name));
-  const hasAnnotation = annotatedFiles.has(node.path);
+  const hasAnnotation = annotatedTracks.has(node.path);
   const isSupported = isSupportedMediaFile(node.path);
 
   if (!isSupported) {
@@ -230,7 +230,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
 function FileTree({
   rootDirectory,
   allFiles,
-  currentFile,
+  currentTrack,
   onFileSelect,
   collapsed,
   onToggleCollapse,
@@ -240,7 +240,7 @@ function FileTree({
   canNavigateNext,
   shuffleMode,
   onToggleShuffle,
-  annotatedFiles,
+  annotatedTracks,
   fileFilter,
   onToggleFileFilter,
   onRevealInFinder,
@@ -259,15 +259,15 @@ function FileTree({
   // On tree build/rebuild, start with only the current file's ancestors expanded
   useEffect(() => {
     if (tree.length > 0) {
-      setExpandedDirs(getAncestorPaths(currentFile, rootDirectory));
+      setExpandedDirs(getAncestorPaths(currentTrack, rootDirectory));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree]); // intentionally snapshot currentFile/rootDirectory at tree-build time; file nav is handled below
+  }, [tree]); // intentionally snapshot currentTrack/rootDirectory at tree-build time; file nav is handled below
 
   // Also auto-expand ancestors of the current file
   useEffect(() => {
-    if (!currentFile || !rootDirectory) return;
-    const rel = currentFile.substring(rootDirectory.length + 1);
+    if (!currentTrack || !rootDirectory) return;
+    const rel = currentTrack.substring(rootDirectory.length + 1);
     const parts = rel.split(/[\\/]/);
     setExpandedDirs(prev => {
       const next = new Set(prev);
@@ -278,7 +278,7 @@ function FileTree({
       }
       return next;
     });
-  }, [currentFile, rootDirectory]);
+  }, [currentTrack, rootDirectory]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -341,7 +341,7 @@ function FileTree({
     }
   }, []);
 
-  useLayoutEffect(syncScrollbar, [currentFile, allFiles, expandedDirs, shuffleMode, syncScrollbar]);
+  useLayoutEffect(syncScrollbar, [currentTrack, allFiles, expandedDirs, shuffleMode, syncScrollbar]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -507,7 +507,7 @@ function FileTree({
           const WINDOW = 105;
           const FADE_ZONE = 5; // items at each edge that fade, but only when files are hidden on that side
 
-          const currentIdx = allFiles.findIndex(f => f === currentFile);
+          const currentIdx = allFiles.findIndex(f => f === currentTrack);
           const startIdx = Math.max(0, currentIdx >= 0 ? currentIdx - WINDOW : 0);
           const endIdx = Math.min(allFiles.length - 1, currentIdx >= 0 ? currentIdx + WINDOW : WINDOW * 2);
           const visible = allFiles.slice(startIdx, endIdx + 1);
@@ -535,9 +535,9 @@ function FileTree({
 
                 const rel = filePath.substring(rootDirectory.length + 1);
                 const relNoExt = rel.replace(/\.[^/.]+$/, '');
-                const isActive = filePath === currentFile;
+                const isActive = filePath === currentTrack;
                 const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(filePath));
-                const hasAnnotation = annotatedFiles.has(filePath);
+                const hasAnnotation = annotatedTracks.has(filePath);
                 const isSupported = isSupportedMediaFile(filePath);
                 if (!isSupported) {
                   return (
@@ -592,17 +592,17 @@ function FileTree({
 
         {/* Normal tree mode */}
         {!shuffleMode && (() => {
-          const ancestorPaths = getAncestorPaths(currentFile, rootDirectory);
+          const ancestorPaths = getAncestorPaths(currentTrack, rootDirectory);
           return tree.map(node => (
             <TreeItem
               key={node.path}
               node={node}
-              currentFile={currentFile}
+              currentTrack={currentTrack}
               onFileSelect={onFileSelect}
               depth={0}
               expandedDirs={expandedDirs}
               toggleDir={toggleDir}
-              annotatedFiles={annotatedFiles}
+              annotatedTracks={annotatedTracks}
               ancestorPaths={ancestorPaths}
               onContextMenu={handleContextMenu}
             />
@@ -656,7 +656,7 @@ function FileTree({
                 : `Show Video in ${finderLabel}`}
           </button>
           {/* Only show "Show Annotations in Finder" for files that have an annotation */}
-          {!contextMenu.isDir && annotatedFiles.has(contextMenu.path) && (
+          {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (
             <button
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
               onClick={() => {

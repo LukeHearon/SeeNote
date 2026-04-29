@@ -4,14 +4,14 @@ import { listDirectory, openDirectoryDialog, DirEntry } from '../utils/tauriComm
 
 interface FileBrowserProps {
   currentDirectory: string | null;
-  currentFile: string | null;
+  currentTrack: string | null;
   onFileSelect: (absolutePath: string) => void;
   onDirectoryChange: (absolutePath: string) => void;
 }
 
 export default function FileBrowser({
   currentDirectory,
-  currentFile,
+  currentTrack,
   onFileSelect,
   onDirectoryChange,
 }: FileBrowserProps) {
@@ -84,7 +84,7 @@ export default function FileBrowser({
           </div>
         )}
         {entries.map(entry => {
-          const isActive = entry.path === currentFile;
+          const isActive = entry.path === currentTrack;
           const isMedia = entry.is_audio || entry.is_video;
 
           if (entry.is_dir) {
