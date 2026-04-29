@@ -210,10 +210,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Sync scroll with playback — center the playhead once it reaches the center of the
   // currently-visible window. Disabled when a selection is active: the user positioned
   // the canvas intentionally relative to the selection and auto-scroll disrupts that.
+  // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
+  // the playhead can travel the full width of the screen without the view moving.
   useEffect(() => {
       if (isPlaying && !selectionRegion && containerRef.current) {
           const containerWidth = containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
+          if (duration * pps <= containerWidth) return;
           const curScroll = scrollLeftRef.current;
           const visibleCenterTime = (curScroll + containerWidth / 2) / pps;
           if (currentTime >= visibleCenterTime) {
@@ -221,7 +224,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               setScrollLeft(Math.max(0, targetScroll));
           }
       }
-  }, [isPlaying, currentTime, zoomSec, selectionRegion]);
+  }, [isPlaying, currentTime, zoomSec, selectionRegion, duration]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
