@@ -1894,9 +1894,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right-edge width resize handle */}
+              {/* Right-edge width resize handle — sits on the outer face of the border */}
               <div
-                className="absolute top-0 right-0 bottom-0 w-1 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-20"
+                className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+                style={{ right: '-6px', width: '6px' }}
                 onMouseDown={handleLeftPanelWidthDrag}
               />
             </div>

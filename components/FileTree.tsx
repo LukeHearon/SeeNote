@@ -488,11 +488,11 @@ function FileTree({
         </div>
       </div>
 
-      {/* File list */}
-      <div className="relative flex-1 min-h-0 overflow-hidden">
+      {/* File list — flex row so scrollbar track is a true sibling, not an overlay */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         <div
           ref={scrollContainerRef}
-          className="h-full overflow-y-scroll no-scrollbar"
+          className="flex-1 min-w-0 overflow-y-scroll no-scrollbar"
           onScroll={syncScrollbar}
         >
         {!rootDirectory && (
@@ -610,25 +610,29 @@ function FileTree({
         })()}
         </div>{/* end scroll container */}
 
-        {/* Custom scrollbar */}
-        {showScrollbar && (
-          <div
-            className="absolute right-0 top-0 bottom-0 w-2 cursor-ns-resize"
-            onMouseDown={handleTrackMouseDown}
-          >
-            <div
-              className="absolute inset-x-0 rounded-full bg-slate-600 hover:bg-slate-500 transition-colors cursor-ns-resize"
-              style={{ top: `${thumbTop}px`, height: `${thumbHeight}px` }}
-              onMouseDown={handleThumbMouseDown}
-            />
-            {activeItemFraction !== null && (
+        {/* Scrollbar track — always present so content is always bounded by it */}
+        <div
+          className="w-2 flex-none bg-[#1F2937] relative cursor-ns-resize"
+          onMouseDown={handleTrackMouseDown}
+        >
+          {showScrollbar && (
+            <>
+              {/* Hash below thumb */}
+              {activeItemFraction !== null && (
+                <div
+                  className="absolute inset-x-0 pointer-events-none rounded-sm"
+                  style={{ top: `${activeItemFraction * 100}%`, height: '3px', background: '#e65161', transform: 'translateY(-50%)' }}
+                />
+              )}
+              {/* Thumb on top, semi-transparent so hash shows through */}
               <div
-                className="absolute inset-x-0 pointer-events-none rounded-sm"
-                style={{ top: `${activeItemFraction * 100}%`, height: '3px', background: '#e65161', transform: 'translateY(-50%)' }}
+                className="absolute inset-x-0 rounded-full bg-slate-600/60 hover:bg-slate-500/70 transition-colors cursor-ns-resize"
+                style={{ top: `${thumbTop}px`, height: `${thumbHeight}px` }}
+                onMouseDown={handleThumbMouseDown}
               />
-            )}
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Context menu */}
