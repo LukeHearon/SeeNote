@@ -1,3 +1,5 @@
+import type { AnnotationTool } from './types';
+
 // Roseus 'r' perceptually-uniform colormap
 // © 2022 dofuuz — MIT License
 // Source: https://github.com/dofuuz/roseus
@@ -115,3 +117,11 @@ export const DEFAULT_ANNOTATION_TOOLS = [
   { key: "7", text: "ins_trill_cicada",  color: HOTKEY_COLORS[7] },
   { key: "8", text: "ins_trill_cricket", color: HOTKEY_COLORS[8] },
 ];
+
+export function pickNextToolColor(existingTools: AnnotationTool[]): string {
+  const usedColors = new Set(existingTools.map(t => t.color));
+  for (let i = 1; i <= 9; i++) {
+    if (!usedColors.has(HOTKEY_COLORS[i])) return HOTKEY_COLORS[i];
+  }
+  return HOTKEY_COLORS[1];
+}

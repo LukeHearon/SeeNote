@@ -17,14 +17,17 @@ export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };
 
-export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => ({
-  id: generateId(),
-  toolKey: tool.key,
-  start,
-  end,
-  text: tool.key === '0' ? '' : tool.text,
-  color: tool.color,
-});
+export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => {
+  if (tool.key === null) throw new Error('Cannot create annotation from unassigned tool');
+  return {
+    id: generateId(),
+    toolKey: tool.key,
+    start,
+    end,
+    text: tool.key === '0' ? '' : tool.text,
+    color: tool.color,
+  };
+};
 
 // Calculate vertical dodging for overlapping annotations.
 // Returns new objects (inputs are never mutated) sorted by start time,

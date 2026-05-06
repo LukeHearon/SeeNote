@@ -34,7 +34,7 @@ export interface AudioMetadata {
 }
 
 export interface AnnotationTool {
-  key: string;
+  key: string | null;  // null = unassigned, "0" = custom, "1"-"9" = hotkey
   text: string;
   color: string;
 }

@@ -6,7 +6,7 @@ import { Project, AnnotationTool, SpectrogramSettings } from '../types';
 // Wire format matching the Rust ProjectRecord struct (uses snake_case and the
 // legacy `label_configs` field name for backward compatibility with saved files).
 interface AnnotationToolRecord {
-  key: string;
+  key: string | null;
   text: string;
   color: string;
 }

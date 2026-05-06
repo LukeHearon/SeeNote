@@ -19,6 +19,7 @@ import TooltipLayer from './components/TooltipLayer';
 import BrightnessContrastPad from './components/BrightnessContrastPad';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
+import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import Toolbar from './components/Toolbar';
 
 export interface AnnotationWindowProps {
@@ -46,6 +47,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+  const [showToolSettings, setShowToolSettings] = useState(false);
 
   // Derived from project prop
   const annotationDirectory = project.annotationDirectory ?? null;
@@ -951,7 +953,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                   ...reassignBufferRef.current,
                   [currentAnnotation.toolKey]: currentAnnotation.text,
               };
-              const savedText = reassignBufferRef.current[tool.key];
+              const savedText = reassignBufferRef.current[tool.key ?? ''];
               const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
               const updated = annotations.map(a => a.id === boundAnnotationId
                   ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
@@ -1051,83 +1053,61 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
   };
 
-  const handleAddTool = useCallback((text: string) => {
-      const nextIndex = annotationTools.length;
-      if (nextIndex >= 10) {
-          alert("Maximum of 10 annotation tools (0-9) allowed.");
-          return;
+  const handleCreateTool = useCallback((text: string, color: string) => {
+    setAnnotationTools(prev => [...prev, { key: null, text, color }]);
+  }, []);
+
+  const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
+    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
+    setAnnotations(prev => prev.map(a => {
+      const tool = annotationTools[toolIndex];
+      if (!tool) return a;
+      // Update text for annotations linked to this tool
+      if (a.toolKey === tool.key && a.toolKey !== '0') {
+        return { ...a, text: newText, color: newColor };
       }
-      const newTool: AnnotationTool = {
-          key: nextIndex.toString(),
-          text,
-          color: HOTKEY_COLORS[nextIndex]
-      };
-      setAnnotationTools(prev => [...prev, newTool]);
-      // Auto-select the newly created annotation tool
-      setActiveToolKey(newTool.key);
-      addLog(`Added tool: ${text} (${nextIndex})`);
-  }, [annotationTools, addLog]);
-
-  const handleSaveTool = useCallback((index: number, newText: string) => {
-      setAnnotationTools(prev => {
-          const updated = [...prev];
-          const old = prev[index];
-          updated[index] = { ...old, text: newText || old.text };
-          return updated;
-      });
-      // Rename matching annotations
-      const tool = annotationTools[index];
-      if (newText && newText !== tool.text) {
-          const updatedAnnotations = annotations.map(a => {
-              if (a.toolKey === tool.key) {
-                  return { ...a, text: newText };
-              }
-              return a;
-          });
-          handleAnnotationsCommit(updatedAnnotations);
-          addLog(`Renamed tool ${tool.text} -> ${newText}. Updated linked annotations.`);
+      // Reassociate Custom annotations matching the new name to this tool
+      if (a.toolKey === '0' && a.text === newText && tool.key !== null) {
+        return { ...a, toolKey: tool.key!, color: newColor };
       }
-  }, [annotationTools, annotations, handleAnnotationsCommit, addLog]);
+      return a;
+    }));
+  }, [annotationTools]);
 
-  const handleDeleteTool = useCallback((idx: number, e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (idx === 0) return; // Cannot delete the Custom Annotation Tool
+  const handleDeleteTool = useCallback((toolIndex: number) => {
+    const tool = annotationTools[toolIndex];
+    if (!tool) return;
+    setAnnotations(prev => prev.map(a =>
+      a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a
+    ));
+    setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
+    if (activeToolKey === tool.key) setActiveToolKey(null);
+  }, [annotationTools, activeToolKey]);
 
-      const tool = annotationTools[idx];
-      const linkedAnnotations = annotations.filter(a => a.toolKey === tool.key);
+  const handleReorderTools = useCallback((newTools: AnnotationTool[]) => {
+    const snapshot = annotationTools;
+    if (newTools.length !== snapshot.length) return;
 
-      if (linkedAnnotations.length > 0) {
-          const choice = confirm(
-              `Deleting tool "${tool.text}" which is used by ${linkedAnnotations.length} annotations.\n\n` +
-              `OK: Convert annotations to Custom (White)\n` +
-              `Cancel: Delete all ${linkedAnnotations.length} annotations`
-          );
+    // Build old→new key remap (by stable index — newTools must preserve indices).
+    const keyRemap = new Map<string, string>();
+    const unassignedKeys = new Set<string>();
+    for (let i = 0; i < snapshot.length; i++) {
+      const oldKey = snapshot[i].key;
+      const newKey = newTools[i].key;
+      if (oldKey && newKey && oldKey !== newKey) keyRemap.set(oldKey, newKey);
+      if (oldKey && !newKey) unassignedKeys.add(oldKey);
+    }
 
-          if (choice) {
-              const updatedAnnotations = annotations.map(a => {
-                  if (a.toolKey === tool.key) {
-                      return { ...a, toolKey: "0", color: "#ffffff" };
-                  }
-                  return a;
-              });
-              handleAnnotationsCommit(updatedAnnotations);
-              addLog(`Deleted tool ${tool.text}. Converted annotations to Custom.`);
-          } else {
-              const updatedAnnotations = annotations.filter(a => a.toolKey !== tool.key);
-              handleAnnotationsCommit(updatedAnnotations);
-              addLog(`Deleted tool ${tool.text} and all linked annotations.`);
-          }
-      } else {
-          addLog(`Deleted tool ${tool.text} (unused).`);
-      }
-
-      // Remove tool and re-index hotkeys (0-9)
-      const newTools = annotationTools.filter((_, i) => i !== idx);
-      const reindexed = newTools.map((t, i) => ({ ...t, key: i.toString(), color: HOTKEY_COLORS[i] }));
-
-      setAnnotationTools(reindexed);
-      setActiveToolKey('0');
-  }, [annotationTools, annotations, handleAnnotationsCommit, addLog]);
+    setAnnotationTools(newTools);
+    setAnnotations(prev => prev.map(a => {
+      if (unassignedKeys.has(a.toolKey)) return { ...a, toolKey: '0', color: '#ffffff' };
+      const remapped = keyRemap.get(a.toolKey);
+      return remapped ? { ...a, toolKey: remapped } : a;
+    }));
+    if (activeToolKey && (unassignedKeys.has(activeToolKey) || keyRemap.has(activeToolKey))) {
+      setActiveToolKey(unassignedKeys.has(activeToolKey) ? null : keyRemap.get(activeToolKey)!);
+    }
+  }, [annotationTools, activeToolKey]);
 
   const handleSplitDrag = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -1315,9 +1295,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 activeToolKey={activeToolKey}
                 onToolActivate={handleToolActivate}
                 onSelectModeActivate={() => setActiveToolKey(null)}
-                onAddTool={handleAddTool}
-                onDeleteTool={handleDeleteTool}
-                onSaveTool={handleSaveTool}
+                onOpenSettings={() => setShowToolSettings(true)}
               />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
@@ -1494,6 +1472,17 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           project={project}
           onSave={handleProjectSettingsSaved}
           onClose={() => setShowProjectSettings(false)}
+        />
+      )}
+      {showToolSettings && (
+        <AnnotationToolsSettingsModal
+          annotationTools={annotationTools}
+          annotations={annotations}
+          onClose={() => setShowToolSettings(false)}
+          onReorderTools={handleReorderTools}
+          onRenameTool={handleRenameTool}
+          onDeleteTool={handleDeleteTool}
+          onCreateTool={handleCreateTool}
         />
       )}
       <TooltipLayer />

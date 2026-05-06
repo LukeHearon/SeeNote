@@ -10,7 +10,7 @@ const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 /// JSON for backward compatibility with existing project files.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AnnotationToolRecord {
-    pub key: String,
+    pub key: Option<String>,
     pub text: String,
     pub color: String,
 }
