@@ -66,7 +66,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   const [cacheVersion, setCacheVersion] = useState(0);
 
   // Volume: 0 to 4 (400% or +12dB approx)
-  const [volume, setVolume] = useState(1);
+  const [volume, setVolume] = useState(project.uiSettings?.volume ?? 1);
   const [muted, setMuted] = useState(false);
 
   // Annotation State
@@ -184,9 +184,9 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // preroll awaits check this so stale resolutions don't start the engine
   // after the user has pressed pause or triggered a new play.
   const playTokenRef = useRef(0);
-  const [splitRatio, setSplitRatio] = useState(0.5);
-  const [leftPanelRatio, setLeftPanelRatio] = useState(0.6);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(224);
+  const [splitRatio, setSplitRatio] = useState(project.uiSettings?.splitRatio ?? 0.5);
+  const [leftPanelRatio, setLeftPanelRatio] = useState(project.uiSettings?.leftPanelRatio ?? 0.6);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(project.uiSettings?.leftPanelWidth ?? 224);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
@@ -531,6 +531,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Persist annotation tools and spectrogram settings to project whenever they change
   const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProjectIdRef = useRef<string | null>(null);
   useEffect(() => {
     // Skip persistence when switching projects (avoids overwriting with stale tools)
@@ -559,6 +560,18 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
     };
   }, [settings]);
+
+  useEffect(() => {
+    if (prevProjectIdRef.current !== project.id) return;
+    if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
+    uiPersistRef.current = setTimeout(() => {
+      if (!projectRef.current) return;
+      updateProject({ ...projectRef.current, uiSettings: { leftPanelWidth, splitRatio, leftPanelRatio, volume } });
+    }, 600);
+    return () => {
+      if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
+    };
+  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
@@ -752,6 +765,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       setSettings(project.spectrogramSettings);
     }
     setShuffleMode(project.shuffleMode ?? false);
+    setSplitRatio(project.uiSettings?.splitRatio ?? 0.5);
+    setLeftPanelRatio(project.uiSettings?.leftPanelRatio ?? 0.6);
+    setLeftPanelWidth(project.uiSettings?.leftPanelWidth ?? 224);
+    setVolume(project.uiSettings?.volume ?? 1);
     setShuffledFiles([]);
     setCurrentDirectory(project.audioDirectory);
     setAnnotatedFiles(new Set());

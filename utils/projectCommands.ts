@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Project, AnnotationTool, SpectrogramSettings } from '../types';
+import { Project, AnnotationTool, SpectrogramSettings, ProjectUiSettings } from '../types';
 
 // ── Rust-side snake_case shape ────────────────────────────────────────────────
 
@@ -25,6 +25,7 @@ interface ProjectRecord {
   output_rounding_decimals?: number;
   file_filter?: string;
   hide_annotated?: boolean;
+  ui_settings?: ProjectUiSettings; // stored as-is (camelCase) via serde_json::Value
 }
 
 interface CopyResultRaw {
@@ -50,6 +51,7 @@ function toProject(r: ProjectRecord): Project {
     outputRoundingDecimals: r.output_rounding_decimals,
     fileFilter: r.file_filter as 'all' | 'annotated' | 'unannotated' | undefined,
     hideAnnotated: r.hide_annotated,
+    uiSettings: r.ui_settings,
   };
 }
 
@@ -68,6 +70,7 @@ function toRecord(p: Project): ProjectRecord {
     output_rounding_decimals: p.outputRoundingDecimals,
     file_filter: p.fileFilter,
     hide_annotated: p.hideAnnotated,
+    ui_settings: p.uiSettings,
   };
 }
 

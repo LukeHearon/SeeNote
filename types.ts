@@ -39,6 +39,13 @@ export interface AnnotationTool {
   color: string;
 }
 
+export interface ProjectUiSettings {
+  leftPanelWidth?: number;  // px
+  splitRatio?: number;      // 0–1, vertical split between video and spectrogram
+  leftPanelRatio?: number;  // 0–1, split within left panel (file tree vs tool palette)
+  volume?: number;          // gain, 0–4
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -55,4 +62,5 @@ export interface Project {
   /** @deprecated Use `fileFilter` instead. Kept for backward-compatible reads of old project files. */
   hideAnnotated?: boolean;
   shuffleMode?: boolean;
+  uiSettings?: ProjectUiSettings;
 }
