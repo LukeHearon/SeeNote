@@ -91,7 +91,7 @@ export default function Toolbar({
 
   // Calculate volume slider background
   const sliderPct = gainToSlider(muted ? 0 : volume) * 100;
-  const isBoosted = volume > 1;
+  const isBoosted = !muted && volume > 1;
 
   // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45", "1:23:45"
   const parseTimestamp = (raw: string): number | null => {
