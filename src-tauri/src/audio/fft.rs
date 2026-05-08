@@ -44,10 +44,9 @@ pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8
         return Vec::new();
     }
 
-    let n_cols = (samples.len() - fft_size) / hop_size;
-    if n_cols == 0 {
-        return Vec::new();
-    }
+    // STFT col k uses samples[k*hop_size .. k*hop_size + fft_size], so the
+    // largest valid k satisfies k*hop_size + fft_size <= samples.len().
+    let n_cols = (samples.len() - fft_size) / hop_size + 1;
 
     let mut output = vec![0u8; n_cols * n_freq_bins];
 

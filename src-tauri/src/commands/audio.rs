@@ -109,8 +109,12 @@ pub async fn get_spectrogram_chunk(
     if req.hop_size >= (sample_rate as usize) / 2 {
         let window_dur = req.fft_size as f64 / sample_rate as f64;
         let actual_end = (req.start_sec + req.duration_sec).min(info.duration_secs);
-        let actual_duration_sec = actual_end - req.start_sec;
-        let n_cols = ((actual_duration_sec * sample_rate as f64) / req.hop_size as f64).ceil() as usize;
+        let chunk_duration = actual_end - req.start_sec;
+        let n_cols = ((chunk_duration * sample_rate as f64) / req.hop_size as f64).floor() as usize + 1;
+        // Same invariant as the standard STFT path: nCols / actualDurationSec
+        // must equal the true cps (= sample_rate / hop_size) so the renderer
+        // places cols at their real centres. See the long comment below.
+        let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
         let mut output = vec![0u8; n_cols * n_freq_bins];
         for col in 0..n_cols {
@@ -155,19 +159,22 @@ pub async fn get_spectrogram_chunk(
     // over the padded buffer. Column 0's Hanning center then lands exactly
     // at req.start_sec with real audio on both sides of it.
     //
-    // ── Why actual_duration_sec uses req.duration_sec (not n_cols*hop/sr) ──
-    // The renderer in Spectrogram.tsx maps canvas pixels → chunk columns via
-    //   col = ((t - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols
-    // Because we decoded extra context, n_cols is SLIGHTLY larger than
-    // (duration_sec * sample_rate / hop_size). If we reported
-    // actual_duration_sec = n_cols * hop / sample_rate (which is > req.duration_sec),
-    // pixels near the chunk's right edge would map to columns inside the
-    // post-context region that belongs to the NEXT chunk's area — causing
-    // the "gap" to manifest as a time-shifted stripe instead.
-    // Reporting req.duration_sec keeps the mapping consistent with the
-    // chunk boundary on the time axis, and the extra post-context columns
-    // are simply unused (they exist only to give earlier columns full
-    // Hanning windows).
+    // ── Why actual_duration_sec is n_cols * hop / sample_rate ─────────────
+    // The renderer maps t -> col via
+    //   col = round((t - chunk.startSec) * (chunk.nCols / chunk.actualDurationSec))
+    // For that to match the *real* col grid (col k centered at chunk.startSec
+    // + k * hop_size / sample_rate), the reported ratio must equal the true
+    // sample_rate / hop_size. Since n_cols is integer-truncated, the only way
+    // to keep the ratio exact is to set actual_duration_sec to
+    // n_cols * hop_size / sample_rate. Any other value (e.g. req.duration_sec)
+    // introduces a sub-col linear drift across the chunk that shows up as
+    // time-axis shimmer in adjacent chunks during scroll/pan.
+    //
+    // Side effect: the chunk's reported extent is up to ~1/cps_real shorter
+    // than chunk_duration. The per-pixel chunk lookup still routes by chunk
+    // index (floor(t / chunk_duration)) so no chunk is "missed"; the renderer
+    // just clamps to the last col for the few ms between the last col centre
+    // and the next chunk's first col centre.
     let half_window = req.fft_size / 2;
     let half_window_sec = half_window as f64 / sample_rate as f64;
 
@@ -187,8 +194,7 @@ pub async fn get_spectrogram_chunk(
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
 
-    let actual_duration_sec = req.duration_sec
-        .min((info.duration_secs - req.start_sec).max(0.0));
+    let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
     Ok(SpectrogramChunkResult {
         data,

@@ -98,6 +98,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  if (!offscreenCanvasRef.current && typeof document !== 'undefined') {
+    offscreenCanvasRef.current = document.createElement('canvas');
+  }
   // Overlay canvas: draws playhead, time ruler, ident, and selection darkening.
   // Must be above annotation HTML divs (z-30 > annotations z-10/20).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -234,120 +238,136 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const offscreen = offscreenCanvasRef.current;
+    if (!canvas || !offscreen) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.width / dpr;   // canvas.width is now in physical px (see resize)
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const startTime = scrollLeft / pixelsPerSecond;
-    const timePerPixel = 1 / pixelsPerSecond;
-    const endTime = startTime + (width * timePerPixel);
+    const endTime = startTime + cssWidth / pixelsPerSecond;
 
     if (chunkCache && duration > 0) {
         // ── Two-stage spectrogram rendering pipeline ────────────────────────
-        // Stage 1 (THIS BLOCK): composite cached chunks into a viewport buffer
-        // with exactly one STFT column per canvas pixel. Each pixel's time
-        // range is [tStart, tEnd); we look up that range in whichever chunk
-        // contains tMid, then either copy the single column or max-reduce
-        // multiple columns that fall under the pixel.
+        // Stage 1 (THIS BLOCK): build a column-resolution viewport buffer
+        // (one entry per STFT column, no time-axis discretization here) and
+        // render it into an offscreen canvas at native column resolution.
         //
-        // Stage 2 (drawSpectrogramChunk in utils/audioProcessing.ts): consumes
-        // the viewport buffer and handles frequency-axis mapping, contrast,
-        // brightness, and colormap. It does NOT do any time-axis remapping —
-        // see the note at the top of that function.
+        // Stage 2: ctx.drawImage with sub-pixel destination shift lets the
+        // browser bilinearly resample the offscreen canvas onto the visible
+        // canvas. Smooth sub-pixel scrolling works because dx is fractional;
+        // no aliasing pattern can lock to the canvas pixel grid.
         //
-        // Pixel ↔ time coordinate system used throughout the app:
-        //     time = (scrollLeft + x) / pixelsPerSecond
-        // Playhead, pointer events, annotation rendering, and this loop all
-        // agree on this formula, so an annotation drawn at time t always
-        // lands on the same pixel as the spectrogram column for time t.
+        // Stage 2b (drawSpectrogramChunk in utils/audioProcessing.ts): handles
+        // frequency-axis remap (linear/log/mel), contrast, brightness, and
+        // colormap. It still does no time-axis remapping — specWidth always
+        // equals the offscreen canvas width.
+        //
+        // Pixel ↔ time coordinate system used everywhere else in the app:
+        //     time = (scrollLeft + xCss) / pixelsPerSecond
+        // Annotations, playhead, ticks all compute their position with this
+        // formula. The drawImage destination math matches it exactly so the
+        // spectrogram and overlays stay locked in time.
         const visibleDuration = endTime - startTime;
-        const activeTier = chunkCache.selectTier(visibleDuration, width);
+        const activeTier = chunkCache.selectTier(visibleDuration, cssWidth);
         chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
 
+        // Probe one chunk for nFreqBins (same as before).
         let nFreqBins = settings.fftSize / 2;
-        for (let px = 0; px < width; px++) {
-            const t = startTime + px * timePerPixel;
-            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-            if (result) { nFreqBins = result.chunk.nFreqBins; break; }
+        {
+          const probe = chunkCache.getChunkWithFallback(startTime, activeTier.tier);
+          if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
-        // Pre-composited viewport buffer: width columns × nFreqBins bins.
-        // Passed to drawSpectrogramChunk as `specData` with specWidth = width.
-        const viewportData = new Uint8Array(width * nFreqBins);
+        // The "global" cps used for the offscreen-canvas grid. Use the active tier's
+        // colsPerSec — fallback chunks at coarser tiers will be resampled by nearest-
+        // col lookup into this grid.
+        const cps = activeTier.colsPerSec;
 
-        for (let px = 0; px < width; px++) {
-            const tStart = startTime + px * timePerPixel;
-            // Don't fill pixels past the end of the file — prevents the last column
-            // from being stretched across the remaining canvas area.
-            if (tStart >= duration) continue;
-            const tEnd = startTime + (px + 1) * timePerPixel;
-            const tMid = (tStart + tEnd) / 2;
+        // Compute the offscreen backbuffer extent. One offscreen pixel per STFT
+        // column at the active tier. Add 1-col margin on each side so sub-pixel
+        // drawImage shift never reads past the buffer.
+        const bbStartCol = Math.floor(startTime * cps) - 1;
+        const bbEndCol   = Math.ceil(endTime * cps) + 1;
+        const bbWidth = Math.max(1, bbEndCol - bbStartCol);
+        const bbStartTime = bbStartCol / cps;
 
-            const result = chunkCache.getChunkWithFallback(tMid, activeTier.tier);
-            if (!result) continue;
-            const { chunk } = result;
-            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+        // Build the column-resolution viewport buffer.
+        const viewportData = new Uint8Array(bbWidth * nFreqBins);
+        for (let i = 0; i < bbWidth; i++) {
+          const absCol = bbStartCol + i;
+          if (absCol < 0) continue;                // before file start
+          const t = absCol / cps;
+          if (t >= duration) continue;             // past file end
+          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+          if (!result) continue;
+          const { chunk } = result;
+          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
 
-            const bins = Math.min(nFreqBins, chunk.nFreqBins);
-            const dstOffset = px * nFreqBins;
+          // Map t into a column index inside this chunk. After the Rust-side
+          // cps-drift fix (audio.rs), chunk.nCols / chunk.actualDurationSec equals
+          // the chunk's true cps, so this is exact for STFT chunks. Overview
+          // chunks (sampled at evenly spaced points) use their own ratio.
+          const chunkCps = chunk.nCols / chunk.actualDurationSec;
+          let col = Math.round((t - chunk.startSec) * chunkCps);
+          if (col < 0) col = 0;
+          if (col >= chunk.nCols) col = chunk.nCols - 1;
 
-            let colStart = Math.floor(((tStart - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
-            let colEnd = Math.ceil(((tEnd - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
-            colStart = Math.max(0, colStart);
-            colEnd = Math.min(chunk.nCols, colEnd);
-
-            if (colEnd - colStart <= 1) {
-                const col = Math.max(0, Math.min(chunk.nCols - 1,
-                    Math.floor(((tMid - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols)));
-                const srcOffset = col * chunk.nFreqBins;
-                viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
-            } else {
-                for (let col = colStart; col < colEnd; col++) {
-                    const srcOffset = col * chunk.nFreqBins;
-                    for (let bin = 0; bin < bins; bin++) {
-                        const val = chunk.data[srcOffset + bin];
-                        if (val > viewportData[dstOffset + bin]) {
-                            viewportData[dstOffset + bin] = val;
-                        }
-                    }
-                }
-            }
+          const bins = Math.min(nFreqBins, chunk.nFreqBins);
+          const srcOffset = col * chunk.nFreqBins;
+          const dstOffset = i * nFreqBins;
+          viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
         }
 
+        // Render the column-resolution image into the offscreen canvas.
+        // Offscreen canvas gets one pixel per column horizontally and matches the
+        // visible canvas's physical-pixel height (so vertical resolution stays sharp).
+        if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
+        if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
+        const offCtx = offscreen.getContext('2d');
+        if (!offCtx) return;
         drawSpectrogramChunk(
-            ctx, viewportData, width, nFreqBins,
-            startTime, timePerPixel, duration, width, height,
-            settings.intensity, settings.contrast,
-            settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale
+          offCtx, viewportData, bbWidth, nFreqBins,
+          offscreen.width, offscreen.height,
+          settings.intensity, settings.contrast,
+          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale
         );
 
-        // Paint end-of-file region with the background color so it's
-        // clearly distinct from zero-value spectrogram data.
-        const endX = Math.ceil((duration - startTime) * pixelsPerSecond);
-        if (endX < width) {
-            ctx.fillStyle = '#0f172a';
-            ctx.fillRect(endX, 0, width - endX, height);
+        // Blit offscreen → visible canvas with sub-pixel destination shift.
+        // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
+        const dxCss = (bbStartTime - startTime) * pixelsPerSecond;
+        const dwCss = bbWidth / cps * pixelsPerSecond;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height,
+                      dxCss * dpr, 0, dwCss * dpr, canvas.height);
+
+        // Paint end-of-file region with the background color so it's distinct
+        // from zero-value spectrogram data.
+        const endXCss = Math.ceil((duration - startTime) * pixelsPerSecond);
+        if (endXCss < cssWidth) {
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(endXCss * dpr, 0, (cssWidth - endXCss) * dpr, canvas.height);
         }
     } else if (!chunkCache && duration > 0 && !isProcessing) {
         ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * dpr;
         ctx.beginPath();
-        for (let i = 0; i < width; i += 50) {
-            ctx.moveTo(i, 0); ctx.lineTo(i, height);
+        for (let i = 0; i < canvas.width; i += 50 * dpr) {
+          ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height);
         }
         ctx.stroke();
         ctx.fillStyle = '#334155';
-        ctx.font = 'bold 24px sans-serif';
+        ctx.font = `bold ${24 * dpr}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('Spectrogram Unavailable', width / 2, height / 2);
+        ctx.fillText('Spectrogram Unavailable', canvas.width / 2, canvas.height / 2);
     }
   }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
 
@@ -599,8 +619,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         setContainerWidth(Math.max(1, width));
         const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
-          canvasRef.current.width = Math.max(1, width);
-          canvasRef.current.height = height;
+          canvasRef.current.width = Math.max(1, Math.round(width * dpr));
+          canvasRef.current.height = Math.max(1, Math.round(height * dpr));
         }
         if (overlayCanvasRef.current) {
           overlayCanvasRef.current.width = width * dpr;

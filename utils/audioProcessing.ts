@@ -82,23 +82,20 @@ export const freqToY = (
 
 // NOTE TO FUTURE READERS / CODE AUDITORS:
 // This function does NOT decide which STFT column lands on which pixel.
-// It receives `specData` as a **pre-composited viewport buffer** built by
-// `Spectrogram.tsx` where there is already exactly one data column per
-// canvas pixel (`specWidth === canvasWidth`). The column→pixel alignment
-// lives in `Spectrogram.tsx` (see the `viewportData` loop around the
-// `colStart`/`colEnd` computation). Here we only do per-pixel work:
-// frequency-axis mapping (linear/log/mel), contrast/brightness, and
-// colormap lookup. The `exactCol` formula below simplifies to `x` by
-// construction — do not "fix" it without first reading the compositing
-// loop in Spectrogram.tsx.
+// It is invoked by the offscreen-canvas builder in `Spectrogram.tsx`,
+// which has already built a column-resolution viewport buffer where
+// `specWidth === canvasWidth` (one data column per offscreen-canvas
+// pixel). Time-axis resampling onto the visible canvas happens later
+// via `ctx.drawImage` with bilinear filtering. Here we only do per-
+// pixel work: frequency-axis mapping (linear/log/mel), contrast/
+// brightness, and colormap lookup. `col === x` by construction —
+// do not reintroduce a time-axis remap without first reading the
+// offscreen pipeline in Spectrogram.tsx.
 export const drawSpectrogramChunk = (
   ctx: CanvasRenderingContext2D,
   specData: Uint8Array,
   specWidth: number, // Total columns in data (== canvasWidth in current pipeline)
   specHeight: number, // Total bins
-  startTime: number, // Time at x=0
-  timePerPixel: number, // Duration per pixel
-  totalDuration: number,
   canvasWidth: number,
   canvasHeight: number,
   brightness: number,
@@ -141,52 +138,43 @@ export const drawSpectrogramChunk = (
   }
 
   for (let x = 0; x < canvasWidth; x++) {
-    // Determine the exact time for this pixel
-    const t = startTime + (x * timePerPixel);
-    
-    // Map time to column index relative to the data's start time
-    const exactCol = ((t - startTime) / (canvasWidth * timePerPixel)) * specWidth;
-    
-    // Bounds check
-    if (exactCol >= 0 && exactCol < specWidth) {
-      const col = Math.floor(exactCol);
+    const col = x;
 
-      for (let y = 0; y < canvasHeight; y++) {
-        // Use pre-computed bin map for Y scaling
-        const actualBin = binMap[y];
-        
-        // Map actualBin to array index (High->Low storage)
-        const dataIndex = (specHeight - 1) - actualBin;
-        
-        // Direct access, no interpolation
-        const rawIntensity = specData[col * specHeight + dataIndex];
-        
-        // Apply Contrast and Brightness
-        // Normalize 0-255 to 0-1
-        let nVal = rawIntensity / 255.0;
-        
-        // Simple contrast stretch around 0.5 center
-        nVal = (nVal - 0.5) * contrast + 0.5;
-        
-        // Clamp 0-1
-        if (nVal < 0) nVal = 0;
-        if (nVal > 1) nVal = 1;
+    for (let y = 0; y < canvasHeight; y++) {
+      // Use pre-computed bin map for Y scaling
+      const actualBin = binMap[y];
 
-        // Apply brightness and convert back
-        let val = nVal * 255 * brightness;
-        
-        // Clamp for color map
-        if (val > 255) val = 255;
-        if (val < 0) val = 0; // Should be covered, but safe check
-        
-        const colorIdx = Math.floor(val) * 3;
+      // Map actualBin to array index (High->Low storage)
+      const dataIndex = (specHeight - 1) - actualBin;
 
-        const pixelIdx = (y * canvasWidth + x) * 4;
-        data[pixelIdx] = COLOR_MAP[colorIdx];     // R
-        data[pixelIdx + 1] = COLOR_MAP[colorIdx + 1]; // G
-        data[pixelIdx + 2] = COLOR_MAP[colorIdx + 2]; // B
-        data[pixelIdx + 3] = 255; // Alpha
-      }
+      // Direct access, no interpolation
+      const rawIntensity = specData[col * specHeight + dataIndex];
+
+      // Apply Contrast and Brightness
+      // Normalize 0-255 to 0-1
+      let nVal = rawIntensity / 255.0;
+
+      // Simple contrast stretch around 0.5 center
+      nVal = (nVal - 0.5) * contrast + 0.5;
+
+      // Clamp 0-1
+      if (nVal < 0) nVal = 0;
+      if (nVal > 1) nVal = 1;
+
+      // Apply brightness and convert back
+      let val = nVal * 255 * brightness;
+
+      // Clamp for color map
+      if (val > 255) val = 255;
+      if (val < 0) val = 0; // Should be covered, but safe check
+
+      const colorIdx = Math.floor(val) * 3;
+
+      const pixelIdx = (y * canvasWidth + x) * 4;
+      data[pixelIdx] = COLOR_MAP[colorIdx];     // R
+      data[pixelIdx + 1] = COLOR_MAP[colorIdx + 1]; // G
+      data[pixelIdx + 2] = COLOR_MAP[colorIdx + 2]; // B
+      data[pixelIdx + 3] = 255; // Alpha
     }
   }
 
