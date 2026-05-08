@@ -44,6 +44,21 @@ export interface ProjectUiSettings {
   splitRatio?: number;      // 0–1, vertical split between video and spectrogram
   leftPanelRatio?: number;  // 0–1, split within left panel (file tree vs tool palette)
   volume?: number;          // gain, 0–4
+  playbackSpeed?: number;   // 0.25–4.0, 1.0 = normal
+}
+
+/**
+ * Temporary band-pass filter applied during playback. Source audio is not
+ * modified — the filter is realised in the Web Audio graph and removed when
+ * the user exits filter mode.
+ *
+ * `low` and `high` are in Hz. `strength` is a 0–1 wet/dry mix where 0 = no
+ * filtering (source untouched) and 1 = pure band-passed signal.
+ */
+export interface BandPassFilter {
+  low: number;
+  high: number;
+  strength: number;
 }
 
 export interface Project {
@@ -63,4 +78,5 @@ export interface Project {
   hideAnnotated?: boolean;
   shuffleMode?: boolean;
   uiSettings?: ProjectUiSettings;
+  bandPassFilter?: BandPassFilter | null;
 }
