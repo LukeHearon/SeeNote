@@ -6,7 +6,7 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, Selection } from './types';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, Selection, BandPassFilter } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
 import { exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
@@ -68,6 +68,19 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Volume: 0 to 4 (400% or +12dB approx)
   const [volume, setVolume] = useState(project.uiSettings?.volume ?? 1);
   const [muted, setMuted] = useState(false);
+
+  // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
+  const [playbackSpeed, setPlaybackSpeed] = useState(project.uiSettings?.playbackSpeed ?? 1);
+
+  // Band-pass filter — `filterToolActive` toggles the spectrogram drag mode
+  // that creates/edits the band AND gates whether the filter is applied to
+  // playback. `bandPassFilter` is persisted on the project (so settings survive
+  // toggling off + restart); the audio graph receives null when the tool is
+  // inactive. `filterStrength` lets the strength slider work even before a
+  // band has been drawn.
+  const [filterToolActive, setFilterToolActive] = useState(false);
+  const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.bandPassFilter ?? null);
+  const [filterStrength, setFilterStrength] = useState(project.bandPassFilter?.strength ?? 1);
 
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -566,12 +579,12 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     uiPersistRef.current = setTimeout(() => {
       if (!projectRef.current) return;
-      updateProject({ ...projectRef.current, uiSettings: { leftPanelWidth, splitRatio, leftPanelRatio, volume } });
+      updateProject({ ...projectRef.current, uiSettings: { leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed } });
     }, 600);
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume]);
+  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
@@ -769,6 +782,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     setLeftPanelRatio(project.uiSettings?.leftPanelRatio ?? 0.6);
     setLeftPanelWidth(project.uiSettings?.leftPanelWidth ?? 224);
     setVolume(project.uiSettings?.volume ?? 1);
+    setPlaybackSpeed(project.uiSettings?.playbackSpeed ?? 1);
+    setFilterToolActive(false);
+    setBandPassFilter(project.bandPassFilter ?? null);
+    setFilterStrength(project.bandPassFilter?.strength ?? 1);
     setShuffledFiles([]);
     setCurrentDirectory(project.audioDirectory);
     setAnnotatedFiles(new Set());
@@ -1039,6 +1056,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
       // Plain keys.
       { key: ' ', handler: togglePlay },
+      { key: 'f', handler: () => setFilterToolActive(v => !v) },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
       // Escape fires even when a text input has focus — see CLAUDE.md / fix:
       // the legacy `tagName === 'INPUT'` guard meant Esc was swallowed any time
@@ -1191,6 +1209,48 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   useEffect(() => {
     engineRef.current?.setGain(muted ? 0 : volume);
   }, [volume, muted]);
+
+  // Sync playback speed to the engine. Changing speed mid-playback restarts
+  // the engine internally so the new speed takes effect immediately.
+  useEffect(() => {
+    engineRef.current?.setPlaybackSpeed(playbackSpeed);
+  }, [playbackSpeed]);
+
+  // Keep filterStrength and bandPassFilter.strength in lockstep so the strength
+  // slider reflects (and can edit) whichever is current. The slider is the
+  // single source of truth — if a band exists, copy its strength back into the
+  // shared state on creation/edit; the engine sync below picks up the result.
+  useEffect(() => {
+    if (bandPassFilter && bandPassFilter.strength !== filterStrength) {
+      setBandPassFilter({ ...bandPassFilter, strength: filterStrength });
+    }
+  }, [filterStrength]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Push the active band-pass filter into the engine. The filter is only
+  // applied while the filter tool is active — toggling the tool off sends
+  // null (dry signal) but keeps `bandPassFilter` intact so it can be
+  // re-applied on the next toggle.
+  useEffect(() => {
+    engineRef.current?.setBandPassFilter(filterToolActive ? bandPassFilter : null);
+  }, [bandPassFilter, filterToolActive]);
+
+  // Persist bandPassFilter changes to the project file (debounced).
+  const filterPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (prevProjectIdRef.current !== project.id) return;
+    if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
+    filterPersistRef.current = setTimeout(() => {
+      if (!projectRef.current) return;
+      updateProject({ ...projectRef.current, bandPassFilter: bandPassFilter ?? null });
+    }, 600);
+    return () => {
+      if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
+    };
+  }, [bandPassFilter]);
+
+  const handleToggleFilterTool = useCallback(() => {
+    setFilterToolActive(v => !v);
+  }, []);
 
   return (
     <div
@@ -1441,6 +1501,14 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
+               playbackSpeed={playbackSpeed}
+               setPlaybackSpeed={setPlaybackSpeed}
+               filterToolActive={filterToolActive}
+               onToggleFilterTool={handleToggleFilterTool}
+               bandPassFilter={bandPassFilter}
+               setBandPassFilter={setBandPassFilter}
+               filterStrength={filterStrength}
+               setFilterStrength={setFilterStrength}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1469,6 +1537,9 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 onSelectionChange={setSelection}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
+                filterToolActive={filterToolActive}
+                bandPassFilter={bandPassFilter}
+                onBandPassFilterChange={setBandPassFilter}
              />
              </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings } from 'lucide-react';
-import { Selection } from '../types';
+import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter } from 'lucide-react';
+import { Selection, BandPassFilter } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
@@ -25,6 +25,14 @@ interface ToolbarProps {
   onBoundAnnotationChange: (id: string | null) => void;
   showSettings?: boolean;
   onToggleSettings?: () => void;
+  playbackSpeed: number;
+  setPlaybackSpeed: (s: number) => void;
+  filterToolActive: boolean;
+  onToggleFilterTool: () => void;
+  bandPassFilter: BandPassFilter | null;
+  setBandPassFilter: (f: BandPassFilter | null) => void;
+  filterStrength: number;
+  setFilterStrength: (s: number) => void;
 }
 
 // Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
@@ -34,6 +42,18 @@ const gainToSlider = (gain: number): number =>
   gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 6;
 const sliderToGain = (s: number): number =>
   s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 6;
+
+// Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 4.0;
+const speedToSlider = (sp: number): number => {
+  const lnMin = Math.log(SPEED_MIN), lnMax = Math.log(SPEED_MAX);
+  return (Math.log(sp) - lnMin) / (lnMax - lnMin);
+};
+const sliderToSpeed = (s: number): number => {
+  const lnMin = Math.log(SPEED_MIN), lnMax = Math.log(SPEED_MAX);
+  return Math.exp(lnMin + s * (lnMax - lnMin));
+};
 
 export default function Toolbar({
   isPlaying,
@@ -55,6 +75,14 @@ export default function Toolbar({
   onBoundAnnotationChange,
   showSettings,
   onToggleSettings,
+  playbackSpeed,
+  setPlaybackSpeed,
+  filterToolActive,
+  onToggleFilterTool,
+  bandPassFilter,
+  setBandPassFilter,
+  filterStrength,
+  setFilterStrength,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -62,8 +90,12 @@ export default function Toolbar({
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
+  const speedRef = useRef(playbackSpeed);
+  const filterStrengthRef = useRef(filterStrength);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
+  useEffect(() => { speedRef.current = playbackSpeed; }, [playbackSpeed]);
+  useEffect(() => { filterStrengthRef.current = filterStrength; }, [filterStrength]);
 
   const [volumeControlEl, setVolumeControlEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -79,6 +111,53 @@ export default function Toolbar({
     volumeControlEl.addEventListener('wheel', handler, { passive: false });
     return () => volumeControlEl.removeEventListener('wheel', handler);
   }, [volumeControlEl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [speedControlEl, setSpeedControlEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!speedControlEl) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const cur = speedToSlider(speedRef.current);
+      const delta = -Math.sign(e.deltaY) * 0.03;
+      let newSlider = Math.max(0, Math.min(1, cur + delta));
+      if (Math.abs(newSlider - 0.5) < 0.015) newSlider = 0.5;
+      setPlaybackSpeed(sliderToSpeed(newSlider));
+    };
+    speedControlEl.addEventListener('wheel', handler, { passive: false });
+    return () => speedControlEl.removeEventListener('wheel', handler);
+  }, [speedControlEl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [editingSpeed, setEditingSpeed] = useState(false);
+  const [editingSpeedRaw, setEditingSpeedRaw] = useState('');
+
+  const commitSpeedEdit = () => {
+    const parsed = parseFloat(editingSpeedRaw.replace(/x$/i, '').trim());
+    if (!isNaN(parsed)) setPlaybackSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+    setEditingSpeed(false);
+    setEditingSpeedRaw('');
+  };
+
+  const [filterStrengthEl, setFilterStrengthEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!filterStrengthEl) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const next = Math.max(0, Math.min(1, filterStrengthRef.current + Math.sign(e.deltaY) * 0.05));
+      setFilterStrength(next);
+      if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: next });
+    };
+    filterStrengthEl.addEventListener('wheel', handler, { passive: false });
+    return () => filterStrengthEl.removeEventListener('wheel', handler);
+  }, [filterStrengthEl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filterStrengthPct = Math.max(0, Math.min(1, filterStrength)) * 100;
+  const showFilterStrength = filterToolActive || bandPassFilter !== null;
+
+  const handleFilterStrengthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    setFilterStrength(v);
+    if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: v });
+  };
 
   // Handle volume slider change
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -303,6 +382,71 @@ export default function Toolbar({
             </div>
           );
         })()}
+      </div>
+
+      {/* Filter Tool Toggle */}
+      <button
+        onClick={onToggleFilterTool}
+        className={`p-1.5 rounded transition-colors ml-2 ${filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+        data-tooltip="Filter (band-pass)"
+        data-help-target="filter-tool"
+      >
+        <Filter size={16} />
+      </button>
+
+      {/* Filter Strength — vertical slider, fixed height matching toolbar */}
+      {showFilterStrength && (
+        <div
+          ref={setFilterStrengthEl}
+          className="flex items-center justify-center"
+          style={{ width: 20, height: 64, flexShrink: 0 }}
+          data-help-target="filter-strength"
+        >
+          <input
+            type="range" min="0" max="1" step="0.005"
+            value={filterStrength}
+            onChange={handleFilterStrengthChange}
+            className="appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161]"
+            style={{
+              writingMode: 'vertical-lr',
+              direction: 'rtl',
+              width: 4,
+              height: 60,
+              background: `linear-gradient(to top, #e65161 0%, #e65161 ${filterStrengthPct}%, #64748b ${filterStrengthPct}%, #64748b 100%)`,
+              borderRadius: 2,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Playback Speed — text entry */}
+      <div
+        ref={setSpeedControlEl}
+        className="flex items-center gap-1.5 bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-2"
+        data-help-target="playback-speed"
+      >
+        <Gauge size={16} className="text-slate-300 flex-none" />
+        {editingSpeed ? (
+          <input
+            autoFocus
+            className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-12 outline-none text-center tabular-nums"
+            value={editingSpeedRaw}
+            onChange={e => setEditingSpeedRaw(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); commitSpeedEdit(); }
+              if (e.key === 'Escape') { e.preventDefault(); setEditingSpeed(false); setEditingSpeedRaw(''); }
+            }}
+            onBlur={commitSpeedEdit}
+          />
+        ) : (
+          <button
+            className="text-xs font-mono text-slate-300 hover:text-white tabular-nums w-10 text-right"
+            onClick={() => { setEditingSpeed(true); setEditingSpeedRaw(playbackSpeed.toFixed(2)); }}
+            data-tooltip="Click to set playback speed"
+          >
+            {playbackSpeed.toFixed(2)}x
+          </button>
+        )}
       </div>
 
       {/* Spectrogram Settings */}
