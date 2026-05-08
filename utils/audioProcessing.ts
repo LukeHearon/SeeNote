@@ -32,8 +32,53 @@ let _scratchPixels: Uint8ClampedArray = new Uint8ClampedArray(0);
 const _binMapCache = new Map<string, Int32Array>();
 
 // Mel Scale helpers
-const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
-const fromMel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
+export const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
+export const fromMel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
+
+// Frequency ↔ Y-coordinate helpers.
+// Convention: y=0 is TOP (maxFreq), y=canvasHeight is BOTTOM (minFreq).
+// For 'log' scale, minFreq is clamped to 1 to avoid log(0).
+export const yToFreq = (
+  y: number,
+  canvasHeight: number,
+  minFreq: number,
+  maxFreq: number,
+  scale: FrequencyScale
+): number => {
+  const normY = 1 - (y / canvasHeight);
+  if (scale === 'linear') {
+    return minFreq + (normY * (maxFreq - minFreq));
+  } else if (scale === 'log') {
+    const safeMinFreq = Math.max(minFreq, 1);
+    return safeMinFreq * Math.pow(maxFreq / safeMinFreq, normY);
+  } else {
+    const minM = toMel(minFreq);
+    const maxM = toMel(maxFreq);
+    const targetM = minM + (normY * (maxM - minM));
+    return fromMel(targetM);
+  }
+};
+
+export const freqToY = (
+  freq: number,
+  canvasHeight: number,
+  minFreq: number,
+  maxFreq: number,
+  scale: FrequencyScale
+): number => {
+  let normY = 0;
+  if (scale === 'linear') {
+    normY = (freq - minFreq) / (maxFreq - minFreq);
+  } else if (scale === 'log') {
+    const safeMinFreq = Math.max(minFreq, 1);
+    normY = Math.log(freq / safeMinFreq) / Math.log(maxFreq / safeMinFreq);
+  } else {
+    const minM = toMel(minFreq);
+    const maxM = toMel(maxFreq);
+    normY = (toMel(freq) - minM) / (maxM - minM);
+  }
+  return canvasHeight * (1 - normY);
+};
 
 // NOTE TO FUTURE READERS / CODE AUDITORS:
 // This function does NOT decide which STFT column lands on which pixel.
@@ -86,27 +131,9 @@ export const drawSpectrogramChunk = (
   if (!binMap) {
     binMap = new Int32Array(canvasHeight);
     const nyquist = sampleRate / 2;
-    const safeMinFreq = Math.max(minFreq, 1); // Avoid log(0) issues
 
     for (let y = 0; y < canvasHeight; y++) {
-        // y=0 is TOP of canvas (Max Freq)
-        // y=height is BOTTOM of canvas (Min Freq)
-        const normY = 1 - (y / canvasHeight);
-
-        let targetFreq = 0;
-
-        if (frequencyScale === 'linear') {
-            targetFreq = minFreq + (normY * (maxFreq - minFreq));
-        } else if (frequencyScale === 'log') {
-            // f = min * (max/min)^normY
-            targetFreq = safeMinFreq * Math.pow(maxFreq / safeMinFreq, normY);
-        } else if (frequencyScale === 'mel') {
-            const minM = toMel(minFreq);
-            const maxM = toMel(maxFreq);
-            const targetM = minM + (normY * (maxM - minM));
-            targetFreq = fromMel(targetM);
-        }
-
+        const targetFreq = yToFreq(y, canvasHeight, minFreq, maxFreq, frequencyScale);
         const binIndex = Math.floor((targetFreq / nyquist) * specHeight);
         binMap[y] = Math.max(0, Math.min(binIndex, specHeight - 1));
     }
