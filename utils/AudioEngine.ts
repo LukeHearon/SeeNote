@@ -28,11 +28,16 @@
  * corresponding to endSec, enabling sample-accurate selection playback.
  *
  * ── Time-stretch (pitch-preserving) ───────────────────────────────────────────
- * When playbackSpeed != 1, each PCM chunk is processed through a SoundTouchJS
- * Stretch+RateTransposer pipeline before being scheduled. The stretched output
- * has a different frame count than the input (≈ inputFrames / speed) but
- * preserves pitch. Output frames are scheduled back-to-back on the ctx clock,
- * and mediaTime is computed by the linear relationship above.
+ * When playbackSpeed != 1, each PCM chunk is processed through one of two
+ * stretch engines, chosen for quality on the relevant content:
+ *   - speed < 1: streaming phase vocoder (utils/PhaseVocoder.ts). Smoother
+ *     than WSOLA on tonal/sustained content at extreme slowdowns.
+ *   - speed > 1: SoundTouchJS (WSOLA). Preserves transient sharpness much
+ *     better than a phase vocoder at speedup; phase vocoder smears clicks.
+ * The stretched output has a different frame count than the input
+ * (≈ inputFrames / speed) but preserves pitch. Output frames are scheduled
+ * back-to-back on the ctx clock, and mediaTime is computed by the linear
+ * relationship above.
  *
  * ── Band-pass filter ──────────────────────────────────────────────────────────
  * A persistent filter graph sits between the chunk source nodes and the master
@@ -44,6 +49,7 @@
 
 import { SoundTouch } from 'soundtouchjs';
 import { getFileInfo, startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
+import { PhaseVocoder } from './PhaseVocoder';
 import { BandPassFilter } from '../types';
 
 export interface AudioEngineCallbacks {
@@ -146,11 +152,17 @@ export class AudioEngine {
 
   // ── Time-stretch ───────────────────────────────────────────────────────────
   // playbackSpeed > 1 → audio plays faster than real time; speed < 1 → slower.
-  // Pitch is preserved via the SoundTouch processor (a phase vocoder + WSOLA
-  // hybrid). The processor is shared across plays and reset (.clear()) at the
-  // start of each play(), so per-play latency stays low.
+  // Pitch is preserved by one of two engines, picked per play() based on speed:
+  // phase vocoder for slowdowns, SoundTouch (WSOLA) for speedups. Both are
+  // allocated lazily and reset at the start of each play().
   private playbackSpeed = 1.0;
+  private _phaseVocoder: PhaseVocoder | null = null;
+  /** Channel count the current _phaseVocoder was allocated for (PV's channel
+   *  count is fixed at construction). Set when allocated, checked on reuse. */
+  private _phaseVocoderChannels = 0;
   private _soundTouch: SoundTouch | null = null;
+  /** Which engine the current play() is using; null when not stretching. */
+  private _activeStretchEngine: 'pv' | 'st' | null = null;
 
   private filePath: string | null = null;
   private fileSampleRate = 44100;
@@ -282,25 +294,26 @@ export class AudioEngine {
       this.ctx.resume().catch(() => {});
     }
 
-    // ── Initialise SoundTouch for time-stretched playback ─────────────────────
-    // Allocated lazily and reset on every play() so internal buffers are clean.
-    if (this.playbackSpeed !== 1.0) {
-      if (!this._soundTouch) {
-        this._soundTouch = new SoundTouch();
+    // ── Initialise the appropriate stretch engine ─────────────────────────────
+    // Phase vocoder for slowdowns, SoundTouch (WSOLA) for speedups. Each engine
+    // is allocated lazily and reset on every play() so internal buffers start clean.
+    if (this.playbackSpeed < 1.0) {
+      const pvChannels = 2;  // _stretchChunk always produces stereo output
+      if (!this._phaseVocoder || this._phaseVocoderChannels !== pvChannels) {
+        this._phaseVocoder = new PhaseVocoder(pvChannels);
+        this._phaseVocoderChannels = pvChannels;
       }
+      this._phaseVocoder.reset();
+      this._phaseVocoder.setSpeed(this.playbackSpeed);
+      this._activeStretchEngine = 'pv';
+    } else if (this.playbackSpeed > 1.0) {
+      if (!this._soundTouch) this._soundTouch = new SoundTouch();
       this._soundTouch.clear();
       this._soundTouch.tempo = this.playbackSpeed;
       this._soundTouch.pitch = 1.0;
-      // SoundTouch's auto-tuning leaves overlap at the default 8ms, which makes
-      // WSOLA grain transitions audible as warble/stutter when the stretch ratio
-      // gets extreme. Below 1.0x we override with a larger overlap and the
-      // SoundTouch "speech" preset window — much smoother on slow playback.
-      // Above 1.0x the auto values are fine.
-      if (this.playbackSpeed < 1.0) {
-        // setParameters(sampleRate, sequenceMs, seekWindowMs, overlapMs)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (this._soundTouch as any).stretch.setParameters(this.fileSampleRate, 82, 28, 24);
-      }
+      this._activeStretchEngine = 'st';
+    } else {
+      this._activeStretchEngine = null;
     }
 
     const myPlayId = ++this.playId;
@@ -439,7 +452,10 @@ export class AudioEngine {
     }
     this.gainNode = null;
     this._teardownFilterGraph();
+    this._phaseVocoder = null;
+    this._phaseVocoderChannels = 0;
     this._soundTouch = null;
+    this._activeStretchEngine = null;
     this.filePath = null;
   }
 
@@ -541,15 +557,70 @@ export class AudioEngine {
   }
 
   /**
-   * Push deinterleaved input PCM through SoundTouch and pull whatever output
-   * frames are currently available. SoundTouch always operates on stereo
-   * interleaved samples, so mono input is duplicated L=R and >2-channel input
-   * is downmixed. Output is always returned as separate left/right Float32Arrays.
+   * Push deinterleaved input PCM through the active stretch engine and pull
+   * whatever output frames are currently available. Both engines emit stereo,
+   * so mono input is duplicated L=R and >2-channel input is downmixed.
+   *
+   * `isFinal` is honored only by the phase vocoder (it has tail samples that
+   * would otherwise be lost on EOF). SoundTouch buffers minimally per chunk,
+   * so the flag is a no-op there.
    */
   private _stretchChunk(
     inputChannels: Float32Array[],
     inputFrames: number,
+    isFinal: boolean,
   ): { left: Float32Array; right: Float32Array; outputFrames: number } {
+    if (this._activeStretchEngine === 'pv') {
+      return this._stretchChunkPV(inputChannels, inputFrames, isFinal);
+    }
+    return this._stretchChunkST(inputChannels, inputFrames);
+  }
+
+  private _stretchChunkPV(
+    inputChannels: Float32Array[],
+    inputFrames: number,
+    isFinal: boolean,
+  ): { left: Float32Array; right: Float32Array; outputFrames: number } {
+    const pv = this._phaseVocoder!;
+    const numCh = inputChannels.length;
+
+    if (inputFrames > 0) {
+      let stereoIn: Float32Array[];
+      if (numCh === 1) {
+        stereoIn = [inputChannels[0], inputChannels[0]];
+      } else if (numCh === 2) {
+        stereoIn = inputChannels;
+      } else {
+        const mono = new Float32Array(inputFrames);
+        for (let i = 0; i < inputFrames; i++) {
+          let sum = 0;
+          for (let c = 0; c < numCh; c++) sum += inputChannels[c][i];
+          mono[i] = sum / numCh;
+        }
+        stereoIn = [mono, mono];
+      }
+      pv.pushInput(stereoIn, inputFrames);
+    }
+
+    if (isFinal) pv.flush();
+
+    const outputFrames = pv.available();
+    if (outputFrames === 0) {
+      return { left: new Float32Array(0), right: new Float32Array(0), outputFrames: 0 };
+    }
+    const left = new Float32Array(outputFrames);
+    const right = new Float32Array(outputFrames);
+    pv.pullOutput([left, right], outputFrames);
+    return { left, right, outputFrames };
+  }
+
+  private _stretchChunkST(
+    inputChannels: Float32Array[],
+    inputFrames: number,
+  ): { left: Float32Array; right: Float32Array; outputFrames: number } {
+    if (inputFrames === 0) {
+      return { left: new Float32Array(0), right: new Float32Array(0), outputFrames: 0 };
+    }
     const st = this._soundTouch!;
     const stereoInput = new Float32Array(inputFrames * 2);
     const numCh = inputChannels.length;
@@ -706,8 +777,33 @@ export class AudioEngine {
       if (this.playId !== myPlayId) break;
 
       if (chunk.frames_read === 0) {
-        // EOF
+        // EOF — drain the phase vocoder tail (~fftSize/2 samples of unflushed
+        // OLA buffer) so the trailing audio doesn't get cut off. Without this,
+        // selection plays at slow speed lose noticeable audio at the end.
         reachedEnd = true;
+        if (stretching) {
+          const tail = this._stretchChunk([], 0, true);
+          if (tail.outputFrames > 0) {
+            const ctxStart = expectedNextCtxStart;
+            const tailDurationSec = tail.outputFrames / sr;
+            const ctxEnd = ctxStart + tailDurationSec;
+            const ab = ctx.createBuffer(2, tail.outputFrames, sr);
+            ab.getChannelData(0).set(tail.left);
+            ab.getChannelData(1).set(tail.right);
+            const source = ctx.createBufferSource();
+            source.buffer = ab;
+            source.connect(this._filterIn ?? this.gainNode!);
+            source.start(ctxStart);
+            this.queue.push({
+              source,
+              mediaStart: this.schedCursor,
+              mediaEnd: this.schedCursor,
+              ctxStart,
+              ctxEnd,
+            });
+            expectedNextCtxStart = ctxEnd;
+          }
+        }
         break;
       }
 
@@ -715,6 +811,7 @@ export class AudioEngine {
       const inputFrames = chunk.frames_read;
       const inputDurationSec = inputFrames / sr;
       const chunkMediaEnd = chunkMediaStart + inputDurationSec;
+      const isFinalChunk = this.endSec !== null && chunkMediaEnd >= this.endSec;
 
       // ── Anchor playStartCtx on first chunk ─────────────────────────────────
       // Defer setting the time origin until PCM is actually in hand. This lets
@@ -752,10 +849,10 @@ export class AudioEngine {
       let outputChannels: Float32Array[];
       let outputFrames: number;
       if (stretching) {
-        const out = this._stretchChunk(inputChannels, inputFrames);
+        const out = this._stretchChunk(inputChannels, inputFrames, isFinalChunk);
         if (out.outputFrames === 0) {
-          // SoundTouch buffered the input but produced no samples yet (rare —
-          // happens when the internal sequence window isn't full). Skip
+          // Vocoder buffered the input but hasn't accumulated a full window
+          // yet (only happens for the very first sub-window of input). Skip
           // scheduling but advance the input cursor so we keep feeding it.
           this.schedCursor = chunkMediaEnd;
           continue;
