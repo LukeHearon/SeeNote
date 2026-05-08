@@ -181,6 +181,40 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
+              <Section title="Playback Speed" target="playback-speed">
+                <p>
+                  The{' '}
+                  <HelpAnchor target="playback-speed">speed slider</HelpAnchor>{' '}
+                  scrubs playback between <span className="font-mono text-xs">0.25x</span> and{' '}
+                  <span className="font-mono text-xs">4.0x</span>. Pitch is preserved, so slowing audio down
+                  to inspect a transient won't drop it into a different octave.
+                  Center snaps to <span className="font-mono text-xs">1.0x</span>; scroll-wheel over the slider also nudges the value.
+                </p>
+                <p className="text-slate-400 text-xs">
+                  Speed is saved per project. Video tracks follow the audio clock, so frames stay in sync at any speed.
+                </p>
+              </Section>
+
+              <Section title="Band-Pass Filter" target="filter-tool">
+                <p>
+                  Click the{' '}
+                  <HelpAnchor target="filter-tool">filter button</HelpAnchor>{' '}
+                  (or press <Kbd>F</Kbd>) to enter filter mode, then drag vertically on the spectrogram to select a frequency band —
+                  audio outside the band is attenuated in real time and the out-of-band region darkens visually.
+                </p>
+                <p>
+                  Drag the two horizontal cutoff lines to retune the band. Use the{' '}
+                  <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
+                  to mix between dry (0%, source untouched) and fully band-passed (100%).
+                </p>
+                <p>
+                  <span className="text-white">Toggling on/off:</span> the filter tool and the filter itself are bound together — when the tool is active the filter is applied to playback and the band overlay is shown; when the tool is inactive both the audio effect and the visual overlay are removed. Press <Kbd>F</Kbd> (or click the filter button) to flip between the two states.
+                </p>
+                <p>
+                  <span className="text-white">Persistence:</span> the band cutoffs and strength are saved into the project file, so the same filter is restored when the project is reopened and <Kbd>F</Kbd> quickly toggles it on and off without redrawing the band. The source audio is never modified and the spectrogram is not recomputed.
+                </p>
+              </Section>
+
               <Section title="Time Display" target="time-display">
                 <p>
                   The{' '}
@@ -247,6 +281,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <ShortcutGroup title="Playback" rows={[
                 { keys: 'Space', label: 'Play / Pause' },
                 { keys: 'M', label: 'Mute / Unmute' },
+                { keys: 'F', label: 'Toggle band-pass filter' },
               ]} />
 
               <ShortcutGroup title="Spectrogram" rows={[

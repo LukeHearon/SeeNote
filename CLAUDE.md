@@ -28,6 +28,7 @@ The time-axis elements that MUST stay in lockstep:
 ## Non-obvious constraints
 
 - **Key "0" is reserved** for the Custom Annotation Tool — new annotations get an empty `text` field so the user can type a one-off name. Auto-focus on the annotation text input is triggered by `text === ""`. Do not repurpose key "0".
+- **Keep `components/HelpPanel.tsx` current**: when a user-facing behavior or hotkey changes, update the relevant Section and Shortcuts entry in the same change.
 - **Tauri IPC**: never call `invoke()` directly from components. All Rust commands are wrapped in `utils/tauriCommands.ts` or `utils/projectCommands.ts` — add a wrapper there. When adding a new Rust command: implement in `src-tauri/src/commands/*.rs`, register in `src-tauri/src/lib.rs` `invoke_handler!`, then add a TypeScript wrapper.
 
 ## Releasing a new version
