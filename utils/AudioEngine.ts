@@ -42,9 +42,20 @@
  * ── Band-pass filter ──────────────────────────────────────────────────────────
  * A persistent filter graph sits between the chunk source nodes and the master
  * gain node. It implements a wet/dry crossfade: the dry path passes the source
- * through untouched, and the wet path goes through cascaded highpass+lowpass
- * biquads. setBandPassFilter() updates the cutoff frequencies and the wet/dry
- * mix in real time without rerouting nodes (so it never causes a click).
+ * through a matched DelayNode, and the wet path goes through cascaded
+ * highpass+lowpass biquads. setBandPassFilter() updates the cutoff frequencies
+ * and the wet/dry mix in real time without rerouting nodes (so it never causes
+ * a click).
+ *
+ * The cascaded biquads have non-trivial group delay (tens of ms near the
+ * cutoffs), so the wet branch is shifted in time relative to the input. To
+ * preserve sample-for-sample sync between what the user sees (playhead) and
+ * what they hear, we (a) match that delay on the dry branch via a DelayNode so
+ * the wet/dry mix is phase-coherent regardless of strength, and (b) subtract
+ * the measured group delay from _computeMediaTime() so the playhead lines up
+ * with the audio actually leaving the speakers. The delay value is measured
+ * empirically by rendering an impulse through an offline copy of the wet chain
+ * whenever the cutoffs change.
  */
 
 import { SoundTouch } from 'soundtouchjs';
@@ -143,12 +154,19 @@ export class AudioEngine {
   // thresholds). A single 2-pole biquad is too gentle (-12 dB/oct) and even
   // 4-pole leaves an audible halo, so we eat the extra biquads.
   private _filterIn: GainNode | null = null;
+  private _filterDryDelay: DelayNode | null = null;
   private _filterDry: GainNode | null = null;
   private _filterHP: BiquadFilterNode[] = [];
   private _filterLP: BiquadFilterNode[] = [];
   private _filterWet: GainNode | null = null;
   private _filterOut: GainNode | null = null;
   private bandPassFilter: BandPassFilter | null = null;
+  /** Measured group delay of the wet biquad chain (seconds, ctx-time domain).
+   *  Mirrored on the dry-path DelayNode and subtracted from playhead. 0 when
+   *  no filter is set. */
+  private _filterDelaySec = 0;
+  /** Monotonic token so a stale async measurement can't overwrite a fresher one. */
+  private _filterDelayMeasurementToken = 0;
 
   // ── Time-stretch ───────────────────────────────────────────────────────────
   // playbackSpeed > 1 → audio plays faster than real time; speed < 1 → slower.
@@ -468,7 +486,10 @@ export class AudioEngine {
       // whether we're paused, between play() and first sample, or at rest.
       return this.pausedAt;
     }
-    const elapsedCtx = this.ctx.currentTime - this.playStartCtx;
+    // Subtract the band-pass filter's group delay so the playhead reflects
+    // what's emerging from the speakers, not what's been scheduled into the
+    // filter chain. _filterDelaySec is 0 when no filter is active.
+    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this._filterDelaySec;
     if (elapsedCtx < 0) return this.playStartMedia;
     const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.fileDurationSec);
     // Clamp to endSec so the playhead never visually overshoots the selection
@@ -492,6 +513,8 @@ export class AudioEngine {
     this._filterOut = ctx.createGain();
     this._filterDry = ctx.createGain();
     this._filterWet = ctx.createGain();
+    // Max delay 0.5s is way more than any realistic biquad group delay.
+    this._filterDryDelay = ctx.createDelay(0.5);
 
     this._filterHP = BUTTERWORTH_8_Q.map(q => {
       const f = ctx.createBiquadFilter();
@@ -506,8 +529,11 @@ export class AudioEngine {
       return f;
     });
 
-    // Dry path: filterIn → filterDry → filterOut
-    this._filterIn.connect(this._filterDry);
+    // Dry path: filterIn → filterDryDelay → filterDry → filterOut.
+    // The DelayNode matches the wet branch's group delay so the wet/dry mix
+    // is phase-coherent at any strength (no comb filtering).
+    this._filterIn.connect(this._filterDryDelay);
+    this._filterDryDelay.connect(this._filterDry);
     this._filterDry.connect(this._filterOut);
     // Wet path: filterIn → HP[0..3] → LP[0..3] → filterWet → filterOut
     let prev: AudioNode = this._filterIn;
@@ -523,18 +549,22 @@ export class AudioEngine {
 
   private _teardownFilterGraph(): void {
     const all: (AudioNode | null)[] = [
-      this._filterIn, this._filterDry, this._filterWet, this._filterOut,
+      this._filterIn, this._filterDryDelay, this._filterDry,
+      this._filterWet, this._filterOut,
       ...this._filterHP, ...this._filterLP,
     ];
     for (const node of all) {
       try { node?.disconnect(); } catch { /* already disconnected */ }
     }
     this._filterIn = null;
+    this._filterDryDelay = null;
     this._filterDry = null;
     this._filterHP = [];
     this._filterLP = [];
     this._filterWet = null;
     this._filterOut = null;
+    this._filterDelaySec = 0;
+    this._filterDelayMeasurementToken++; // invalidate any pending measurement
   }
 
   private _applyFilterToGraph(): void {
@@ -550,10 +580,85 @@ export class AudioEngine {
       const s = Math.max(0, Math.min(1, strength));
       this._filterDry.gain.setValueAtTime(1 - s, t);
       this._filterWet.gain.setValueAtTime(s, t);
+      void this._updateFilterDelay(safeLow, safeHigh);
     } else {
       this._filterDry.gain.setValueAtTime(1, t);
       this._filterWet.gain.setValueAtTime(0, t);
+      this._filterDelaySec = 0;
+      this._filterDelayMeasurementToken++;
+      this._filterDryDelay?.delayTime.setValueAtTime(0, t);
     }
+  }
+
+  /**
+   * Measure the wet chain's group delay for the given cutoffs and apply it to
+   * the dry-path DelayNode + _filterDelaySec. Async because measurement runs
+   * in an OfflineAudioContext; uses a token so out-of-order completion of a
+   * stale measurement can't clobber a fresher one.
+   */
+  private async _updateFilterDelay(low: number, high: number): Promise<void> {
+    const token = ++this._filterDelayMeasurementToken;
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const sampleRate = ctx.sampleRate;
+    let delaySec: number;
+    try {
+      delaySec = await this._measureWetGroupDelay(low, high, sampleRate);
+    } catch {
+      return;
+    }
+    if (token !== this._filterDelayMeasurementToken) return;
+    if (!this.ctx || !this._filterDryDelay) return;
+    const now = this.ctx.currentTime;
+    this._filterDelaySec = delaySec;
+    this._filterDryDelay.delayTime.setValueAtTime(delaySec, now);
+  }
+
+  /**
+   * Render an impulse through an offline copy of the wet chain and return the
+   * peak position of |response| in seconds — a close-enough proxy for group
+   * delay for our purposes (we only need to remove ~tens-of-ms of visual drift,
+   * not chase sub-sample accuracy). Cheap: a single offline render of <500ms
+   * of audio through 8 biquads.
+   */
+  private async _measureWetGroupDelay(low: number, high: number, sampleRate: number): Promise<number> {
+    const BUTTERWORTH_8_Q = [0.5097955, 0.6013372, 0.9000000, 2.5629154];
+    const length = Math.ceil(0.5 * sampleRate);
+    const offline = new OfflineAudioContext(1, length, sampleRate);
+    const impulseBuf = offline.createBuffer(1, length, sampleRate);
+    impulseBuf.getChannelData(0)[0] = 1;
+    const source = offline.createBufferSource();
+    source.buffer = impulseBuf;
+
+    let prev: AudioNode = source;
+    for (const q of BUTTERWORTH_8_Q) {
+      const hp = offline.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = low;
+      hp.Q.value = q;
+      prev.connect(hp);
+      prev = hp;
+    }
+    for (const q of BUTTERWORTH_8_Q) {
+      const lp = offline.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = high;
+      lp.Q.value = q;
+      prev.connect(lp);
+      prev = lp;
+    }
+    prev.connect(offline.destination);
+    source.start(0);
+
+    const rendered = await offline.startRendering();
+    const data = rendered.getChannelData(0);
+    let peakIdx = 0;
+    let peakVal = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = Math.abs(data[i]);
+      if (v > peakVal) { peakVal = v; peakIdx = i; }
+    }
+    return peakIdx / sampleRate;
   }
 
   /**
