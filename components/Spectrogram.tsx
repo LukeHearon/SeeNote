@@ -197,8 +197,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
      return containerWidth / zoomSec;
   }, [zoomSec, containerWidth]);
 
+  const zoomSecRef = useRef(zoomSec);
+
   // Keep refs in sync so RAF/window handlers read current values without stale closures.
   pixelsPerSecondRef.current = pixelsPerSecond;
+  zoomSecRef.current = zoomSec;
   durationRef.current = duration;
   creatingSelectionRef.current = creatingSelection;
   creatingAnnotationRef.current = creatingAnnotation;
@@ -616,14 +619,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
-        setContainerWidth(Math.max(1, width));
+        const newWidth = Math.max(1, width);
+        // Preserve the left-edge time across resize: scrollLeft is in pixels and
+        // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
+        // the visible time range unless we rescale scrollLeft proportionally.
+        if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0) {
+          const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
+          const newPps = newWidth / zoomSecRef.current;
+          const newScrollLeft = leftEdgeTime * newPps;
+          scrollLeftRef.current = newScrollLeft;
+          setScrollLeft(newScrollLeft);
+        }
+        setContainerWidth(newWidth);
         const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
-          canvasRef.current.width = Math.max(1, Math.round(width * dpr));
+          canvasRef.current.width = Math.max(1, Math.round(newWidth * dpr));
           canvasRef.current.height = Math.max(1, Math.round(height * dpr));
         }
         if (overlayCanvasRef.current) {
-          overlayCanvasRef.current.width = width * dpr;
+          overlayCanvasRef.current.width = newWidth * dpr;
           overlayCanvasRef.current.height = height * dpr;
         }
         if (yAxisCanvasRef.current) {
@@ -775,7 +789,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const updated = annotationsRef.current.map(a => {
         if (a.id !== da.id) return a;
         const dur = a.end - a.start;
-        const newStart = Math.max(0, t - da.startOffset);
+        const newStart = Math.max(0, Math.min(t - da.startOffset, durationRef.current - dur));
         return { ...a, start: newStart, end: newStart + dur };
       });
       pendingAnnotationsRef.current = updated;
@@ -879,16 +893,34 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (pos && container) {
         const rect = container.getBoundingClientRect();
         const containerWidth = rect.width;
+        const pps = pixelsPerSecondRef.current;
+        const dur = durationRef.current;
         let overflow = 0;
-        if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
-        else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+
+        const da = draggedAnnotationRef.current;
+        if (da) {
+          // For annotation drags, trigger auto-pan based on where the annotation edge
+          // would land given the current mouse position — not where the mouse itself is.
+          // This way panning starts the moment the annotation boundary reaches the viewport
+          // edge, even while the mouse is still inside.
+          const ann = annotationsRef.current.find(a => a.id === da.id);
+          if (ann) {
+            const annotDur = ann.end - ann.start;
+            const mouseRelX = pos.clientX - rect.left;
+            const desiredStartPx = mouseRelX - da.startOffset * pps;
+            const desiredEndPx = mouseRelX + (annotDur - da.startOffset) * pps;
+            if (desiredStartPx < 0) overflow = desiredStartPx;
+            else if (desiredEndPx > containerWidth) overflow = desiredEndPx - containerWidth;
+          }
+        } else {
+          if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
+          else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+        }
 
         if (overflow !== 0) {
           const absOverflow = Math.abs(overflow);
           // Gentle acceleration: slow start (~1px/frame at edge), ramps up, capped at 40px/frame
           const speed = Math.sign(overflow) * Math.min(Math.pow(absOverflow / 40, 1.5), 40);
-          const pps = pixelsPerSecondRef.current;
-          const dur = durationRef.current;
           const overrunPixels = containerWidth * 0.4;
           const maxScroll = Math.max(0, dur * pps - containerWidth + overrunPixels);
           const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
@@ -896,7 +928,29 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
             scrollLeftRef.current = newScroll;
             setScrollLeft(newScroll);
-            processDragAtClientX(pos.clientX);
+            const da = draggedAnnotationRef.current;
+            if (da) {
+              // Pin the appropriate boundary to the visible edge so the annotation
+              // stays fully visible: start→left edge when panning left, end→right edge when panning right.
+              const viewLeft = newScroll / pps;
+              const viewRight = (newScroll + containerWidth) / pps;
+              const updated = annotationsRef.current.map(a => {
+                if (a.id !== da.id) return a;
+                const annotDur = a.end - a.start;
+                const newStart = overflow < 0
+                  ? Math.max(0, viewLeft)
+                  : Math.max(0, Math.min(viewRight - annotDur, dur - annotDur));
+                return { ...a, start: newStart, end: newStart + annotDur };
+              });
+              pendingAnnotationsRef.current = updated;
+              onAnnotationsChangeRef.current(updated);
+              if (da.id === boundAnnotationIdRef.current) {
+                const moved = updated.find(a => a.id === da.id);
+                if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
+              }
+            } else {
+              processDragAtClientX(pos.clientX);
+            }
           }
         }
       }
@@ -1091,10 +1145,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     if (draggedAnnotation) {
+       const pps = pixelsPerSecondRef.current;
+       const viewLeft = scrollLeftRef.current / pps;
+       const viewRight = (scrollLeftRef.current + (containerRef.current?.clientWidth ?? 0)) / pps;
        const updated = annotations.map(a => {
            if (a.id === draggedAnnotation.id) {
                const dur = a.end - a.start;
-               const newStart = Math.max(0, t - draggedAnnotation.startOffset);
+               const desired = t - draggedAnnotation.startOffset;
+               // Clamp so neither edge exits the visible viewport (auto-pan handles scrolling).
+               const newStart = Math.max(0, Math.max(viewLeft, Math.min(desired, Math.min(durationRef.current - dur, viewRight - dur))));
                return { ...a, start: newStart, end: newStart + dur };
            }
            return a;
