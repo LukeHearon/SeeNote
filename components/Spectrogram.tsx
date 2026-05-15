@@ -4,7 +4,6 @@ import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
-import { useHotkeys } from '../hooks/useHotkeys';
 import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
@@ -49,7 +48,12 @@ interface SpectrogramProps {
   boundAnnotationId: string | null;
   filterToolActive: boolean;
   bandPassFilter: BandPassFilter | null;
+  /** Edit-in-place geometry updates (cutoff resize). Does NOT push the stack. */
   onBandPassFilterChange: (f: BandPassFilter | null) => void;
+  /** Called when a band is freshly drawn via drag — pushes `filterBand` and engages filtering. */
+  onBandPassFilterDrawn: (f: BandPassFilter) => void;
+  /** Most recent of {annotationTool, filterTool} in the activation stack, or null. Drives cursor orientation. */
+  topTool: 'annotationTool' | 'filterTool' | null;
   onSeek: (time: number) => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
@@ -88,6 +92,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   filterToolActive,
   bandPassFilter,
   onBandPassFilterChange,
+  onBandPassFilterDrawn,
+  topTool,
   onSeek,
   onAnnotationsChange,
   onAnnotationsCommit,
@@ -716,15 +722,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     scrollToTime,
   }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime]);
 
-  // Keyboard shortcuts: Escape = clear bound annotation; also clear selection
-  // when not playing. Fires alongside App.tsx's Esc binding (which deactivates
-  // the active annotation tool). Both are window-level and complementary.
-  useHotkeys([
-    { key: 'Escape', allowInInput: true, preventDefault: false, handler: () => {
-      onBoundAnnotationChange(null);
-      if (!isPlaying) onSelectionChange(null);
-    }},
-  ]);
+  // Escape handling lives in AnnotationWindow (universal activation-stack
+  // unwind). When `Esc` pops `selection`, AnnotationWindow also clears
+  // boundAnnotationId, so this component no longer registers an Esc binding.
 
   // --- Interaction Handlers ---
 
@@ -1203,7 +1203,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (yBottom - yTop > 5 && canvasHeight > 0) {
         const high = yToFreq(yTop, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
         const low = yToFreq(yBottom, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-        onBandPassFilterChange({ low, high, strength: bandPassFilter?.strength ?? 1 });
+        // Fresh drag → auto-engage filtering and push the `filterBand` stack
+        // entry. Pure edit-in-place geometry (cutoff resize) still uses
+        // onBandPassFilterChange and does NOT touch the stack.
+        onBandPassFilterDrawn({ low, high, strength: bandPassFilter?.strength ?? 1 });
       }
       setCreatingFilter(null);
       return;
@@ -1428,7 +1431,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       {/* Spectrogram area — all interactive content lives here */}
       <div
           ref={containerRef}
-          className={`relative flex-1 h-full overflow-hidden ${filterToolActive ? 'cursor-crosshair' : 'cursor-none'}`}
+          className="relative flex-1 h-full overflow-hidden cursor-none"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -1691,32 +1694,47 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         style={{ zIndex: 30 }}
       />
 
-      {/* Custom cursor — z-40, above overlay canvas */}
-      {cursorPos && !suppressCustomCursor && !filterToolActive && (
-        <div
-          className="absolute pointer-events-none"
-          style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
-        >
-          {/* Crosshair */}
-          <div className="absolute" style={{ left: -8, top: -0.5, width: 16, height: 1, background: 'white', opacity: 0.85 }} />
-          <div className="absolute" style={{ left: -0.5, top: -8, width: 1, height: 16, background: 'white', opacity: 0.85 }} />
-          {/* Tool name — only shown when an annotation tool is active */}
-          {activeAnnotationTool && (
+      {/* ToolCursor — z-40, above overlay canvas. A single bar whose
+          orientation reflects the topmost tool: vertical for Select /
+          annotation tools (time-axis drags), horizontal for the filter tool
+          (frequency-axis drags). High-contrast white fill with 1px dark
+          outline for readability over bright spectrogram regions. */}
+      {cursorPos && !suppressCustomCursor && (() => {
+        const isFilter = topTool === 'filterTool';
+        const w = isFilter ? 24 : 2;
+        const h = isFilter ? 2 : 24;
+        return (
+          <div
+            className="absolute pointer-events-none"
+            style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
+          >
             <div
-              className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
               style={{
-                top: 10,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                color: activeAnnotationTool.color,
-                textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
+                width: w,
+                height: h,
+                background: 'white',
+                outline: '1px solid rgba(0,0,0,0.85)',
+                outlineOffset: 0,
               }}
-            >
-              {activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text}
-            </div>
-          )}
-        </div>
-      )}
+            />
+            {/* Tool name — only shown when an annotation tool is active. */}
+            {!isFilter && activeAnnotationTool && (
+              <div
+                className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
+                style={{
+                  top: 16,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  color: activeAnnotationTool.color,
+                  textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
+                }}
+              >
+                {activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       </div>{/* end spectrogram area */}
     </div>

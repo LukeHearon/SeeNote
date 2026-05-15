@@ -11,6 +11,7 @@ import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS
 import { exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useHotkeys } from './hooks/useHotkeys';
+import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -72,15 +73,25 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
   const [playbackSpeed, setPlaybackSpeed] = useState(project.uiSettings?.playbackSpeed ?? 1);
 
-  // Band-pass filter — `filterToolActive` toggles the spectrogram drag mode
-  // that creates/edits the band AND gates whether the filter is applied to
-  // playback. `bandPassFilter` is persisted on the project (so settings survive
-  // toggling off + restart); the audio graph receives null when the tool is
-  // inactive. `filterStrength` lets the strength slider work even before a
-  // band has been drawn.
+  // Band-pass filter — three independent pieces of state, coordinated via the
+  // activation stack (see useActivationStack).
+  //   - `filterToolActive`: filter tool is readied for vertical drag. Pure
+  //     drawing state; does NOT gate audio.
+  //   - `bandPassFilter`:  the band itself, persisted on the project so cutoffs
+  //     survive restart. May be non-null even when audio filtering is disabled.
+  //   - `bandPassFilterEnabled`: gates whether the audio engine actually applies
+  //     the filter. Toggled by drawing a band (on), the filter button (off),
+  //     and Esc when `filterBand` is the topmost stack entry.
+  //   - `filterStrength`: lets the strength slider work even before a band is
+  //     drawn; mirrored into `bandPassFilter.strength` when a band exists.
   const [filterToolActive, setFilterToolActive] = useState(false);
   const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.bandPassFilter ?? null);
+  const [bandPassFilterEnabled, setBandPassFilterEnabled] = useState(false);
   const [filterStrength, setFilterStrength] = useState(project.bandPassFilter?.strength ?? 1);
+
+  // Layer activation stack — single source of truth for Esc unwinding order
+  // and cursor-mode selection. See hooks/useActivationStack.ts.
+  const activationStack = useActivationStack();
 
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -304,6 +315,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     setIsBuffering(false);
     setSelectedAnnotationId(null);
     setSelection(null);
+    activationStack.remove('selection');
     setBoundAnnotationId(null);
     setDebugLogs([]);
     setTrackPath(absolutePath);
@@ -785,6 +797,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     setPlaybackSpeed(project.uiSettings?.playbackSpeed ?? 1);
     setFilterToolActive(false);
     setBandPassFilter(project.bandPassFilter ?? null);
+    setBandPassFilterEnabled(false);
     setFilterStrength(project.bandPassFilter?.strength ?? 1);
     setShuffledFiles([]);
     setCurrentDirectory(project.audioDirectory);
@@ -975,7 +988,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
   useEffect(() => { seekRef.current = seek; }, [seek]);
 
-  // Shared handler for activating an annotation tool by key — used by both number hotkeys and palette clicks.
+  // Shared handler for activating an annotation tool by key — used by both
+  // number hotkeys and palette clicks. Also manages the `annotationTool` entry
+  // in the activation stack: pushIfAbsent on activate, remove when this
+  // call toggles the tool off (same key pressed twice).
   const handleToolActivate = useCallback((key: string) => {
       const tool = annotationTools.find(t => t.key === key);
       if (!tool) return;
@@ -995,6 +1011,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
               );
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
+              activationStack.pushIfAbsent('annotationTool');
           }
       } else if (activeToolKey === null && selection !== null) {
           const newAnnotation = makeAnnotationFromTool(tool, selection.start, selection.end);
@@ -1002,10 +1019,18 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           setSelectedAnnotationId(newAnnotation.id);
           setBoundAnnotationId(newAnnotation.id);
           setActiveToolKey(key);
+          activationStack.pushIfAbsent('annotationTool');
       } else {
-          setActiveToolKey(prev => prev === key ? null : key);
+          setActiveToolKey(prev => {
+            if (prev === key) {
+              activationStack.remove('annotationTool');
+              return null;
+            }
+            activationStack.pushIfAbsent('annotationTool');
+            return key;
+          });
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
@@ -1019,7 +1044,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
               handleAnnotationsCommit([...annotations, newAnnotation]);
               setSelectedAnnotationId(newAnnotation.id);
               setBoundAnnotationId(newAnnotation.id);
-              setSelection({ start: 0, end: duration });
+              handleSelectionChange({ start: 0, end: duration });
           }
       } else {
           setSelection({ start: 0, end: duration });
@@ -1031,7 +1056,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       const wasBound = selectedAnnotationId === boundAnnotationId;
       setSelectedAnnotationId(null);
       if (wasBound) {
-          setSelection(null);
+          handleSelectionChange(null);
           setBoundAnnotationId(null);
       }
   };
@@ -1056,19 +1081,51 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
       // Plain keys.
       { key: ' ', handler: togglePlay },
-      { key: 'f', handler: () => setFilterToolActive(v => !v) },
+      // `S`: select tool (no annotation tool readied). Stack-equivalent to
+      // removing the `annotationTool` entry — does not touch selection, filter
+      // tool, or band.
+      { key: 's', handler: () => {
+          setActiveToolKey(null);
+          activationStack.remove('annotationTool');
+      }},
+      // `F`: toggle filter-tool readiness ONLY (decoupled from audio filtering).
+      { key: 'f', handler: () => handleToggleFilterTool() },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
-      // Escape fires even when a text input has focus — see CLAUDE.md / fix:
-      // the legacy `tagName === 'INPUT'` guard meant Esc was swallowed any time
-      // an annotation-text input was auto-focused, so the Select tool couldn't
-      // be activated during playback. Local input onKeyDown handlers can still
-      // run first (and call stopImmediatePropagation if they want to suppress
-      // this).
-      { key: 'Escape', allowInInput: true, handler: () => setActiveToolKey(null) },
+      // Escape — universal undo of the most-recently-activated layer. Fires
+      // even when a text input has focus (HelpPanel's `stop:true` Esc handler
+      // still wins when help is open). Layer kinds & clear actions:
+      //   annotationTool → setActiveToolKey(null)
+      //   selection      → clear selection bounds
+      //   filterTool     → setFilterToolActive(false)
+      //   filterBand     → setBandPassFilter(null) + setBandPassFilterEnabled(false)
+      { key: 'Escape', allowInInput: true, handler: () => {
+          const top = activationStack.popTop();
+          switch (top) {
+            case 'annotationTool':
+              setActiveToolKey(null);
+              break;
+            case 'selection':
+              setSelection(null);
+              setBoundAnnotationId(null);
+              break;
+            case 'filterTool':
+              setFilterToolActive(false);
+              break;
+            case 'filterBand':
+              setBandPassFilter(null);
+              setBandPassFilterEnabled(false);
+              break;
+            default:
+              // Stack empty → no-op (already at Select baseline).
+              break;
+          }
+      }},
       { key: 'Delete', handler: deleteSelectedAnnotation, preventDefault: false },
       { key: 'Backspace', handler: deleteSelectedAnnotation, preventDefault: false },
 
-      // 0-9: activate annotation tool by key, if defined.
+      // 0-9: activate annotation tool by key, if defined. Stack management
+      // (pushIfAbsent on activate; remove on toggle-off) lives in
+      // handleToolActivate so palette clicks and hotkeys agree.
       { key: 'Digit', handler: (e) => {
           const tool = annotationTools.find(t => t.key === e.key);
           if (tool) handleToolActivate(e.key);
@@ -1226,13 +1283,13 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     }
   }, [filterStrength]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Push the active band-pass filter into the engine. The filter is only
-  // applied while the filter tool is active — toggling the tool off sends
-  // null (dry signal) but keeps `bandPassFilter` intact so it can be
-  // re-applied on the next toggle.
+  // Push the active band-pass filter into the engine. Audio filtering is
+  // independent of filter-tool readiness: the engine receives the band only
+  // when `bandPassFilterEnabled` is true. Drawing a band auto-enables;
+  // Esc-on-band or the filter-off button disables.
   useEffect(() => {
-    engineRef.current?.setBandPassFilter(filterToolActive ? bandPassFilter : null);
-  }, [bandPassFilter, filterToolActive]);
+    engineRef.current?.setBandPassFilter(bandPassFilterEnabled ? bandPassFilter : null);
+  }, [bandPassFilter, bandPassFilterEnabled]);
 
   // Persist bandPassFilter changes to the project file (debounced).
   const filterPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1248,9 +1305,56 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     };
   }, [bandPassFilter]);
 
+  // `F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
+  // filtering is governed separately by `bandPassFilterEnabled`.
   const handleToggleFilterTool = useCallback(() => {
-    setFilterToolActive(v => !v);
-  }, []);
+    setFilterToolActive(prev => {
+      const next = !prev;
+      if (next) activationStack.pushIfAbsent('filterTool');
+      else activationStack.remove('filterTool');
+      return next;
+    });
+  }, [activationStack]);
+
+  // Filter button "off" path — clears the band, disables filtering, and pulls
+  // `filterBand` out of the stack. The button is the only path to re-disable
+  // filtering without using Esc.
+  const handleDisableBandPassFilter = useCallback(() => {
+    setBandPassFilter(null);
+    setBandPassFilterEnabled(false);
+    activationStack.remove('filterBand');
+  }, [activationStack]);
+
+  // Called by Spectrogram when a band-drag completes (new band drawn). Always
+  // (re-)engages filtering and pushes `filterBand` only if not already present.
+  const handleBandPassFilterDrawn = useCallback((f: BandPassFilter) => {
+    setBandPassFilter(f);
+    setBandPassFilterEnabled(true);
+    activationStack.pushIfAbsent('filterBand');
+  }, [activationStack]);
+
+  // Called by Spectrogram when a selection region is created via drag (or by
+  // annotation-bound auto-selection). Stack position is preserved if already
+  // present; geometry edits don't reorder.
+  const handleSelectionActivated = useCallback(() => {
+    activationStack.pushIfAbsent('selection');
+  }, [activationStack]);
+
+  // Selection cleared from any source (e.g. clicking off, internal Spectrogram
+  // clears) — keep stack in sync.
+  const handleSelectionCleared = useCallback(() => {
+    activationStack.remove('selection');
+  }, [activationStack]);
+
+  // Wrap setSelection at the prop boundary so any path that sets/clears the
+  // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
+  // activation stack synchronised without each caller having to remember to
+  // push/remove.
+  const handleSelectionChange = useCallback((s: Selection | null) => {
+    setSelection(s);
+    if (s) activationStack.pushIfAbsent('selection');
+    else activationStack.remove('selection');
+  }, [activationStack]);
 
   return (
     <div
@@ -1371,7 +1475,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 annotationTools={annotationTools}
                 activeToolKey={activeToolKey}
                 onToolActivate={handleToolActivate}
-                onSelectModeActivate={() => setActiveToolKey(null)}
+                onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                 onOpenSettings={() => setShowToolSettings(true)}
               />
 
@@ -1497,7 +1601,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                setMuted={setMuted}
                onPlay={togglePlay}
                onSeek={seek}
-               onSelectionChange={setSelection}
+               onSelectionChange={handleSelectionChange}
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
@@ -1507,6 +1611,9 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                onToggleFilterTool={handleToggleFilterTool}
                bandPassFilter={bandPassFilter}
                setBandPassFilter={setBandPassFilter}
+               bandPassFilterEnabled={bandPassFilterEnabled}
+               setBandPassFilterEnabled={setBandPassFilterEnabled}
+               onDisableBandPassFilter={handleDisableBandPassFilter}
                filterStrength={filterStrength}
                setFilterStrength={setFilterStrength}
              />
@@ -1534,12 +1641,14 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 onAnnotationsChange={setAnnotations}
                 onAnnotationsCommit={handleAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
-                onSelectionChange={setSelection}
+                onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
                 filterToolActive={filterToolActive}
                 bandPassFilter={bandPassFilter}
                 onBandPassFilterChange={setBandPassFilter}
+                onBandPassFilterDrawn={handleBandPassFilterDrawn}
+                topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
              />
              </div>
 

@@ -46,7 +46,7 @@ export default function AnnotationToolsPanel({
               color="#374151"
               dotColor="#94a3b8"
               label="Select"
-              hotkey="Esc"
+              hotkey="S"
               dotted
               onClick={onSelectModeActivate}
             />

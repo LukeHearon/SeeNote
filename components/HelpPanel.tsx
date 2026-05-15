@@ -155,16 +155,20 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <Section title="Two Modes: Selection vs. Tool">
                 <ul className="space-y-2 list-none">
                   <li>
-                    <span className="text-white">Selection Mode</span> (press <Kbd>Esc</Kbd> to enter —{' '}
+                    <span className="text-white">Selection Mode</span> (press <Kbd>S</Kbd> to enter —{' '}
                     <HelpAnchor target="tool-palette">see palette</HelpAnchor>
                     ): left-click &amp; drag creates a <span className="italic">selection region</span>.
                     Playback is bounded to that region. While a selection is active, pressing a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>) drops an annotation onto it.
                   </li>
                   <li>
                     <span className="text-white">Annotation Tool Mode</span> (a tool is active): left-click &amp; drag directly creates an annotation.
-                    Press a number key to switch tools, or <Kbd>Esc</Kbd> to return to Selection Mode.
+                    Press a number key to switch tools, or <Kbd>S</Kbd> to return to Selection Mode.
                   </li>
                 </ul>
+                <p className="text-slate-400 text-xs">
+                  <Kbd>Esc</Kbd> is the universal undo-layer key: it pops the most recently activated layer
+                  (band, filter-tool, selection, annotation tool) in the reverse order you turned them on.
+                </p>
               </Section>
 
               <Section title="Transport Controls" target="transport-buttons">
@@ -197,21 +201,30 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
               <Section title="Band-Pass Filter" target="filter-tool">
                 <p>
-                  Click the{' '}
-                  <HelpAnchor target="filter-tool">filter button</HelpAnchor>{' '}
-                  (or press <Kbd>F</Kbd>) to enter filter mode, then drag vertically on the spectrogram to select a frequency band —
-                  audio outside the band is attenuated in real time and the out-of-band region darkens visually.
+                  Press <Kbd>F</Kbd> (or click the{' '}
+                  <HelpAnchor target="filter-tool">filter button</HelpAnchor>) to ready the filter tool —
+                  the cursor flips to a horizontal bar. Drag vertically on the spectrogram to draw a band:
+                  audio outside the band is attenuated in real time, the out-of-band region darkens,
+                  and the filter engages automatically.
                 </p>
                 <p>
-                  Drag the two horizontal cutoff lines to retune the band. Use the{' '}
+                  Drag the two horizontal cutoff lines to retune the band in place. Use the{' '}
                   <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
                   to mix between dry (0%, source untouched) and fully band-passed (100%).
                 </p>
                 <p>
-                  <span className="text-white">Toggling on/off:</span> the filter tool and the filter itself are bound together — when the tool is active the filter is applied to playback and the band overlay is shown; when the tool is inactive both the audio effect and the visual overlay are removed. Press <Kbd>F</Kbd> (or click the filter button) to flip between the two states.
+                  <span className="text-white">Tool readiness vs. audio filtering are independent.</span>{' '}
+                  Pressing <Kbd>F</Kbd> only toggles tool readiness; a drawn band keeps filtering audio
+                  even after the tool is unreadied. The{' '}
+                  <HelpAnchor target="filter-onoff">On/Off pill</HelpAnchor>{' '}
+                  (shown next to the filter button while a band exists) clears the band and stops filtering.
                 </p>
                 <p>
-                  <span className="text-white">Persistence:</span> the band cutoffs and strength are saved into the project file, so the same filter is restored when the project is reopened and <Kbd>F</Kbd> quickly toggles it on and off without redrawing the band. The source audio is never modified and the spectrogram is not recomputed.
+                  <Kbd>Esc</Kbd> unwinds the most recent layer: first the band (and filtering), then the
+                  filter tool itself, then selection, then the annotation tool — in the order you turned them on.
+                </p>
+                <p>
+                  <span className="text-white">Persistence:</span> the band cutoffs and strength are saved into the project file. The source audio is never modified and the spectrogram is not recomputed.
                 </p>
               </Section>
 
@@ -281,7 +294,6 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <ShortcutGroup title="Playback" rows={[
                 { keys: 'Space', label: 'Play / Pause' },
                 { keys: 'M', label: 'Mute / Unmute' },
-                { keys: 'F', label: 'Toggle band-pass filter' },
               ]} />
 
               <ShortcutGroup title="Spectrogram" rows={[
@@ -296,9 +308,14 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 { keys: 'Cmd+↑ / ↓', label: 'Prev / Next file' },
               ]} />
 
-              <ShortcutGroup title="Annotations" rows={[
+              <ShortcutGroup title="Tools" rows={[
                 { keys: '0 – 9', label: 'Activate annotation tool' },
-                { keys: 'Esc', label: 'Selection Mode / clear selection' },
+                { keys: 'S', label: 'Select tool (no annotation tool)' },
+                { keys: 'F', label: 'Ready filter tool' },
+                { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
+              ]} />
+
+              <ShortcutGroup title="Annotations" rows={[
                 { keys: 'Delete / Backspace', label: 'Delete selected annotation' },
                 { keys: 'Middle-click', label: 'Delete annotation instantly' },
                 { keys: 'Cmd/Ctrl+Z', label: 'Undo' },

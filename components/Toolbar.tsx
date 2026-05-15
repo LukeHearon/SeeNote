@@ -31,6 +31,9 @@ interface ToolbarProps {
   onToggleFilterTool: () => void;
   bandPassFilter: BandPassFilter | null;
   setBandPassFilter: (f: BandPassFilter | null) => void;
+  bandPassFilterEnabled: boolean;
+  setBandPassFilterEnabled: (v: boolean) => void;
+  onDisableBandPassFilter: () => void;
   filterStrength: number;
   setFilterStrength: (s: number) => void;
 }
@@ -81,6 +84,9 @@ export default function Toolbar({
   onToggleFilterTool,
   bandPassFilter,
   setBandPassFilter,
+  bandPassFilterEnabled,
+  setBandPassFilterEnabled,
+  onDisableBandPassFilter,
   filterStrength,
   setFilterStrength,
 }: ToolbarProps) {
@@ -384,15 +390,31 @@ export default function Toolbar({
         })()}
       </div>
 
-      {/* Filter Tool Toggle */}
+      {/* Filter Tool Toggle (readiness for drawing a band — F).
+          Active visual binds to filterToolActive only; band on/off lives on the
+          adjacent toggle so a band can persist after the tool is unreadied. */}
       <button
         onClick={onToggleFilterTool}
         className={`p-1.5 rounded transition-colors ml-2 ${filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-        data-tooltip="Filter (band-pass)"
+        data-tooltip="Filter tool (F)"
         data-help-target="filter-tool"
       >
         <Filter size={16} />
       </button>
+
+      {/* Band on/off toggle — visible only when a band exists. Click clears
+          the band, disables filtering, and removes the `filterBand` stack
+          entry. To re-engage filtering, draw a new band. */}
+      {bandPassFilter !== null && bandPassFilterEnabled && (
+        <button
+          onClick={onDisableBandPassFilter}
+          className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide transition-colors bg-[#e65161] text-white hover:bg-[#f06575]"
+          data-tooltip="Disable filter (clears band)"
+          data-help-target="filter-onoff"
+        >
+          On
+        </button>
+      )}
 
       {/* Filter Strength — vertical slider, fixed height matching toolbar */}
       {showFilterStrength && (
