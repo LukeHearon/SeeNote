@@ -150,9 +150,9 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">Marquee:</span> in zoom mode, drag a box over the video to zoom into that region.</li>
-                  <li><span className="text-white">+ / −:</span> zoom in and out around the current centre.</li>
+                  <li><span className="text-white">Zoom in / out:</span> buttons that step the zoom around the current centre (no <Kbd>+</Kbd>/<Kbd>−</Kbd> hotkey).</li>
                   <li><span className="text-white">Reset:</span> return to the full frame.</li>
-                  <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view.</li>
+                  <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view (zoom mode must be on).</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
                   Zoom is purely visual and never affects the playhead, audio, or annotation timing.
@@ -290,6 +290,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">From scratch:</span> activate a tool, then drag on the spectrogram.</li>
                   <li><span className="text-white">From selection:</span> make a selection region, then press a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>).</li>
+                  <li><span className="text-white">Whole track:</span> with a tool active, press <Kbd>Cmd/Ctrl+A</Kbd> to annotate the entire track (with no tool active it selects the whole track instead).</li>
                 </ul>
               </Section>
 
@@ -336,14 +337,16 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               ]} />
 
               <ShortcutGroup title="Annotations" rows={[
+                { keys: 'Cmd/Ctrl+A', label: 'Select whole track (annotate full track if a tool is active)' },
                 { keys: 'Delete / Backspace', label: 'Delete selected annotation' },
                 { keys: 'Middle-click', label: 'Delete annotation instantly' },
                 { keys: 'Cmd/Ctrl+Z', label: 'Undo' },
-                { keys: 'Cmd/Ctrl+Shift+Z', label: 'Redo' },
+                { keys: 'Cmd/Ctrl+Shift+Z / Cmd+Y', label: 'Redo' },
               ]} />
 
               <ShortcutGroup title="App" rows={[
                 { keys: 'F1 / ?', label: 'Toggle this help panel' },
+                { keys: '/ (hold)', label: 'Show tooltips instantly' },
               ]} />
             </>
           )}
