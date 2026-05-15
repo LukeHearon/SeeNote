@@ -41,6 +41,7 @@
  */
 
 import { createFile, DataStream, Endianness, type ISOFile, type Sample, type Track, type MP4BoxBuffer } from 'mp4box';
+import { DEFAULT_VIEWPORT, computeContentRect, regionPx, type Viewport } from './videoZoom';
 
 const DEFAULT_WINDOW_BEFORE_SEC = 2;
 const DEFAULT_WINDOW_AFTER_SEC = 30;
@@ -71,6 +72,8 @@ export class VideoFrameSource {
   private rangeToken = 0;
   private approxCacheBytes = 0;
   private bytesPerFrame = 0;
+  /** Current zoom/pan viewport applied by drawAt. Default = whole frame. */
+  private viewport: Viewport = DEFAULT_VIEWPORT;
   private opts: VideoFrameSourceOptions;
 
   constructor(opts: VideoFrameSourceOptions = {}) {
@@ -327,13 +330,47 @@ export class VideoFrameSource {
     const canvas = ctx.canvas;
     const frameW = frame.displayWidth || this.width;
     const frameH = frame.displayHeight || this.height;
-    const scale = Math.min(canvas.width / frameW, canvas.height / frameH);
-    const drawW = frameW * scale;
-    const drawH = frameH * scale;
-    const dx = (canvas.width - drawW) / 2;
-    const dy = (canvas.height - drawH) / 2;
+    // The whole frame letterboxes into this display rect; the zoomed
+    // sub-region maps into the *same* rect, so the picture stays put and
+    // only the visible portion changes — keeping playhead/frame sync intact.
+    const dst = computeContentRect(canvas.width, canvas.height, frameW, frameH);
+    const src = regionPx(this.viewport, frameW, frameH);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(frame, dx, dy, drawW, drawH);
+    // Use clip + 5-arg drawImage (whole frame scaled) instead of 9-arg
+    // source-rect cropping: WKWebView (Tauri/macOS) ignores the source
+    // rectangle for VideoFrame sources, which would draw the full frame
+    // unzoomed. Scaling the entire frame and clipping to dst is equivalent
+    // and uses only the well-supported draw path.
+    const scale = dst.w / src.w; // == dst.h / src.h (aspect preserved)
+    const fullW = frameW * scale;
+    const fullH = frameH * scale;
+    const originX = dst.x - src.x * scale;
+    const originY = dst.y - src.y * scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dst.x, dst.y, dst.w, dst.h);
+    ctx.clip();
+    ctx.drawImage(frame, originX, originY, fullW, fullH);
+    ctx.restore();
+  }
+
+  /** Update the zoom/pan viewport. Cheap — applied on the next rAF draw. */
+  setViewport(vp: Viewport): void {
+    this.viewport = vp;
+  }
+
+  /** Draw the *whole* current frame (ignoring the viewport) fitted into a
+   *  w×h context — used by the minimap viewfinder. */
+  drawThumbnail(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    if (this.frameCache.length === 0) return;
+    const tsMicros = this.currentPlayheadSec * 1e6;
+    const idx = this.findFrameIdxAtOrBefore(tsMicros);
+    const frame = idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
+    const frameW = frame.displayWidth || this.width;
+    const frameH = frame.displayHeight || this.height;
+    const dst = computeContentRect(w, h, frameW, frameH);
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(frame, dst.x, dst.y, dst.w, dst.h);
   }
 
   getDimensions(): { width: number; height: number } {

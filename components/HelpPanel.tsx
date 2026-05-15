@@ -140,6 +140,25 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
+              <Section title="Video Zoom" target="video-panel">
+                <p>
+                  When the active track has video, controls appear at the{' '}
+                  <span className="text-white">top-right</span> of the video panel.
+                  Enter <span className="text-white">zoom mode</span> with the tool
+                  button or <Kbd>Z</Kbd>; the other controls are enabled only in
+                  zoom mode.
+                </p>
+                <ul className="space-y-1 list-none">
+                  <li><span className="text-white">Marquee:</span> in zoom mode, drag a box over the video to zoom into that region.</li>
+                  <li><span className="text-white">+ / −:</span> zoom in and out around the current centre.</li>
+                  <li><span className="text-white">Reset:</span> return to the full frame.</li>
+                  <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view.</li>
+                </ul>
+                <p className="text-slate-400 text-xs">
+                  Zoom is purely visual and never affects the playhead, audio, or annotation timing.
+                </p>
+              </Section>
+
               <Section title="Spectrogram" target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
@@ -312,6 +331,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 { keys: '0 – 9', label: 'Activate annotation tool' },
                 { keys: 'S', label: 'Select tool (no annotation tool)' },
                 { keys: 'F', label: 'Ready filter tool' },
+                { keys: 'Z', label: 'Toggle video zoom mode' },
                 { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
               ]} />
 
