@@ -71,22 +71,12 @@ export const writeTextFile = (path: string, content: string): Promise<void> =>
 export const readTextFile = (path: string): Promise<string | null> =>
   invoke('read_text_file', { path });
 
-export const openFileDialog = (): Promise<string | null> =>
-  invoke('open_file_dialog');
-
 export const openDirectoryDialog = (): Promise<string | null> =>
   invoke('open_directory_dialog');
 
 export const openDirectoryDialogAt = (startPath: string): Promise<string | null> =>
   invoke('open_directory_dialog_at', { startPath });
 
-export interface OpenResult {
-  path: string;
-  is_dir: boolean;
-}
-
-export const openFileOrFolderDialog = (): Promise<OpenResult | null> =>
-  invoke('open_file_or_folder_dialog');
 
 export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_media_files_recursive', { path });

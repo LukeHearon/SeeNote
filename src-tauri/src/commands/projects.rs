@@ -34,8 +34,6 @@ pub struct ProjectRecord {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub file_filter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub hide_annotated: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub shuffle_mode: Option<bool>,
 }
 
