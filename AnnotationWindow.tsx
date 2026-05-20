@@ -17,7 +17,6 @@ import { revealInFileManager, listAnnotationFiles } from './utils/projectCommand
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
-import BrightnessContrastPad from './components/BrightnessContrastPad';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
@@ -219,11 +218,15 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   const [settings, setSettings] = useState<SpectrogramSettings>({
       minFreq: 0,
       maxFreq: 22050,
-      intensity: 1.6,
-      contrast: 1.4,
       fftSize: 1024,
       frequencyScale: 'mel',
+      displayFloor: -100,
+      displayCeil: 0,
   });
+  // Draft strings for the display-range inputs — let the user type freely;
+  // only parse and validate when they blur or press Enter.
+  const [displayFloorDraft, setDisplayFloorDraft] = useState('-100');
+  const [displayCeilDraft, setDisplayCeilDraft] = useState('0');
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
@@ -700,7 +703,12 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   useEffect(() => {
     setAnnotationTools(project.annotationTools.length > 0 ? project.annotationTools : DEFAULT_ANNOTATION_TOOLS);
     if (project.spectrogramSettings) {
-      setSettings(project.spectrogramSettings);
+      setSettings(s => ({
+        ...s,
+        ...project.spectrogramSettings,
+        displayFloor: project.spectrogramSettings!.displayFloor ?? -100,
+        displayCeil: project.spectrogramSettings!.displayCeil ?? 0,
+      }));
     }
     setShuffleMode(project.shuffleMode ?? false);
     setSplitRatio(project.uiSettings?.splitRatio ?? 0.5);
@@ -1466,23 +1474,98 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
-                <div className="absolute top-10 right-4 z-40 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
+                <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
                     <div className="p-4 space-y-6">
-                        {/* Visuals */}
+                        {/* Level Range */}
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Level Range (dBFS)</h4>
+                            {/* Dual-thumb slider — two range inputs share the same track */}
+                            <div className="relative h-5 flex items-center">
+                                <input
+                                    type="range"
+                                    min={-160} max={40}
+                                    value={settings.displayFloor}
+                                    onChange={(e) => {
+                                        const v = Math.min(parseInt(e.target.value), settings.displayCeil - 1);
+                                        setSettings(s => ({...s, displayFloor: v}));
+                                        setDisplayFloorDraft(String(v));
+                                    }}
+                                    className="absolute w-full appearance-none h-1 rounded bg-slate-600 pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                />
+                                <input
+                                    type="range"
+                                    min={-160} max={40}
+                                    value={settings.displayCeil}
+                                    onChange={(e) => {
+                                        const v = Math.max(parseInt(e.target.value), settings.displayFloor + 1);
+                                        setSettings(s => ({...s, displayCeil: v}));
+                                        setDisplayCeilDraft(String(v));
+                                    }}
+                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                />
+                            </div>
+                            <div className="flex justify-between">
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={displayFloorDraft}
+                                    onChange={(e) => setDisplayFloorDraft(e.target.value)}
+                                    onBlur={() => {
+                                        const v = parseInt(displayFloorDraft);
+                                        const clamped = isNaN(v) ? settings.displayFloor : Math.max(-160, Math.min(settings.displayCeil - 1, v));
+                                        setSettings(s => ({...s, displayFloor: clamped}));
+                                        setDisplayFloorDraft(String(clamped));
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+                                />
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={displayCeilDraft}
+                                    onChange={(e) => setDisplayCeilDraft(e.target.value)}
+                                    onBlur={() => {
+                                        const v = parseInt(displayCeilDraft);
+                                        const clamped = isNaN(v) ? settings.displayCeil : Math.max(settings.displayFloor + 1, Math.min(40, v));
+                                        setSettings(s => ({...s, displayCeil: clamped}));
+                                        setDisplayCeilDraft(String(clamped));
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Frequency */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase">Visuals</h4>
-                            <BrightnessContrastPad
-                                brightness={settings.intensity}
-                                contrast={settings.contrast}
-                                onChange={(b, c) => setSettings(s => ({...s, intensity: b, contrast: c}))}
-                            />
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Frequency (Hz)</h4>
+                            <div className="flex space-x-2 pt-2">
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400">Min</label>
+                                    <input
+                                        type="number"
+                                        value={settings.minFreq}
+                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400">Max</label>
+                                    <input
+                                        type="number"
+                                        value={settings.maxFreq}
+                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
+                                    />
+                                </div>
+                            </div>
                         </div>
 
                         {/* FFT */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase">FFT</h4>
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">FFT</h4>
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block">FFT Window Size</label>
+                                <label className="text-xs text-slate-400 mb-1 block">Window Size</label>
                                 <select
                                     value={settings.fftSize}
                                     onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
@@ -1507,30 +1590,6 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                             </div>
                         </div>
 
-                        {/* Frequency */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase">Frequency</h4>
-                            <div className="flex space-x-2 pt-2">
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Freq. Min</label>
-                                    <input
-                                        type="number"
-                                        value={settings.minFreq}
-                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Freq. Max</label>
-                                    <input
-                                        type="number"
-                                        value={settings.maxFreq}
-                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 </div>
              )}

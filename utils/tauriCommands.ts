@@ -10,7 +10,7 @@ export interface FileInfo {
 }
 
 export interface SpectrogramChunkResult {
-  data: number[];          // JSON-serialized Vec<u8>
+  data: Uint16Array;       // Binary IPC: u16 per cell, -140..0 dBFS mapped to 0..65535
   n_cols: number;
   n_freq_bins: number;
   start_sec: number;
@@ -36,14 +36,30 @@ export interface DialogFilter {
 export const getFileInfo = (path: string): Promise<FileInfo> =>
   invoke('get_file_info', { path });
 
-export const getSpectrogramChunk = (
+// Header layout from Rust's build_spectrogram_response (28 bytes, all little-endian):
+//   u32 n_cols, u32 n_freq_bins, f64 start_sec, f64 actual_duration_sec, u32 sample_rate
+const SPECTROGRAM_HEADER_BYTES = 28;
+
+function parseSpectrogramBuffer(buffer: ArrayBuffer): SpectrogramChunkResult {
+  const view = new DataView(buffer);
+  const n_cols = view.getUint32(0, true);
+  const n_freq_bins = view.getUint32(4, true);
+  const start_sec = view.getFloat64(8, true);
+  const actual_duration_sec = view.getFloat64(16, true);
+  const sample_rate = view.getUint32(24, true);
+  // Slice the tail into a new ArrayBuffer so Uint16Array alignment is guaranteed.
+  const data = new Uint16Array(buffer.slice(SPECTROGRAM_HEADER_BYTES));
+  return { data, n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate };
+}
+
+export const getSpectrogramChunk = async (
   path: string,
   startSec: number,
   durationSec: number,
   fftSize: number,
   hopSize: number,
-): Promise<SpectrogramChunkResult> =>
-  invoke('get_spectrogram_chunk', {
+): Promise<SpectrogramChunkResult> => {
+  const buffer = await invoke<ArrayBuffer>('get_spectrogram_chunk', {
     req: {
       path,
       start_sec: startSec,
@@ -52,15 +68,19 @@ export const getSpectrogramChunk = (
       hop_size: hopSize,
     },
   });
+  return parseSpectrogramBuffer(buffer);
+};
 
-export const getOverviewSpectrogram = (
+export const getOverviewSpectrogram = async (
   path: string,
   nColumns: number,
   fftSize: number,
-): Promise<SpectrogramChunkResult> =>
-  invoke('get_overview_spectrogram', {
+): Promise<SpectrogramChunkResult> => {
+  const buffer = await invoke<ArrayBuffer>('get_overview_spectrogram', {
     req: { path, n_columns: nColumns, fft_size: fftSize },
   });
+  return parseSpectrogramBuffer(buffer);
+};
 
 export const listDirectory = (path: string): Promise<DirEntry[]> =>
   invoke('list_directory', { path });

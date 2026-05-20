@@ -2,7 +2,7 @@ import { getSpectrogramChunk, getOverviewSpectrogram } from './utils/tauriComman
 import { TIER_CONFIGS, TierConfig } from './constants';
 
 export interface CachedChunk {
-  data: Uint8Array;
+  data: Uint16Array;
   nCols: number;
   nFreqBins: number;
   startSec: number;
@@ -187,7 +187,7 @@ export class MultiTierSpectrogramCache {
         if (this.generationId !== generation) return;
 
         const chunk: CachedChunk = {
-          data: new Uint8Array(result.data),
+          data: result.data,
           nCols: result.n_cols,
           nFreqBins: result.n_freq_bins,
           startSec: result.start_sec,
@@ -233,7 +233,7 @@ export class MultiTierSpectrogramCache {
       if (this.generationId !== generation) return;
 
       this.ultraOverview = {
-        data: new Uint8Array(result.data),
+        data: result.data,
         nCols: result.n_cols,
         nFreqBins: result.n_freq_bins,
         startSec: 0,

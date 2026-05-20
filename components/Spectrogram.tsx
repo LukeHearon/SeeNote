@@ -308,7 +308,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const bbStartTime = bbStartCol / cps;
 
         // Build the column-resolution viewport buffer.
-        const viewportData = new Uint8Array(bbWidth * nFreqBins);
+        const viewportData = new Uint16Array(bbWidth * nFreqBins);
         for (let i = 0; i < bbWidth; i++) {
           const absCol = bbStartCol + i;
           if (absCol < 0) continue;                // before file start
@@ -344,8 +344,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawSpectrogramChunk(
           offCtx, viewportData, bbWidth, nFreqBins,
           offscreen.width, offscreen.height,
-          settings.intensity, settings.contrast,
-          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale
+          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
+          settings.displayFloor, settings.displayCeil,
         );
 
         // Blit offscreen → visible canvas with sub-pixel destination shift.
@@ -380,7 +380,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.textBaseline = 'middle';
         ctx.fillText('Spectrogram Unavailable', canvas.width / 2, canvas.height / 2);
     }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing]);
 
   // Overlay canvas: axis, playhead, ident, and selection region darkening.
   // Rendered above annotation HTML divs (z-30).

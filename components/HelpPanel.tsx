@@ -157,7 +157,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
-                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, range) are saved per project.
+                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
                 </p>
               </Section>
 

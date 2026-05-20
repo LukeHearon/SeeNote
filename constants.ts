@@ -5,12 +5,13 @@ import type { AnnotationTool } from './types';
 // Source: https://github.com/dofuuz/roseus
 // 17 stops sampled evenly from the 256-entry dataset (indices 0, 16, 32 … 240, 255)
 export const MAGMA_STOPS = [
-  { pos: 0.0, r: 28,  g: 15,  b: 70  },   // Midnight purple                                                           
-  { pos: 0.2, r: 80,  g: 17,  b: 123 },  // Purple                                                                     
-  { pos: 0.4, r: 180, g: 53,  b: 120 },  // Red-Purple                                                                 
-  { pos: 0.6, r: 230, g: 81,  b: 97  },  // Orange-Red                                                                 
-  { pos: 0.8, r: 249, g: 195, b: 135 },  // Orange-Yellow                                                              
-  { pos: 1.0, r: 250, g: 251, b: 198 },  // White-Yellow      
+  { pos: 0.00, r: 0,   g: 0,   b: 0   },  // True black (noise floor)
+  { pos: 0.07, r: 28,  g: 15,  b: 70  },  // Midnight purple
+  { pos: 0.2,  r: 80,  g: 17,  b: 123 },  // Purple
+  { pos: 0.4,  r: 180, g: 53,  b: 120 },  // Red-Purple
+  { pos: 0.6,  r: 230, g: 81,  b: 97  },  // Orange-Red
+  { pos: 0.8,  r: 249, g: 195, b: 135 },  // Orange-Yellow
+  { pos: 1.0,  r: 250, g: 251, b: 198 },  // White-Yellow
 ];
 
 // Extensions that the Rust symphonia decoder can actually decode.

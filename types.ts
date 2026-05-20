@@ -21,10 +21,10 @@ export type AnnotationWithLayer = Annotation & { layerIndex: number };
 export interface SpectrogramSettings {
   minFreq: number;
   maxFreq: number;
-  intensity: number; // Brightness multiplier
-  contrast: number; // Contrast multiplier
   fftSize: number; // Power of 2 (e.g., 1024, 2048)
   frequencyScale: FrequencyScale;
+  displayFloor: number; // dBFS lower bound for display mapping; default -100
+  displayCeil: number;  // dBFS upper bound for display mapping; default 0
 }
 
 
