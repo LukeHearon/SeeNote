@@ -27,11 +27,6 @@ export interface SpectrogramSettings {
   frequencyScale: FrequencyScale;
 }
 
-export interface AudioMetadata {
-  duration: number;
-  sampleRate: number;
-  channels: number;
-}
 
 export interface AnnotationTool {
   key: string | null;  // null = unassigned, "0" = custom, "1"-"9" = hotkey
@@ -66,7 +61,7 @@ export interface Project {
   name: string;
   audioDirectory: string;
   annotationDirectory: string;
-  outputFormat: 'json' | 'csv' | 'txt';
+  outputFormat: 'txt';
   outputRoundingDecimals?: number; // decimal places for start/end in output files; default 4
   createdAt: string;
   lastOpened: string;
@@ -74,8 +69,6 @@ export interface Project {
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
   fileFilter?: 'all' | 'annotated' | 'unannotated';
-  /** @deprecated Use `fileFilter` instead. Kept for backward-compatible reads of old project files. */
-  hideAnnotated?: boolean;
   shuffleMode?: boolean;
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;

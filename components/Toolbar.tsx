@@ -31,9 +31,8 @@ interface ToolbarProps {
   onToggleFilterTool: () => void;
   bandPassFilter: BandPassFilter | null;
   setBandPassFilter: (f: BandPassFilter | null) => void;
-  bandPassFilterEnabled: boolean;
-  setBandPassFilterEnabled: (v: boolean) => void;
   onDisableBandPassFilter: () => void;
+  onEnableBandPassFilter: (strength: number) => void;
   filterStrength: number;
   setFilterStrength: (s: number) => void;
 }
@@ -84,9 +83,8 @@ export default function Toolbar({
   onToggleFilterTool,
   bandPassFilter,
   setBandPassFilter,
-  bandPassFilterEnabled,
-  setBandPassFilterEnabled,
   onDisableBandPassFilter,
+  onEnableBandPassFilter,
   filterStrength,
   setFilterStrength,
 }: ToolbarProps) {
@@ -98,10 +96,12 @@ export default function Toolbar({
   const mutedRef = useRef(muted);
   const speedRef = useRef(playbackSpeed);
   const filterStrengthRef = useRef(filterStrength);
+  const bandPassFilterRef = useRef(bandPassFilter);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { speedRef.current = playbackSpeed; }, [playbackSpeed]);
   useEffect(() => { filterStrengthRef.current = filterStrength; }, [filterStrength]);
+  useEffect(() => { bandPassFilterRef.current = bandPassFilter; }, [bandPassFilter]);
 
   const [volumeControlEl, setVolumeControlEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -135,10 +135,14 @@ export default function Toolbar({
 
   const [editingSpeed, setEditingSpeed] = useState(false);
   const [editingSpeedRaw, setEditingSpeedRaw] = useState('');
+  const [lastNonOneSpeed, setLastNonOneSpeed] = useState(() => playbackSpeed !== 1 ? playbackSpeed : 1.5);
 
   const commitSpeedEdit = () => {
     const parsed = parseFloat(editingSpeedRaw.replace(/x$/i, '').trim());
-    if (!isNaN(parsed)) setPlaybackSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+    if (!isNaN(parsed)) {
+      setPlaybackSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+      if (parsed !== 1.0) setLastNonOneSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+    }
     setEditingSpeed(false);
     setEditingSpeedRaw('');
   };
@@ -148,21 +152,36 @@ export default function Toolbar({
     if (!filterStrengthEl) return;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
+      // Wheeling up from disabled re-enables the filter at the new strength.
+      if (!bandPassFilterRef.current) {
+        if (Math.sign(e.deltaY) >= 0) return; // wheeling down on a disabled filter is a no-op
+        const next = Math.max(0, Math.min(1, -Math.sign(e.deltaY) * 0.05));
+        if (next > 0) onEnableBandPassFilter(next);
+        return;
+      }
       const next = Math.max(0, Math.min(1, filterStrengthRef.current + Math.sign(e.deltaY) * 0.05));
+      if (next === 0) { onDisableBandPassFilter(); return; }
       setFilterStrength(next);
-      if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: next });
+      setBandPassFilter({ ...bandPassFilterRef.current, strength: next });
     };
     filterStrengthEl.addEventListener('wheel', handler, { passive: false });
     return () => filterStrengthEl.removeEventListener('wheel', handler);
   }, [filterStrengthEl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filterStrengthPct = Math.max(0, Math.min(1, filterStrength)) * 100;
-  const showFilterStrength = filterToolActive || bandPassFilter !== null;
+  const filterEnabled = bandPassFilter !== null;
+  // Display 0 when disabled so the slider snaps to bottom; filterStrength is
+  // still preserved as the remembered value that F-toggle will restore.
+  const displayStrength = filterEnabled ? Math.max(0, Math.min(1, filterStrength)) : 0;
+  const displayStrengthPct = displayStrength * 100;
 
   const handleFilterStrengthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseFloat(e.target.value);
+    if (v === 0) { onDisableBandPassFilter(); setFilterStrength(0); return; }
+    // Dragging up from 0 (filter disabled) re-enables filtering. The handler
+    // in AnnotationWindow restores the last band (or falls back to a default).
+    if (!bandPassFilter) { onEnableBandPassFilter(v); return; }
     setFilterStrength(v);
-    if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: v });
+    setBandPassFilter({ ...bandPassFilter, strength: v });
   };
 
   // Handle volume slider change
@@ -396,50 +415,37 @@ export default function Toolbar({
       <button
         onClick={onToggleFilterTool}
         className={`p-1.5 rounded transition-colors ml-2 ${filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-        data-tooltip="Filter tool (F)"
+        data-tooltip="Filter tool (Shift+F)"
         data-help-target="filter-tool"
       >
         <Filter size={16} />
       </button>
 
-      {/* Band on/off toggle — visible only when a band exists. Click clears
-          the band, disables filtering, and removes the `filterBand` stack
-          entry. To re-engage filtering, draw a new band. */}
-      {bandPassFilter !== null && bandPassFilterEnabled && (
-        <button
-          onClick={onDisableBandPassFilter}
-          className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide transition-colors bg-[#e65161] text-white hover:bg-[#f06575]"
-          data-tooltip="Disable filter (clears band)"
-          data-help-target="filter-onoff"
-        >
-          On
-        </button>
-      )}
 
-      {/* Filter Strength — vertical slider, fixed height matching toolbar */}
-      {showFilterStrength && (
-        <div
-          ref={setFilterStrengthEl}
-          className="flex items-center justify-center"
-          style={{ width: 20, height: 64, flexShrink: 0 }}
-          data-help-target="filter-strength"
-        >
-          <input
-            type="range" min="0" max="1" step="0.005"
-            value={filterStrength}
-            onChange={handleFilterStrengthChange}
-            className="appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161]"
-            style={{
-              writingMode: 'vertical-lr',
-              direction: 'rtl',
-              width: 4,
-              height: 60,
-              background: `linear-gradient(to top, #e65161 0%, #e65161 ${filterStrengthPct}%, #64748b ${filterStrengthPct}%, #64748b 100%)`,
-              borderRadius: 2,
-            }}
-          />
-        </div>
-      )}
+      {/* Filter Strength — vertical slider, always visible */}
+      <div
+        ref={setFilterStrengthEl}
+        className="flex items-center justify-center"
+        style={{ width: 20, height: 64, flexShrink: 0 }}
+        data-help-target="filter-strength"
+      >
+        <input
+          type="range" min="0" max="1" step="0.005"
+          value={displayStrength}
+          onChange={handleFilterStrengthChange}
+          className={`appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${filterEnabled ? '[&::-webkit-slider-thumb]:bg-[#e65161]' : '[&::-webkit-slider-thumb]:bg-slate-500'}`}
+          style={{
+            writingMode: 'vertical-lr',
+            direction: 'rtl',
+            width: 4,
+            height: 60,
+            background: filterEnabled
+              ? `linear-gradient(to top, #e65161 0%, #e65161 ${displayStrengthPct}%, #64748b ${displayStrengthPct}%, #64748b 100%)`
+              : '#475569',
+            borderRadius: 2,
+          }}
+        />
+      </div>
 
       {/* Playback Speed — text entry */}
       <div
@@ -447,7 +453,14 @@ export default function Toolbar({
         className="flex items-center gap-1.5 bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-2"
         data-help-target="playback-speed"
       >
-        <Gauge size={16} className="text-slate-300 flex-none" />
+        <button
+          type="button"
+          onClick={() => setPlaybackSpeed(playbackSpeed === 1 ? lastNonOneSpeed : 1)}
+          className="flex-none p-0 leading-none"
+          data-tooltip={playbackSpeed !== 1 ? "Click to reset to 1× (click text to set custom speed)" : "Click to restore last speed"}
+        >
+          <Gauge size={16} className={playbackSpeed > 1 ? 'text-red-400' : playbackSpeed < 1 ? 'text-blue-400' : 'text-slate-300'} />
+        </button>
         {editingSpeed ? (
           <input
             autoFocus

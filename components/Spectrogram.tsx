@@ -59,6 +59,7 @@ interface SpectrogramProps {
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: Selection | null) => void;
+  onSelectionCommit?: (region: Selection) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
 }
@@ -99,6 +100,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onAnnotationsCommit,
   onSelectAnnotation,
   onSelectionChange,
+  onSelectionCommit,
   onBoundAnnotationChange,
   onZoomChange
 }, ref) => {
@@ -424,16 +426,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
-    // Render in-progress filter creation OR persistent band. Only draw the
-    // band overlay while the filter tool is active — when the tool is off the
-    // filter is inaudible, so showing the visual would be misleading.
+    // Render in-progress filter creation OR persistent band. The band overlay
+    // tracks `bandPassFilter` (the audio source of truth) — tool readiness
+    // (`filterToolActive`) only affects whether the cutoff handles are
+    // interactive, not whether the band is visible.
     const filterBand = creatingFilter
       ? {
           yTop: Math.min(creatingFilter.y0, creatingFilter.y1),
           yBottom: Math.max(creatingFilter.y0, creatingFilter.y1),
           strength: bandPassFilter?.strength ?? 1,
         }
-      : (filterToolActive && bandPassFilter)
+      : bandPassFilter
       ? {
           yTop: freqToY(bandPassFilter.high, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
           yBottom: freqToY(bandPassFilter.low, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
@@ -518,7 +521,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, filterToolActive, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -1241,6 +1244,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const end = Math.max(creatingSelection.start, creatingSelection.current);
       if (end > start) {
         onSelectionChange({ start, end });
+        onSelectionCommit?.({ start, end });
         onBoundAnnotationChange(null);
       } else {
         onSelectionChange(null);

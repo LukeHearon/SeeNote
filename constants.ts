@@ -31,9 +31,13 @@ export function isSupportedMediaFile(path: string): boolean {
 }
 
 export const MIN_ZOOM_SEC = 1;
-export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 10;
-export const SCROLL_SENSITIVITY = 1.0;
+
+// Used when the user engages the band-pass filter (F key or slider drag-up
+// from 0) without ever having drawn a band: an audible mid-range default so
+// the filter does something immediately, and the user can refine cutoffs from
+// there with the filter tool.
+export const DEFAULT_BAND_PASS_FILTER = { low: 500, high: 4000, strength: 0.5 };
 // Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
 export const DRAG_INTENT_HOLD_MS = 250;
 

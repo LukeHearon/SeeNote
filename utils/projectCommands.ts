@@ -24,7 +24,6 @@ interface ProjectRecord {
   name_gradient_colors?: [string, string];
   output_rounding_decimals?: number;
   file_filter?: string;
-  hide_annotated?: boolean;
   ui_settings?: ProjectUiSettings; // stored as-is (camelCase) via serde_json::Value
 }
 
@@ -42,7 +41,7 @@ function toProject(r: ProjectRecord): Project {
     name: r.name,
     audioDirectory: r.audio_directory,
     annotationDirectory: r.annotation_directory,
-    outputFormat: r.output_format as 'json' | 'csv' | 'txt',
+    outputFormat: 'txt',
     createdAt: r.created_at,
     lastOpened: r.last_opened,
     annotationTools: r.label_configs,
@@ -50,7 +49,6 @@ function toProject(r: ProjectRecord): Project {
     nameGradientColors: r.name_gradient_colors,
     outputRoundingDecimals: r.output_rounding_decimals,
     fileFilter: r.file_filter as 'all' | 'annotated' | 'unannotated' | undefined,
-    hideAnnotated: r.hide_annotated,
     uiSettings: r.ui_settings,
   };
 }
@@ -69,7 +67,6 @@ function toRecord(p: Project): ProjectRecord {
     name_gradient_colors: p.nameGradientColors,
     output_rounding_decimals: p.outputRoundingDecimals,
     file_filter: p.fileFilter,
-    hide_annotated: p.hideAnnotated,
     ui_settings: p.uiSettings,
   };
 }
