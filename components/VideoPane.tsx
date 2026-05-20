@@ -4,9 +4,13 @@ import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
+import { useHotkeys } from '../hooks/useHotkeys';
 import {
   DEFAULT_VIEWPORT,
   computeContentRect,
+  drawLetterboxed,
+  isZoomed,
+  panViewport,
   type Viewport,
 } from '../utils/videoZoom';
 
@@ -39,16 +43,70 @@ export default function VideoPane({
   // ── Zoom state (shared model; reset whenever the track changes) ────────
   const [viewport, setViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
   const [zoomToolActive, setZoomToolActive] = useState(false);
+  // Remembers the last zoomed-in viewport so Z can restore it.
+  const lastZoomViewport = useRef<Viewport | null>(null);
 
   useEffect(() => {
     setViewport(DEFAULT_VIEWPORT);
     setZoomToolActive(false);
+    lastZoomViewport.current = null;
   }, [frameSourceVersion, videoSrc, isAudioTrack]);
+
+  // Z key toggles zoom state: saves/restores lastZoomViewport without
+  // touching the tool. Shift+Z (in VideoZoomLayer) toggles the drawing tool.
+  const handleToggleZoomState = useCallback(() => {
+    setViewport(prev => {
+      if (isZoomed(prev)) {
+        lastZoomViewport.current = prev;
+        return DEFAULT_VIEWPORT;
+      } else {
+        return lastZoomViewport.current ?? DEFAULT_VIEWPORT;
+      }
+    });
+  }, []);
+
+  useHotkeys([
+    {
+      key: 'z',
+      handler: handleToggleZoomState,
+    },
+  ]);
+
+  // Toggling the zoom tool does not affect the viewport.
+  const handleZoomToolActiveChange = useCallback((active: boolean) => {
+    setZoomToolActive(active);
+  }, []);
+
+  // Viewport changes from the zoom layer (buttons, marquee) update
+  // lastZoomViewport so Z can restore them later.
+  const handleViewportChange = useCallback((vp: Viewport) => {
+    if (isZoomed(vp)) lastZoomViewport.current = vp;
+    setViewport(vp);
+  }, []);
 
   // Canvas path: push the viewport into the frame source (drawAt reads it).
   useEffect(() => {
     if (usingCanvas && frameSource) frameSource.setViewport(viewport);
   }, [usingCanvas, frameSource, viewport]);
+
+  // Change 3b: scroll-to-pan — keep a ref so the non-reactive wheel handler
+  // always sees the latest viewport without re-registering the listener.
+  const viewportRef = useRef(viewport);
+  useEffect(() => { viewportRef.current = viewport; }, [viewport]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (!isZoomed(viewportRef.current)) return;
+      e.preventDefault();
+      const dx = e.deltaX / 1500;
+      const dy = e.deltaY / 1500;
+      setViewport(prev => panViewport(prev, dx, dy));
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Pane size + media dimensions (for fallback positioning / minimap) ──
   const containerRef = useRef<HTMLDivElement>(null);
@@ -89,13 +147,7 @@ export default function VideoPane({
       }
       const v = fallbackVideoRef.current;
       if (v && v.videoWidth > 0) {
-        const r = computeContentRect(w, h, v.videoWidth, v.videoHeight);
-        ctx.clearRect(0, 0, w, h);
-        try {
-          ctx.drawImage(v, r.x, r.y, r.w, r.h);
-        } catch {
-          /* element not yet drawable */
-        }
+        drawLetterboxed(ctx, v, w, h, v.videoWidth, v.videoHeight);
       }
     },
     [usingCanvas, frameSource],
@@ -136,11 +188,12 @@ export default function VideoPane({
       {hasVideo && !isProcessing && (
         <VideoZoomLayer
           viewport={viewport}
-          onViewportChange={setViewport}
+          onViewportChange={handleViewportChange}
           frameW={frameW}
           frameH={frameH}
           toolActive={zoomToolActive}
-          onToolActiveChange={setZoomToolActive}
+          onToolActiveChange={handleZoomToolActiveChange}
+          onToggleZoomState={handleToggleZoomState}
           drawThumbnail={drawThumbnail}
         />
       )}

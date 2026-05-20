@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScanSearch, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { ScanSearch, ZoomIn, ZoomOut, Maximize2, Search } from 'lucide-react';
 import { useHotkeys } from '../hooks/useHotkeys';
 import {
   DEFAULT_VIEWPORT,
@@ -8,6 +8,7 @@ import {
   computeContentRect,
   isZoomed,
   panToFraction,
+  regionNorm,
   viewportFromDragRect,
   zoomBy,
   type Rect,
@@ -25,6 +26,7 @@ interface VideoZoomLayerProps {
   /** Draws the whole current frame fitted into a w×h context for the
    *  minimap. Absent → minimap shows a plain placeholder. */
   drawThumbnail?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
+  onToggleZoomState?: () => void;
 }
 
 const MINIMAP_MAX_W = 168;
@@ -44,18 +46,43 @@ export default function VideoZoomLayer({
   frameH,
   toolActive,
   onToolActiveChange,
+  onToggleZoomState,
   drawThumbnail,
 }: VideoZoomLayerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const haveDims = frameW > 0 && frameH > 0;
   const zoomed = isZoomed(viewport);
 
-  // Toggle the marquee-zoom tool with the Z key (plain z; mod+z / mod+shift+z
-  // remain undo/redo). Only mounted when the active track has video.
+  // Change 4: track container height to detect minimap/button overlap.
+  const [containerH, setContainerH] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setContainerH(el.getBoundingClientRect().height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Shift+Z toggles the marquee-zoom drawing tool (plain Z toggles zoom state
+  // in VideoPane; mod+z / mod+shift+z remain undo/redo).
+  // = and + zoom in; - zooms out.
   useHotkeys([
     {
       key: 'z',
+      mods: ['shift'],
       handler: () => onToolActiveChange(!toolActive),
+    },
+    {
+      key: '=',
+      handler: () => onViewportChange(zoomBy(viewport, ZOOM_STEP)),
+    },
+    {
+      key: '+',
+      handler: () => onViewportChange(zoomBy(viewport, ZOOM_STEP)),
+    },
+    {
+      key: '-',
+      handler: () => onViewportChange(zoomBy(viewport, 1 / ZOOM_STEP)),
     },
   ]);
 
@@ -109,14 +136,28 @@ export default function VideoZoomLayer({
     onViewportChange(viewportFromDragRect(viewport, content, m));
   }, [boxRect, marquee, haveDims, frameW, frameH, viewport, onViewportChange]);
 
+  // Change 2: Escape cancels an in-progress marquee drag.
+  useEffect(() => {
+    if (!marquee) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        dragStart.current = null;
+        setMarquee(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [!!marquee]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Minimap viewfinder ────────────────────────────────────────────────
   const miniCanvasRef = useRef<HTMLCanvasElement>(null);
-  const miniW = haveDims
-    ? Math.min(MINIMAP_MAX_W, (MINIMAP_MAX_H * frameW) / frameH)
-    : MINIMAP_MAX_W;
-  const miniH = haveDims
-    ? Math.min(MINIMAP_MAX_H, (MINIMAP_MAX_W * frameH) / frameW)
-    : MINIMAP_MAX_H;
+  // Same letterbox-fit math the canvas/fallback paths use, so the minimap
+  // box keeps the frame's aspect ratio.
+  const mini = haveDims
+    ? computeContentRect(MINIMAP_MAX_W, MINIMAP_MAX_H, frameW, frameH)
+    : { x: 0, y: 0, w: MINIMAP_MAX_W, h: MINIMAP_MAX_H };
+  const miniW = mini.w;
+  const miniH = mini.h;
 
   // Live thumbnail render loop (only while the minimap is shown).
   useEffect(() => {
@@ -156,14 +197,13 @@ export default function VideoZoomLayer({
   const miniDragging = useRef(false);
   const onMiniDown = useCallback(
     (e: React.PointerEvent) => {
-      if (!toolActive) return; // panning only in zoom mode
       e.preventDefault();
       e.stopPropagation();
       miniDragging.current = true;
       (e.target as Element).setPointerCapture?.(e.pointerId);
       panFromMini(e);
     },
-    [panFromMini, toolActive],
+    [panFromMini],
   );
   const onMiniMove = useCallback(
     (e: React.PointerEvent) => {
@@ -175,14 +215,18 @@ export default function VideoZoomLayer({
     miniDragging.current = false;
   }, []);
 
-  // Visible-region rectangle drawn over the minimap.
-  const vSize = 1 / viewport.zoom;
+  // Visible-region rectangle drawn over the minimap (shared region math).
+  const region = regionNorm(viewport);
   const regionStyle: React.CSSProperties = {
-    left: `${(viewport.cx - vSize / 2) * 100}%`,
-    top: `${(viewport.cy - vSize / 2) * 100}%`,
-    width: `${vSize * 100}%`,
-    height: `${vSize * 100}%`,
+    left: `${region.x * 100}%`,
+    top: `${region.y * 100}%`,
+    width: `${region.w * 100}%`,
+    height: `${region.h * 100}%`,
   };
+
+  // Change 4: 5 buttons × 36 px + 4 gaps × 8 px + 8 px top padding = 220 px.
+  const STRIP_H = 5 * 36 + 4 * 8 + 8;
+  const shouldWrapButtons = zoomed && containerH > 0 && containerH < STRIP_H + miniH + 24;
 
   const btn =
     'w-9 h-9 flex items-center justify-center rounded-md border transition-colors disabled:opacity-30 disabled:cursor-not-allowed';
@@ -192,7 +236,7 @@ export default function VideoZoomLayer({
       {/* Drag-to-zoom marquee capture (only while the tool is armed). */}
       {toolActive && haveDims && (
         <div
-          className="absolute inset-0 pointer-events-auto cursor-crosshair"
+          className="absolute inset-0 pointer-events-auto cursor-zoom-in"
           onPointerDown={onMarqueeDown}
           onPointerMove={onMarqueeMove}
           onPointerUp={onMarqueeUp}
@@ -212,8 +256,21 @@ export default function VideoZoomLayer({
         </div>
       )}
 
-      {/* Top-right control strip — kept clear of the bottom-right viewfinder. */}
-      <div className="absolute right-2 top-2 flex flex-col gap-2 pointer-events-auto z-30">
+      {/* Top-right control strip — reflows to a row when the minimap would overlap. */}
+      <div className={`absolute right-2 top-2 flex gap-2 pointer-events-auto z-30 ${shouldWrapButtons ? 'flex-row flex-wrap justify-end' : 'flex-col'}`}>
+        <button
+          type="button"
+          title="Toggle zoom (Z)"
+          aria-pressed={zoomed}
+          onClick={() => onToggleZoomState?.()}
+          className={`${btn} ${
+            zoomed
+              ? 'bg-[#e65161] border-[#e65161] text-white'
+              : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
+          }`}
+        >
+          <Search size={18} />
+        </button>
         <button
           type="button"
           title="Marquee zoom — drag a box on the video to zoom into it"
@@ -230,7 +287,6 @@ export default function VideoZoomLayer({
         <button
           type="button"
           title="Zoom in"
-          disabled={!toolActive}
           onClick={() => onViewportChange(zoomBy(viewport, ZOOM_STEP))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}
         >
@@ -239,7 +295,7 @@ export default function VideoZoomLayer({
         <button
           type="button"
           title="Zoom out"
-          disabled={!toolActive || !zoomed}
+          disabled={!zoomed}
           onClick={() => onViewportChange(zoomBy(viewport, 1 / ZOOM_STEP))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}
         >
@@ -248,7 +304,7 @@ export default function VideoZoomLayer({
         <button
           type="button"
           title="Reset zoom"
-          disabled={!toolActive || !zoomed}
+          disabled={!zoomed}
           onClick={() => onViewportChange(clampViewport(DEFAULT_VIEWPORT))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}
         >
@@ -264,7 +320,7 @@ export default function VideoZoomLayer({
         >
           <canvas
             ref={miniCanvasRef}
-            className={`absolute inset-0 w-full h-full ${toolActive ? 'cursor-move' : 'cursor-default'}`}
+            className="absolute inset-0 w-full h-full cursor-move"
             onPointerDown={onMiniDown}
             onPointerMove={onMiniMove}
             onPointerUp={onMiniUp}

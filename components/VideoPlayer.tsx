@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Music } from 'lucide-react';
 
+import { isZoomed } from '../utils/videoZoom';
 import type { Rect, Viewport } from '../utils/videoZoom';
 
 interface VideoPlayerProps {
@@ -110,7 +111,7 @@ export default function VideoPlayer({
         // transform mathematically equivalent to the canvas path's source
         // sub-rect, keeping both render paths in lockstep.
         const zoomed =
-          !!viewport && !!contentRect && viewport.zoom > 1.0001 && !isAudio;
+          !!viewport && !!contentRect && isZoomed(viewport) && !isAudio;
         const wrapperStyle: React.CSSProperties =
           zoomed && contentRect
             ? {

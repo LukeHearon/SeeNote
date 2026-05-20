@@ -41,7 +41,7 @@
  */
 
 import { createFile, DataStream, Endianness, type ISOFile, type Sample, type Track, type MP4BoxBuffer } from 'mp4box';
-import { DEFAULT_VIEWPORT, computeContentRect, regionPx, type Viewport } from './videoZoom';
+import { DEFAULT_VIEWPORT, computeContentRect, drawLetterboxed, regionPx, type Viewport } from './videoZoom';
 
 const DEFAULT_WINDOW_BEFORE_SEC = 2;
 const DEFAULT_WINDOW_AFTER_SEC = 30;
@@ -270,13 +270,7 @@ export class VideoFrameSource {
       // Re-attach fileStart before each appendBuffer call.
       (this.rawBuffer as unknown as { fileStart: number }).fileStart = 0;
       try {
-        const t0 = performance.now();
         file.appendBuffer(this.rawBuffer as MP4BoxBuffer);
-        // ── DIAGNOSTIC: appendBuffer is synchronous; if this takes >16ms it
-        // blocks the rAF loop and causes a visible freeze on the canvas. ──
-        this.opts.onDebugLog?.(
-          `[video] appendBuffer ${startSec.toFixed(2)}s: ${(performance.now() - t0).toFixed(1)}ms sync block, fed=${fed}`,
-        );
         // appendBuffer has returned; onReady + onSamples have already fired
         // and decoder.decode() has been called fed times.
         resolve();
@@ -310,23 +304,9 @@ export class VideoFrameSource {
    *  a blank canvas — better stale than empty. */
   drawAt(ctx: CanvasRenderingContext2D, tSec: number): void {
     this.currentPlayheadSec = tSec;
-    if (this.frameCache.length === 0) return;
+    const frame = this.currentFrame();
+    if (!frame) return;
 
-    const tsMicros = tSec * 1e6;
-    const idx = this.findFrameIdxAtOrBefore(tsMicros);
-    const frame = idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
-
-    // ── DIAGNOSTIC: log when the drawn frame is significantly behind the
-    // requested time — indicates a cache miss during a freeze. ──
-    const frameTs = (frame.timestamp ?? 0) / 1e6;
-    const staleSec = tSec - frameTs;
-    if (staleSec > 0.5) {
-      const minTs = (this.frameCache[0]?.timestamp ?? 0) / 1e6;
-      const maxTs = (this.frameCache[this.frameCache.length - 1]?.timestamp ?? 0) / 1e6;
-      this.opts.onDebugLog?.(
-        `[video] stale draw: want=${tSec.toFixed(3)}s have=${frameTs.toFixed(3)}s gap=${staleSec.toFixed(3)}s cache=${this.frameCache.length} span=[${minTs.toFixed(3)}–${maxTs.toFixed(3)}s]`,
-      );
-    }
     const canvas = ctx.canvas;
     const frameW = frame.displayWidth || this.width;
     const frameH = frame.displayHeight || this.height;
@@ -362,19 +342,22 @@ export class VideoFrameSource {
   /** Draw the *whole* current frame (ignoring the viewport) fitted into a
    *  w×h context — used by the minimap viewfinder. */
   drawThumbnail(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    if (this.frameCache.length === 0) return;
-    const tsMicros = this.currentPlayheadSec * 1e6;
-    const idx = this.findFrameIdxAtOrBefore(tsMicros);
-    const frame = idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
+    const frame = this.currentFrame();
+    if (!frame) return;
     const frameW = frame.displayWidth || this.width;
     const frameH = frame.displayHeight || this.height;
-    const dst = computeContentRect(w, h, frameW, frameH);
-    ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(frame, dst.x, dst.y, dst.w, dst.h);
+    drawLetterboxed(ctx, frame, w, h, frameW, frameH);
   }
 
   getDimensions(): { width: number; height: number } {
     return { width: this.width, height: this.height };
+  }
+
+  getFrameDuration(): number {
+    if (this.samples && this.samples.length > 0) {
+      return this.samples[0].duration / this.trackTimescale;
+    }
+    return 1 / 30;
   }
 
   notifyPlayhead(tSec: number): void {
@@ -426,11 +409,6 @@ export class VideoFrameSource {
       try { frame.close(); } catch { /* */ }
       return;
     }
-    if (this.frameCache.length === 0) {
-      this.opts.onDebugLog?.(
-        `[video] first decoded frame ts=${frame.timestamp}μs size=${frame.displayWidth}x${frame.displayHeight}`,
-      );
-    }
     const ts = frame.timestamp;
     if (this.hasFrameAt(ts)) {
       try { frame.close(); } catch { /* */ }
@@ -464,6 +442,14 @@ export class VideoFrameSource {
     return false;
   }
 
+  /** The cached frame at/before the current playhead, or the earliest cached
+   *  frame as a fallback. null only when the cache is empty. */
+  private currentFrame(): VideoFrame | null {
+    if (this.frameCache.length === 0) return null;
+    const idx = this.findFrameIdxAtOrBefore(this.currentPlayheadSec * 1e6);
+    return idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
+  }
+
   private findFrameIdxAtOrBefore(tsMicros: number): number {
     let lo = 0;
     let hi = this.frameCache.length - 1;
@@ -483,7 +469,6 @@ export class VideoFrameSource {
     const selStart = this.activeRange ? this.activeRange.start * 1e6 : Infinity;
     const selEnd = this.activeRange ? this.activeRange.end * 1e6 : -Infinity;
 
-    const before = this.frameCache.length;
     const kept: VideoFrame[] = [];
     for (const f of this.frameCache) {
       const t = f.timestamp ?? 0;
@@ -498,16 +483,6 @@ export class VideoFrameSource {
     }
     this.frameCache = kept;
     if (this.approxCacheBytes < 0) this.approxCacheBytes = 0;
-
-    // ── DIAGNOSTIC ──
-    const evicted = before - kept.length;
-    if (evicted > 0) {
-      const minTs = kept.length ? (kept[0].timestamp ?? 0) / 1e6 : 0;
-      const maxTs = kept.length ? (kept[kept.length - 1].timestamp ?? 0) / 1e6 : 0;
-      this.opts.onDebugLog?.(
-        `[video] evict: playhead=${this.currentPlayheadSec.toFixed(3)}s keepBefore=${(keepBefore/1e6).toFixed(3)}s evicted=${evicted}/${before} remain=${kept.length} span=[${minTs.toFixed(3)}–${maxTs.toFixed(3)}s]`,
-      );
-    }
   }
 
   private enforceMemoryBudget(): void {

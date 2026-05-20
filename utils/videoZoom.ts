@@ -66,13 +66,46 @@ export function computeContentRect(
   return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h };
 }
 
+/**
+ * Draw `source` (a whole frame / video element) fitted into a boxW×boxH
+ * context, object-contain letterboxed. Clears the box first. Shared by the
+ * minimap's canvas path (VideoFrame cache) and its <video> fallback so the
+ * two stay pixel-identical.
+ */
+export function drawLetterboxed(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  boxW: number,
+  boxH: number,
+  srcW: number,
+  srcH: number,
+): void {
+  const r = computeContentRect(boxW, boxH, srcW, srcH);
+  ctx.clearRect(0, 0, boxW, boxH);
+  try {
+    ctx.drawImage(source, r.x, r.y, r.w, r.h);
+  } catch {
+    /* source not yet drawable */
+  }
+}
+
+/**
+ * The visible window as a normalized rect in frame space, [0,1], clamped so
+ * it stays fully inside the frame. Single source of truth for "where the
+ * viewport is looking" — `regionPx` scales it to pixels, the minimap renders
+ * it as a percentage overlay.
+ */
+export function regionNorm(vp: Viewport): Rect {
+  const size = 1 / vp.zoom;
+  const x = Math.min(1 - size, Math.max(0, vp.cx - size / 2));
+  const y = Math.min(1 - size, Math.max(0, vp.cy - size / 2));
+  return { x, y, w: size, h: size };
+}
+
 /** Source sub-rect (in frame pixels) that the current viewport exposes. */
 export function regionPx(vp: Viewport, frameW: number, frameH: number): Rect {
-  const sw = frameW / vp.zoom;
-  const sh = frameH / vp.zoom;
-  const sx = Math.min(frameW - sw, Math.max(0, vp.cx * frameW - sw / 2));
-  const sy = Math.min(frameH - sh, Math.max(0, vp.cy * frameH - sh / 2));
-  return { x: sx, y: sy, w: sw, h: sh };
+  const r = regionNorm(vp);
+  return { x: r.x * frameW, y: r.y * frameH, w: r.w * frameW, h: r.h * frameH };
 }
 
 /**
@@ -117,4 +150,9 @@ export function zoomBy(vp: Viewport, factor: number): Viewport {
 /** Re-centre on a normalized frame point (used by the minimap viewfinder). */
 export function panToFraction(vp: Viewport, fx: number, fy: number): Viewport {
   return clampViewport({ ...vp, cx: fx, cy: fy });
+}
+
+/** Translate the viewport by (dx, dy) in normalized frame space (used by scroll-to-pan). */
+export function panViewport(vp: Viewport, dx: number, dy: number): Viewport {
+  return clampViewport({ ...vp, cx: vp.cx + dx, cy: vp.cy + dy });
 }
