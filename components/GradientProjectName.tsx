@@ -15,7 +15,6 @@ export default function GradientProjectName({ name, nameGradientColors, classNam
       className={`bg-clip-text text-transparent inline-block${className ? ` ${className}` : ''}`}
       style={{
         backgroundImage: `linear-gradient(to right, ${from}, ${to})`,
-        filter: 'drop-shadow(0px 1px 1px rgba(255,255,255,0.4))',
       }}
     >
       {name}

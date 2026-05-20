@@ -18,7 +18,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const nameRef = useRef<HTMLDivElement>(null);
   const [audioDir, setAudioDir] = useState(project.audioDirectory);
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
-  const [outputFormat, setOutputFormat] = useState(project.outputFormat);
+  const outputFormat = 'txt' as const;
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? 4);
   const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
   const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
@@ -145,7 +145,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setIsBusy(true);
     try {
       // Build copies list: scan old dir for .txt files
-      const copies = await buildCopiesList(oldDir, newDir, outputFormat);
+      const copies = await buildCopiesList(oldDir, newDir);
       const result = await copyAnnotationFiles(copies, resolution);
       if (result.errors.length > 0) {
         setError(`Copy completed with errors:\n${result.errors.join('\n')}`);
@@ -247,19 +247,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                     <FolderOpen size={16} />
                   </button>
                 </div>
-              </div>
-
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">Output Format</label>
-                <select
-                  value={outputFormat}
-                  onChange={e => setOutputFormat(e.target.value as 'json' | 'csv' | 'txt')}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                >
-                  <option value="txt">Audacity (.txt)</option>
-                  <option value="csv">CSV (.csv)</option>
-                  <option value="json">JSON (.json)</option>
-                </select>
               </div>
 
               <div>
@@ -391,15 +378,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
 }
 
-// Scan oldDir recursively and build copy specs mapping to newDir.
-// Uses the project's outputFormat to determine which file extension to scan for.
 async function buildCopiesList(
   oldDir: string,
   newDir: string,
-  outputFormat: string,
 ): Promise<{ src: string; dst: string }[]> {
-  const ext = outputFormat === 'csv' ? '.csv' : outputFormat === 'json' ? '.json' : '.txt';
-  const files = await listAnnotationFilesRecursive(oldDir, ext);
+  const files = await listAnnotationFilesRecursive(oldDir, '.txt');
 
   return files.map(src => {
     const rel = src.startsWith(oldDir) ? src.slice(oldDir.length) : src;

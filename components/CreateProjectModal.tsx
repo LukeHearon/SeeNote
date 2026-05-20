@@ -22,7 +22,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
   const [name, setName] = useState('');
   const [audioDir, setAudioDir] = useState('');
   const [annotationDir, setAnnotationDir] = useState('');
-  const [outputFormat, setOutputFormat] = useState<'json' | 'csv' | 'txt'>('txt');
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -52,7 +51,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
         name: name.trim(),
         audioDirectory: audioDir,
         annotationDirectory: annotationDir,
-        outputFormat,
+        outputFormat: 'txt' as const,
         annotationTools: DEFAULT_ANNOTATION_TOOLS,
         nameGradientColors: gradientColors,
       });
@@ -141,20 +140,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
                 <FolderOpen size={16} />
               </button>
             </div>
-          </div>
-
-          {/* Output format */}
-          <div>
-            <label className="text-gray-400 text-sm block mb-1">Output Format</label>
-            <select
-              value={outputFormat}
-              onChange={e => setOutputFormat(e.target.value as 'json' | 'csv' | 'txt')}
-              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="txt">Audacity (.txt)</option>
-              <option value="csv">CSV (.csv)</option>
-              <option value="json">JSON (.json)</option>
-            </select>
           </div>
 
           {(error || (audioDir && annotationDir && validateDirectoryPair(audioDir, annotationDir))) && (

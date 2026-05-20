@@ -2,7 +2,7 @@
 
 SeeNote is a Tauri v2 + React/TypeScript desktop app for annotating audio/video files to build ML training datasets.
 
-For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.md`](TERMS.md).
+For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.md`](TERMS.md). For a quick codebase map, see [`FILEMAP.md`](FILEMAP.md).
 
 ## CRITICAL: Time-axis synchrony is the cornerstone invariant
 
