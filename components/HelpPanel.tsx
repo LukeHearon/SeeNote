@@ -157,7 +157,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
-                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
+                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
                 </p>
               </Section>
 
@@ -291,7 +291,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                     <span className="text-white">Bound selection:</span> click the center of an annotation to bind the playhead loop to it.
                     Use <Kbd>Cmd+←</Kbd> / <Kbd>Cmd+→</Kbd> to jump between annotations.
                   </li>
-                  <li><span className="text-white">Rename:</span> click the annotation's text label to edit inline. Custom tool annotations open for editing automatically.</li>
+                  <li><span className="text-white">Rename:</span> hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically.</li>
                   <li><span className="text-white">Delete:</span> select an annotation and press <Kbd>Delete</Kbd> / <Kbd>Backspace</Kbd>, or middle-click it directly.</li>
                   <li><span className="text-white">Undo/Redo:</span> <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd>.</li>
                 </ul>
