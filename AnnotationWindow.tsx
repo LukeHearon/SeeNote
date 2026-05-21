@@ -6,8 +6,9 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, Selection, BandPassFilter } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, isSupportedMediaFile } from './constants';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, Selection, BandPassFilter, ProjectUiSettings } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, isSupportedMediaFile } from './constants';
+import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
 import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -64,11 +65,18 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   const [cacheVersion, setCacheVersion] = useState(0);
 
   // Volume: 0 to 4 (400% or +12dB approx)
-  const [volume, setVolume] = useState(project.uiSettings?.volume ?? 1);
+  const [volume, setVolume] = useState(project.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
   const [muted, setMuted] = useState(false);
 
   // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
-  const [playbackSpeed, setPlaybackSpeed] = useState(project.uiSettings?.playbackSpeed ?? 1);
+  const [playbackSpeed, setPlaybackSpeed] = useState(project.uiSettings?.playbackSpeed ?? DEFAULT_UI_SETTINGS.playbackSpeed);
+  // Last non-1.0 speed picked by the user; restored by the gauge-icon toggle.
+  const [lastDefinedSpeed, setLastDefinedSpeed] = useState(
+    project.uiSettings?.lastDefinedSpeed
+      ?? (project.uiSettings?.playbackSpeed && project.uiSettings.playbackSpeed !== 1
+            ? project.uiSettings.playbackSpeed
+            : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
+  );
 
   // Band-pass filter — two independent pieces of state, coordinated via the
   // activation stack (see useActivationStack).
@@ -205,28 +213,24 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // preroll awaits check this so stale resolutions don't start the engine
   // after the user has pressed pause or triggered a new play.
   const playTokenRef = useRef(0);
-  const [splitRatio, setSplitRatio] = useState(project.uiSettings?.splitRatio ?? 0.5);
-  const [leftPanelRatio, setLeftPanelRatio] = useState(project.uiSettings?.leftPanelRatio ?? 0.6);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(project.uiSettings?.leftPanelWidth ?? 224);
+  const [splitRatio, setSplitRatio] = useState(project.uiSettings?.splitRatio ?? DEFAULT_UI_SETTINGS.splitRatio);
+  const [leftPanelRatio, setLeftPanelRatio] = useState(project.uiSettings?.leftPanelRatio ?? DEFAULT_UI_SETTINGS.leftPanelRatio);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(project.uiSettings?.leftPanelWidth ?? DEFAULT_UI_SETTINGS.leftPanelWidth);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
 
-  const [zoomSec, setZoomSec] = useState(DEFAULT_ZOOM_SEC);
+  const [zoomSec, setZoomSec] = useState(project.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
   const [settings, setSettings] = useState<SpectrogramSettings>({
-      minFreq: 0,
-      maxFreq: 22050,
-      fftSize: 1024,
-      frequencyScale: 'mel',
-      displayFloor: -100,
-      displayCeil: 0,
+      ...DEFAULT_SPECTROGRAM_SETTINGS,
+      ...project.spectrogramSettings,
   });
   // Draft strings for the display-range inputs — let the user type freely;
   // only parse and validate when they blur or press Enter.
-  const [displayFloorDraft, setDisplayFloorDraft] = useState('-100');
-  const [displayCeilDraft, setDisplayCeilDraft] = useState('0');
+  const [displayFloorDraft, setDisplayFloorDraft] = useState(String(project.spectrogramSettings?.displayFloor ?? DEFAULT_SPECTROGRAM_SETTINGS.displayFloor));
+  const [displayCeilDraft, setDisplayCeilDraft] = useState(String(project.spectrogramSettings?.displayCeil ?? DEFAULT_SPECTROGRAM_SETTINGS.displayCeil));
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
@@ -357,7 +361,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
         setSampleRate(sr);
         if (dur > 0) setDuration(dur);
-        setSettings(s => ({ ...s, maxFreq: sr / 2 }));
+        // Clamp displayed max frequency to Nyquist of *this* file, but don't
+        // clobber a lower user-defined ceiling. If the user has chosen a max
+        // ≤ this file's Nyquist, keep it; otherwise pull it down.
+        setSettings(s => s.maxFreq > sr / 2 ? { ...s, maxFreq: sr / 2 } : s);
 
         // Fit zoom to file if the file is shorter than the current zoom window.
         const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
@@ -586,17 +593,60 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     };
   }, [settings]);
 
+  // Consolidated UI persistence — every persisted UI field flows through this
+  // single debounced effect, so the project file only gets one write per
+  // settling burst regardless of which slider/handle moved.
   useEffect(() => {
     if (prevProjectIdRef.current !== project.id) return;
     if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     uiPersistRef.current = setTimeout(() => {
       if (!projectRef.current) return;
-      updateProject({ ...projectRef.current, uiSettings: { leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed } });
+      // Store the active track relative to the audio directory so the saved
+      // value survives the user moving or renaming the project root.
+      const cur = trackPathRef.current;
+      const audioRoot = projectRef.current.audioDirectory;
+      const activeTrackPath = cur && audioRoot && cur.startsWith(audioRoot + '/')
+        ? cur.substring(audioRoot.length + 1)
+        : null;
+      const uiSettings: ProjectUiSettings = {
+        leftPanelWidth,
+        splitRatio,
+        leftPanelRatio,
+        volume,
+        playbackSpeed,
+        lastDefinedSpeed,
+        zoomSec,
+        activeTrackPath,
+        windowBounds: projectRef.current.uiSettings?.windowBounds,
+      };
+      updateProject({ ...projectRef.current, uiSettings });
     }, 600);
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed]);
+  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath]);
+
+  // Poll the Tauri window for size/position changes and persist them when they
+  // settle. A 1Hz poll is cheap and avoids needing a Tauri event listener
+  // (which would need its own capability wiring). Persists only when the
+  // value actually differs from what we last wrote.
+  useEffect(() => {
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const wb = await getWindowBounds();
+        const cur = projectRef.current?.uiSettings?.windowBounds;
+        if (!cur || cur.x !== wb.x || cur.y !== wb.y || cur.width !== wb.width || cur.height !== wb.height) {
+          if (projectRef.current) {
+            const ui: ProjectUiSettings = { ...projectRef.current.uiSettings, windowBounds: wb };
+            updateProject({ ...projectRef.current, uiSettings: ui });
+          }
+        }
+      } catch { /* window API not available — silently skip */ }
+    }, 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [updateProject]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
@@ -634,7 +684,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           });
           return;
         }
-        const decimals = projectRef.current?.outputRoundingDecimals ?? 4;
+        const decimals = projectRef.current?.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
         const content = generateAudacityContent(annotations, decimals);
         await writeTextFile(savedAnnotPath, content);
         setAnnotatedFiles(prev => {
@@ -702,20 +752,22 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Initialize state from project prop on mount
   useEffect(() => {
     setAnnotationTools(project.annotationTools.length > 0 ? project.annotationTools : DEFAULT_ANNOTATION_TOOLS);
-    if (project.spectrogramSettings) {
-      setSettings(s => ({
-        ...s,
-        ...project.spectrogramSettings,
-        displayFloor: project.spectrogramSettings!.displayFloor ?? -100,
-        displayCeil: project.spectrogramSettings!.displayCeil ?? 0,
-      }));
-    }
+    const sg = { ...DEFAULT_SPECTROGRAM_SETTINGS, ...project.spectrogramSettings };
+    setSettings(sg);
+    setDisplayFloorDraft(String(sg.displayFloor));
+    setDisplayCeilDraft(String(sg.displayCeil));
     setShuffleMode(project.shuffleMode ?? false);
-    setSplitRatio(project.uiSettings?.splitRatio ?? 0.5);
-    setLeftPanelRatio(project.uiSettings?.leftPanelRatio ?? 0.6);
-    setLeftPanelWidth(project.uiSettings?.leftPanelWidth ?? 224);
-    setVolume(project.uiSettings?.volume ?? 1);
-    setPlaybackSpeed(project.uiSettings?.playbackSpeed ?? 1);
+    const ui = { ...DEFAULT_UI_SETTINGS, ...project.uiSettings };
+    setSplitRatio(ui.splitRatio);
+    setLeftPanelRatio(ui.leftPanelRatio);
+    setLeftPanelWidth(ui.leftPanelWidth);
+    setVolume(ui.volume);
+    setPlaybackSpeed(ui.playbackSpeed);
+    setLastDefinedSpeed(
+      project.uiSettings?.lastDefinedSpeed
+        ?? (ui.playbackSpeed !== 1 ? ui.playbackSpeed : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
+    );
+    setZoomSec(ui.zoomSec);
     setFilterToolActive(false);
     setBandPassFilter(project.bandPassFilter ?? null);
     setFilterStrength(project.bandPassFilter?.strength ?? 0.5);
@@ -727,6 +779,12 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     setVideoSrc(null);
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
+
+    // Restore saved window bounds (best-effort; silently no-ops if unset or
+    // off-screen — Tauri handles the latter).
+    const wb = project.uiSettings?.windowBounds;
+    if (wb) setWindowBounds(wb).catch(() => {});
+
     listMediaFilesRecursive(project.audioDirectory)
       .then(files => {
         setAllMediaFiles(files);
@@ -740,23 +798,17 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           setShuffledFiles(shuffled);
           firstFile = shuffled[0];
         }
+        // Prefer the project's saved active track (resolved relative to the
+        // current audio root, so it survives the project root being renamed
+        // or moved). Falls through to the first file if the saved track no
+        // longer exists.
+        const savedRel = project.uiSettings?.activeTrackPath;
+        if (savedRel) {
+          const savedAbs = `${project.audioDirectory}/${savedRel}`;
+          if (files.includes(savedAbs)) firstFile = savedAbs;
+        }
         if (firstFile) handleOpenTrack(firstFile);
-        listAnnotationFiles(project.annotationDirectory, 'txt')
-          .then(relPaths => {
-            const audioRoot = project.audioDirectory;
-            const relToFull = new Map<string, string>();
-            for (const f of files) {
-              const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
-              relToFull.set(rel, f);
-            }
-            const annotated = new Set<string>();
-            for (const rp of relPaths) {
-              const full = relToFull.get(rp);
-              if (full) annotated.add(full);
-            }
-            setAnnotatedFiles(annotated);
-          })
-          .catch(() => {});
+        refreshAnnotatedSet(files, project.audioDirectory, project.annotationDirectory);
       })
       .catch(err => {
         setAllMediaFiles([]);
@@ -765,30 +817,40 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Shared helper: from a freshly-scanned media file list, compute which
+  // entries already have annotation files on disk. Used by both the initial
+  // mount scan and the manual-refresh path so the rel-path mapping logic
+  // doesn't live in two places.
+  const refreshAnnotatedSet = useCallback(async (
+    files: string[],
+    audioRoot: string,
+    annotationDir: string,
+  ) => {
+    try {
+      const relPaths = await listAnnotationFiles(annotationDir, 'txt');
+      const relToFull = new Map<string, string>();
+      for (const f of files) {
+        const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+        relToFull.set(rel, f);
+      }
+      const annotated = new Set<string>();
+      for (const rp of relPaths) {
+        const full = relToFull.get(rp);
+        if (full) annotated.add(full);
+      }
+      setAnnotatedFiles(annotated);
+    } catch { /* ignore */ }
+  }, []);
+
   const handleRefreshFiles = useCallback(async () => {
     try {
       const files = await listMediaFilesRecursive(project.audioDirectory);
       setAllMediaFiles(files);
-      listAnnotationFiles(project.annotationDirectory, 'txt')
-        .then(relPaths => {
-          const audioRoot = project.audioDirectory;
-          const relToFull = new Map<string, string>();
-          for (const f of files) {
-            const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
-            relToFull.set(rel, f);
-          }
-          const annotated = new Set<string>();
-          for (const rp of relPaths) {
-            const full = relToFull.get(rp);
-            if (full) annotated.add(full);
-          }
-          setAnnotatedFiles(annotated);
-        })
-        .catch(() => {});
+      refreshAnnotatedSet(files, project.audioDirectory, project.annotationDirectory);
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
     }
-  }, [project]);
+  }, [project, refreshAnnotatedSet]);
 
   const handleProjectSettingsSaved = useCallback(async (updated: Project) => {
     await updateProject(updated);
@@ -1066,7 +1128,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
   const performExport = async () => {
       if (annotations.length === 0) return;
-      const decimals = project?.outputRoundingDecimals ?? 4;
+      const decimals = project?.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
       await exportToAudacity(annotations, trackName, trackPath, decimals);
       addLog('Exported annotations as TXT');
   };
@@ -1616,6 +1678,8 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                onToggleSettings={() => setShowSettings(s => !s)}
                playbackSpeed={playbackSpeed}
                setPlaybackSpeed={setPlaybackSpeed}
+               lastDefinedSpeed={lastDefinedSpeed}
+               setLastDefinedSpeed={setLastDefinedSpeed}
                filterToolActive={filterToolActive}
                onToggleFilterTool={handleToggleFilterTool}
                bandPassFilter={bandPassFilter}

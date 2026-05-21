@@ -32,6 +32,8 @@ pub fn run() {
             commands::projects::list_txt_files_recursive,
             commands::projects::reveal_in_file_manager,
             commands::projects::list_annotation_files,
+            commands::window::get_window_bounds,
+            commands::window::set_window_bounds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

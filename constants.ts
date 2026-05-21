@@ -1,4 +1,4 @@
-import type { AnnotationTool } from './types';
+import type { AnnotationTool, ProjectUiSettings, SpectrogramSettings } from './types';
 
 // Roseus 'r' perceptually-uniform colormap
 // © 2022 dofuuz — MIT License
@@ -33,6 +33,31 @@ export function isSupportedMediaFile(path: string): boolean {
 
 export const MIN_ZOOM_SEC = 1;
 export const DEFAULT_ZOOM_SEC = 10;
+
+// Canonical default for output rounding (used when project.outputRoundingDecimals is unset).
+export const DEFAULT_OUTPUT_ROUNDING_DECIMALS = 4;
+
+// Canonical defaults for every persisted setting. Every load site reads from
+// here so a default never has to be repeated. New persisted fields should be
+// added here first, then referenced from useState/load paths.
+export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
+  minFreq: 0,
+  maxFreq: 22050,
+  fftSize: 1024,
+  frequencyScale: 'mel',
+  displayFloor: -100,
+  displayCeil: 0,
+};
+
+export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings, 'activeTrackPath' | 'windowBounds'>> = {
+  leftPanelWidth: 224,
+  splitRatio: 0.5,
+  leftPanelRatio: 0.6,
+  volume: 1,
+  playbackSpeed: 1,
+  lastDefinedSpeed: 1.5,
+  zoomSec: DEFAULT_ZOOM_SEC,
+};
 
 // Used when the user engages the band-pass filter (F key or slider drag-up
 // from 0) without ever having drawn a band: an audible mid-range default so

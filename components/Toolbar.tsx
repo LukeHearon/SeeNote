@@ -27,6 +27,8 @@ interface ToolbarProps {
   onToggleSettings?: () => void;
   playbackSpeed: number;
   setPlaybackSpeed: (s: number) => void;
+  lastDefinedSpeed: number;
+  setLastDefinedSpeed: (s: number) => void;
   filterToolActive: boolean;
   onToggleFilterTool: () => void;
   bandPassFilter: BandPassFilter | null;
@@ -79,6 +81,8 @@ export default function Toolbar({
   onToggleSettings,
   playbackSpeed,
   setPlaybackSpeed,
+  lastDefinedSpeed,
+  setLastDefinedSpeed,
   filterToolActive,
   onToggleFilterTool,
   bandPassFilter,
@@ -127,7 +131,9 @@ export default function Toolbar({
       const delta = -Math.sign(e.deltaY) * 0.03;
       let newSlider = Math.max(0, Math.min(1, cur + delta));
       if (Math.abs(newSlider - 0.5) < 0.015) newSlider = 0.5;
-      setPlaybackSpeed(sliderToSpeed(newSlider));
+      const next = sliderToSpeed(newSlider);
+      setPlaybackSpeed(next);
+      if (next !== 1.0) setLastDefinedSpeed(next);
     };
     speedControlEl.addEventListener('wheel', handler, { passive: false });
     return () => speedControlEl.removeEventListener('wheel', handler);
@@ -135,13 +141,11 @@ export default function Toolbar({
 
   const [editingSpeed, setEditingSpeed] = useState(false);
   const [editingSpeedRaw, setEditingSpeedRaw] = useState('');
-  const [lastNonOneSpeed, setLastNonOneSpeed] = useState(() => playbackSpeed !== 1 ? playbackSpeed : 1.5);
-
   const commitSpeedEdit = () => {
     const parsed = parseFloat(editingSpeedRaw.replace(/x$/i, '').trim());
     if (!isNaN(parsed)) {
       setPlaybackSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
-      if (parsed !== 1.0) setLastNonOneSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+      if (parsed !== 1.0) setLastDefinedSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
     }
     setEditingSpeed(false);
     setEditingSpeedRaw('');
@@ -455,7 +459,7 @@ export default function Toolbar({
       >
         <button
           type="button"
-          onClick={() => setPlaybackSpeed(playbackSpeed === 1 ? lastNonOneSpeed : 1)}
+          onClick={() => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1)}
           className="flex-none p-0 leading-none"
           data-tooltip={playbackSpeed !== 1 ? "Click to reset to 1× (click text to set custom speed)" : "Click to restore last speed"}
         >

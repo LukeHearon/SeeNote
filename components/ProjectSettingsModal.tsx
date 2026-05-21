@@ -3,6 +3,7 @@ import { X, FolderOpen } from 'lucide-react';
 import { Project } from '../types';
 import { openDirectoryDialog, checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import GradientPicker from './GradientPicker';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
@@ -19,7 +20,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [audioDir, setAudioDir] = useState(project.audioDirectory);
   const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
   const outputFormat = 'txt' as const;
-  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? 4);
+  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
   const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
 

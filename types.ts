@@ -34,12 +34,23 @@ export interface AnnotationTool {
   color: string;
 }
 
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ProjectUiSettings {
   leftPanelWidth?: number;  // px
   splitRatio?: number;      // 0–1, vertical split between video and spectrogram
   leftPanelRatio?: number;  // 0–1, split within left panel (file tree vs tool palette)
   volume?: number;          // gain, 0–4
   playbackSpeed?: number;   // 0.25–4.0, 1.0 = normal
+  lastDefinedSpeed?: number;        // last non-1.0 speed picked by user; restored on speed toggle
+  zoomSec?: number;                 // spectrogram visible duration
+  activeTrackPath?: string | null;  // path of last-opened track, relative to project.audioDirectory
+  windowBounds?: WindowBounds;      // app window position and size
 }
 
 /**
