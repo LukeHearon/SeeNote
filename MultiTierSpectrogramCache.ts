@@ -8,6 +8,7 @@ export interface CachedChunk {
   startSec: number;
   actualDurationSec: number;
   sampleRate: number;
+  maxFreq: number;
   lastAccessed: number;
 }
 
@@ -19,6 +20,12 @@ interface ResolvedTier {
   maxChunks: number;
 }
 
+function snapMaxFreq(maxFreq: number, nyquist: number): number {
+  const grid = [1000, 2000, 4000, 8000];
+  const snapped = grid.find(v => v >= maxFreq);
+  return snapped !== undefined ? snapped : nyquist;
+}
+
 export class MultiTierSpectrogramCache {
   private tiers: ResolvedTier[];
   private caches: Map<number, Map<number, CachedChunk>>; // tier -> (chunkIdx -> chunk)
@@ -28,13 +35,17 @@ export class MultiTierSpectrogramCache {
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
   private generationId: number = 0;
 
+  private readonly maxFreq: number;
+
   constructor(
     private readonly filePath: string,
     private readonly fftSize: number,
     private readonly sampleRate: number,
     private readonly duration: number,
     private readonly onChunkLoaded: () => void,
+    maxFreqRaw: number,
   ) {
+    this.maxFreq = snapMaxFreq(maxFreqRaw, sampleRate / 2);
     // Resolve tier configs into concrete hop sizes.
     // NOTE: Math.round() here is benign for sample-accuracy. The hop size
     // determines the STFT column grid WITHIN a chunk, and all downstream
@@ -181,6 +192,7 @@ export class MultiTierSpectrogramCache {
       tierConfig.chunkDuration,
       this.fftSize,
       tierConfig.hopSize,
+      this.maxFreq,
     )
       .then(result => {
         // Discard result if invalidate() was called while this fetch was in flight.
@@ -193,6 +205,7 @@ export class MultiTierSpectrogramCache {
           startSec: result.start_sec,
           actualDurationSec: result.actual_duration_sec,
           sampleRate: result.sample_rate,
+          maxFreq: result.max_freq,
           lastAccessed: Date.now(),
         };
 
@@ -227,7 +240,7 @@ export class MultiTierSpectrogramCache {
       const nColumns = 1200;
       if (nColumns <= 0) return;
 
-      const result = await getOverviewSpectrogram(this.filePath, nColumns, this.fftSize);
+      const result = await getOverviewSpectrogram(this.filePath, nColumns, this.fftSize, this.maxFreq);
 
       // Discard result if invalidate() was called while this fetch was in flight.
       if (this.generationId !== generation) return;
@@ -239,6 +252,7 @@ export class MultiTierSpectrogramCache {
         startSec: 0,
         actualDurationSec: result.actual_duration_sec,
         sampleRate: result.sample_rate,
+        maxFreq: result.max_freq,
         lastAccessed: Date.now(),
       };
       this.onChunkLoaded();
