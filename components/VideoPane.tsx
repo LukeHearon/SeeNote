@@ -21,6 +21,8 @@ interface VideoPaneProps {
   videoSrc: string | null;
   isProcessing: boolean;
   isBuffering: boolean;
+  isPlaying: boolean;
+  playbackSpeed: number;
   getMediaTime: () => number;
   onDebugLog: (msg: string, type?: 'info' | 'error') => void;
   onDurationChange: (d: number) => void;
@@ -33,6 +35,8 @@ export default function VideoPane({
   videoSrc,
   isProcessing,
   isBuffering,
+  isPlaying,
+  playbackSpeed,
   getMediaTime,
   onDebugLog,
   onDurationChange,
@@ -174,6 +178,9 @@ export default function VideoPane({
         <VideoPlayer
           src={videoSrc}
           isAudio={isAudioTrack}
+          isPlaying={isPlaying}
+          playbackSpeed={playbackSpeed}
+          getMediaTime={getMediaTime}
           onDurationChange={onDurationChange}
           onDebugLog={onDebugLog}
           viewport={viewport}

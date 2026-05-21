@@ -1523,6 +1523,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             videoSrc={videoSrc}
             isProcessing={isProcessing}
             isBuffering={isBuffering}
+            isPlaying={isPlaying}
+            playbackSpeed={playbackSpeed}
             getMediaTime={getMediaTime}
             onDebugLog={addLog}
             onDurationChange={setDuration}
