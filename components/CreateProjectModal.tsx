@@ -27,6 +27,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
   const [isCreating, setIsCreating] = useState(false);
   const [mediaDirExists, setMediaDirExists] = useState<boolean | null>(null);
   const [annotationDirExists, setAnnotationDirExists] = useState<boolean | null>(null);
+  const [existingProjectName, setExistingProjectName] = useState<string | null>(null);
 
   const nameTouchedRef = useRef(false);
   const mediaTouchedRef = useRef(false);
@@ -71,9 +72,19 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
     return () => { cancelled = true; clearTimeout(t); };
   }, [resolvedAnnotationDir]);
 
+  const checkExistingProject = async (dir: string) => {
+    if (!dir) { setExistingProjectName(null); return; }
+    try {
+      const existing = await readProjectSettings(dir);
+      setExistingProjectName(existing.name);
+    } catch {
+      setExistingProjectName(null);
+    }
+  };
+
   const handleBrowseProject = async () => {
     const dir = await openDirectoryDialog();
-    if (dir) setProjectDir(dir);
+    if (dir) { setProjectDir(dir); checkExistingProject(dir); }
   };
 
   const handleBrowseMedia = async () => {
@@ -107,12 +118,13 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
     if (!projectDirOk) { setError('Project directory does not exist.'); setIsCreating(false); return; }
 
     try {
-      await readProjectSettings(projectDir);
-      setError('A SeeNote project already exists at this location.');
+      const existing = await readProjectSettings(projectDir);
+      setExistingProjectName(existing.name);
+      setError(`Project "${existing.name}" already exists in this location. Delete its .seenote directory first, or pick a different location.`);
       setIsCreating(false);
       return;
     } catch {
-      // expected — no project here yet
+      setExistingProjectName(null);
     }
 
     try {
@@ -157,7 +169,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
               <input
                 type="text"
                 value={projectDir}
-                onChange={e => setProjectDir(e.target.value)}
+                onChange={e => { setProjectDir(e.target.value); setExistingProjectName(null); }}
+                onBlur={e => checkExistingProject(e.target.value)}
                 placeholder="/path/to/project"
                 className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                 autoFocus
@@ -169,6 +182,11 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
                 <FolderOpen size={16} />
               </button>
             </div>
+            {existingProjectName && (
+              <p className="text-red-400 text-xs mt-1">
+                Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
+              </p>
+            )}
           </div>
 
           <div>

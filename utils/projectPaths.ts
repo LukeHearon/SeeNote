@@ -5,7 +5,9 @@ function stripTrailingSep(p: string): string {
 }
 
 function joinPath(base: string, rest: string): string {
-  return stripTrailingSep(base) + '/' + rest.replace(/^[./\\]+/, '');
+  const baseClean = stripTrailingSep(base);
+  const restClean = rest.replace(/^(?:\.[/\\]+)+/, '').replace(/^[/\\]+/, '');
+  return restClean ? baseClean + '/' + restClean : baseClean;
 }
 
 /** True for paths that are already absolute (unix `/`, home `~/`, Windows drive `C:\`). */
