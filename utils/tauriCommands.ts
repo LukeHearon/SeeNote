@@ -111,6 +111,9 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
+export const createDirAll = (path: string): Promise<void> =>
+  invoke('create_dir_all', { path });
+
 export const saveFileDialog = (
   defaultPath: string,
   filters: DialogFilter[],

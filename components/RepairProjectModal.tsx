@@ -1,26 +1,24 @@
 import React from 'react';
 import { AlertCircle, FolderOpen } from 'lucide-react';
 import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
-import { Project } from '../types';
+import { Project, ProjectSettings } from '../types';
 import { findFirstValidAncestor } from '../utils/helpers';
+import { makeProjectPath } from '../utils/projectPaths';
 
 export type RepairProjectState = {
   project: Project;
-  audioMissing: boolean;
-  annotationMissing: boolean;
-  repairedAudio: string;
-  repairedAnnotation: string;
+  repairedMedia: string;
 };
 
 function RepairProjectModal({
   repairProject,
   setRepairProject,
-  updateProject,
+  updateProjectSettings,
   onOpenProject,
 }: {
   repairProject: RepairProjectState;
   setRepairProject: React.Dispatch<React.SetStateAction<RepairProjectState | null>>;
-  updateProject: (p: Project) => Promise<void> | void;
+  updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
   onOpenProject: (p: Project) => void;
 }) {
   return (
@@ -29,60 +27,34 @@ function RepairProjectModal({
         <div className="flex items-start gap-3">
           <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
           <div>
-            <h3 className="text-white font-semibold text-base">Project directory not found</h3>
+            <h3 className="text-white font-semibold text-base">Media directory not found</h3>
             <p className="text-slate-400 text-sm mt-1">
-              One or more directories for <span className="text-white">{repairProject.project.name}</span> no longer exist. Please choose new paths.
+              The media directory for <span className="text-white">{repairProject.project.settings.name}</span> no longer exists. Please choose a new path.
             </p>
           </div>
         </div>
 
-        {repairProject.audioMissing && (
-          <div>
-            <label className="text-slate-400 text-xs block mb-1">Audio Directory <span className="text-amber-400">(missing)</span></label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={repairProject.repairedAudio}
-                onChange={e => setRepairProject(r => r ? { ...r, repairedAudio: e.target.value } : r)}
-                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-              />
-              <button
-                onClick={async () => {
-                  const startDir = await findFirstValidAncestor(repairProject.repairedAudio);
-                  const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                  if (dir) setRepairProject(r => r ? { ...r, repairedAudio: dir } : r);
-                }}
-                className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-              >
-                <FolderOpen size={16} />
-              </button>
-            </div>
+        <div>
+          <label className="text-slate-400 text-xs block mb-1">Media Directory <span className="text-amber-400">(missing)</span></label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={repairProject.repairedMedia}
+              onChange={e => setRepairProject(r => r ? { ...r, repairedMedia: e.target.value } : r)}
+              className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
+            />
+            <button
+              onClick={async () => {
+                const startDir = await findFirstValidAncestor(repairProject.repairedMedia);
+                const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                if (dir) setRepairProject(r => r ? { ...r, repairedMedia: dir } : r);
+              }}
+              className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
+            >
+              <FolderOpen size={16} />
+            </button>
           </div>
-        )}
-
-        {repairProject.annotationMissing && (
-          <div>
-            <label className="text-slate-400 text-xs block mb-1">Annotation Directory <span className="text-amber-400">(missing)</span></label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={repairProject.repairedAnnotation}
-                onChange={e => setRepairProject(r => r ? { ...r, repairedAnnotation: e.target.value } : r)}
-                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-[#e65161]"
-              />
-              <button
-                onClick={async () => {
-                  const startDir = await findFirstValidAncestor(repairProject.repairedAnnotation);
-                  const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-                  if (dir) setRepairProject(r => r ? { ...r, repairedAnnotation: dir } : r);
-                }}
-                className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
-              >
-                <FolderOpen size={16} />
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
 
         <div className="flex gap-3 justify-end pt-2">
           <button
@@ -93,14 +65,13 @@ function RepairProjectModal({
           </button>
           <button
             onClick={async () => {
-              const updated = {
-                ...repairProject.project,
-                audioDirectory: repairProject.repairedAudio,
-                annotationDirectory: repairProject.repairedAnnotation,
+              const newSettings: ProjectSettings = {
+                ...repairProject.project.settings,
+                mediaDirectory: makeProjectPath(repairProject.project.projectDir, repairProject.repairedMedia),
               };
-              await updateProject(updated);
+              const updated = await updateProjectSettings(repairProject.project.id, newSettings);
               setRepairProject(null);
-              onOpenProject(updated);
+              if (updated) onOpenProject(updated);
             }}
             className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
           >

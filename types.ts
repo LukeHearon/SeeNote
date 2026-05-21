@@ -49,7 +49,7 @@ export interface ProjectUiSettings {
   playbackSpeed?: number;   // 0.25–4.0, 1.0 = normal
   lastDefinedSpeed?: number;        // last non-1.0 speed picked by user; restored on speed toggle
   zoomSec?: number;                 // spectrogram visible duration
-  activeTrackPath?: string | null;  // path of last-opened track, relative to project.audioDirectory
+  activeTrackPath?: string | null;  // path of last-opened track, relative to project.mediaDirectoryAbs
   windowBounds?: WindowBounds;      // app window position and size
 }
 
@@ -67,15 +67,27 @@ export interface BandPassFilter {
   strength: number;
 }
 
-export interface Project {
-  id: string;
+/**
+ * A directory path stored in project settings. `relative` paths are resolved
+ * against the project directory; `absolute` paths are taken as-is. Choosing
+ * `relative` whenever possible is what makes a project portable across
+ * machines.
+ */
+export type ProjectPath =
+  | { kind: 'relative'; path: string }
+  | { kind: 'absolute'; path: string };
+
+/**
+ * Contents of `{projectDir}/.seenote/settings.json`. The project directory
+ * itself is implicit — it is the parent of `.seenote/`. The registry entry
+ * provides `projectDir` to the in-memory `Project`.
+ */
+export interface ProjectSettings {
   name: string;
-  audioDirectory: string;
-  annotationDirectory: string;
+  mediaDirectory: ProjectPath;
+  annotationDirectory: ProjectPath;
   outputFormat: 'txt';
-  outputRoundingDecimals?: number; // decimal places for start/end in output files; default 4
-  createdAt: string;
-  lastOpened: string;
+  outputRoundingDecimals?: number;
   annotationTools: AnnotationTool[];
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
@@ -84,3 +96,39 @@ export interface Project {
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;
 }
+
+/**
+ * Pointer record in the per-machine registry at
+ * `{app_data}/.projects/projects.json`. Holds only what is needed to locate
+ * the project on this machine and order the launch list.
+ */
+export interface ProjectRegistryEntry {
+  id: string;
+  projectDir: string; // absolute, this-machine path
+  lastOpened: string; // ISO timestamp
+}
+
+/**
+ * In-memory project bundle assembled from a `ProjectRegistryEntry` plus the
+ * project's loaded `ProjectSettings`. The `mediaDirectoryAbs` /
+ * `annotationDirectoryAbs` fields are resolved on load and are what the rest
+ * of the app uses for filesystem calls.
+ */
+export interface Project {
+  id: string;
+  projectDir: string;
+  lastOpened: string;
+  settings: ProjectSettings;
+  mediaDirectoryAbs: string;
+  annotationDirectoryAbs: string;
+}
+
+/**
+ * One row in the launch screen list. `ok` entries have a fully-loaded
+ * `project`; other variants only have the registry pointer so the user can
+ * be prompted to remove or reconnect.
+ */
+export type ProjectListEntry =
+  | { status: 'ok'; registry: ProjectRegistryEntry; project: Project }
+  | { status: 'missing-dir'; registry: ProjectRegistryEntry }
+  | { status: 'bad-settings'; registry: ProjectRegistryEntry; error: string };
