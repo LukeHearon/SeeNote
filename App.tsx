@@ -8,29 +8,22 @@ import { useProjects } from './hooks/useProjects';
 import { listDirectory } from './utils/tauriCommands';
 
 export default function App() {
-  const { projects, isLoading, loadError, projectsFilePath, createProject, updateProject, deleteProject, touchLastOpened } = useProjects();
+  const {
+    entries, isLoading, loadError, projectsFilePath,
+    createProject, addExistingProject, updateProjectSettings,
+    removeProject, touchLastOpened, reconnectProject,
+  } = useProjects();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
 
-  // Broken-path repair modal: set when a project's audio/annotation dir is missing
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
 
   const handleOpenProject = useCallback(async (project: Project) => {
     const touched = await touchLastOpened(project.id) ?? project;
-
-    // Check that both directories still exist before opening.
-    const audioExists = await listDirectory(touched.audioDirectory).then(() => true).catch(() => false);
-    const annotationExists = await listDirectory(touched.annotationDirectory).then(() => true).catch(() => false);
-    if (!audioExists || !annotationExists) {
-      setRepairProject({
-        project: touched,
-        audioMissing: !audioExists,
-        annotationMissing: !annotationExists,
-        repairedAudio: touched.audioDirectory,
-        repairedAnnotation: touched.annotationDirectory,
-      });
+    const mediaExists = await listDirectory(touched.mediaDirectoryAbs).then(() => true).catch(() => false);
+    if (!mediaExists) {
+      setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
       return;
     }
-
     setActiveProject(touched);
   }, [touchLastOpened]);
 
@@ -43,7 +36,7 @@ export default function App() {
       <AnnotationWindow
         project={activeProject}
         onClose={handleCloseProject}
-        updateProject={updateProject}
+        updateProjectSettings={updateProjectSettings}
         touchLastOpened={touchLastOpened}
       />
     );
@@ -52,20 +45,22 @@ export default function App() {
   return (
     <>
       <LaunchScreen
-        projects={projects}
+        entries={entries}
         isLoading={isLoading}
         loadError={loadError}
         projectsFilePath={projectsFilePath}
         onOpenProject={handleOpenProject}
         createProject={createProject}
-        updateProject={updateProject}
-        deleteProject={deleteProject}
+        addExistingProject={addExistingProject}
+        removeProject={removeProject}
+        reconnectProject={reconnectProject}
+        updateProjectSettings={updateProjectSettings}
       />
       {repairProject && (
         <RepairProjectModal
           repairProject={repairProject}
           setRepairProject={setRepairProject}
-          updateProject={updateProject}
+          updateProjectSettings={updateProjectSettings}
           onOpenProject={handleOpenProject}
         />
       )}

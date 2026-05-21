@@ -27,6 +27,7 @@ interface FileTreeProps {
   onToggleFileFilter: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
+  onRevealAnnotationsRoot?: () => void;
   onRefresh: () => void;
 }
 
@@ -245,6 +246,7 @@ function FileTree({
   onToggleFileFilter,
   onRevealInFinder,
   onRevealAnnotations,
+  onRevealAnnotationsRoot,
   onRefresh,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
@@ -661,6 +663,18 @@ function FileTree({
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
               onClick={() => {
                 onRevealAnnotations(contextMenu.path);
+                setContextMenu(null);
+              }}
+            >
+              {`Show Annotations in ${finderLabel}`}
+            </button>
+          )}
+          {/* Show annotations root folder for the audio root */}
+          {contextMenu.isAudioRoot && onRevealAnnotationsRoot && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                onRevealAnnotationsRoot();
                 setContextMenu(null);
               }}
             >

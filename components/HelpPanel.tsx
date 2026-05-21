@@ -58,16 +58,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
   // Close on Esc when the panel is open. `stop: true` blocks other hotkey
   // listeners so Esc doesn't also deactivate the active annotation tool.
-  // Arrow keys cycle through the tabs (no stop — they're scoped enough that
-  // other Arrow handlers don't matter while this panel is open).
-  const cycleTab = (delta: number) => {
-    const idx = tabs.findIndex(t => t.id === tab);
-    onTabChange(tabs[(idx + delta + tabs.length) % tabs.length].id);
-  };
   useHotkeys([
     { key: 'Escape', allowInInput: true, stop: true, handler: onClose },
-    { key: 'ArrowLeft', allowInInput: true, handler: () => cycleTab(-1) },
-    { key: 'ArrowRight', allowInInput: true, handler: () => cycleTab(1) },
   ], open);
 
   const tabPanelId = `help-tabpanel-${tab}`;
@@ -126,7 +118,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <span className="text-white">annotation output directory</span> where label files are saved.
                 </p>
                 <p>
-                  Configure output format (Audacity .txt, CSV, or JSON) and label categories via{' '}
+                  Configure label categories and other settings via{' '}
                   <HelpAnchor target="project-settings-btn">Project Settings</HelpAnchor>.
                   All settings—including annotation tools and spectrogram display—persist per project.
                 </p>
@@ -140,6 +132,23 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
+              <Section title="Video Zoom" target="video-panel">
+                <p>
+                  When the active track has video, controls appear at the{' '}
+                  <span className="text-white">top-right</span> of the video panel.
+                </p>
+                <ul className="space-y-1 list-none">
+                  <li><span className="text-white"><Kbd>Z</Kbd>:</span> toggle zoom state — restores your last zoomed viewport when turning on, saves it when turning off.</li>
+                  <li><span className="text-white"><Kbd>Shift+Z</Kbd>:</span> toggle the marquee drawing tool. While armed, drag a box over the video to zoom into that region. Press <Kbd>Esc</Kbd> mid-drag to cancel.</li>
+                  <li><span className="text-white">Pan:</span> while zoomed, scroll (trackpad two-finger or mouse wheel) over the video panel to pan around.</li>
+                  <li><span className="text-white">Zoom in / out / reset:</span> buttons available whenever zoomed in.</li>
+                  <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view.</li>
+                </ul>
+                <p className="text-slate-400 text-xs">
+                  Zoom is purely visual and never affects the playhead, audio, or annotation timing.
+                </p>
+              </Section>
+
               <Section title="Spectrogram" target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
@@ -148,23 +157,27 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
-                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, range) are saved per project.
+                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
                 </p>
               </Section>
 
               <Section title="Two Modes: Selection vs. Tool">
                 <ul className="space-y-2 list-none">
                   <li>
-                    <span className="text-white">Selection Mode</span> (press <Kbd>Esc</Kbd> to enter —{' '}
+                    <span className="text-white">Selection Mode</span> (press <Kbd>S</Kbd> to enter —{' '}
                     <HelpAnchor target="tool-palette">see palette</HelpAnchor>
                     ): left-click &amp; drag creates a <span className="italic">selection region</span>.
                     Playback is bounded to that region. While a selection is active, pressing a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>) drops an annotation onto it.
                   </li>
                   <li>
                     <span className="text-white">Annotation Tool Mode</span> (a tool is active): left-click &amp; drag directly creates an annotation.
-                    Press a number key to switch tools, or <Kbd>Esc</Kbd> to return to Selection Mode.
+                    Press a number key to switch tools, or <Kbd>S</Kbd> to return to Selection Mode.
                   </li>
                 </ul>
+                <p className="text-slate-400 text-xs">
+                  <Kbd>Esc</Kbd> is the universal undo-layer key: it pops the most recently activated layer
+                  (band, filter-tool, selection, annotation tool) in the reverse order you turned them on.
+                </p>
               </Section>
 
               <Section title="Transport Controls" target="transport-buttons">
@@ -178,6 +191,49 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   The{' '}
                   <HelpAnchor target="volume-control">volume slider</HelpAnchor>{' '}
                   supports up to 2× gain boost (slider past center). Press <Kbd>M</Kbd> to mute.
+                </p>
+              </Section>
+
+              <Section title="Playback Speed" target="playback-speed">
+                <p>
+                  The{' '}
+                  <HelpAnchor target="playback-speed">speed slider</HelpAnchor>{' '}
+                  scrubs playback between <span className="font-mono text-xs">0.25x</span> and{' '}
+                  <span className="font-mono text-xs">4.0x</span>. Pitch is preserved, so slowing audio down
+                  to inspect a transient won't drop it into a different octave.
+                  Center snaps to <span className="font-mono text-xs">1.0x</span>; scroll-wheel over the slider also nudges the value.
+                </p>
+                <p className="text-slate-400 text-xs">
+                  Speed is saved per project. Video tracks follow the audio clock, so frames stay in sync at any speed.
+                </p>
+              </Section>
+
+              <Section title="Band-Pass Filter" target="filter-tool">
+                <p>
+                  Press <Kbd>Shift+F</Kbd> (or click the{' '}
+                  <HelpAnchor target="filter-tool">filter button</HelpAnchor>) to ready the filter tool —
+                  the cursor flips to a horizontal bar. Drag vertically on the spectrogram to draw a band:
+                  audio outside the band is attenuated in real time, the out-of-band region darkens,
+                  and the filter engages automatically.
+                </p>
+                <p>
+                  Drag the two horizontal cutoff lines to retune the band in place. Use the{' '}
+                  <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
+                  to mix between dry (0%, source untouched) and fully band-passed (100%).
+                  Dragging the slider up from 0 re-enables filtering at the new strength,
+                  restoring the last band you drew.
+                </p>
+                <p>
+                  <span className="text-white">F toggles filtering on/off</span>, saving and restoring the last defined band — just like <Kbd>Z</Kbd> for video zoom.
+                  If you've never drawn a band, F engages a default 500 Hz–4 kHz band at 50% so you can hear something immediately and refine from there.
+                  Tool readiness (<Kbd>Shift+F</Kbd>) is independent: a drawn band keeps filtering even after the tool is unreadied.
+                </p>
+                <p>
+                  <Kbd>Esc</Kbd> unwinds the most recent layer: first the band (and filtering), then the
+                  filter tool itself, then selection, then the annotation tool — in the order you turned them on.
+                </p>
+                <p>
+                  <span className="text-white">Persistence:</span> the band cutoffs and strength are saved into the project file. The source audio is never modified and the spectrogram is not recomputed.
                 </p>
               </Section>
 
@@ -224,6 +280,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">From scratch:</span> activate a tool, then drag on the spectrogram.</li>
                   <li><span className="text-white">From selection:</span> make a selection region, then press a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>).</li>
+                  <li><span className="text-white">Whole track:</span> with a tool active, press <Kbd>Cmd/Ctrl+A</Kbd> to annotate the entire track (with no tool active it selects the whole track instead).</li>
                 </ul>
               </Section>
 
@@ -257,21 +314,32 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
               <ShortcutGroup title="Navigation" rows={[
                 { keys: '← / →', label: 'Scrub playhead ±10% zoom' },
+                { keys: ', / .', label: 'Scrub back / forward one frame (video tracks)' },
                 { keys: 'Cmd+← / →', label: 'Prev / Next annotation' },
                 { keys: 'Cmd+↑ / ↓', label: 'Prev / Next file' },
               ]} />
 
-              <ShortcutGroup title="Annotations" rows={[
+              <ShortcutGroup title="Tools" rows={[
                 { keys: '0 – 9', label: 'Activate annotation tool' },
-                { keys: 'Esc', label: 'Selection Mode / clear selection' },
+                { keys: 'S', label: 'Select tool (no annotation tool)' },
+                { keys: 'F', label: 'Toggle filter on/off (saves/restores last band)' },
+                { keys: 'Shift+F', label: 'Ready filter tool (drag to draw band)' },
+                { keys: 'Z', label: 'Toggle video zoom state (saves/restores last viewport)' },
+                { keys: 'Shift+Z', label: 'Toggle marquee zoom drawing tool' },
+                { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
+              ]} />
+
+              <ShortcutGroup title="Annotations" rows={[
+                { keys: 'Cmd/Ctrl+A', label: 'Select whole track (annotate full track if a tool is active)' },
                 { keys: 'Delete / Backspace', label: 'Delete selected annotation' },
                 { keys: 'Middle-click', label: 'Delete annotation instantly' },
                 { keys: 'Cmd/Ctrl+Z', label: 'Undo' },
-                { keys: 'Cmd/Ctrl+Shift+Z', label: 'Redo' },
+                { keys: 'Cmd/Ctrl+Shift+Z / Cmd+Y', label: 'Redo' },
               ]} />
 
               <ShortcutGroup title="App" rows={[
                 { keys: 'F1 / ?', label: 'Toggle this help panel' },
+                { keys: '/ (hold)', label: 'Show tooltips instantly' },
               ]} />
             </>
           )}

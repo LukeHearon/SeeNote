@@ -5,6 +5,7 @@ import { MAGMA_STOPS, interpolateMagmaHex } from '../constants';
 interface Props {
   value: [string, string];
   onChange: (colors: [string, string]) => void;
+  minT?: number;
 }
 
 // Build the CSS gradient string for the magma colormap bar.
@@ -33,9 +34,9 @@ function hexToMagmaT(hex: string): number {
   return bestT;
 }
 
-export default function GradientPicker({ value, onChange }: Props) {
+export default function GradientPicker({ value, onChange, minT = 0 }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
-  const [tStart, setTStart] = useState(() => hexToMagmaT(value[0]));
+  const [tStart, setTStart] = useState(() => Math.max(minT, hexToMagmaT(value[0])));
   const [tEnd, setTEnd] = useState(() => hexToMagmaT(value[1]));
   const mountedRef = useRef(false);
 

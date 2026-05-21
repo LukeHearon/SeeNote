@@ -6,29 +6,31 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, Selection } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, isSupportedMediaFile } from './constants';
-import { exportToCSV, exportToAudacity, exportToJSON, generateAudacityContent, generateCSVContent, generateJSONContent, makeAnnotationFromTool } from './utils/helpers';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, isSupportedMediaFile } from './constants';
+import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
+import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
 import { useHotkeys } from './hooks/useHotkeys';
+import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
-import BrightnessContrastPad from './components/BrightnessContrastPad';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
+import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import Toolbar from './components/Toolbar';
 
 export interface AnnotationWindowProps {
   project: Project;
   onClose: () => void;
-  updateProject: (p: Project) => Promise<void> | void;
+  updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
   touchLastOpened: (id: string) => void;
 }
 
-export default function AnnotationWindow({ project, onClose, updateProject, touchLastOpened }: AnnotationWindowProps) {
+export default function AnnotationWindow({ project, onClose, updateProjectSettings, touchLastOpened }: AnnotationWindowProps) {
   // Track State
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [trackName, setTrackName] = useState<string>("video");
@@ -46,11 +48,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+  const [showToolSettings, setShowToolSettings] = useState(false);
 
   // Derived from project prop
-  const annotationDirectory = project.annotationDirectory ?? null;
-  const exportFormat = project.outputFormat ?? 'txt';
-
+  const annotationDirectory = project.annotationDirectoryAbs ?? null;
   // Queue / shuffle
   const [shuffleMode, setShuffleMode] = useState(false);
   const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
@@ -64,8 +65,38 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   const [cacheVersion, setCacheVersion] = useState(0);
 
   // Volume: 0 to 4 (400% or +12dB approx)
-  const [volume, setVolume] = useState(1);
+  const [volume, setVolume] = useState(project.settings.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
   const [muted, setMuted] = useState(false);
+
+  // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
+  const [playbackSpeed, setPlaybackSpeed] = useState(project.settings.uiSettings?.playbackSpeed ?? DEFAULT_UI_SETTINGS.playbackSpeed);
+  // Last non-1.0 speed picked by the user; restored by the gauge-icon toggle.
+  const [lastDefinedSpeed, setLastDefinedSpeed] = useState(
+    project.settings.uiSettings?.lastDefinedSpeed
+      ?? (project.settings.uiSettings?.playbackSpeed && project.settings.uiSettings.playbackSpeed !== 1
+            ? project.settings.uiSettings.playbackSpeed
+            : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
+  );
+
+  // Band-pass filter — two independent pieces of state, coordinated via the
+  // activation stack (see useActivationStack).
+  //   - `filterToolActive`: filter tool is readied for vertical drag. Pure
+  //     drawing state; does NOT gate audio.
+  //   - `bandPassFilter`:  the band itself, persisted on the project so cutoffs
+  //     survive restart. Non-null = filter active; null = filter disabled.
+  //     Slider dragged to 0 clears the band (disables); drawing a new band
+  //     sets it (enables).
+  //   - `filterStrength`: lets the strength slider work even before a band is
+  //     drawn; mirrored into `bandPassFilter.strength` when a band exists.
+  const [filterToolActive, setFilterToolActive] = useState(false);
+  const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.settings.bandPassFilter ?? null);
+  const [filterStrength, setFilterStrength] = useState(project.settings.bandPassFilter?.strength ?? 0.5);
+  // Last active band saved so F can restore it after toggling off.
+  const lastBandPassFilterRef = useRef<BandPassFilter | null>(null);
+
+  // Layer activation stack — single source of truth for Esc unwinding order
+  // and cursor-mode selection. See hooks/useActivationStack.ts.
+  const activationStack = useActivationStack();
 
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -182,24 +213,24 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // preroll awaits check this so stale resolutions don't start the engine
   // after the user has pressed pause or triggered a new play.
   const playTokenRef = useRef(0);
-  const [splitRatio, setSplitRatio] = useState(0.5);
-  const [leftPanelRatio, setLeftPanelRatio] = useState(0.6);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(224);
+  const [splitRatio, setSplitRatio] = useState(project.settings.uiSettings?.splitRatio ?? DEFAULT_UI_SETTINGS.splitRatio);
+  const [leftPanelRatio, setLeftPanelRatio] = useState(project.settings.uiSettings?.leftPanelRatio ?? DEFAULT_UI_SETTINGS.leftPanelRatio);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(project.settings.uiSettings?.leftPanelWidth ?? DEFAULT_UI_SETTINGS.leftPanelWidth);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
 
-  const [zoomSec, setZoomSec] = useState(DEFAULT_ZOOM_SEC);
+  const [zoomSec, setZoomSec] = useState(project.settings.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
   const [settings, setSettings] = useState<SpectrogramSettings>({
-      minFreq: 0,
-      maxFreq: 22050,
-      intensity: 1.6,
-      contrast: 1.4,
-      fftSize: 1024,
-      frequencyScale: 'mel',
+      ...DEFAULT_SPECTROGRAM_SETTINGS,
+      ...project.settings.spectrogramSettings,
   });
+  // Draft strings for the display-range inputs — let the user type freely;
+  // only parse and validate when they blur or press Enter.
+  const [displayFloorDraft, setDisplayFloorDraft] = useState(String(project.settings.spectrogramSettings?.displayFloor ?? DEFAULT_SPECTROGRAM_SETTINGS.displayFloor));
+  const [displayCeilDraft, setDisplayCeilDraft] = useState(String(project.settings.spectrogramSettings?.displayCeil ?? DEFAULT_SPECTROGRAM_SETTINGS.displayCeil));
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
@@ -214,14 +245,13 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRef.current = selection; }, [selection]);
 
-  // Warm the frame-source cache whenever the selection region changes so
-  // frames inside the range are decoded ahead of play. Cheap to call — if
-  // the range is already cached, ensureRange returns without re-decoding.
-  useEffect(() => {
+  // Warm the frame-source cache when the user commits a selection (mouse
+  // release) rather than on every drag pixel, to avoid redundant decodes.
+  const handleSelectionCommit = useCallback((sel: Selection) => {
     const source = frameSourceRef.current;
-    if (!source || !selection) return;
-    source.ensureRange(selection.start, selection.end).catch(() => {});
-  }, [selection, frameSourceVersion]);
+    if (!source) return;
+    source.ensureRange(sel.start, sel.end).catch(() => {});
+  }, []);
 
   // Pre-decode PCM for the selection so repeat plays are instant. AudioEngine
   // skips the call if the range is already covered by its cache.
@@ -289,6 +319,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     setIsBuffering(false);
     setSelectedAnnotationId(null);
     setSelection(null);
+    activationStack.remove('selection');
     setBoundAnnotationId(null);
     setDebugLogs([]);
     setTrackPath(absolutePath);
@@ -330,7 +361,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
         setSampleRate(sr);
         if (dur > 0) setDuration(dur);
-        setSettings(s => ({ ...s, maxFreq: sr / 2 }));
+        // Clamp displayed max frequency to Nyquist of *this* file, but don't
+        // clobber a lower user-defined ceiling. If the user has chosen a max
+        // ≤ this file's Nyquist, keep it; otherwise pull it down.
+        setSettings(s => s.maxFreq > sr / 2 ? { ...s, maxFreq: sr / 2 } : s);
 
         // Fit zoom to file if the file is shorter than the current zoom window.
         const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
@@ -427,11 +461,11 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // The ordered list used for navigation (respects shuffle mode and fileFilter)
   const displayQueue = useMemo(() => {
     const base = shuffleMode ? shuffledFiles : allTracks;
-    const filter = project?.fileFilter ?? (project?.hideAnnotated ? 'unannotated' : 'all');
+    const filter = project?.settings.fileFilter ?? 'all';
     if (filter === 'annotated') return base.filter(f => annotatedTracks.has(f));
     if (filter === 'unannotated') return base.filter(f => !annotatedTracks.has(f));
     return base;
-  }, [shuffleMode, shuffledFiles, allTracks, project?.fileFilter, project?.hideAnnotated, annotatedTracks]);
+  }, [shuffleMode, shuffledFiles, allTracks, project?.settings.fileFilter, annotatedTracks]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {
@@ -488,11 +522,11 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
         setShuffledFiles(shuffled);
       }
       if (projectRef.current) {
-        updateProject({ ...projectRef.current, shuffleMode: next });
+        updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, shuffleMode: next });
       }
       return next;
     });
-  }, [allTracks, updateProject]);
+  }, [allTracks, updateProjectSettings]);
 
   // Ident: relative path from audio root to track, without extension
   const ident = useMemo(() => {
@@ -529,6 +563,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Persist annotation tools and spectrogram settings to project whenever they change
   const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProjectIdRef = useRef<string | null>(null);
   useEffect(() => {
     // Skip persistence when switching projects (avoids overwriting with stale tools)
@@ -539,7 +574,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
     toolPersistRef.current = setTimeout(() => {
       if (!projectRef.current) return;
-      updateProject({ ...projectRef.current, annotationTools });
+      updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, annotationTools });
     }, 500);
     return () => {
       if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
@@ -551,21 +586,75 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
     settingsPersistRef.current = setTimeout(() => {
       if (!projectRef.current) return;
-      updateProject({ ...projectRef.current, spectrogramSettings: settings });
+      updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, spectrogramSettings: settings });
     }, 800);
     return () => {
       if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
     };
   }, [settings]);
 
+  // Consolidated UI persistence — every persisted UI field flows through this
+  // single debounced effect, so the project file only gets one write per
+  // settling burst regardless of which slider/handle moved.
+  useEffect(() => {
+    if (prevProjectIdRef.current !== project.id) return;
+    if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
+    uiPersistRef.current = setTimeout(() => {
+      if (!projectRef.current) return;
+      // Store the active track relative to the media directory so the saved
+      // value survives the user moving or renaming the project root.
+      const cur = trackPathRef.current;
+      const audioRoot = projectRef.current.mediaDirectoryAbs;
+      const activeTrackPath = cur && audioRoot && cur.startsWith(audioRoot + '/')
+        ? cur.substring(audioRoot.length + 1)
+        : null;
+      const uiSettings: ProjectUiSettings = {
+        leftPanelWidth,
+        splitRatio,
+        leftPanelRatio,
+        volume,
+        playbackSpeed,
+        lastDefinedSpeed,
+        zoomSec,
+        activeTrackPath,
+        windowBounds: projectRef.current.settings.uiSettings?.windowBounds,
+      };
+      updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, uiSettings });
+    }, 600);
+    return () => {
+      if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
+    };
+  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath]);
+
+  // Poll the Tauri window for size/position changes and persist them when they
+  // settle. A 1Hz poll is cheap and avoids needing a Tauri event listener
+  // (which would need its own capability wiring). Persists only when the
+  // value actually differs from what we last wrote.
+  useEffect(() => {
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const wb = await getWindowBounds();
+        const cur = projectRef.current?.settings.uiSettings?.windowBounds;
+        if (!cur || cur.x !== wb.x || cur.y !== wb.y || cur.width !== wb.width || cur.height !== wb.height) {
+          if (projectRef.current) {
+            const ui: ProjectUiSettings = { ...projectRef.current.settings.uiSettings, windowBounds: wb };
+            updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, uiSettings: ui });
+          }
+        }
+      } catch { /* window API not available — silently skip */ }
+    }, 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [updateProjectSettings]);
+
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
     if (!annotationDirectory || !currentDirectory) return null;
     const rel = trackFilePath.substring(currentDirectory.length);
     const withoutExt = rel.replace(/\.[^/.]+$/, '');
-    const ext = exportFormat === 'json' ? '.json' : exportFormat === 'csv' ? '.csv' : '.txt';
-    return annotationDirectory + withoutExt + ext;
-  }, [annotationDirectory, currentDirectory, exportFormat]);
+    return annotationDirectory + withoutExt + '.txt';
+  }, [annotationDirectory, currentDirectory]);
 
   // Auto-save annotations whenever they change
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -595,11 +684,8 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           });
           return;
         }
-        const decimals = projectRef.current?.outputRoundingDecimals ?? 4;
-        let content: string;
-        if (exportFormat === 'json') content = generateJSONContent(annotations, decimals);
-        else if (exportFormat === 'csv') content = generateCSVContent(annotations, decimals);
-        else content = generateAudacityContent(annotations, decimals);
+        const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
+        const content = generateAudacityContent(annotations, decimals);
         await writeTextFile(savedAnnotPath, content);
         setAnnotatedFiles(prev => {
             const next = new Set(prev);
@@ -614,7 +700,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     return () => {
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
-  }, [annotations, trackPath, annotationDirectory, exportFormat, getAnnotationPath]);
+  }, [annotations, trackPath, annotationDirectory, getAnnotationPath]);
 
   // Auto-load annotations when the current track or annotation directory changes
   useEffect(() => {
@@ -634,97 +720,17 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
         const loaded: Annotation[] = [];
 
-        if (exportFormat === 'json') {
-          const parsed = JSON.parse(content) as Annotation[];
-          parsed.forEach(a => {
-            const matchedTool = annotationTools.find(t => t.text === a.text);
-            loaded.push({
-              ...a,
-              id: Math.random().toString(36).substring(2, 9),
-              toolKey: matchedTool?.key ?? a.toolKey ?? '0',
-              color: matchedTool?.color ?? a.color ?? '#ffffff',
-            });
-          });
-        } else if (exportFormat === 'csv') {
-          // Proper CSV tokenizer: handles commas and newlines inside quoted fields
-          // and "" as an escaped double-quote (RFC 4180 compatible).
-          const parseCSVRow = (row: string): string[] => {
-            const fields: string[] = [];
-            let field = '';
-            let inQuotes = false;
-            for (let i = 0; i < row.length; i++) {
-              const ch = row[i];
-              if (inQuotes) {
-                if (ch === '"') {
-                  // Peek ahead: "" = escaped quote
-                  if (i + 1 < row.length && row[i + 1] === '"') {
-                    field += '"';
-                    i++;
-                  } else {
-                    inQuotes = false;
-                  }
-                } else {
-                  field += ch;
-                }
-              } else {
-                if (ch === '"') {
-                  inQuotes = true;
-                } else if (ch === ',') {
-                  fields.push(field);
-                  field = '';
-                } else {
-                  field += ch;
-                }
-              }
-            }
-            fields.push(field);
-            return fields;
-          };
-          // Re-join lines that belong to a single quoted field (embedded newlines).
-          const reassembleRows = (raw: string): string[] => {
-            const rows: string[] = [];
-            let current = '';
-            let openQuotes = 0;
-            for (const ch of raw) {
-              if (ch === '"') openQuotes ^= 1;
-              if (ch === '\n' && openQuotes === 0) {
-                rows.push(current);
-                current = '';
-              } else {
-                current += ch;
-              }
-            }
-            if (current) rows.push(current);
-            return rows;
-          };
-          const allRows = reassembleRows(content.trim());
-          // Skip header row
-          for (const row of allRows.slice(1)) {
-            if (!row.trim()) continue;
-            const fields = parseCSVRow(row);
-            if (fields.length >= 3) {
-              const text = fields[0];
-              const start = parseFloat(fields[1]);
-              const end = parseFloat(fields[2]);
-              if (!isNaN(start) && !isNaN(end)) {
-                const matchedTool = annotationTools.find(t => t.text === text);
-                loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
-              }
-            }
-          }
-        } else {
-          // Audacity .txt
-          const lines = content.trim().split('\n');
-          for (const line of lines) {
-            const parts = line.split('\t');
-            if (parts.length >= 3) {
-              const start = parseFloat(parts[0]);
-              const end = parseFloat(parts[1]);
-              const text = parts.slice(2).join('\t');
-              if (!isNaN(start) && !isNaN(end)) {
-                const matchedTool = annotationTools.find(t => t.text === text);
-                loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
-              }
+        // Audacity .txt
+        const lines = content.trim().split('\n');
+        for (const line of lines) {
+          const parts = line.split('\t');
+          if (parts.length >= 3) {
+            const start = parseFloat(parts[0]);
+            const end = parseFloat(parts[1]);
+            const text = parts.slice(2).join('\t');
+            if (!isNaN(start) && !isNaN(end)) {
+              const matchedTool = annotationTools.find(t => t.text === text);
+              loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
             }
           }
         }
@@ -741,28 +747,49 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
         addLog(`Error loading annotations: ${err}`, 'error');
       }
     })();
-  }, [trackPath, annotationDirectory, exportFormat, annotationTools]);
+  }, [trackPath, annotationDirectory, annotationTools]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
-    setAnnotationTools(project.annotationTools.length > 0 ? project.annotationTools : DEFAULT_ANNOTATION_TOOLS);
-    if (project.spectrogramSettings) {
-      setSettings(project.spectrogramSettings);
-    }
-    setShuffleMode(project.shuffleMode ?? false);
+    setAnnotationTools(project.settings.annotationTools.length > 0 ? project.settings.annotationTools : DEFAULT_ANNOTATION_TOOLS);
+    const sg = { ...DEFAULT_SPECTROGRAM_SETTINGS, ...project.settings.spectrogramSettings };
+    setSettings(sg);
+    setDisplayFloorDraft(String(sg.displayFloor));
+    setDisplayCeilDraft(String(sg.displayCeil));
+    setShuffleMode(project.settings.shuffleMode ?? false);
+    const ui = { ...DEFAULT_UI_SETTINGS, ...project.settings.uiSettings };
+    setSplitRatio(ui.splitRatio);
+    setLeftPanelRatio(ui.leftPanelRatio);
+    setLeftPanelWidth(ui.leftPanelWidth);
+    setVolume(ui.volume);
+    setPlaybackSpeed(ui.playbackSpeed);
+    setLastDefinedSpeed(
+      project.settings.uiSettings?.lastDefinedSpeed
+        ?? (ui.playbackSpeed !== 1 ? ui.playbackSpeed : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
+    );
+    setZoomSec(ui.zoomSec);
+    setFilterToolActive(false);
+    setBandPassFilter(project.settings.bandPassFilter ?? null);
+    setFilterStrength(project.settings.bandPassFilter?.strength ?? 0.5);
     setShuffledFiles([]);
-    setCurrentDirectory(project.audioDirectory);
+    setCurrentDirectory(project.mediaDirectoryAbs);
     setAnnotatedFiles(new Set());
     setAnnotations([]);
     setTrackPath(null);
     setVideoSrc(null);
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
-    listMediaFilesRecursive(project.audioDirectory)
+
+    // Restore saved window bounds (best-effort; silently no-ops if unset or
+    // off-screen — Tauri handles the latter).
+    const wb = project.settings.uiSettings?.windowBounds;
+    if (wb) setWindowBounds(wb).catch(() => {});
+
+    listMediaFilesRecursive(project.mediaDirectoryAbs)
       .then(files => {
         setAllMediaFiles(files);
         let firstFile = files[0];
-        if (project.shuffleMode && files.length > 0) {
+        if (project.settings.shuffleMode && files.length > 0) {
           const shuffled = [...files];
           for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -771,23 +798,17 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           setShuffledFiles(shuffled);
           firstFile = shuffled[0];
         }
+        // Prefer the project's saved active track (resolved relative to the
+        // current audio root, so it survives the project root being renamed
+        // or moved). Falls through to the first file if the saved track no
+        // longer exists.
+        const savedRel = project.settings.uiSettings?.activeTrackPath;
+        if (savedRel) {
+          const savedAbs = `${project.mediaDirectoryAbs}/${savedRel}`;
+          if (files.includes(savedAbs)) firstFile = savedAbs;
+        }
         if (firstFile) handleOpenTrack(firstFile);
-        listAnnotationFiles(project.annotationDirectory, project.outputFormat)
-          .then(relPaths => {
-            const audioRoot = project.audioDirectory;
-            const relToFull = new Map<string, string>();
-            for (const f of files) {
-              const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
-              relToFull.set(rel, f);
-            }
-            const annotated = new Set<string>();
-            for (const rp of relPaths) {
-              const full = relToFull.get(rp);
-              if (full) annotated.add(full);
-            }
-            setAnnotatedFiles(annotated);
-          })
-          .catch(() => {});
+        refreshAnnotatedSet(files, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
       })
       .catch(err => {
         setAllMediaFiles([]);
@@ -796,42 +817,58 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Shared helper: from a freshly-scanned media file list, compute which
+  // entries already have annotation files on disk. Used by both the initial
+  // mount scan and the manual-refresh path so the rel-path mapping logic
+  // doesn't live in two places.
+  const refreshAnnotatedSet = useCallback(async (
+    files: string[],
+    audioRoot: string,
+    annotationDir: string,
+  ) => {
+    try {
+      const relPaths = await listAnnotationFiles(annotationDir, 'txt');
+      const relToFull = new Map<string, string>();
+      for (const f of files) {
+        const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+        relToFull.set(rel, f);
+      }
+      const annotated = new Set<string>();
+      for (const rp of relPaths) {
+        const full = relToFull.get(rp);
+        if (full) annotated.add(full);
+      }
+      setAnnotatedFiles(annotated);
+    } catch { /* ignore */ }
+  }, []);
+
   const handleRefreshFiles = useCallback(async () => {
     try {
-      const files = await listMediaFilesRecursive(project.audioDirectory);
+      const files = await listMediaFilesRecursive(project.mediaDirectoryAbs);
       setAllMediaFiles(files);
-      listAnnotationFiles(project.annotationDirectory, project.outputFormat)
-        .then(relPaths => {
-          const audioRoot = project.audioDirectory;
-          const relToFull = new Map<string, string>();
-          for (const f of files) {
-            const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
-            relToFull.set(rel, f);
-          }
-          const annotated = new Set<string>();
-          for (const rp of relPaths) {
-            const full = relToFull.get(rp);
-            if (full) annotated.add(full);
-          }
-          setAnnotatedFiles(annotated);
-        })
-        .catch(() => {});
+      refreshAnnotatedSet(files, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
     }
-  }, [project]);
+  }, [project, refreshAnnotatedSet]);
 
-  const handleProjectSettingsSaved = useCallback(async (updated: Project) => {
-    await updateProject(updated);
-    const audioDirChanged = updated.audioDirectory !== project.audioDirectory;
-    setAnnotationTools(updated.annotationTools.length > 0 ? updated.annotationTools : DEFAULT_ANNOTATION_TOOLS);
-    if (audioDirChanged) {
-      setCurrentDirectory(updated.audioDirectory);
+  const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings) => {
+    const prev = project.settings.mediaDirectory;
+    const next = updatedSettings.mediaDirectory;
+    const mediaDirChanged = prev.kind !== next.kind || prev.path !== next.path;
+    const updated = await updateProjectSettings(project.id, updatedSettings);
+    if (!updated) {
+      setShowProjectSettings(false);
+      return;
+    }
+    setAnnotationTools(updated.settings.annotationTools.length > 0 ? updated.settings.annotationTools : DEFAULT_ANNOTATION_TOOLS);
+    if (mediaDirChanged) {
+      setCurrentDirectory(updated.mediaDirectoryAbs);
       setTrackPath(null);
       setVideoSrc(null);
       setAnnotations([]);
       try {
-        const files = await listMediaFilesRecursive(updated.audioDirectory);
+        const files = await listMediaFilesRecursive(updated.mediaDirectoryAbs);
         setAllMediaFiles(files);
         if (files.length > 0) handleOpenTrack(files[0]);
       } catch (err) {
@@ -840,13 +877,13 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProject, handleOpenTrack]);
+  }, [project, updateProjectSettings, handleOpenTrack]);
 
   const handleToggleFileFilter = useCallback(() => {
-    const current = project.fileFilter ?? (project.hideAnnotated ? 'unannotated' : 'all');
+    const current = project.settings.fileFilter ?? 'all';
     const next = ({ all: 'unannotated', unannotated: 'annotated', annotated: 'all' } as const)[current];
-    updateProject({ ...project, fileFilter: next, hideAnnotated: next === 'unannotated' });
-  }, [project, updateProject]);
+    updateProjectSettings(project.id, { ...project.settings, fileFilter: next });
+  }, [project, updateProjectSettings]);
 
   const handleRevealInFinder = useCallback((path: string) => {
     revealInFileManager(path).catch(err => addLog(`reveal_in_file_manager error: ${err}`, 'error'));
@@ -939,7 +976,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
   // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
   useEffect(() => { seekRef.current = seek; }, [seek]);
 
-  // Shared handler for activating an annotation tool by key — used by both number hotkeys and palette clicks.
+  // Shared handler for activating an annotation tool by key — used by both
+  // number hotkeys and palette clicks. Also manages the `annotationTool` entry
+  // in the activation stack: pushIfAbsent on activate, remove when this
+  // call toggles the tool off (same key pressed twice).
   const handleToolActivate = useCallback((key: string) => {
       const tool = annotationTools.find(t => t.key === key);
       if (!tool) return;
@@ -951,7 +991,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                   ...reassignBufferRef.current,
                   [currentAnnotation.toolKey]: currentAnnotation.text,
               };
-              const savedText = reassignBufferRef.current[tool.key];
+              const savedText = reassignBufferRef.current[tool.key ?? ''];
               const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
               const updated = annotations.map(a => a.id === boundAnnotationId
                   ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
@@ -959,6 +999,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
               );
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
+              activationStack.pushIfAbsent('annotationTool');
           }
       } else if (activeToolKey === null && selection !== null) {
           const newAnnotation = makeAnnotationFromTool(tool, selection.start, selection.end);
@@ -966,10 +1007,18 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           setSelectedAnnotationId(newAnnotation.id);
           setBoundAnnotationId(newAnnotation.id);
           setActiveToolKey(key);
+          activationStack.pushIfAbsent('annotationTool');
       } else {
-          setActiveToolKey(prev => prev === key ? null : key);
+          setActiveToolKey(prev => {
+            if (prev === key) {
+              activationStack.remove('annotationTool');
+              return null;
+            }
+            activationStack.pushIfAbsent('annotationTool');
+            return key;
+          });
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
@@ -983,10 +1032,10 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
               handleAnnotationsCommit([...annotations, newAnnotation]);
               setSelectedAnnotationId(newAnnotation.id);
               setBoundAnnotationId(newAnnotation.id);
-              setSelection({ start: 0, end: duration });
+              handleSelectionChange({ start: 0, end: duration });
           }
       } else {
-          setSelection({ start: 0, end: duration });
+          handleSelectionChange({ start: 0, end: duration });
       }
   };
   const deleteSelectedAnnotation = () => {
@@ -995,7 +1044,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       const wasBound = selectedAnnotationId === boundAnnotationId;
       setSelectedAnnotationId(null);
       if (wasBound) {
-          setSelection(null);
+          handleSelectionChange(null);
           setBoundAnnotationId(null);
       }
   };
@@ -1017,21 +1066,66 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       // Plain arrow keys: scrub playhead ±10% of visible window.
       { key: 'ArrowLeft', handler: () => seek(Math.max(0, currentTimeRef.current - zoomSecRef.current * 0.1)) },
       { key: 'ArrowRight', handler: () => seek(Math.min(durationRef.current, currentTimeRef.current + zoomSecRef.current * 0.1)) },
+      // Frame scrub: step back/forward one frame (video tracks only).
+      { key: ',', handler: () => {
+        if (isAudioTrackRef.current) return;
+        const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
+        seek(Math.max(0, currentTimeRef.current - frameDuration));
+      }},
+      { key: '.', handler: () => {
+        if (isAudioTrackRef.current) return;
+        const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
+        seek(Math.min(durationRef.current, currentTimeRef.current + frameDuration));
+      }},
 
       // Plain keys.
       { key: ' ', handler: togglePlay },
+      // `S`: select tool (no annotation tool readied). Stack-equivalent to
+      // removing the `annotationTool` entry — does not touch selection, filter
+      // tool, or band.
+      { key: 's', handler: () => {
+          setActiveToolKey(null);
+          activationStack.remove('annotationTool');
+      }},
+      // `Shift+F`: ready the filter tool (click-drag to define band).
+      // `F`: toggle filter state on/off (restore last band). Must come after shift binding.
+      { key: 'f', mods: ['shift'], handler: () => handleToggleFilterTool() },
+      { key: 'f', handler: () => handleToggleFilterState() },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
-      // Escape fires even when a text input has focus — see CLAUDE.md / fix:
-      // the legacy `tagName === 'INPUT'` guard meant Esc was swallowed any time
-      // an annotation-text input was auto-focused, so the Select tool couldn't
-      // be activated during playback. Local input onKeyDown handlers can still
-      // run first (and call stopImmediatePropagation if they want to suppress
-      // this).
-      { key: 'Escape', allowInInput: true, handler: () => setActiveToolKey(null) },
+      // Escape — universal undo of the most-recently-activated layer. Fires
+      // even when a text input has focus (HelpPanel's `stop:true` Esc handler
+      // still wins when help is open). Layer kinds & clear actions:
+      //   annotationTool → setActiveToolKey(null)
+      //   selection      → clear selection bounds
+      //   filterTool     → setFilterToolActive(false)
+      //   filterBand     → setBandPassFilter(null)
+      { key: 'Escape', allowInInput: true, handler: () => {
+          const top = activationStack.popTop();
+          switch (top) {
+            case 'annotationTool':
+              setActiveToolKey(null);
+              break;
+            case 'selection':
+              setSelection(null);
+              setBoundAnnotationId(null);
+              break;
+            case 'filterTool':
+              setFilterToolActive(false);
+              break;
+            case 'filterBand':
+              setBandPassFilter(null);
+              break;
+            default:
+              // Stack empty → no-op (already at Select baseline).
+              break;
+          }
+      }},
       { key: 'Delete', handler: deleteSelectedAnnotation, preventDefault: false },
       { key: 'Backspace', handler: deleteSelectedAnnotation, preventDefault: false },
 
-      // 0-9: activate annotation tool by key, if defined.
+      // 0-9: activate annotation tool by key, if defined. Stack management
+      // (pushIfAbsent on activate; remove on toggle-off) lives in
+      // handleToolActivate so palette clicks and hotkeys agree.
       { key: 'Digit', handler: (e) => {
           const tool = annotationTools.find(t => t.key === e.key);
           if (tool) handleToolActivate(e.key);
@@ -1040,94 +1134,66 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
   const performExport = async () => {
       if (annotations.length === 0) return;
-      const decimals = project?.outputRoundingDecimals ?? 4;
-      if (exportFormat === 'json') {
-          await exportToJSON(annotations, trackName, trackPath, decimals);
-      } else if (exportFormat === 'csv') {
-          await exportToCSV(annotations, trackName, trackPath, decimals);
-      } else {
-          await exportToAudacity(annotations, trackName, trackPath, decimals);
-      }
-      addLog(`Exported annotations as ${exportFormat.toUpperCase()}`);
+      const decimals = project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
+      await exportToAudacity(annotations, trackName, trackPath, decimals);
+      addLog('Exported annotations as TXT');
   };
 
-  const handleAddTool = useCallback((text: string) => {
-      const nextIndex = annotationTools.length;
-      if (nextIndex >= 10) {
-          alert("Maximum of 10 annotation tools (0-9) allowed.");
-          return;
+  const handleCreateTool = useCallback((text: string, color: string) => {
+    setAnnotationTools(prev => [...prev, { key: null, text, color }]);
+  }, []);
+
+  const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
+    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
+    setAnnotations(prev => prev.map(a => {
+      const tool = annotationTools[toolIndex];
+      if (!tool) return a;
+      // Update text for annotations linked to this tool
+      if (a.toolKey === tool.key && a.toolKey !== '0') {
+        return { ...a, text: newText, color: newColor };
       }
-      const newTool: AnnotationTool = {
-          key: nextIndex.toString(),
-          text,
-          color: HOTKEY_COLORS[nextIndex]
-      };
-      setAnnotationTools(prev => [...prev, newTool]);
-      // Auto-select the newly created annotation tool
-      setActiveToolKey(newTool.key);
-      addLog(`Added tool: ${text} (${nextIndex})`);
-  }, [annotationTools, addLog]);
-
-  const handleSaveTool = useCallback((index: number, newText: string) => {
-      setAnnotationTools(prev => {
-          const updated = [...prev];
-          const old = prev[index];
-          updated[index] = { ...old, text: newText || old.text };
-          return updated;
-      });
-      // Rename matching annotations
-      const tool = annotationTools[index];
-      if (newText && newText !== tool.text) {
-          const updatedAnnotations = annotations.map(a => {
-              if (a.toolKey === tool.key) {
-                  return { ...a, text: newText };
-              }
-              return a;
-          });
-          handleAnnotationsCommit(updatedAnnotations);
-          addLog(`Renamed tool ${tool.text} -> ${newText}. Updated linked annotations.`);
+      // Reassociate Custom annotations matching the new name to this tool
+      if (a.toolKey === '0' && a.text === newText && tool.key !== null) {
+        return { ...a, toolKey: tool.key!, color: newColor };
       }
-  }, [annotationTools, annotations, handleAnnotationsCommit, addLog]);
+      return a;
+    }));
+  }, [annotationTools]);
 
-  const handleDeleteTool = useCallback((idx: number, e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (idx === 0) return; // Cannot delete the Custom Annotation Tool
+  const handleDeleteTool = useCallback((toolIndex: number) => {
+    const tool = annotationTools[toolIndex];
+    if (!tool) return;
+    setAnnotations(prev => prev.map(a =>
+      a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a
+    ));
+    setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
+    if (activeToolKey === tool.key) setActiveToolKey(null);
+  }, [annotationTools, activeToolKey]);
 
-      const tool = annotationTools[idx];
-      const linkedAnnotations = annotations.filter(a => a.toolKey === tool.key);
+  const handleReorderTools = useCallback((newTools: AnnotationTool[]) => {
+    const snapshot = annotationTools;
+    if (newTools.length !== snapshot.length) return;
 
-      if (linkedAnnotations.length > 0) {
-          const choice = confirm(
-              `Deleting tool "${tool.text}" which is used by ${linkedAnnotations.length} annotations.\n\n` +
-              `OK: Convert annotations to Custom (White)\n` +
-              `Cancel: Delete all ${linkedAnnotations.length} annotations`
-          );
+    // Build old→new key remap (by stable index — newTools must preserve indices).
+    const keyRemap = new Map<string, string>();
+    const unassignedKeys = new Set<string>();
+    for (let i = 0; i < snapshot.length; i++) {
+      const oldKey = snapshot[i].key;
+      const newKey = newTools[i].key;
+      if (oldKey && newKey && oldKey !== newKey) keyRemap.set(oldKey, newKey);
+      if (oldKey && !newKey) unassignedKeys.add(oldKey);
+    }
 
-          if (choice) {
-              const updatedAnnotations = annotations.map(a => {
-                  if (a.toolKey === tool.key) {
-                      return { ...a, toolKey: "0", color: "#ffffff" };
-                  }
-                  return a;
-              });
-              handleAnnotationsCommit(updatedAnnotations);
-              addLog(`Deleted tool ${tool.text}. Converted annotations to Custom.`);
-          } else {
-              const updatedAnnotations = annotations.filter(a => a.toolKey !== tool.key);
-              handleAnnotationsCommit(updatedAnnotations);
-              addLog(`Deleted tool ${tool.text} and all linked annotations.`);
-          }
-      } else {
-          addLog(`Deleted tool ${tool.text} (unused).`);
-      }
-
-      // Remove tool and re-index hotkeys (0-9)
-      const newTools = annotationTools.filter((_, i) => i !== idx);
-      const reindexed = newTools.map((t, i) => ({ ...t, key: i.toString(), color: HOTKEY_COLORS[i] }));
-
-      setAnnotationTools(reindexed);
-      setActiveToolKey('0');
-  }, [annotationTools, annotations, handleAnnotationsCommit, addLog]);
+    setAnnotationTools(newTools);
+    setAnnotations(prev => prev.map(a => {
+      if (unassignedKeys.has(a.toolKey)) return { ...a, toolKey: '0', color: '#ffffff' };
+      const remapped = keyRemap.get(a.toolKey);
+      return remapped ? { ...a, toolKey: remapped } : a;
+    }));
+    if (activeToolKey && (unassignedKeys.has(activeToolKey) || keyRemap.has(activeToolKey))) {
+      setActiveToolKey(unassignedKeys.has(activeToolKey) ? null : keyRemap.get(activeToolKey)!);
+    }
+  }, [annotationTools, activeToolKey]);
 
   const handleSplitDrag = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -1195,6 +1261,120 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
     engineRef.current?.setGain(muted ? 0 : volume);
   }, [volume, muted]);
 
+  // Sync playback speed to the engine. Changing speed mid-playback restarts
+  // the engine internally so the new speed takes effect immediately.
+  useEffect(() => {
+    engineRef.current?.setPlaybackSpeed(playbackSpeed);
+  }, [playbackSpeed]);
+
+  // Keep filterStrength and bandPassFilter.strength in lockstep so the strength
+  // slider reflects (and can edit) whichever is current. The slider is the
+  // single source of truth — if a band exists, copy its strength back into the
+  // shared state on creation/edit; the engine sync below picks up the result.
+  useEffect(() => {
+    if (bandPassFilter && bandPassFilter.strength !== filterStrength) {
+      setBandPassFilter({ ...bandPassFilter, strength: filterStrength });
+    }
+  }, [filterStrength]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Push the active band-pass filter into the engine. Non-null = apply;
+  // null = bypass. Drawing a band sets it; slider to 0 or Esc clears it.
+  useEffect(() => {
+    engineRef.current?.setBandPassFilter(bandPassFilter);
+  }, [bandPassFilter]);
+
+  // Persist bandPassFilter changes to the project file (debounced).
+  const filterPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (prevProjectIdRef.current !== project.id) return;
+    if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
+    filterPersistRef.current = setTimeout(() => {
+      if (!projectRef.current) return;
+      updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, bandPassFilter: bandPassFilter ?? null });
+    }, 600);
+    return () => {
+      if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
+    };
+  }, [bandPassFilter]);
+
+  // `Shift+F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
+  // filtering is governed by bandPassFilter being non-null.
+  const handleToggleFilterTool = useCallback(() => {
+    setFilterToolActive(prev => {
+      const next = !prev;
+      if (next) activationStack.pushIfAbsent('filterTool');
+      else activationStack.remove('filterTool');
+      return next;
+    });
+  }, [activationStack]);
+
+  // Canonical "engage filter" path. Every code path that turns the filter on
+  // — F key, slider drag-up-from-0, spectrogram drag-draw — funnels through
+  // here so the band state, slider value, activation stack, and visualization
+  // gate stay in lockstep. Geometry: caller's band if given, else the last
+  // band we remember, else the project default. Strength: caller's override
+  // if given, else the band's own strength.
+  const engageBandPassFilter = useCallback(
+    (band?: BandPassFilter | null, strengthOverride?: number) => {
+      const base = band ?? lastBandPassFilterRef.current ?? DEFAULT_BAND_PASS_FILTER;
+      const next = { ...base, strength: strengthOverride ?? base.strength };
+      lastBandPassFilterRef.current = next;
+      setBandPassFilter(next);
+      setFilterStrength(next.strength);
+      activationStack.pushIfAbsent('filterBand');
+    },
+    [activationStack]
+  );
+
+  // `Shift+F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
+  // filtering is governed by bandPassFilter being non-null.
+  // (Defined above; this comment kept for orientation — see handleToggleFilterTool.)
+
+  // `F`: toggle filter state on/off. On-turn engages via the canonical path
+  // (restores last band, or falls back to the default); off-turn snapshots
+  // and clears. Mirrors the Z key pattern for video zoom.
+  const handleToggleFilterState = useCallback(() => {
+    if (bandPassFilter !== null) {
+      lastBandPassFilterRef.current = bandPassFilter;
+      setBandPassFilter(null);
+      activationStack.remove('filterBand');
+    } else {
+      engageBandPassFilter();
+    }
+  }, [bandPassFilter, engageBandPassFilter, activationStack]);
+
+  // Filter "off" path — snapshots the band to `lastBandPassFilterRef` so it can
+  // be restored, clears the band (disabling filtering), and pulls `filterBand`
+  // out of the stack. Called by slider-to-0, Esc-on-band, and explicit disable.
+  const handleDisableBandPassFilter = useCallback(() => {
+    setBandPassFilter(prev => {
+      if (prev) lastBandPassFilterRef.current = prev;
+      return null;
+    });
+    activationStack.remove('filterBand');
+  }, [activationStack]);
+
+  // Drag-up-from-0 path: slider/wheel re-enabled filtering while the band was
+  // off. Engages at the user's chosen strength via the canonical path.
+  const handleEnableBandPassFilter = useCallback((strength: number) => {
+    engageBandPassFilter(undefined, strength);
+  }, [engageBandPassFilter]);
+
+  // Called by Spectrogram when a band-drag completes (new band drawn).
+  const handleBandPassFilterDrawn = useCallback((f: BandPassFilter) => {
+    engageBandPassFilter(f);
+  }, [engageBandPassFilter]);
+
+  // Wrap setSelection at the prop boundary so any path that sets/clears the
+  // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
+  // activation stack synchronised without each caller having to remember to
+  // push/remove.
+  const handleSelectionChange = useCallback((s: Selection | null) => {
+    setSelection(s);
+    if (s) activationStack.pushIfAbsent('selection');
+    else activationStack.remove('selection');
+  }, [activationStack]);
+
   return (
     <div
       className="flex flex-col h-screen bg-slate-900 text-slate-200"
@@ -1217,7 +1397,7 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 data-help-target="project-settings-btn"
             >
                 <h1 className="text-xl font-bold">
-                    <GradientProjectName name={project.name} nameGradientColors={project.nameGradientColors} />
+                    <GradientProjectName name={project.settings.name} nameGradientColors={project.settings.nameGradientColors} />
                 </h1>
                 <Settings size={15} className="text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
             </button>
@@ -1276,10 +1456,13 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
             shuffleMode,
             onToggleShuffle: toggleShuffle,
             annotatedTracks,
-            fileFilter: (project?.fileFilter ?? (project?.hideAnnotated ? 'unannotated' : 'all')) as 'all' | 'annotated' | 'unannotated',
+            fileFilter: (project?.settings.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
             onToggleFileFilter: handleToggleFileFilter,
             onRevealInFinder: handleRevealInFinder,
             onRevealAnnotations: handleRevealAnnotations,
+            onRevealAnnotationsRoot: annotationDirectory
+              ? () => revealInFileManager(annotationDirectory).catch(() => {})
+              : undefined,
             onRefresh: handleRefreshFiles,
           };
 
@@ -1314,10 +1497,8 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 annotationTools={annotationTools}
                 activeToolKey={activeToolKey}
                 onToolActivate={handleToolActivate}
-                onSelectModeActivate={() => setActiveToolKey(null)}
-                onAddTool={handleAddTool}
-                onDeleteTool={handleDeleteTool}
-                onSaveTool={handleSaveTool}
+                onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
+                onOpenSettings={() => setShowToolSettings(true)}
               />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
@@ -1361,23 +1542,98 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
 
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
-                <div className="absolute top-10 right-4 z-40 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
+                <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
                     <div className="p-4 space-y-6">
-                        {/* Visuals */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase">Visuals</h4>
-                            <BrightnessContrastPad
-                                brightness={settings.intensity}
-                                contrast={settings.contrast}
-                                onChange={(b, c) => setSettings(s => ({...s, intensity: b, contrast: c}))}
-                            />
+                        {/* Level Range */}
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Level Range (dBFS)</h4>
+                            {/* Dual-thumb slider — two range inputs share the same track */}
+                            <div className="relative h-5 flex items-center">
+                                <input
+                                    type="range"
+                                    min={-160} max={40}
+                                    value={settings.displayFloor}
+                                    onChange={(e) => {
+                                        const v = Math.min(parseInt(e.target.value), settings.displayCeil - 1);
+                                        setSettings(s => ({...s, displayFloor: v}));
+                                        setDisplayFloorDraft(String(v));
+                                    }}
+                                    className="absolute w-full appearance-none h-1 rounded bg-slate-600 pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                />
+                                <input
+                                    type="range"
+                                    min={-160} max={40}
+                                    value={settings.displayCeil}
+                                    onChange={(e) => {
+                                        const v = Math.max(parseInt(e.target.value), settings.displayFloor + 1);
+                                        setSettings(s => ({...s, displayCeil: v}));
+                                        setDisplayCeilDraft(String(v));
+                                    }}
+                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                />
+                            </div>
+                            <div className="flex justify-between">
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={displayFloorDraft}
+                                    onChange={(e) => setDisplayFloorDraft(e.target.value)}
+                                    onBlur={() => {
+                                        const v = parseInt(displayFloorDraft);
+                                        const clamped = isNaN(v) ? settings.displayFloor : Math.max(-160, Math.min(settings.displayCeil - 1, v));
+                                        setSettings(s => ({...s, displayFloor: clamped}));
+                                        setDisplayFloorDraft(String(clamped));
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+                                />
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={displayCeilDraft}
+                                    onChange={(e) => setDisplayCeilDraft(e.target.value)}
+                                    onBlur={() => {
+                                        const v = parseInt(displayCeilDraft);
+                                        const clamped = isNaN(v) ? settings.displayCeil : Math.max(settings.displayFloor + 1, Math.min(40, v));
+                                        setSettings(s => ({...s, displayCeil: clamped}));
+                                        setDisplayCeilDraft(String(clamped));
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+                                />
+                            </div>
                         </div>
 
                         {/* Frequency */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase">Frequency</h4>
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Frequency (Hz)</h4>
+                            <div className="flex space-x-2 pt-2">
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400">Min</label>
+                                    <input
+                                        type="number"
+                                        value={settings.minFreq}
+                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400">Max</label>
+                                    <input
+                                        type="number"
+                                        value={settings.maxFreq}
+                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* FFT */}
+                        <div className="space-y-3">
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">FFT</h4>
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block">FFT Window Size</label>
+                                <label className="text-xs text-slate-400 mb-1 block">Window Size</label>
                                 <select
                                     value={settings.fftSize}
                                     onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
@@ -1400,28 +1656,8 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                                     <option value="mel">Mel</option>
                                 </select>
                             </div>
-
-                            <div className="flex space-x-2 pt-2">
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Min (Hz)</label>
-                                    <input
-                                        type="number"
-                                        value={settings.minFreq}
-                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Max (Hz)</label>
-                                    <input
-                                        type="number"
-                                        value={settings.maxFreq}
-                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                            </div>
                         </div>
+
                     </div>
                 </div>
              )}
@@ -1442,10 +1678,22 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                setMuted={setMuted}
                onPlay={togglePlay}
                onSeek={seek}
-               onSelectionChange={setSelection}
+               onSelectionChange={handleSelectionChange}
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
+               playbackSpeed={playbackSpeed}
+               setPlaybackSpeed={setPlaybackSpeed}
+               lastDefinedSpeed={lastDefinedSpeed}
+               setLastDefinedSpeed={setLastDefinedSpeed}
+               filterToolActive={filterToolActive}
+               onToggleFilterTool={handleToggleFilterTool}
+               bandPassFilter={bandPassFilter}
+               setBandPassFilter={setBandPassFilter}
+               onDisableBandPassFilter={handleDisableBandPassFilter}
+               onEnableBandPassFilter={handleEnableBandPassFilter}
+               filterStrength={filterStrength}
+               setFilterStrength={setFilterStrength}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1471,9 +1719,15 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
                 onAnnotationsChange={setAnnotations}
                 onAnnotationsCommit={handleAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
-                onSelectionChange={setSelection}
+                onSelectionChange={handleSelectionChange}
+                onSelectionCommit={handleSelectionCommit}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
+                filterToolActive={filterToolActive}
+                bandPassFilter={bandPassFilter}
+                onBandPassFilterChange={setBandPassFilter}
+                onBandPassFilterDrawn={handleBandPassFilterDrawn}
+                topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
              />
              </div>
 
@@ -1494,6 +1748,17 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
           project={project}
           onSave={handleProjectSettingsSaved}
           onClose={() => setShowProjectSettings(false)}
+        />
+      )}
+      {showToolSettings && (
+        <AnnotationToolsSettingsModal
+          annotationTools={annotationTools}
+          annotations={annotations}
+          onClose={() => setShowToolSettings(false)}
+          onReorderTools={handleReorderTools}
+          onRenameTool={handleRenameTool}
+          onDeleteTool={handleDeleteTool}
+          onCreateTool={handleCreateTool}
         />
       )}
       <TooltipLayer />

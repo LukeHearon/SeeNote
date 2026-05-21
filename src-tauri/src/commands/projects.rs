@@ -6,37 +6,15 @@ use tauri::Manager;
 const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
-/// Wire-format record for an annotation tool, kept as `label_configs` in the
-/// JSON for backward compatibility with existing project files.
+/// Slim registry entry stored in `{app_data}/.projects/projects.json`. Maps a
+/// stable id to a project directory on this machine plus a `last_opened`
+/// timestamp for sort order. Per-project settings live in
+/// `{project_dir}/.seenote/settings.json`.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct AnnotationToolRecord {
-    pub key: String,
-    pub text: String,
-    pub color: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct ProjectRecord {
+pub struct RegistryEntryRecord {
     pub id: String,
-    pub name: String,
-    pub audio_directory: String,
-    pub annotation_directory: String,
-    pub output_format: String,
-    pub created_at: String,
+    pub project_dir: String,
     pub last_opened: String,
-    pub label_configs: Vec<AnnotationToolRecord>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub spectrogram_settings: Option<JsonValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub name_gradient_colors: Option<[String; 2]>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub output_rounding_decimals: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub file_filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub hide_annotated: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub shuffle_mode: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +39,7 @@ pub async fn get_app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn load_projects(projects_file: String) -> Result<Vec<ProjectRecord>, String> {
+pub async fn load_projects(projects_file: String) -> Result<Vec<RegistryEntryRecord>, String> {
     let path = Path::new(&projects_file);
     if !path.exists() {
         return Ok(vec![]);
@@ -73,16 +51,20 @@ pub async fn load_projects(projects_file: String) -> Result<Vec<ProjectRecord>, 
 #[tauri::command]
 pub async fn save_projects(
     projects_file: String,
-    projects: Vec<ProjectRecord>,
+    projects: Vec<RegistryEntryRecord>,
 ) -> Result<(), String> {
     let path = Path::new(&projects_file);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
+    atomic_write(path, &content)
+}
 
-    // Atomic write: write to a sibling .tmp file then rename over the target
-    // so that a crash mid-write never leaves projects.json truncated/corrupt.
+/// Write `content` to `path` atomically: stage to a sibling `.tmp` file then
+/// rename over the target, so that a crash mid-write never leaves the file
+/// truncated or corrupt.
+fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let tmp_path = {
         let mut t = path.to_path_buf();
         let mut name = t.file_name().unwrap_or_default().to_os_string();
@@ -91,17 +73,58 @@ pub async fn save_projects(
         t
     };
 
-    std::fs::write(&tmp_path, &content).map_err(|e| {
+    std::fs::write(&tmp_path, content).map_err(|e| {
         format!("failed to write temp file '{}': {}", tmp_path.display(), e)
     })?;
 
     if let Err(rename_err) = std::fs::rename(&tmp_path, path) {
-        // Best-effort cleanup before returning the error.
         let _ = std::fs::remove_file(&tmp_path);
-        return Err(format!("failed to rename '{}' to '{}': {}", tmp_path.display(), path.display(), rename_err));
+        return Err(format!(
+            "failed to rename '{}' to '{}': {}",
+            tmp_path.display(),
+            path.display(),
+            rename_err
+        ));
     }
 
     Ok(())
+}
+
+/// Read `{project_dir}/.seenote/settings.json` and return its parsed JSON.
+/// Schema validation is performed on the TypeScript side.
+#[tauri::command]
+pub async fn read_project_settings(project_dir: String) -> Result<JsonValue, String> {
+    let settings_path = Path::new(&project_dir).join(".seenote").join("settings.json");
+    if !settings_path.exists() {
+        return Err(format!("settings file not found: {}", settings_path.display()));
+    }
+    let content = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+/// Write `settings` to `{project_dir}/.seenote/settings.json`, creating the
+/// `.seenote/` directory if missing. Uses the same atomic-rename pattern as
+/// `save_projects`.
+#[tauri::command]
+pub async fn write_project_settings(
+    project_dir: String,
+    settings: JsonValue,
+) -> Result<(), String> {
+    let seenote_dir = Path::new(&project_dir).join(".seenote");
+    std::fs::create_dir_all(&seenote_dir).map_err(|e| e.to_string())?;
+    let settings_path = seenote_dir.join("settings.json");
+    let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    atomic_write(&settings_path, &content)
+}
+
+#[tauri::command]
+pub async fn project_dir_exists(project_dir: String) -> Result<bool, String> {
+    Ok(Path::new(&project_dir).is_dir())
+}
+
+#[tauri::command]
+pub async fn create_dir_all(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
 fn has_media_file_with_stem(dir: &Path, stem: &str) -> bool {

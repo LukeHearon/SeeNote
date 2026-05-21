@@ -1,14 +1,17 @@
+import type { AnnotationTool, ProjectUiSettings, SpectrogramSettings } from './types';
+
 // Roseus 'r' perceptually-uniform colormap
 // © 2022 dofuuz — MIT License
 // Source: https://github.com/dofuuz/roseus
 // 17 stops sampled evenly from the 256-entry dataset (indices 0, 16, 32 … 240, 255)
 export const MAGMA_STOPS = [
-  { pos: 0.0, r: 28,  g: 15,  b: 70  },   // Midnight purple                                                           
-  { pos: 0.2, r: 80,  g: 17,  b: 123 },  // Purple                                                                     
-  { pos: 0.4, r: 180, g: 53,  b: 120 },  // Red-Purple                                                                 
-  { pos: 0.6, r: 230, g: 81,  b: 97  },  // Orange-Red                                                                 
-  { pos: 0.8, r: 249, g: 195, b: 135 },  // Orange-Yellow                                                              
-  { pos: 1.0, r: 250, g: 251, b: 198 },  // White-Yellow      
+  { pos: 0.00, r: 0,   g: 0,   b: 0   },  // True black (noise floor)
+  { pos: 0.07, r: 28,  g: 15,  b: 70  },  // Midnight purple
+  { pos: 0.2,  r: 80,  g: 17,  b: 123 },  // Purple
+  { pos: 0.4,  r: 180, g: 53,  b: 120 },  // Red-Purple
+  { pos: 0.6,  r: 230, g: 81,  b: 97  },  // Orange-Red
+  { pos: 0.8,  r: 249, g: 195, b: 135 },  // Orange-Yellow
+  { pos: 1.0,  r: 250, g: 251, b: 198 },  // White-Yellow
 ];
 
 // Extensions that the Rust symphonia decoder can actually decode.
@@ -29,9 +32,38 @@ export function isSupportedMediaFile(path: string): boolean {
 }
 
 export const MIN_ZOOM_SEC = 1;
-export const MAX_ZOOM_SEC = 86400; // 24 hours — clamped to file duration at runtime
 export const DEFAULT_ZOOM_SEC = 10;
-export const SCROLL_SENSITIVITY = 1.0;
+
+// Canonical default for output rounding (used when project.outputRoundingDecimals is unset).
+export const DEFAULT_OUTPUT_ROUNDING_DECIMALS = 4;
+
+// Canonical defaults for every persisted setting. Every load site reads from
+// here so a default never has to be repeated. New persisted fields should be
+// added here first, then referenced from useState/load paths.
+export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
+  minFreq: 0,
+  maxFreq: 22050,
+  fftSize: 1024,
+  frequencyScale: 'mel',
+  displayFloor: -100,
+  displayCeil: 0,
+};
+
+export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings, 'activeTrackPath' | 'windowBounds'>> = {
+  leftPanelWidth: 224,
+  splitRatio: 0.5,
+  leftPanelRatio: 0.6,
+  volume: 1,
+  playbackSpeed: 1,
+  lastDefinedSpeed: 1.5,
+  zoomSec: DEFAULT_ZOOM_SEC,
+};
+
+// Used when the user engages the band-pass filter (F key or slider drag-up
+// from 0) without ever having drawn a band: an audible mid-range default so
+// the filter does something immediately, and the user can refine cutoffs from
+// there with the filter tool.
+export const DEFAULT_BAND_PASS_FILTER = { low: 500, high: 4000, strength: 0.5 };
 // Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
 export const DRAG_INTENT_HOLD_MS = 250;
 
@@ -115,3 +147,11 @@ export const DEFAULT_ANNOTATION_TOOLS = [
   { key: "7", text: "ins_trill_cicada",  color: HOTKEY_COLORS[7] },
   { key: "8", text: "ins_trill_cricket", color: HOTKEY_COLORS[8] },
 ];
+
+export function pickNextToolColor(existingTools: AnnotationTool[]): string {
+  const usedColors = new Set(existingTools.map(t => t.color));
+  for (let i = 1; i <= 9; i++) {
+    if (!usedColors.has(HOTKEY_COLORS[i])) return HOTKEY_COLORS[i];
+  }
+  return HOTKEY_COLORS[1];
+}

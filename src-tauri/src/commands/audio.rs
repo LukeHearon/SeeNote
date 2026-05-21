@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use crate::audio::{decoder, fft};
+use tauri::ipc::Response;
 
 // ── PCM stream state ──────────────────────────────────────────────────────────
 
@@ -83,22 +84,39 @@ pub struct SpectrogramChunkRequest {
     pub hop_size: usize,
 }
 
-#[derive(Serialize)]
-pub struct SpectrogramChunkResult {
-    /// Flat column-major byte array: n_cols * n_freq_bins bytes.
-    /// Each column has n_freq_bins entries (index 0 = highest freq bin, matching JS layout).
-    pub data: Vec<u8>,
-    pub n_cols: usize,
-    pub n_freq_bins: usize,
-    pub start_sec: f64,
-    pub actual_duration_sec: f64,
-    pub sample_rate: u32,
+/// Encode spectrogram metadata + u16 data into a binary blob for IPC.
+///
+/// Header layout (28 bytes, all little-endian):
+///   u32  n_cols
+///   u32  n_freq_bins
+///   f64  start_sec
+///   f64  actual_duration_sec
+///   u32  sample_rate
+/// Followed by n_cols * n_freq_bins u16 values (little-endian).
+fn build_spectrogram_response(
+    n_cols: usize,
+    n_freq_bins: usize,
+    start_sec: f64,
+    actual_duration_sec: f64,
+    sample_rate: u32,
+    data: &[u16],
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(28 + data.len() * 2);
+    bytes.extend_from_slice(&(n_cols as u32).to_le_bytes());
+    bytes.extend_from_slice(&(n_freq_bins as u32).to_le_bytes());
+    bytes.extend_from_slice(&start_sec.to_le_bytes());
+    bytes.extend_from_slice(&actual_duration_sec.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    for &v in data {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes
 }
 
 #[tauri::command]
 pub async fn get_spectrogram_chunk(
     req: SpectrogramChunkRequest,
-) -> Result<SpectrogramChunkResult, String> {
+) -> Result<Response, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let sample_rate = info.sample_rate;
     let n_freq_bins = req.fft_size / 2;
@@ -109,10 +127,14 @@ pub async fn get_spectrogram_chunk(
     if req.hop_size >= (sample_rate as usize) / 2 {
         let window_dur = req.fft_size as f64 / sample_rate as f64;
         let actual_end = (req.start_sec + req.duration_sec).min(info.duration_secs);
-        let actual_duration_sec = actual_end - req.start_sec;
-        let n_cols = ((actual_duration_sec * sample_rate as f64) / req.hop_size as f64).ceil() as usize;
+        let chunk_duration = actual_end - req.start_sec;
+        let n_cols = ((chunk_duration * sample_rate as f64) / req.hop_size as f64).floor() as usize + 1;
+        // Same invariant as the standard STFT path: nCols / actualDurationSec
+        // must equal the true cps (= sample_rate / hop_size) so the renderer
+        // places cols at their real centres. See the long comment below.
+        let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
-        let mut output = vec![0u8; n_cols * n_freq_bins];
+        let mut output = vec![0u16; n_cols * n_freq_bins];
         for col in 0..n_cols {
             let t = req.start_sec + (col as f64 * req.hop_size as f64 / sample_rate as f64);
             if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
@@ -125,14 +147,10 @@ pub async fn get_spectrogram_chunk(
             }
         }
 
-        return Ok(SpectrogramChunkResult {
-            data: output,
-            n_cols,
-            n_freq_bins,
-            start_sec: req.start_sec,
-            actual_duration_sec,
-            sample_rate,
-        });
+        let bytes = build_spectrogram_response(
+            n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &output,
+        );
+        return Ok(Response::new(bytes));
     }
 
     // Standard STFT path for fine-detail tiers.
@@ -155,19 +173,22 @@ pub async fn get_spectrogram_chunk(
     // over the padded buffer. Column 0's Hanning center then lands exactly
     // at req.start_sec with real audio on both sides of it.
     //
-    // ── Why actual_duration_sec uses req.duration_sec (not n_cols*hop/sr) ──
-    // The renderer in Spectrogram.tsx maps canvas pixels → chunk columns via
-    //   col = ((t - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols
-    // Because we decoded extra context, n_cols is SLIGHTLY larger than
-    // (duration_sec * sample_rate / hop_size). If we reported
-    // actual_duration_sec = n_cols * hop / sample_rate (which is > req.duration_sec),
-    // pixels near the chunk's right edge would map to columns inside the
-    // post-context region that belongs to the NEXT chunk's area — causing
-    // the "gap" to manifest as a time-shifted stripe instead.
-    // Reporting req.duration_sec keeps the mapping consistent with the
-    // chunk boundary on the time axis, and the extra post-context columns
-    // are simply unused (they exist only to give earlier columns full
-    // Hanning windows).
+    // ── Why actual_duration_sec is n_cols * hop / sample_rate ─────────────
+    // The renderer maps t -> col via
+    //   col = round((t - chunk.startSec) * (chunk.nCols / chunk.actualDurationSec))
+    // For that to match the *real* col grid (col k centered at chunk.startSec
+    // + k * hop_size / sample_rate), the reported ratio must equal the true
+    // sample_rate / hop_size. Since n_cols is integer-truncated, the only way
+    // to keep the ratio exact is to set actual_duration_sec to
+    // n_cols * hop_size / sample_rate. Any other value (e.g. req.duration_sec)
+    // introduces a sub-col linear drift across the chunk that shows up as
+    // time-axis shimmer in adjacent chunks during scroll/pan.
+    //
+    // Side effect: the chunk's reported extent is up to ~1/cps_real shorter
+    // than chunk_duration. The per-pixel chunk lookup still routes by chunk
+    // index (floor(t / chunk_duration)) so no chunk is "missed"; the renderer
+    // just clamps to the last col for the few ms between the last col centre
+    // and the next chunk's first col centre.
     let half_window = req.fft_size / 2;
     let half_window_sec = half_window as f64 / sample_rate as f64;
 
@@ -186,18 +207,12 @@ pub async fn get_spectrogram_chunk(
 
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
+    let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
-    let actual_duration_sec = req.duration_sec
-        .min((info.duration_secs - req.start_sec).max(0.0));
-
-    Ok(SpectrogramChunkResult {
-        data,
-        n_cols,
-        n_freq_bins,
-        start_sec: req.start_sec,
-        actual_duration_sec,
-        sample_rate,
-    })
+    let bytes = build_spectrogram_response(
+        n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &data,
+    );
+    Ok(Response::new(bytes))
 }
 
 // ── Overview spectrogram ──────────────────────────────────────────────────────
@@ -212,24 +227,18 @@ pub struct OverviewRequest {
 #[tauri::command]
 pub async fn get_overview_spectrogram(
     req: OverviewRequest,
-) -> Result<SpectrogramChunkResult, String> {
+) -> Result<Response, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let duration = info.duration_secs;
     let n_freq_bins = req.fft_size / 2;
 
     if duration <= 0.0 || req.n_columns == 0 {
-        return Ok(SpectrogramChunkResult {
-            data: Vec::new(),
-            n_cols: 0,
-            n_freq_bins,
-            start_sec: 0.0,
-            actual_duration_sec: 0.0,
-            sample_rate: info.sample_rate,
-        });
+        let bytes = build_spectrogram_response(0, n_freq_bins, 0.0, 0.0, info.sample_rate, &[]);
+        return Ok(Response::new(bytes));
     }
 
     let window_dur = req.fft_size as f64 / info.sample_rate as f64;
-    let mut output = vec![0u8; req.n_columns * n_freq_bins];
+    let mut output = vec![0u16; req.n_columns * n_freq_bins];
 
     for col in 0..req.n_columns {
         let t = (col as f64 / req.n_columns as f64) * duration;
@@ -243,14 +252,10 @@ pub async fn get_overview_spectrogram(
         }
     }
 
-    Ok(SpectrogramChunkResult {
-        data: output,
-        n_cols: req.n_columns,
-        n_freq_bins,
-        start_sec: 0.0,
-        actual_duration_sec: duration,
-        sample_rate: info.sample_rate,
-    })
+    let bytes = build_spectrogram_response(
+        req.n_columns, n_freq_bins, 0.0, duration, info.sample_rate, &output,
+    );
+    Ok(Response::new(bytes))
 }
 
 // ── PCM streaming commands ────────────────────────────────────────────────────

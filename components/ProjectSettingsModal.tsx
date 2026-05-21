@@ -1,86 +1,123 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, FolderOpen } from 'lucide-react';
-import { Project } from '../types';
+import { X, FolderOpen, ExternalLink } from 'lucide-react';
+import { Project, ProjectSettings } from '../types';
 import { openDirectoryDialog, checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
-import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles } from '../utils/projectCommands';
+import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
+import { makeProjectPath, isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import GradientPicker from './GradientPicker';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
 
 interface Props {
   project: Project;
-  onSave: (updated: Project) => void;
+  onSave: (settings: ProjectSettings) => void;
   onClose: () => void;
 }
 
-export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
-  const [name, setName] = useState(project.name);
-  const nameRef = useRef<HTMLDivElement>(null);
-  const [audioDir, setAudioDir] = useState(project.audioDirectory);
-  const [annotationDir, setAnnotationDir] = useState(project.annotationDirectory);
-  const [outputFormat, setOutputFormat] = useState(project.outputFormat);
-  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(project.outputRoundingDecimals ?? 4);
-  const defaultColors = project.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
-  const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
 
-  // Set initial text content of the contentEditable name field on mount
+const PORTABILITY_WARNING =
+  'This path is outside the project directory; the project will not be portable to other machines unless you also move it.';
+
+export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
+  const [name, setName] = useState(project.settings.name);
+  const nameRef = useRef<HTMLDivElement>(null);
+  const [mediaDir, setMediaDir] = useState(() => trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs));
+  const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
+  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
+    project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
+  );
+  const defaultColors = project.settings.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
+  const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
+  const [mediaDirExists, setMediaDirExists] = useState<boolean | null>(null);
+  const [annotationDirExists, setAnnotationDirExists] = useState<boolean | null>(null);
+  const [debouncedMediaDir, setDebouncedMediaDir] = useState(mediaDir);
+  const [debouncedAnnotationDir, setDebouncedAnnotationDir] = useState(annotationDir);
+
+  // Resolved absolute paths — used for all filesystem operations and settings serialisation.
+  const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
+  const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
+  const resolvedDebouncedMediaDir = resolveInputPath(project.projectDir, debouncedMediaDir);
+  const resolvedDebouncedAnnotationDir = resolveInputPath(project.projectDir, debouncedAnnotationDir);
+
   useEffect(() => {
-    if (nameRef.current) nameRef.current.textContent = project.name;
+    if (nameRef.current) nameRef.current.textContent = project.settings.name;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMediaDir(mediaDir), 250);
+    return () => clearTimeout(t);
+  }, [mediaDir]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAnnotationDir(annotationDir), 250);
+    return () => clearTimeout(t);
+  }, [annotationDir]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!resolvedDebouncedMediaDir) { setMediaDirExists(null); return; }
+    checkDirExists(resolvedDebouncedMediaDir).then(exists => {
+      if (!cancelled) setMediaDirExists(exists);
+    });
+    return () => { cancelled = true; };
+  }, [resolvedDebouncedMediaDir]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!resolvedDebouncedAnnotationDir) { setAnnotationDirExists(null); return; }
+    checkDirExists(resolvedDebouncedAnnotationDir).then(exists => {
+      if (!cancelled) setAnnotationDirExists(exists);
+    });
+    return () => { cancelled = true; };
+  }, [resolvedDebouncedAnnotationDir]);
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState('');
 
-  // Pending update — we build the final Project once all confirmations are done
-  const pendingRef = React.useRef<Project | null>(null);
+  const pendingRef = React.useRef<ProjectSettings | null>(null);
 
-  const handleBrowseAudio = async () => {
+  const handleBrowseMedia = async () => {
     const dir = await openDirectoryDialog();
-    if (dir) setAudioDir(dir);
+    if (dir) setMediaDir(trimProjectPrefix(project.projectDir, dir));
   };
 
   const handleBrowseAnnotation = async () => {
     const dir = await openDirectoryDialog();
-    if (dir) setAnnotationDir(dir);
+    if (dir) setAnnotationDir(trimProjectPrefix(project.projectDir, dir));
   };
 
-  // Called when user clicks Save on the main form
   const handleFormSubmit = async () => {
     if (!name.trim()) { setError('Project name is required.'); return; }
-    if (!audioDir) { setError('Audio directory is required.'); return; }
+    if (!mediaDir) { setError('Media directory is required.'); return; }
     if (!annotationDir) { setError('Annotations directory is required.'); return; }
 
     setIsBusy(true);
-    const [audioDirOk, annotationDirOk] = await Promise.all([
-      checkDirExists(audioDir),
-      checkDirExists(annotationDir),
-    ]);
+    const mediaDirOk = await checkDirExists(resolvedMediaDir);
     setIsBusy(false);
 
-    if (!audioDirOk) { setError('Audio directory does not exist.'); return; }
-    if (!annotationDirOk) { setError('Annotations directory does not exist.'); return; }
+    if (!mediaDirOk) { setError('Media directory does not exist.'); return; }
 
     setError('');
-    const updated: Project = {
-      ...project,
+    const settings: ProjectSettings = {
+      ...project.settings,
       name: name.trim(),
-      audioDirectory: audioDir,
-      annotationDirectory: annotationDir,
-      outputFormat,
+      mediaDirectory: makeProjectPath(project.projectDir, resolvedMediaDir),
+      annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
     };
-    pendingRef.current = updated;
+    pendingRef.current = settings;
 
-    const audioDirChanged = audioDir !== project.audioDirectory;
-    const annotationDirChanged = annotationDir !== project.annotationDirectory;
+    const mediaDirChanged = resolvedMediaDir !== project.mediaDirectoryAbs;
+    const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
 
-    if (audioDirChanged) {
+    if (mediaDirChanged) {
       setIsBusy(true);
       try {
-        const orphans = await getOrphanedAnnotations(project.annotationDirectory, audioDir);
+        const orphans = await getOrphanedAnnotations(project.annotationDirectoryAbs, resolvedMediaDir);
         setIsBusy(false);
         if (orphans.length > 0) {
           setOrphanedPaths(orphans);
@@ -99,10 +136,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       return;
     }
 
-    onSave(updated);
+    onSave(settings);
   };
 
-  // User chose to delete or retain orphaned annotations
   const handleOrphanResolution = async (resolution: 'delete' | 'retain') => {
     if (resolution === 'delete') {
       setIsBusy(true);
@@ -116,7 +152,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       setIsBusy(false);
     }
 
-    const annotationDirChanged = annotationDir !== project.annotationDirectory;
+    const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
     if (annotationDirChanged) {
       setStep('annotationCopyConfirm');
     } else {
@@ -126,7 +162,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     }
   };
 
-  // User chose whether to copy annotations to new dir
   const handleCopyDecision = (shouldCopy: boolean) => {
     if (!shouldCopy) {
       const pending = pendingRef.current;
@@ -137,15 +172,13 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setStep('conflictConfirm');
   };
 
-  // User chose conflict resolution — perform the copy
   const handleConflictResolution = async (resolution: 'overwrite' | 'skip') => {
-    const oldDir = project.annotationDirectory;
-    const newDir = annotationDir;
+    const oldDir = project.annotationDirectoryAbs;
+    const newDir = resolvedAnnotationDir;
 
     setIsBusy(true);
     try {
-      // Build copies list: scan old dir for .txt files
-      const copies = await buildCopiesList(oldDir, newDir, outputFormat);
+      const copies = await buildCopiesList(oldDir, newDir);
       const result = await copyAnnotationFiles(copies, resolution);
       if (result.errors.length > 0) {
         setError(`Copy completed with errors:\n${result.errors.join('\n')}`);
@@ -164,11 +197,15 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     onSave(pending);
   };
 
+  const mediaOutside = resolvedDebouncedMediaDir && !isInsideProjectDir(project.projectDir, resolvedDebouncedMediaDir);
+  const annotationOutside = resolvedDebouncedAnnotationDir && !isInsideProjectDir(project.projectDir, resolvedDebouncedAnnotationDir);
+  const mediaIsRelative = debouncedMediaDir && !isAbsolutePath(debouncedMediaDir);
+  const annotationIsRelative = debouncedAnnotationDir && !isAbsolutePath(debouncedAnnotationDir);
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
 
-        {/* Main form */}
         {step === 'form' && (
           <>
             <div className="flex items-center justify-between mb-6">
@@ -214,30 +251,62 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               </div>
 
               <div>
-                <label className="text-gray-400 text-sm block mb-1">Audio Directory</label>
+                <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    value={audioDir}
-                    onChange={e => setAudioDir(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    value={project.projectDir}
+                    disabled
+                    className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-gray-400 text-sm cursor-not-allowed"
                   />
                   <button
-                    onClick={handleBrowseAudio}
+                    onClick={() => revealInFileManager(project.projectDir)}
                     className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
+                    title="Show in Finder"
                   >
-                    <FolderOpen size={16} />
+                    <ExternalLink size={16} />
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="text-gray-400 text-sm block mb-1">Annotations Directory</label>
+                <label className="text-gray-400 text-sm block mb-1">
+                  {mediaIsRelative ? 'Media Subdirectory' : 'Media Directory'}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={mediaDir}
+                    onChange={e => setMediaDir(trimProjectPrefix(project.projectDir, e.target.value))}
+                    className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={handleBrowseMedia}
+                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
+                  >
+                    <FolderOpen size={16} />
+                  </button>
+                </div>
+                {mediaIsRelative && resolvedDebouncedMediaDir && (
+                  <p className="text-gray-500 text-xs mt-1">→ {resolvedDebouncedMediaDir}</p>
+                )}
+                {mediaOutside && (
+                  <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
+                )}
+                {debouncedMediaDir && mediaDirExists === false && (
+                  <p className="text-yellow-400 text-xs mt-1">Directory does not exist.</p>
+                )}
+              </div>
+
+              <div>
+                <label className="text-gray-400 text-sm block mb-1">
+                  {annotationIsRelative ? 'Annotations Subdirectory' : 'Annotations Directory'}
+                </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={annotationDir}
-                    onChange={e => setAnnotationDir(e.target.value)}
+                    onChange={e => setAnnotationDir(trimProjectPrefix(project.projectDir, e.target.value))}
                     className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                   />
                   <button
@@ -247,19 +316,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                     <FolderOpen size={16} />
                   </button>
                 </div>
-              </div>
-
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">Output Format</label>
-                <select
-                  value={outputFormat}
-                  onChange={e => setOutputFormat(e.target.value as 'json' | 'csv' | 'txt')}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                >
-                  <option value="txt">Audacity (.txt)</option>
-                  <option value="csv">CSV (.csv)</option>
-                  <option value="json">JSON (.json)</option>
-                </select>
+                {annotationIsRelative && resolvedDebouncedAnnotationDir && (
+                  <p className="text-gray-500 text-xs mt-1">→ {resolvedDebouncedAnnotationDir}</p>
+                )}
+                {annotationOutside && (
+                  <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
+                )}
+                {debouncedAnnotationDir && annotationDirExists === false && (
+                  <p className="text-yellow-400 text-xs mt-1">
+                    Directory does not exist yet; it will be created when the first annotation is saved.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -283,7 +350,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 </div>
               </div>
 
-              {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
+              {error && (
+                <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>
+              )}
             </div>
 
             <div className="flex gap-3 mt-6 justify-end">
@@ -301,13 +370,12 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           </>
         )}
 
-        {/* Orphaned annotations confirmation */}
         {step === 'orphanConfirm' && (
           <>
             <h2 className="text-white text-lg font-semibold mb-4">Orphaned Annotations</h2>
             <p className="text-gray-300 text-sm mb-2">
               {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} no
-              corresponding audio in the new audio directory:
+              corresponding media in the new media directory:
             </p>
             <ul className="bg-gray-800 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-1">
               {orphanedPaths.map(p => (
@@ -335,7 +403,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           </>
         )}
 
-        {/* Copy annotations to new dir? */}
         {step === 'annotationCopyConfirm' && (
           <>
             <h2 className="text-white text-lg font-semibold mb-4">Move Annotations</h2>
@@ -360,7 +427,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           </>
         )}
 
-        {/* Conflict resolution */}
         {step === 'conflictConfirm' && (
           <>
             <h2 className="text-white text-lg font-semibold mb-4">Handle Conflicts</h2>
@@ -391,15 +457,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
 }
 
-// Scan oldDir recursively and build copy specs mapping to newDir.
-// Uses the project's outputFormat to determine which file extension to scan for.
 async function buildCopiesList(
   oldDir: string,
   newDir: string,
-  outputFormat: string,
 ): Promise<{ src: string; dst: string }[]> {
-  const ext = outputFormat === 'csv' ? '.csv' : outputFormat === 'json' ? '.json' : '.txt';
-  const files = await listAnnotationFilesRecursive(oldDir, ext);
+  const files = await listAnnotationFilesRecursive(oldDir, '.txt');
 
   return files.map(src => {
     const rel = src.startsWith(oldDir) ? src.slice(oldDir.length) : src;

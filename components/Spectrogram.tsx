@@ -1,10 +1,9 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection } from '../types';
-import { drawSpectrogramChunk } from '../utils/audioProcessing';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter } from '../types';
+import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
-import { useHotkeys } from '../hooks/useHotkeys';
 import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
@@ -47,11 +46,20 @@ interface SpectrogramProps {
   annotationTools: AnnotationTool[];
   selection: Selection | null;
   boundAnnotationId: string | null;
+  filterToolActive: boolean;
+  bandPassFilter: BandPassFilter | null;
+  /** Edit-in-place geometry updates (cutoff resize). Does NOT push the stack. */
+  onBandPassFilterChange: (f: BandPassFilter | null) => void;
+  /** Called when a band is freshly drawn via drag — pushes `filterBand` and engages filtering. */
+  onBandPassFilterDrawn: (f: BandPassFilter) => void;
+  /** Most recent of {annotationTool, filterTool} in the activation stack, or null. Drives cursor orientation. */
+  topTool: 'annotationTool' | 'filterTool' | null;
   onSeek: (time: number) => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: Selection | null) => void;
+  onSelectionCommit?: (region: Selection) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
 }
@@ -82,16 +90,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   annotationTools,
   selection,
   boundAnnotationId,
+  filterToolActive,
+  bandPassFilter,
+  onBandPassFilterChange,
+  onBandPassFilterDrawn,
+  topTool,
   onSeek,
   onAnnotationsChange,
   onAnnotationsCommit,
   onSelectAnnotation,
   onSelectionChange,
+  onSelectionCommit,
   onBoundAnnotationChange,
   onZoomChange
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  if (!offscreenCanvasRef.current && typeof document !== 'undefined') {
+    offscreenCanvasRef.current = document.createElement('canvas');
+  }
   // Overlay canvas: draws playhead, time ruler, ident, and selection darkening.
   // Must be above annotation HTML divs (z-30 > annotations z-10/20).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,6 +163,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const [creatingSelection, setCreatingSelection] = useState<{ start: number; current: number } | null>(null);
   const [resizingSelectionHandle, setResizingSelectionHandle] = useState<'start' | 'end' | null>(null);
 
+  // Filter tool interaction state
+  const [creatingFilter, setCreatingFilter] = useState<{ y0: number; y1: number } | null>(null);
+  const [resizingFilterEdge, setResizingFilterEdge] = useState<'low' | 'high' | null>(null);
+
   // Annotation-bound selection state is lifted to App.tsx (boundAnnotationId prop + onBoundAnnotationChange).
 
   // Track mousedown on annotation center to distinguish click vs drag
@@ -183,8 +205,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
      return containerWidth / zoomSec;
   }, [zoomSec, containerWidth]);
 
+  const zoomSecRef = useRef(zoomSec);
+
   // Keep refs in sync so RAF/window handlers read current values without stale closures.
   pixelsPerSecondRef.current = pixelsPerSecond;
+  zoomSecRef.current = zoomSec;
   durationRef.current = duration;
   creatingSelectionRef.current = creatingSelection;
   creatingAnnotationRef.current = creatingAnnotation;
@@ -224,122 +249,138 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const offscreen = offscreenCanvasRef.current;
+    if (!canvas || !offscreen) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.width / dpr;   // canvas.width is now in physical px (see resize)
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const startTime = scrollLeft / pixelsPerSecond;
-    const timePerPixel = 1 / pixelsPerSecond;
-    const endTime = startTime + (width * timePerPixel);
+    const endTime = startTime + cssWidth / pixelsPerSecond;
 
     if (chunkCache && duration > 0) {
         // ── Two-stage spectrogram rendering pipeline ────────────────────────
-        // Stage 1 (THIS BLOCK): composite cached chunks into a viewport buffer
-        // with exactly one STFT column per canvas pixel. Each pixel's time
-        // range is [tStart, tEnd); we look up that range in whichever chunk
-        // contains tMid, then either copy the single column or max-reduce
-        // multiple columns that fall under the pixel.
+        // Stage 1 (THIS BLOCK): build a column-resolution viewport buffer
+        // (one entry per STFT column, no time-axis discretization here) and
+        // render it into an offscreen canvas at native column resolution.
         //
-        // Stage 2 (drawSpectrogramChunk in utils/audioProcessing.ts): consumes
-        // the viewport buffer and handles frequency-axis mapping, contrast,
-        // brightness, and colormap. It does NOT do any time-axis remapping —
-        // see the note at the top of that function.
+        // Stage 2: ctx.drawImage with sub-pixel destination shift lets the
+        // browser bilinearly resample the offscreen canvas onto the visible
+        // canvas. Smooth sub-pixel scrolling works because dx is fractional;
+        // no aliasing pattern can lock to the canvas pixel grid.
         //
-        // Pixel ↔ time coordinate system used throughout the app:
-        //     time = (scrollLeft + x) / pixelsPerSecond
-        // Playhead, pointer events, annotation rendering, and this loop all
-        // agree on this formula, so an annotation drawn at time t always
-        // lands on the same pixel as the spectrogram column for time t.
+        // Stage 2b (drawSpectrogramChunk in utils/audioProcessing.ts): handles
+        // frequency-axis remap (linear/log/mel), contrast, brightness, and
+        // colormap. It still does no time-axis remapping — specWidth always
+        // equals the offscreen canvas width.
+        //
+        // Pixel ↔ time coordinate system used everywhere else in the app:
+        //     time = (scrollLeft + xCss) / pixelsPerSecond
+        // Annotations, playhead, ticks all compute their position with this
+        // formula. The drawImage destination math matches it exactly so the
+        // spectrogram and overlays stay locked in time.
         const visibleDuration = endTime - startTime;
-        const activeTier = chunkCache.selectTier(visibleDuration, width);
+        const activeTier = chunkCache.selectTier(visibleDuration, cssWidth);
         chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
 
+        // Probe one chunk for nFreqBins (same as before).
         let nFreqBins = settings.fftSize / 2;
-        for (let px = 0; px < width; px++) {
-            const t = startTime + px * timePerPixel;
-            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-            if (result) { nFreqBins = result.chunk.nFreqBins; break; }
+        {
+          const probe = chunkCache.getChunkWithFallback(startTime, activeTier.tier);
+          if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
-        // Pre-composited viewport buffer: width columns × nFreqBins bins.
-        // Passed to drawSpectrogramChunk as `specData` with specWidth = width.
-        const viewportData = new Uint8Array(width * nFreqBins);
+        // The "global" cps used for the offscreen-canvas grid. Use the active tier's
+        // colsPerSec — fallback chunks at coarser tiers will be resampled by nearest-
+        // col lookup into this grid.
+        const cps = activeTier.colsPerSec;
 
-        for (let px = 0; px < width; px++) {
-            const tStart = startTime + px * timePerPixel;
-            // Don't fill pixels past the end of the file — prevents the last column
-            // from being stretched across the remaining canvas area.
-            if (tStart >= duration) continue;
-            const tEnd = startTime + (px + 1) * timePerPixel;
-            const tMid = (tStart + tEnd) / 2;
+        // Compute the offscreen backbuffer extent. One offscreen pixel per STFT
+        // column at the active tier. Add 1-col margin on each side so sub-pixel
+        // drawImage shift never reads past the buffer.
+        const bbStartCol = Math.floor(startTime * cps) - 1;
+        const bbEndCol   = Math.ceil(endTime * cps) + 1;
+        const bbWidth = Math.max(1, bbEndCol - bbStartCol);
+        const bbStartTime = bbStartCol / cps;
 
-            const result = chunkCache.getChunkWithFallback(tMid, activeTier.tier);
-            if (!result) continue;
-            const { chunk } = result;
-            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+        // Build the column-resolution viewport buffer.
+        const viewportData = new Uint16Array(bbWidth * nFreqBins);
+        for (let i = 0; i < bbWidth; i++) {
+          const absCol = bbStartCol + i;
+          if (absCol < 0) continue;                // before file start
+          const t = absCol / cps;
+          if (t >= duration) continue;             // past file end
+          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+          if (!result) continue;
+          const { chunk } = result;
+          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
 
-            const bins = Math.min(nFreqBins, chunk.nFreqBins);
-            const dstOffset = px * nFreqBins;
+          // Map t into a column index inside this chunk. After the Rust-side
+          // cps-drift fix (audio.rs), chunk.nCols / chunk.actualDurationSec equals
+          // the chunk's true cps, so this is exact for STFT chunks. Overview
+          // chunks (sampled at evenly spaced points) use their own ratio.
+          const chunkCps = chunk.nCols / chunk.actualDurationSec;
+          let col = Math.round((t - chunk.startSec) * chunkCps);
+          if (col < 0) col = 0;
+          if (col >= chunk.nCols) col = chunk.nCols - 1;
 
-            let colStart = Math.floor(((tStart - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
-            let colEnd = Math.ceil(((tEnd - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols);
-            colStart = Math.max(0, colStart);
-            colEnd = Math.min(chunk.nCols, colEnd);
-
-            if (colEnd - colStart <= 1) {
-                const col = Math.max(0, Math.min(chunk.nCols - 1,
-                    Math.floor(((tMid - chunk.startSec) / chunk.actualDurationSec) * chunk.nCols)));
-                const srcOffset = col * chunk.nFreqBins;
-                viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
-            } else {
-                for (let col = colStart; col < colEnd; col++) {
-                    const srcOffset = col * chunk.nFreqBins;
-                    for (let bin = 0; bin < bins; bin++) {
-                        const val = chunk.data[srcOffset + bin];
-                        if (val > viewportData[dstOffset + bin]) {
-                            viewportData[dstOffset + bin] = val;
-                        }
-                    }
-                }
-            }
+          const bins = Math.min(nFreqBins, chunk.nFreqBins);
+          const srcOffset = col * chunk.nFreqBins;
+          const dstOffset = i * nFreqBins;
+          viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
         }
 
+        // Render the column-resolution image into the offscreen canvas.
+        // Offscreen canvas gets one pixel per column horizontally and matches the
+        // visible canvas's physical-pixel height (so vertical resolution stays sharp).
+        if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
+        if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
+        const offCtx = offscreen.getContext('2d');
+        if (!offCtx) return;
         drawSpectrogramChunk(
-            ctx, viewportData, width, nFreqBins,
-            startTime, timePerPixel, duration, width, height,
-            settings.intensity, settings.contrast,
-            settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale
+          offCtx, viewportData, bbWidth, nFreqBins,
+          offscreen.width, offscreen.height,
+          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
+          settings.displayFloor, settings.displayCeil,
         );
 
-        // Paint end-of-file region with the background color so it's
-        // clearly distinct from zero-value spectrogram data.
-        const endX = Math.ceil((duration - startTime) * pixelsPerSecond);
-        if (endX < width) {
-            ctx.fillStyle = '#0f172a';
-            ctx.fillRect(endX, 0, width - endX, height);
+        // Blit offscreen → visible canvas with sub-pixel destination shift.
+        // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
+        const dxCss = (bbStartTime - startTime) * pixelsPerSecond;
+        const dwCss = bbWidth / cps * pixelsPerSecond;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height,
+                      dxCss * dpr, 0, dwCss * dpr, canvas.height);
+
+        // Paint end-of-file region with the background color so it's distinct
+        // from zero-value spectrogram data.
+        const endXCss = Math.ceil((duration - startTime) * pixelsPerSecond);
+        if (endXCss < cssWidth) {
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(endXCss * dpr, 0, (cssWidth - endXCss) * dpr, canvas.height);
         }
     } else if (!chunkCache && duration > 0 && !isProcessing) {
         ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * dpr;
         ctx.beginPath();
-        for (let i = 0; i < width; i += 50) {
-            ctx.moveTo(i, 0); ctx.lineTo(i, height);
+        for (let i = 0; i < canvas.width; i += 50 * dpr) {
+          ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height);
         }
         ctx.stroke();
         ctx.fillStyle = '#334155';
-        ctx.font = 'bold 24px sans-serif';
+        ctx.font = `bold ${24 * dpr}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('Spectrogram Unavailable', width / 2, height / 2);
+        ctx.fillText('Spectrogram Unavailable', canvas.width / 2, canvas.height / 2);
     }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.intensity, settings.contrast, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, isProcessing]);
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing]);
 
   // Overlay canvas: axis, playhead, ident, and selection region darkening.
   // Rendered above annotation HTML divs (z-30).
@@ -383,6 +424,41 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (selEndX < width) {
         ctx.fillRect(selEndX, 0, width - selEndX, height);
       }
+    }
+
+    // Render in-progress filter creation OR persistent band. The band overlay
+    // tracks `bandPassFilter` (the audio source of truth) — tool readiness
+    // (`filterToolActive`) only affects whether the cutoff handles are
+    // interactive, not whether the band is visible.
+    const filterBand = creatingFilter
+      ? {
+          yTop: Math.min(creatingFilter.y0, creatingFilter.y1),
+          yBottom: Math.max(creatingFilter.y0, creatingFilter.y1),
+          strength: bandPassFilter?.strength ?? 1,
+        }
+      : bandPassFilter
+      ? {
+          yTop: freqToY(bandPassFilter.high, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
+          yBottom: freqToY(bandPassFilter.low, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
+          strength: bandPassFilter.strength,
+        }
+      : null;
+
+    if (filterBand) {
+      const darkAlpha = 0.5 * filterBand.strength;
+      ctx.fillStyle = `rgba(0, 0, 0, ${darkAlpha})`;
+      if (filterBand.yTop > 0) {
+        ctx.fillRect(0, 0, width, filterBand.yTop);
+      }
+      if (filterBand.yBottom < height) {
+        ctx.fillRect(0, filterBand.yBottom, width, height - filterBand.yBottom);
+      }
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
+      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
+      ctx.stroke();
     }
 
     // 2. Draw Playhead Line
@@ -445,7 +521,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration]);
+  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -552,14 +628,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
-        setContainerWidth(Math.max(1, width));
+        const newWidth = Math.max(1, width);
+        // Preserve the left-edge time across resize: scrollLeft is in pixels and
+        // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
+        // the visible time range unless we rescale scrollLeft proportionally.
+        if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0) {
+          const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
+          const newPps = newWidth / zoomSecRef.current;
+          const newScrollLeft = leftEdgeTime * newPps;
+          scrollLeftRef.current = newScrollLeft;
+          setScrollLeft(newScrollLeft);
+        }
+        setContainerWidth(newWidth);
         const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
-          canvasRef.current.width = Math.max(1, width);
-          canvasRef.current.height = height;
+          canvasRef.current.width = Math.max(1, Math.round(newWidth * dpr));
+          canvasRef.current.height = Math.max(1, Math.round(height * dpr));
         }
         if (overlayCanvasRef.current) {
-          overlayCanvasRef.current.width = width * dpr;
+          overlayCanvasRef.current.width = newWidth * dpr;
           overlayCanvasRef.current.height = height * dpr;
         }
         if (yAxisCanvasRef.current) {
@@ -638,15 +725,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     scrollToTime,
   }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime]);
 
-  // Keyboard shortcuts: Escape = clear bound annotation; also clear selection
-  // when not playing. Fires alongside App.tsx's Esc binding (which deactivates
-  // the active annotation tool). Both are window-level and complementary.
-  useHotkeys([
-    { key: 'Escape', allowInInput: true, preventDefault: false, handler: () => {
-      onBoundAnnotationChange(null);
-      if (!isPlaying) onSelectionChange(null);
-    }},
-  ]);
+  // Escape handling lives in AnnotationWindow (universal activation-stack
+  // unwind). When `Esc` pops `selection`, AnnotationWindow also clears
+  // boundAnnotationId, so this component no longer registers an Esc binding.
 
   // --- Interaction Handlers ---
 
@@ -711,7 +792,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const updated = annotationsRef.current.map(a => {
         if (a.id !== da.id) return a;
         const dur = a.end - a.start;
-        const newStart = Math.max(0, t - da.startOffset);
+        const newStart = Math.max(0, Math.min(t - da.startOffset, durationRef.current - dur));
         return { ...a, start: newStart, end: newStart + dur };
       });
       pendingAnnotationsRef.current = updated;
@@ -747,12 +828,46 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const isAnyDragActiveRef = useRef(isAnyDragActive);
   isAnyDragActiveRef.current = isAnyDragActive;
 
+  // Filter drags are vertical only — kept out of isAnyDragActive so they don't trigger
+  // the horizontal auto-pan, but still tracked for the window-level mouseup handler.
+  const isFilterDragActive = creatingFilter !== null || resizingFilterEdge !== null;
+  const isFilterDragActiveRef = useRef(isFilterDragActive);
+  isFilterDragActiveRef.current = isFilterDragActive;
+
   // Always track mouse position so the RAF can use it even when mouse is outside the spectrogram
   useEffect(() => {
     const trackMouse = (e: MouseEvent) => { mousePosRef.current = { clientX: e.clientX, clientY: e.clientY }; };
     window.addEventListener('mousemove', trackMouse, { passive: true });
     return () => window.removeEventListener('mousemove', trackMouse);
   }, []);
+
+  // While a filter drag is active, track mouse moves at window level so the drag
+  // continues even if the pointer leaves the spectrogram container vertically.
+  useEffect(() => {
+    if (!isFilterDragActive) return;
+    const onMove = (e: MouseEvent) => {
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const canvasHeight = container.clientHeight;
+      const localY = Math.max(0, Math.min(canvasHeight, e.clientY - rect.top));
+
+      if (resizingFilterEdge !== null && bandPassFilter) {
+        const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+        if (resizingFilterEdge === 'low') {
+          const newLow = Math.min(freq, bandPassFilter.high - 1);
+          onBandPassFilterChange({ ...bandPassFilter, low: Math.max(settings.minFreq, newLow) });
+        } else {
+          const newHigh = Math.max(freq, bandPassFilter.low + 1);
+          onBandPassFilterChange({ ...bandPassFilter, high: Math.min(settings.maxFreq, newHigh) });
+        }
+      } else if (creatingFilter !== null) {
+        setCreatingFilter({ ...creatingFilter, y1: localY });
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [isFilterDragActive, creatingFilter, resizingFilterEdge, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale, onBandPassFilterChange]);
 
   // Re-sync pendingAnnotationsRef when the annotations prop changes externally (e.g. undo/redo).
   // If a drag is in flight, discard any pending edit — the undo intentionally rewinds state.
@@ -781,16 +896,34 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (pos && container) {
         const rect = container.getBoundingClientRect();
         const containerWidth = rect.width;
+        const pps = pixelsPerSecondRef.current;
+        const dur = durationRef.current;
         let overflow = 0;
-        if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
-        else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+
+        const da = draggedAnnotationRef.current;
+        if (da) {
+          // For annotation drags, trigger auto-pan based on where the annotation edge
+          // would land given the current mouse position — not where the mouse itself is.
+          // This way panning starts the moment the annotation boundary reaches the viewport
+          // edge, even while the mouse is still inside.
+          const ann = annotationsRef.current.find(a => a.id === da.id);
+          if (ann) {
+            const annotDur = ann.end - ann.start;
+            const mouseRelX = pos.clientX - rect.left;
+            const desiredStartPx = mouseRelX - da.startOffset * pps;
+            const desiredEndPx = mouseRelX + (annotDur - da.startOffset) * pps;
+            if (desiredStartPx < 0) overflow = desiredStartPx;
+            else if (desiredEndPx > containerWidth) overflow = desiredEndPx - containerWidth;
+          }
+        } else {
+          if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
+          else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+        }
 
         if (overflow !== 0) {
           const absOverflow = Math.abs(overflow);
           // Gentle acceleration: slow start (~1px/frame at edge), ramps up, capped at 40px/frame
           const speed = Math.sign(overflow) * Math.min(Math.pow(absOverflow / 40, 1.5), 40);
-          const pps = pixelsPerSecondRef.current;
-          const dur = durationRef.current;
           const overrunPixels = containerWidth * 0.4;
           const maxScroll = Math.max(0, dur * pps - containerWidth + overrunPixels);
           const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
@@ -798,7 +931,29 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
             scrollLeftRef.current = newScroll;
             setScrollLeft(newScroll);
-            processDragAtClientX(pos.clientX);
+            const da = draggedAnnotationRef.current;
+            if (da) {
+              // Pin the appropriate boundary to the visible edge so the annotation
+              // stays fully visible: start→left edge when panning left, end→right edge when panning right.
+              const viewLeft = newScroll / pps;
+              const viewRight = (newScroll + containerWidth) / pps;
+              const updated = annotationsRef.current.map(a => {
+                if (a.id !== da.id) return a;
+                const annotDur = a.end - a.start;
+                const newStart = overflow < 0
+                  ? Math.max(0, viewLeft)
+                  : Math.max(0, Math.min(viewRight - annotDur, dur - annotDur));
+                return { ...a, start: newStart, end: newStart + annotDur };
+              });
+              pendingAnnotationsRef.current = updated;
+              onAnnotationsChangeRef.current(updated);
+              if (da.id === boundAnnotationIdRef.current) {
+                const moved = updated.find(a => a.id === da.id);
+                if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
+              }
+            } else {
+              processDragAtClientX(pos.clientX);
+            }
           }
         }
       }
@@ -819,6 +974,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     if ((e.target as HTMLElement).closest('input') || (e.target as HTMLElement).closest('button')) return;
+
+    if (filterToolActive) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const y = e.clientY - rect.top;
+      setCreatingFilter({ y0: y, y1: y });
+      return;
+    }
 
     const annotationItem = (e.target as HTMLElement).closest('.annotation-item');
     if (!annotationItem) {
@@ -878,6 +1041,29 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const overrunPixels = containerWidth * 0.4;
       const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
       setScrollLeft(Math.max(0, Math.min(dragStart.scroll + delta, maxScroll)));
+      return;
+    }
+
+    if (resizingFilterEdge !== null && bandPassFilter) {
+      const canvasHeight = containerRef.current?.clientHeight ?? 0;
+      const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
+      const localY = Math.max(0, Math.min(canvasHeight, e.clientY - rectY));
+      const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+      if (resizingFilterEdge === 'low') {
+        const newLow = Math.min(freq, bandPassFilter.high - 1);
+        onBandPassFilterChange({ ...bandPassFilter, low: Math.max(settings.minFreq, newLow) });
+      } else {
+        const newHigh = Math.max(freq, bandPassFilter.low + 1);
+        onBandPassFilterChange({ ...bandPassFilter, high: Math.min(settings.maxFreq, newHigh) });
+      }
+      return;
+    }
+
+    if (creatingFilter !== null) {
+      const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
+      const canvasHeight = containerRef.current?.clientHeight ?? 0;
+      const y = Math.max(0, Math.min(canvasHeight, e.clientY - rectY));
+      setCreatingFilter({ ...creatingFilter, y1: y });
       return;
     }
 
@@ -962,10 +1148,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     if (draggedAnnotation) {
+       const pps = pixelsPerSecondRef.current;
+       const viewLeft = scrollLeftRef.current / pps;
+       const viewRight = (scrollLeftRef.current + (containerRef.current?.clientWidth ?? 0)) / pps;
        const updated = annotations.map(a => {
            if (a.id === draggedAnnotation.id) {
                const dur = a.end - a.start;
-               const newStart = Math.max(0, t - draggedAnnotation.startOffset);
+               const desired = t - draggedAnnotation.startOffset;
+               // Clamp so neither edge exits the visible viewport (auto-pan handles scrolling).
+               const newStart = Math.max(0, Math.max(viewLeft, Math.min(desired, Math.min(durationRef.current - dur, viewRight - dur))));
                return { ...a, start: newStart, end: newStart + dur };
            }
            return a;
@@ -1003,6 +1194,27 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const handleMouseUp = (e?: React.MouseEvent) => {
     if (dragStart) setDragStart(null);
 
+    if (resizingFilterEdge !== null) {
+      setResizingFilterEdge(null);
+      return;
+    }
+
+    if (creatingFilter !== null) {
+      const canvasHeight = containerRef.current?.clientHeight ?? 0;
+      const yTop = Math.min(creatingFilter.y0, creatingFilter.y1);
+      const yBottom = Math.max(creatingFilter.y0, creatingFilter.y1);
+      if (yBottom - yTop > 5 && canvasHeight > 0) {
+        const high = yToFreq(yTop, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+        const low = yToFreq(yBottom, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+        // Fresh drag → auto-engage filtering and push the `filterBand` stack
+        // entry. Pure edit-in-place geometry (cutoff resize) still uses
+        // onBandPassFilterChange and does NOT touch the stack.
+        onBandPassFilterDrawn({ low, high, strength: bandPassFilter?.strength ?? 1 });
+      }
+      setCreatingFilter(null);
+      return;
+    }
+
     // Pending annotation click (no significant movement) → annotation-bound selection
     if (clickDownRef.current) {
       const annotation = annotations.find(a => a.id === clickDownRef.current!.annotationId);
@@ -1032,6 +1244,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const end = Math.max(creatingSelection.start, creatingSelection.current);
       if (end > start) {
         onSelectionChange({ start, end });
+        onSelectionCommit?.({ start, end });
         onBoundAnnotationChange(null);
       } else {
         onSelectionChange(null);
@@ -1063,7 +1276,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const handleMouseUpRef = useRef(handleMouseUp);
   handleMouseUpRef.current = handleMouseUp;
   useEffect(() => {
-    const onWindowMouseUp = () => { if (isAnyDragActiveRef.current) handleMouseUpRef.current(); };
+    const onWindowMouseUp = () => {
+      if (isAnyDragActiveRef.current || isFilterDragActiveRef.current) handleMouseUpRef.current();
+    };
     window.addEventListener('mouseup', onWindowMouseUp);
     return () => window.removeEventListener('mouseup', onWindowMouseUp);
   }, []);
@@ -1167,6 +1382,45 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             }}
           >
             <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // Render horizontal cutoff handles for the band-pass filter.
+  const renderFilterHandles = () => {
+    if (!filterToolActive || !bandPassFilter || creatingFilter) return null;
+    const canvasHeight = containerRef.current?.clientHeight ?? 0;
+    if (canvasHeight === 0) return null;
+
+    const yHigh = freqToY(bandPassFilter.high, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+    const yLow = freqToY(bandPassFilter.low, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+
+    return (
+      <>
+        {yHigh >= 0 && yHigh <= canvasHeight && (
+          <div
+            className="absolute left-0 right-0 cursor-ns-resize"
+            style={{ top: `${yHigh - 4}px`, height: '9px', zIndex: 15 }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setResizingFilterEdge('high');
+            }}
+          >
+            <div className="absolute left-0 right-0" style={{ top: '4px', height: '1px', background: '#60a5fa' }} />
+          </div>
+        )}
+        {yLow >= 0 && yLow <= canvasHeight && (
+          <div
+            className="absolute left-0 right-0 cursor-ns-resize"
+            style={{ top: `${yLow - 4}px`, height: '9px', zIndex: 15 }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setResizingFilterEdge('low');
+            }}
+          >
+            <div className="absolute left-0 right-0" style={{ top: '4px', height: '1px', background: '#60a5fa' }} />
           </div>
         )}
       </>
@@ -1431,6 +1685,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
          {/* Selection region handles */}
          {renderSelectionHandles()}
+
+         {/* Band-pass filter cutoff handles */}
+         {renderFilterHandles()}
       </div>
 
       {/* Layer 3: overlay canvas — playhead, time ruler, ident, selection darkening.
@@ -1441,32 +1698,47 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         style={{ zIndex: 30 }}
       />
 
-      {/* Custom cursor — z-40, above overlay canvas */}
-      {cursorPos && !suppressCustomCursor && (
-        <div
-          className="absolute pointer-events-none"
-          style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
-        >
-          {/* Crosshair */}
-          <div className="absolute" style={{ left: -8, top: -0.5, width: 16, height: 1, background: 'white', opacity: 0.85 }} />
-          <div className="absolute" style={{ left: -0.5, top: -8, width: 1, height: 16, background: 'white', opacity: 0.85 }} />
-          {/* Tool name — only shown when an annotation tool is active */}
-          {activeAnnotationTool && (
+      {/* ToolCursor — z-40, above overlay canvas. A single bar whose
+          orientation reflects the topmost tool: vertical for Select /
+          annotation tools (time-axis drags), horizontal for the filter tool
+          (frequency-axis drags). High-contrast white fill with 1px dark
+          outline for readability over bright spectrogram regions. */}
+      {cursorPos && !suppressCustomCursor && (() => {
+        const isFilter = topTool === 'filterTool';
+        const w = isFilter ? 24 : 2;
+        const h = isFilter ? 2 : 24;
+        return (
+          <div
+            className="absolute pointer-events-none"
+            style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
+          >
             <div
-              className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
               style={{
-                top: 10,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                color: activeAnnotationTool.color,
-                textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
+                width: w,
+                height: h,
+                background: 'white',
+                outline: '1px solid rgba(0,0,0,0.85)',
+                outlineOffset: 0,
               }}
-            >
-              {activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text}
-            </div>
-          )}
-        </div>
-      )}
+            />
+            {/* Tool name — only shown when an annotation tool is active. */}
+            {!isFilter && activeAnnotationTool && (
+              <div
+                className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
+                style={{
+                  top: 16,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  color: activeAnnotationTool.color,
+                  textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)',
+                }}
+              >
+                {activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       </div>{/* end spectrogram area */}
     </div>

@@ -29,27 +29,28 @@ fn get_fft_and_window(fft_size: usize) -> (Arc<dyn Fft<f32>>, Vec<f32>) {
     entry
 }
 
-/// Runs STFT on `samples` and returns a flat Vec<u8> of shape [n_cols * n_freq_bins],
+/// Runs STFT on `samples` and returns a flat Vec<u16> of shape [n_cols * n_freq_bins],
 /// column-major. Each column stores bins from low-to-high frequency (index 0 = highest freq,
 /// matching the JS layout: outputData[col * height + (height - 1 - bin)]).
 ///
-/// Normalization (matches audioProcessing.ts):
-///   mag_norm = mag * 4 / fft_size          (Hanning coherent amplitude gain → 0 dBFS = 0 dB)
-///   val      = 20 * log10(mag_norm + 1e-6) (dBFS)
-///   intensity = (val + 80) / 80 * 255      (80 dB range: -80 dBFS → 0, 0 dBFS → 255)
-pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8> {
+/// Each u16 encodes dBFS linearly: 0 → −140 dBFS, 65535 → 0 dBFS (~0.00214 dB/step).
+/// Values below −140 dBFS clamp to 0; values above 0 dBFS clamp to 65535.
+///
+/// Normalization:
+///   mag_norm = mag * 4 / fft_size   (Hanning coherent amplitude gain → 0 dBFS = 0 dB)
+///   val      = 20 * log10(mag_norm + 1e-6)  (dBFS)
+pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u16> {
     let n_freq_bins = fft_size / 2;
 
     if samples.len() < fft_size {
         return Vec::new();
     }
 
-    let n_cols = (samples.len() - fft_size) / hop_size;
-    if n_cols == 0 {
-        return Vec::new();
-    }
+    // STFT col k uses samples[k*hop_size .. k*hop_size + fft_size], so the
+    // largest valid k satisfies k*hop_size + fft_size <= samples.len().
+    let n_cols = (samples.len() - fft_size) / hop_size + 1;
 
-    let mut output = vec![0u8; n_cols * n_freq_bins];
+    let mut output = vec![0u16; n_cols * n_freq_bins];
 
     let (fft, window) = get_fft_and_window(fft_size);
     let mut scratch = vec![Complex::new(0.0f32, 0.0f32); fft.get_outofplace_scratch_len()];
@@ -73,18 +74,13 @@ pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u8
             let im = buf_out[bin].im;
             let mag = (re * re + im * im).sqrt();
 
-            // Match JS normalization exactly:
-            // val = 20 * log10(mag + 1e-6)
-            // intensity = (val + 60) * 4
-            // Normalize by Hanning coherent amplitude gain (N/4) so 0 dBFS → 0 dB
             let mag_norm = mag * 4.0 / fft_size as f32;
             let val = 20.0 * (mag_norm + 1e-6f32).log10();
-            // 80 dB display range: -80 dBFS → 0, 0 dBFS → 255
-            let intensity = (val + 80.0) / 80.0 * 255.0;
-            let intensity = intensity.clamp(0.0, 255.0) as u8;
+            // −140..0 dBFS mapped linearly to 0..65535
+            let quantized = ((val + 140.0) / 140.0 * 65535.0).clamp(0.0, 65535.0) as u16;
 
             // JS layout: outputData[col * height + (height - 1 - bin)]
-            output[col * n_freq_bins + (n_freq_bins - 1 - bin)] = intensity;
+            output[col * n_freq_bins + (n_freq_bins - 1 - bin)] = quantized;
         }
     }
 
