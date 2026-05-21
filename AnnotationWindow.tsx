@@ -370,7 +370,6 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
             sr,
             dur,
             () => setCacheVersion(v => v + 1),
-            settings.maxFreq,
         );
         chunkCacheRef.current = cache;
         setCacheVersion(0);
@@ -446,28 +445,11 @@ export default function AnnotationWindow({ project, onClose, updateProject, touc
       sampleRate,
       duration,
       () => setCacheVersion(v => v + 1),
-      settings.maxFreq,
     );
     chunkCacheRef.current = cache;
     setCacheVersion(0);
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
   }, [settings.fftSize]);
-
-  // Rebuild cache when maxFreq changes while a track is open
-  useEffect(() => {
-    if (!trackPath || !sampleRate || !duration) return;
-    const cache = new MultiTierSpectrogramCache(
-      trackPath,
-      settings.fftSize,
-      sampleRate,
-      duration,
-      () => setCacheVersion(v => v + 1),
-      settings.maxFreq,
-    );
-    chunkCacheRef.current = cache;
-    setCacheVersion(0);
-    cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
-  }, [settings.maxFreq]);
 
   // The ordered list used for navigation (respects shuffle mode and fileFilter)
   const displayQueue = useMemo(() => {

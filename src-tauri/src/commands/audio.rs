@@ -82,18 +82,16 @@ pub struct SpectrogramChunkRequest {
     pub duration_sec: f64,
     pub fft_size: usize,
     pub hop_size: usize,
-    pub max_freq: f32,
 }
 
 /// Encode spectrogram metadata + u16 data into a binary blob for IPC.
 ///
-/// Header layout (32 bytes, all little-endian):
-///   u32  n_cols              (offset 0)
-///   u32  n_freq_bins         (offset 4)
-///   f64  start_sec           (offset 8)
-///   f64  actual_duration_sec (offset 16)
-///   u32  sample_rate         (offset 24)
-///   f32  max_freq            (offset 28)
+/// Header layout (28 bytes, all little-endian):
+///   u32  n_cols
+///   u32  n_freq_bins
+///   f64  start_sec
+///   f64  actual_duration_sec
+///   u32  sample_rate
 /// Followed by n_cols * n_freq_bins u16 values (little-endian).
 fn build_spectrogram_response(
     n_cols: usize,
@@ -101,16 +99,14 @@ fn build_spectrogram_response(
     start_sec: f64,
     actual_duration_sec: f64,
     sample_rate: u32,
-    max_freq: f32,
     data: &[u16],
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(32 + data.len() * 2);
+    let mut bytes = Vec::with_capacity(28 + data.len() * 2);
     bytes.extend_from_slice(&(n_cols as u32).to_le_bytes());
     bytes.extend_from_slice(&(n_freq_bins as u32).to_le_bytes());
     bytes.extend_from_slice(&start_sec.to_le_bytes());
     bytes.extend_from_slice(&actual_duration_sec.to_le_bytes());
     bytes.extend_from_slice(&sample_rate.to_le_bytes());
-    bytes.extend_from_slice(&max_freq.to_le_bytes());
     for &v in data {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
@@ -123,10 +119,7 @@ pub async fn get_spectrogram_chunk(
 ) -> Result<Response, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let sample_rate = info.sample_rate;
-    let n_freq_bins_full = req.fft_size / 2;
-    let nyquist = sample_rate as f32 / 2.0;
-    let n_freq_bins = ((req.max_freq / nyquist) * n_freq_bins_full as f32).ceil() as usize;
-    let n_freq_bins = n_freq_bins.min(n_freq_bins_full).max(1);
+    let n_freq_bins = req.fft_size / 2;
 
     // For very large hop sizes (coarse overview tiers), use a sampled approach:
     // seek to each column position and decode one FFT window instead of
@@ -142,21 +135,20 @@ pub async fn get_spectrogram_chunk(
         let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
         let mut output = vec![0u16; n_cols * n_freq_bins];
-        let skip = n_freq_bins_full - n_freq_bins;
         for col in 0..n_cols {
             let t = req.start_sec + (col as f64 * req.hop_size as f64 / sample_rate as f64);
             if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
                 if samples.len() >= req.fft_size {
                     let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
                     for bin in 0..n_freq_bins {
-                        output[col * n_freq_bins + bin] = col_data.get(skip + bin).copied().unwrap_or(0);
+                        output[col * n_freq_bins + bin] = col_data.get(bin).copied().unwrap_or(0);
                     }
                 }
             }
         }
 
         let bytes = build_spectrogram_response(
-            n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, req.max_freq, &output,
+            n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &output,
         );
         return Ok(Response::new(bytes));
     }
@@ -214,20 +206,11 @@ pub async fn get_spectrogram_chunk(
     samples.extend_from_slice(&raw_samples);
 
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
-    let n_cols = if n_freq_bins_full > 0 { data.len() / n_freq_bins_full } else { 0 };
+    let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
     let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
-    // Crop to n_freq_bins: index 0 = highest freq, so low bins are at the END of each column.
-    let skip = n_freq_bins_full - n_freq_bins;
-    let cropped: Vec<u16> = (0..n_cols)
-        .flat_map(|col| {
-            let src = col * n_freq_bins_full + skip;
-            data[src..src + n_freq_bins].iter().copied()
-        })
-        .collect();
-
     let bytes = build_spectrogram_response(
-        n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, req.max_freq, &cropped,
+        n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &data,
     );
     Ok(Response::new(bytes))
 }
@@ -239,7 +222,6 @@ pub struct OverviewRequest {
     pub path: String,
     pub n_columns: usize,
     pub fft_size: usize,
-    pub max_freq: f32,
 }
 
 #[tauri::command]
@@ -248,20 +230,15 @@ pub async fn get_overview_spectrogram(
 ) -> Result<Response, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let duration = info.duration_secs;
-    let sample_rate = info.sample_rate;
-    let n_freq_bins_full = req.fft_size / 2;
-    let nyquist = sample_rate as f32 / 2.0;
-    let n_freq_bins = ((req.max_freq / nyquist) * n_freq_bins_full as f32).ceil() as usize;
-    let n_freq_bins = n_freq_bins.min(n_freq_bins_full).max(1);
+    let n_freq_bins = req.fft_size / 2;
 
     if duration <= 0.0 || req.n_columns == 0 {
-        let bytes = build_spectrogram_response(0, n_freq_bins, 0.0, 0.0, sample_rate, req.max_freq, &[]);
+        let bytes = build_spectrogram_response(0, n_freq_bins, 0.0, 0.0, info.sample_rate, &[]);
         return Ok(Response::new(bytes));
     }
 
-    let window_dur = req.fft_size as f64 / sample_rate as f64;
+    let window_dur = req.fft_size as f64 / info.sample_rate as f64;
     let mut output = vec![0u16; req.n_columns * n_freq_bins];
-    let skip = n_freq_bins_full - n_freq_bins;
 
     for col in 0..req.n_columns {
         let t = (col as f64 / req.n_columns as f64) * duration;
@@ -269,14 +246,14 @@ pub async fn get_overview_spectrogram(
             if samples.len() >= req.fft_size {
                 let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
                 for bin in 0..n_freq_bins {
-                    output[col * n_freq_bins + bin] = col_data.get(skip + bin).copied().unwrap_or(0);
+                    output[col * n_freq_bins + bin] = col_data.get(bin).copied().unwrap_or(0);
                 }
             }
         }
     }
 
     let bytes = build_spectrogram_response(
-        req.n_columns, n_freq_bins, 0.0, duration, sample_rate, req.max_freq, &output,
+        req.n_columns, n_freq_bins, 0.0, duration, info.sample_rate, &output,
     );
     Ok(Response::new(bytes))
 }

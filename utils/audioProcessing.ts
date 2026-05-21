@@ -102,7 +102,7 @@ export const drawSpectrogramChunk = (
   canvasHeight: number,
   minFreq: number,
   maxFreq: number,
-  chunkMaxFreq: number,
+  sampleRate: number,
   frequencyScale: FrequencyScale,
   displayFloor: number,  // dBFS lower display bound
   displayCeil: number,   // dBFS upper display bound
@@ -127,19 +127,15 @@ export const drawSpectrogramChunk = (
   // Cached by the parameters that determine the mapping; recomputed only on change.
   // Stores 3 floats per row: [dataIndex0, dataIndex1, weight].
   // The Rust layout stores index 0 = highest freq, so dataIndex = (specHeight-1) - binIndex.
-  const binMapKey = `${canvasHeight}|${minFreq}|${maxFreq}|${chunkMaxFreq}|${frequencyScale}|${specHeight}`;
+  const binMapKey = `${canvasHeight}|${minFreq}|${maxFreq}|${sampleRate}|${frequencyScale}|${specHeight}`;
   let binMap = _binMapCache.get(binMapKey);
   if (!binMap) {
     binMap = new Float32Array(canvasHeight * 3);
+    const nyquist = sampleRate / 2;
 
     for (let y = 0; y < canvasHeight; y++) {
       const targetFreq = yToFreq(y, canvasHeight, minFreq, maxFreq, frequencyScale);
-      if (targetFreq > chunkMaxFreq) {
-        // Out-of-range: use sentinel so the pixel loop keeps the background color
-        binMap[y * 3 + 2] = -1;
-        continue;
-      }
-      const binFrac = (targetFreq / chunkMaxFreq) * specHeight;
+      const binFrac = (targetFreq / nyquist) * specHeight;
       const i0 = Math.max(0, Math.min(Math.floor(binFrac), specHeight - 1));
       const i1 = Math.min(i0 + 1, specHeight - 1);
       const w = binFrac - Math.floor(binFrac);
@@ -161,8 +157,6 @@ export const drawSpectrogramChunk = (
       const dIdx0 = binMap[mapBase];
       const dIdx1 = binMap[mapBase + 1];
       const w = binMap[mapBase + 2];
-
-      if (w < 0) continue;  // out-of-range pixel: keep background color
 
       // Linearly interpolate between adjacent bins to eliminate banding artifacts
       // (especially visible in mel scale where low-freq bins are stretched over many rows).

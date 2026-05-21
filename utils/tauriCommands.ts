@@ -16,7 +16,6 @@ export interface SpectrogramChunkResult {
   start_sec: number;
   actual_duration_sec: number;
   sample_rate: number;
-  max_freq: number;
 }
 
 export interface DirEntry {
@@ -37,9 +36,9 @@ export interface DialogFilter {
 export const getFileInfo = (path: string): Promise<FileInfo> =>
   invoke('get_file_info', { path });
 
-// Header layout from Rust's build_spectrogram_response (32 bytes, all little-endian):
-//   u32 n_cols, u32 n_freq_bins, f64 start_sec, f64 actual_duration_sec, u32 sample_rate, f32 max_freq
-const SPECTROGRAM_HEADER_BYTES = 32;
+// Header layout from Rust's build_spectrogram_response (28 bytes, all little-endian):
+//   u32 n_cols, u32 n_freq_bins, f64 start_sec, f64 actual_duration_sec, u32 sample_rate
+const SPECTROGRAM_HEADER_BYTES = 28;
 
 function parseSpectrogramBuffer(buffer: ArrayBuffer): SpectrogramChunkResult {
   const view = new DataView(buffer);
@@ -48,10 +47,9 @@ function parseSpectrogramBuffer(buffer: ArrayBuffer): SpectrogramChunkResult {
   const start_sec = view.getFloat64(8, true);
   const actual_duration_sec = view.getFloat64(16, true);
   const sample_rate = view.getUint32(24, true);
-  const max_freq = view.getFloat32(28, true);
   // Slice the tail into a new ArrayBuffer so Uint16Array alignment is guaranteed.
   const data = new Uint16Array(buffer.slice(SPECTROGRAM_HEADER_BYTES));
-  return { data, n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate, max_freq };
+  return { data, n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate };
 }
 
 export const getSpectrogramChunk = async (
@@ -60,7 +58,6 @@ export const getSpectrogramChunk = async (
   durationSec: number,
   fftSize: number,
   hopSize: number,
-  maxFreq: number,
 ): Promise<SpectrogramChunkResult> => {
   const buffer = await invoke<ArrayBuffer>('get_spectrogram_chunk', {
     req: {
@@ -69,7 +66,6 @@ export const getSpectrogramChunk = async (
       duration_sec: durationSec,
       fft_size: fftSize,
       hop_size: hopSize,
-      max_freq: maxFreq,
     },
   });
   return parseSpectrogramBuffer(buffer);
@@ -79,10 +75,9 @@ export const getOverviewSpectrogram = async (
   path: string,
   nColumns: number,
   fftSize: number,
-  maxFreq: number,
 ): Promise<SpectrogramChunkResult> => {
   const buffer = await invoke<ArrayBuffer>('get_overview_spectrogram', {
-    req: { path, n_columns: nColumns, fft_size: fftSize, max_freq: maxFreq },
+    req: { path, n_columns: nColumns, fft_size: fftSize },
   });
   return parseSpectrogramBuffer(buffer);
 };

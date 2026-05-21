@@ -287,15 +287,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const activeTier = chunkCache.selectTier(visibleDuration, cssWidth);
         chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
 
-        // Probe one chunk for nFreqBins and chunkMaxFreq.
+        // Probe one chunk for nFreqBins (same as before).
         let nFreqBins = settings.fftSize / 2;
-        let chunkMaxFreq = sampleRate / 2;  // fallback: full nyquist
         {
           const probe = chunkCache.getChunkWithFallback(startTime, activeTier.tier);
-          if (probe) {
-            nFreqBins = probe.chunk.nFreqBins;
-            chunkMaxFreq = probe.chunk.maxFreq;
-          }
+          if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
         // The "global" cps used for the offscreen-canvas grid. Use the active tier's
@@ -348,7 +344,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawSpectrogramChunk(
           offCtx, viewportData, bbWidth, nFreqBins,
           offscreen.width, offscreen.height,
-          settings.minFreq, settings.maxFreq, chunkMaxFreq, settings.frequencyScale,
+          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
           settings.displayFloor, settings.displayCeil,
         );
 
