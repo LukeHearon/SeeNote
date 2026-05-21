@@ -14,16 +14,13 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust-targets: aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-            rust-targets: x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles dmg
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
           - platform: ubuntu-22.04
-            args: ''
+            args: --bundles appimage
             rust-targets: ''
           - platform: windows-latest
-            args: ''
+            args: --bundles nsis
             rust-targets: ''
 
     runs-on: ${{ matrix.platform }}
@@ -70,3 +67,46 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  update-cask:
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download macOS DMGs and update Homebrew cask
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+
+          gh release download "$TAG" \
+            --repo LukeHearon/SeeNote \
+            --pattern "*_universal.dmg" \
+            --dir /tmp/dmgs
+
+          SHA=$(shasum -a 256 /tmp/dmgs/SeeNote_${VERSION}_universal.dmg | awk '{print $1}')
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
+          cat > /tmp/tap/Casks/seenote.rb << CASK
+          cask "seenote" do
+            version "${VERSION}"
+            sha256 "${SHA}"
+
+            url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote_#{version}_universal.dmg"
+            name "SeeNote"
+            desc "Audio/video annotation tool for building ML training datasets"
+            homepage "https://github.com/LukeHearon/SeeNote"
+
+            app "SeeNote.app"
+          end
+          CASK
+
+          cd /tmp/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/seenote.rb
+          git commit -m "Update seenote cask to ${VERSION}"
+          git push
