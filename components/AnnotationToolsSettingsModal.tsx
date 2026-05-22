@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, GripVertical, Settings, Plus } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, GripVertical, Settings, Plus, Trash2 } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
@@ -11,8 +11,18 @@ interface Props {
   onReorderTools: (newTools: AnnotationTool[]) => void;
   onRenameTool: (toolIndex: number, newText: string, newColor: string) => void;
   onDeleteTool: (toolIndex: number) => void;
-  onCreateTool: (text: string, color: string) => void;
+  onCreateTool: (text: string, color: string, key?: string | null) => void;
+  // Restore both tools and their linked annotations atomically — used by the
+  // modal-local undo/redo so an "undelete" puts back the reassigned annotations
+  // too. Wired in AnnotationWindow to commit through the shared annotation
+  // history path so global undo stays consistent.
+  onRestoreToolsState: (tools: AnnotationTool[], annotations: Annotation[]) => void;
 }
+
+// Snapshot of the two arrays a tool mutation can touch. Deleting a tool also
+// reassigns its linked annotations to Custom, so a correct undo must restore
+// both together.
+type ToolsSnapshot = { tools: AnnotationTool[]; annotations: Annotation[] };
 
 const SLOTS = ['1','2','3','4','5','6','7','8','9'] as const;
 type Slot = typeof SLOTS[number];
@@ -42,16 +52,19 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
-function ToolItem({ tool, toolIndex, annotations, onDragStart, onDragEnd, onGearClick, dim }: {
+function ToolItem({ tool, toolIndex, annotations, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim }: {
   tool: AnnotationTool;
   toolIndex: number;
   annotations: Annotation[];
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onGearClick: () => void;
+  onDeleteClick: () => void;
   dim?: boolean;
 }) {
   const linkedCount = annotations.filter(a => a.toolKey === tool.key).length;
+  // The Custom tool (index 0 / key "0") is reserved and can never be deleted.
+  const canDelete = toolIndex !== 0 && tool.key !== '0';
   return (
     <div
       draggable
@@ -69,7 +82,45 @@ function ToolItem({ tool, toolIndex, annotations, onDragStart, onDragEnd, onGear
       >
         <Settings size={10} />
       </button>
+      {canDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); onDeleteClick(); }}
+          className="opacity-0 group-hover/item:opacity-100 p-0.5 rounded text-slate-500 hover:text-red-400 flex-none"
+          title="Delete tool"
+        >
+          <Trash2 size={10} />
+        </button>
+      )}
     </div>
+  );
+}
+
+// Shared inline "new tool" input used by both the Unassigned bin and empty
+// hotkey slots. Centralising it keeps the create UX identical everywhere and
+// avoids duplicating the input markup/keyboard handling.
+function NewToolInput({ onCommit, onCancel }: {
+  onCommit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState('');
+  const commit = () => {
+    const trimmed = text.trim();
+    if (trimmed) onCommit(trimmed);
+    else onCancel();
+  };
+  return (
+    <input
+      autoFocus
+      className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none"
+      placeholder="Tool name…"
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') onCancel();
+      }}
+      onBlur={commit}
+    />
   );
 }
 
@@ -81,11 +132,55 @@ export default function AnnotationToolsSettingsModal({
   onRenameTool,
   onDeleteTool,
   onCreateTool,
+  onRestoreToolsState,
 }: Props) {
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
-  const [isAddingTool, setIsAddingTool] = useState(false);
-  const [newToolText, setNewToolText] = useState('');
+  // Which bin is currently showing the inline create input: the Unassigned bin
+  // or a specific empty hotkey slot (its digit). null = none.
+  const [addingTo, setAddingTo] = useState<'unassigned' | Slot | null>(null);
+  // Which empty hotkey slot the pointer is over (drives the in-place affordance).
+  const [hoveredSlot, setHoveredSlot] = useState<Slot | null>(null);
+
+  // Undo/redo stacks of {tools, annotations} snapshots, taken immediately
+  // before each mutating action. Refs (not state) so the keydown listener reads
+  // the latest without re-subscribing. Reset fresh whenever the modal mounts.
+  const undoStack = useRef<ToolsSnapshot[]>([]);
+  const redoStack = useRef<ToolsSnapshot[]>([]);
+  // Latest props mirrored into refs so the snapshot captured at mutation time —
+  // and the "current state" pushed onto the opposite stack during undo/redo —
+  // always reflect what's on screen right now.
+  const currentRef = useRef<ToolsSnapshot>({ tools: annotationTools, annotations });
+  currentRef.current = { tools: annotationTools, annotations };
+  const onRestoreRef = useRef(onRestoreToolsState);
+  onRestoreRef.current = onRestoreToolsState;
+
+  // Record the pre-mutation snapshot, then run the mutating action. Any new
+  // user action clears the redo stack (standard linear-history semantics).
+  const withSnapshot = (mutate: () => void) => {
+    undoStack.current.push(currentRef.current);
+    redoStack.current = [];
+    mutate();
+  };
+
+  const undo = () => {
+    const prev = undoStack.current.pop();
+    if (!prev) return;
+    // Close any open editor first: restoring can change tool indices (e.g.
+    // undoing a create removes the tool editingToolIndex points at), which would
+    // otherwise dereference an out-of-bounds tool.
+    setEditingToolIndex(null);
+    redoStack.current.push(currentRef.current);
+    onRestoreRef.current(prev.tools, prev.annotations);
+  };
+
+  const redo = () => {
+    const next = redoStack.current.pop();
+    if (!next) return;
+    setEditingToolIndex(null);
+    undoStack.current.push(currentRef.current);
+    onRestoreRef.current(next.tools, next.annotations);
+  };
 
   const beginDrag = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
   const cancelDrag = () => setDrag(null);
@@ -95,15 +190,16 @@ export default function AnnotationToolsSettingsModal({
 
   const commitDrag = () => {
     if (!drag?.target) { cancelDrag(); return; }
-    onReorderTools(applySwap(annotationTools, drag.sourceIndex, drag.target));
+    const newTools = applySwap(annotationTools, drag.sourceIndex, drag.target);
+    withSnapshot(() => onReorderTools(newTools));
     setDrag(null);
   };
 
-  const commitNewTool = () => {
-    const trimmed = newToolText.trim();
-    if (trimmed) onCreateTool(trimmed, pickNextToolColor(annotationTools));
-    setIsAddingTool(false);
-    setNewToolText('');
+  // Commit a new tool from either the Unassigned bin (key undefined → null) or
+  // an empty hotkey slot (key = that slot's digit).
+  const commitNewTool = (text: string, key?: string | null) => {
+    withSnapshot(() => onCreateTool(text, pickNextToolColor(annotationTools), key));
+    setAddingTo(null);
   };
 
   const isSlotHighlighted = (k: Slot) =>
@@ -111,6 +207,32 @@ export default function AnnotationToolsSettingsModal({
 
   const isUnassignedHighlighted =
     drag?.target?.type === 'unassigned';
+
+  // Modal-local undo/redo. Registered in the CAPTURE phase on window so it runs
+  // BEFORE the app's bubble-phase global hotkey listener (useHotkeys attaches
+  // in the bubble phase). preventDefault + stopPropagation ensure the global
+  // mod+z annotation-undo never also fires while this modal is open.
+  useEffect(() => {
+    const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+    const handler = (e: KeyboardEvent) => {
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod) return;
+      // Let the inline "new tool" input keep native text undo while it's focused.
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.shiftKey) redo(); else undo();
+      } else if (e.key.toLowerCase() === 'y' && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', handler, { capture: true });
+    return () => window.removeEventListener('keydown', handler, { capture: true });
+  }, []);
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
@@ -153,14 +275,37 @@ export default function AnnotationToolsSettingsModal({
                         onDragStart={() => beginDrag(toolIndex)}
                         onDragEnd={cancelDrag}
                         onGearClick={() => setEditingToolIndex(toolIndex)}
+                        onDeleteClick={() => withSnapshot(() => onDeleteTool(toolIndex))}
                         dim={drag?.sourceIndex === toolIndex}
                       />
                     </div>
+                  ) : addingTo === k ? (
+                    // Inline create targeting this slot — new tool takes its digit.
+                    <div className="flex-1">
+                      <NewToolInput
+                        onCommit={text => commitNewTool(text, k)}
+                        onCancel={() => setAddingTo(null)}
+                      />
+                    </div>
                   ) : (
+                    // Empty slot: dashed box, becomes a "+ New tool" affordance on
+                    // hover. Creating from here assigns the new tool to this digit.
                     <div
                       className="flex-1 h-8 rounded border-2 border-dashed"
                       style={{ borderColor: isSlotHighlighted(k) ? '#3b82f6' : '#334155' }}
-                    />
+                      onMouseEnter={() => setHoveredSlot(k)}
+                      onMouseLeave={() => setHoveredSlot(s => (s === k ? null : s))}
+                    >
+                      {hoveredSlot === k && !drag && (
+                        <button
+                          onClick={() => setAddingTo(k)}
+                          className="w-full h-full flex items-center justify-center rounded text-slate-500 hover:text-slate-300 transition-colors text-xs gap-1"
+                        >
+                          <Plus size={10} />
+                          New tool
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -185,26 +330,21 @@ export default function AnnotationToolsSettingsModal({
                     onDragStart={() => beginDrag(toolIndex)}
                     onDragEnd={cancelDrag}
                     onGearClick={() => setEditingToolIndex(toolIndex)}
+                    onDeleteClick={() => withSnapshot(() => onDeleteTool(toolIndex))}
                     dim={drag?.sourceIndex === toolIndex}
                   />
                 </div>
               ))}
-            {isAddingTool ? (
-              <input
-                autoFocus
-                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none mt-2"
-                placeholder="Tool name…"
-                value={newToolText}
-                onChange={e => setNewToolText(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commitNewTool();
-                  if (e.key === 'Escape') { setIsAddingTool(false); setNewToolText(''); }
-                }}
-                onBlur={commitNewTool}
-              />
+            {addingTo === 'unassigned' ? (
+              <div className="mt-2">
+                <NewToolInput
+                  onCommit={text => commitNewTool(text)}
+                  onCancel={() => setAddingTo(null)}
+                />
+              </div>
             ) : (
               <button
-                onClick={() => setIsAddingTool(true)}
+                onClick={() => setAddingTo('unassigned')}
                 className="mt-2 w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
               >
                 <Plus size={10} />
@@ -221,8 +361,7 @@ export default function AnnotationToolsSettingsModal({
           toolIndex={editingToolIndex}
           annotations={annotations}
           onClose={() => setEditingToolIndex(null)}
-          onSave={(idx, text, color) => { onRenameTool(idx, text, color); setEditingToolIndex(null); }}
-          onDelete={(idx) => { onDeleteTool(idx); setEditingToolIndex(null); }}
+          onSave={(idx, text, color) => { withSnapshot(() => onRenameTool(idx, text, color)); setEditingToolIndex(null); }}
         />
       )}
     </div>

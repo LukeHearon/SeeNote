@@ -270,9 +270,11 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Key <Kbd>0</Kbd> is always the <span className="text-white">Custom Tool</span> — annotations created with it open immediately for you to type a one-off name.
                 </p>
                 <p>
-                  Click a tool name in the <HelpAnchor target="tool-palette">palette</HelpAnchor> to rename it; all existing annotations update automatically.
-                  Use <Kbd>+</Kbd> to add a tool, or the trash icon to remove one.
-                  Tool configuration is saved per project.
+                  Open <HelpAnchor target="tool-palette">Annotation Tool Settings</HelpAnchor> (gear icon) to manage tools: drag tools between hotkey slots and the Unassigned bin, click a tool's gear to edit its label and color, or hover a tool and click the trash icon to delete it (deletes are undoable). Hover an empty hotkey slot to create a new tool directly on that key.
+                  Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project.
+                </p>
+                <p className="text-slate-400 text-xs">
+                  Inside Annotation Tool Settings, <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd> undo and redo the last tool change.
                 </p>
               </Section>
 
@@ -327,6 +329,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 { keys: 'Z', label: 'Toggle video zoom state (saves/restores last viewport)' },
                 { keys: 'Shift+Z', label: 'Toggle marquee zoom drawing tool' },
                 { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
+                { keys: 'Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z', label: 'Undo / redo last change in Annotation Tool Settings (while open)' },
               ]} />
 
               <ShortcutGroup title="Annotations" rows={[

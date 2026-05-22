@@ -10,13 +10,11 @@ interface Props {
   annotations: Annotation[];
   onClose: () => void;
   onSave: (toolIndex: number, newText: string, newColor: string) => void;
-  onDelete: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave, onDelete }: Props) {
+export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave }: Props) {
   const [text, setText] = useState(tool.text);
   const [color, setColor] = useState(tool.color);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -42,7 +40,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-72 p-5 shadow-2xl flex flex-col gap-4">
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-slate-400">Tool Name</label>
+            <label className="text-xs text-slate-400">Label</label>
             <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
               <X size={16} />
             </button>
@@ -88,57 +86,20 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           </div>
         </div>
 
-        {showDeleteConfirm ? (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-red-400">
-              {linkedCount} {linkedCount > 1 ? 'annotations' : 'annotation'} reference '{tool.text}'. Deleting this Annotation Tool will convert existing annotations to Custom Annotations. If you make a new tool with the same label, the existing annotations will be reconnected.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { onDelete(toolIndex); onClose(); }}
-                className="px-3 py-1.5 text-sm text-white bg-red-600 hover:bg-red-500 rounded transition-colors"
-              >
-                Delete Tool
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between">
-            <button
-              onClick={() => {
-                if (linkedCount === 0) {
-                  onDelete(toolIndex);
-                  onClose();
-                } else {
-                  setShowDeleteConfirm(true);
-                }
-              }}
-              className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded transition-colors"
-            >
-              Delete
-            </button>
-            <div className="flex gap-2">
-              <button
-                onClick={onClose}
-                className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { onSave(toolIndex, text.trim(), color); onClose(); }}
-                className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        )}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => { onSave(toolIndex, text.trim(), color); onClose(); }}
+            className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+          >
+            Save
+          </button>
+        </div>
       </div>
     </div>
   );

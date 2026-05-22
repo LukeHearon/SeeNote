@@ -1139,9 +1139,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       addLog('Exported annotations as TXT');
   };
 
-  const handleCreateTool = useCallback((text: string, color: string) => {
-    setAnnotationTools(prev => [...prev, { key: null, text, color }]);
+  const handleCreateTool = useCallback((text: string, color: string, key?: string | null) => {
+    setAnnotationTools(prev => [...prev, { key: key ?? null, text, color }]);
   }, []);
+
+  // Atomically restore tools + annotations for the Annotation Tool Settings
+  // modal's own undo/redo (e.g. undeleting a tool, which must also put back the
+  // annotations that delete reassigned to Custom). Annotations go through the
+  // shared commit path so the global annotation history stays consistent.
+  const handleRestoreToolsState = useCallback((tools: AnnotationTool[], restoredAnnotations: Annotation[]) => {
+    setAnnotationTools(tools);
+    handleAnnotationsCommit(restoredAnnotations);
+  }, [handleAnnotationsCommit]);
 
   const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
     setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
@@ -1775,6 +1784,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onRenameTool={handleRenameTool}
           onDeleteTool={handleDeleteTool}
           onCreateTool={handleCreateTool}
+          onRestoreToolsState={handleRestoreToolsState}
         />
       )}
       <TooltipLayer />
