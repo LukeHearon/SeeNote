@@ -1549,8 +1549,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                         {/* Level Range */}
                         <div className="space-y-2">
                             <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Level Range (dBFS)</h4>
-                            {/* Dual-thumb slider — two range inputs share the same track */}
+                            {/* Dual-thumb slider — two range inputs share the same track.
+                                Layering (bottom→top): base track → active-range fill → the two
+                                inputs (both with transparent tracks so only their thumbs show on
+                                top of the fill). */}
                             <div className="relative h-5 flex items-center">
+                                {/* Base track */}
+                                <div className="absolute w-full h-1 rounded bg-slate-600 pointer-events-none" />
+                                {/* Active range: the selected dBFS band between the two thumbs.
+                                    Range is [-160, 40] dBFS → span 200. */}
+                                <div
+                                    className="absolute h-1 rounded bg-[#e65161] pointer-events-none"
+                                    style={{
+                                        left: `${((settings.displayFloor + 160) / 200) * 100}%`,
+                                        width: `${((settings.displayCeil - settings.displayFloor) / 200) * 100}%`,
+                                    }}
+                                />
                                 <input
                                     type="range"
                                     min={-160} max={40}
@@ -1560,7 +1574,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                                         setSettings(s => ({...s, displayFloor: v}));
                                         setDisplayFloorDraft(String(v));
                                     }}
-                                    className="absolute w-full appearance-none h-1 rounded bg-slate-600 pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
                                 />
                                 <input
                                     type="range"
