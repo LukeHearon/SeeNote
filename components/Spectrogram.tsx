@@ -205,6 +205,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const [containerWidth, setContainerWidth] = useState(0);
 
+  // True while the visible viewport still has chunks resolving (first load or a
+  // settings-driven rebuild). Drives the "building spectrogram" veil. Computed
+  // inside `draw` (which already knows the active tier and iterates columns) and
+  // mirrored into a ref so setState only fires on an actual transition — never
+  // every frame, which would loop draw→render→draw.
+  const [isBuilding, setIsBuilding] = useState(false);
+  const isBuildingRef = useRef(false);
+
   const pixelsPerSecond = useMemo(() => {
      if (containerWidth === 0) return 100;
      return containerWidth / zoomSec;
@@ -267,6 +275,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + cssWidth / pixelsPerSecond;
 
+    // Recomputed below: true while the visible range is still being built.
+    let building = false;
+
     if (chunkCache && duration > 0) {
         // ── Two-stage spectrogram rendering pipeline ────────────────────────
         // Stage 1 (THIS BLOCK): build a column-resolution viewport buffer
@@ -291,6 +302,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const visibleDuration = endTime - startTime;
         const activeTier = chunkCache.selectTier(visibleDuration, cssWidth);
         chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
+
+        // "Building" = the visible range isn't yet fully resolved at the active
+        // tier (so columns are missing or drawn blurry from a coarser fallback),
+        // with in-flight fetches as a corroborating signal. Both probes are
+        // read-only — they never mutate tier hysteresis or LRU order.
+        building =
+          !chunkCache.isViewportResolved(startTime, endTime, activeTier.tier) &&
+          chunkCache.pendingCount() > 0;
 
         // Probe one chunk for nFreqBins (same as before).
         let nFreqBins = settings.fftSize / 2;
@@ -384,6 +403,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('Spectrogram Unavailable', canvas.width / 2, canvas.height / 2);
+    }
+
+    // Reconcile the build-progress veil. Guarded by a ref so setState (and the
+    // resulting re-render) only happens when the value actually flips — draw
+    // runs every RAF, so an unconditional setState would loop forever.
+    if (building !== isBuildingRef.current) {
+      isBuildingRef.current = building;
+      setIsBuilding(building);
     }
   }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing]);
 
@@ -1470,7 +1497,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       {/* Layer 1: spectrogram canvas (bottom) */}
       <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
 
-      {/* Blurred placeholder overlay during spectrogram generation */}
+      {/* Blurred placeholder overlay during initial spectrogram generation (decode phase) */}
       {isProcessing && (
         <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
           <div
@@ -1484,6 +1511,33 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           <div className="absolute inset-0 bg-slate-900/60" />
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="text-slate-400 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide">Generating spectrogram…</span>
+          </div>
+        </div>
+      )}
+
+      {/* Build-in-progress veil — shown while viewport chunks are still resolving
+          (settings rebuild, or chunks streaming in after decode). Purely visual:
+          dims the existing spectrogram and runs a slow accent-tinted sweep so it's
+          clear work is happening, with no loading spinner. pointer-events-none so
+          it never intercepts clicks/drags. Suppressed during the initial decode,
+          which already shows the stronger "Generating…" treatment above. */}
+      {isBuilding && !isProcessing && (
+        <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
+          {/* Inline, self-contained keyframes — scoped to this veil only. */}
+          <style>{`@keyframes spectroBuildSweep { 0% { transform: translateX(-60%); } 100% { transform: translateX(160%); } }`}</style>
+          {/* Breathing dim over the (blurry/partial) spectrogram. */}
+          <div className="absolute inset-0 bg-slate-900/45 animate-pulse" />
+          {/* Slow diagonal accent sweep. */}
+          <div
+            className="absolute inset-y-0"
+            style={{
+              width: '40%',
+              background: 'linear-gradient(100deg, transparent 0%, rgba(230,81,97,0.10) 45%, rgba(230,81,97,0.18) 50%, rgba(230,81,97,0.10) 55%, transparent 100%)',
+              animation: 'spectroBuildSweep 1.6s linear infinite',
+            }}
+          />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-slate-300 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide border border-[#e65161]/40">Building spectrogram…</span>
           </div>
         </div>
       )}
