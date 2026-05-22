@@ -184,6 +184,28 @@ export function useProjects() {
     return resolved;
   }, [setBoth]);
 
+  /**
+   * Re-resolve every entry against disk (background re-validation). Only writes
+   * state if some entry's status actually changed — e.g. a missing project
+   * reappeared and flips back to `ok`, or an open project vanished. Entries
+   * whose status is unchanged keep their existing object reference so unaffected
+   * rows don't re-render.
+   */
+  const revalidateAll = useCallback(async (): Promise<void> => {
+    const current = entriesRef.current;
+    if (current.length === 0) return;
+    const resolved = await Promise.all(current.map(e => resolveEntry(e.registry)));
+    let changed = false;
+    const next = current.map((prev, i) => {
+      if (resolved[i].status !== prev.status) {
+        changed = true;
+        return resolved[i];
+      }
+      return prev;
+    });
+    if (changed) setBoth(next);
+  }, [setBoth]);
+
   return {
     entries,
     isLoading,
@@ -195,5 +217,6 @@ export function useProjects() {
     removeProject,
     touchLastOpened,
     reconnectProject,
+    revalidateAll,
   };
 }

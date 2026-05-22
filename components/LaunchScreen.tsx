@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, AlertCircle } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
@@ -17,7 +17,7 @@ interface Props {
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
   addExistingProject: (projectDir: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
-  reconnectProject: (id: string) => Promise<ProjectListEntry | undefined>;
+  revalidateAll: () => Promise<void>;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
 }
 
@@ -43,7 +43,7 @@ export default function LaunchScreen({
   createProject,
   addExistingProject,
   removeProject,
-  reconnectProject,
+  revalidateAll,
   updateProjectSettings,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
@@ -57,6 +57,22 @@ export default function LaunchScreen({
     document.body.addEventListener('mousedown', onDown);
     return () => document.body.removeEventListener('mousedown', onDown);
   }, [contextMenu]);
+
+  // Background re-validation: while the launch screen is mounted, periodically
+  // and on window focus re-check every entry against disk so a project that
+  // reappears flips back to `ok` (restoring its gradient) without a user click.
+  // `revalidateAll` only writes state when a status actually changed.
+  const revalidateRef = useRef(revalidateAll);
+  revalidateRef.current = revalidateAll;
+  useEffect(() => {
+    const run = () => { revalidateRef.current().catch(() => {}); };
+    const interval = window.setInterval(run, 3500);
+    window.addEventListener('focus', run);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', run);
+    };
+  }, []);
 
   const handleCreated = (project: Project) => {
     setShowCreate(false);
@@ -75,22 +91,11 @@ export default function LaunchScreen({
     }
   };
 
-  const handleEntryClick = async (entry: ProjectListEntry) => {
-    if (entry.status === 'ok') {
-      onOpenProject(entry.project);
-      return;
-    }
-    const returned = await reconnectProject(entry.registry.id);
-    if (returned && returned.status === 'ok') {
-      onOpenProject(returned.project);
-      return;
-    }
-    const message = entry.status === 'missing-dir'
-      ? `Project folder not found at\n${entry.registry.projectDir}\n\nRemove from list?`
-      : `Project folder found at\n${entry.registry.projectDir}\nbut .seenote/settings.json could not be read.\n\nRemove from list?`;
-    if (confirm(message)) {
-      await removeProject(entry.registry.id);
-    }
+  // Only `ok` entries are clickable. Non-ok rows are inert (the user removes
+  // them via the X button); they auto-recover to `ok` via background
+  // re-validation when the project reappears on disk.
+  const handleEntryClick = (project: Project) => {
+    onOpenProject(project);
   };
 
   const handleRemove = async (e: React.MouseEvent, entry: ProjectListEntry, name: string) => {
@@ -202,7 +207,7 @@ export default function LaunchScreen({
               const gradientColors = isOk ? entry.project.settings.nameGradientColors : undefined;
               const liClass = isOk
                 ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all'
-                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50';
+                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-default transition-all text-gray-500 opacity-50';
 
               let pathLines: React.ReactNode = null;
               if (entry.status === 'ok') {
@@ -233,14 +238,18 @@ export default function LaunchScreen({
               return (
                 <li
                   key={entry.registry.id}
-                  onClick={() => handleEntryClick(entry)}
+                  onClick={entry.status === 'ok' ? () => handleEntryClick(entry.project) : undefined}
                   onContextMenu={e => handleContextMenu(e, entry)}
                   className={liClass}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold truncate">
-                        <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                        {isOk ? (
+                          <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                        ) : (
+                          <span className="text-gray-500">{name}</span>
+                        )}
                       </p>
                       {pathLines}
                     </div>

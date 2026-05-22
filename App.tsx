@@ -11,21 +11,30 @@ export default function App() {
   const {
     entries, isLoading, loadError, projectsFilePath,
     createProject, addExistingProject, updateProjectSettings,
-    removeProject, touchLastOpened, reconnectProject,
+    removeProject, touchLastOpened, reconnectProject, revalidateAll,
   } = useProjects();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
 
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
 
   const handleOpenProject = useCallback(async (project: Project) => {
-    const touched = await touchLastOpened(project.id) ?? project;
+    // The project may have been deleted while the launch screen was open.
+    // Re-validate it first so we can distinguish "project gone" from "media
+    // folder missing". If the project itself is gone, reconnectProject has
+    // already flipped the row to its non-ok status (graying it out); leave it
+    // in the list and abort — don't show the media-repair modal.
+    const resolved = await reconnectProject(project.id);
+    if (resolved && resolved.status !== 'ok') return;
+    const fresh = resolved && resolved.status === 'ok' ? resolved.project : project;
+
+    const touched = await touchLastOpened(fresh.id) ?? fresh;
     const mediaExists = await listDirectory(touched.mediaDirectoryAbs).then(() => true).catch(() => false);
     if (!mediaExists) {
       setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
       return;
     }
     setActiveProject(touched);
-  }, [touchLastOpened]);
+  }, [touchLastOpened, reconnectProject]);
 
   const handleCloseProject = useCallback(() => {
     setActiveProject(null);
@@ -53,7 +62,7 @@ export default function App() {
         createProject={createProject}
         addExistingProject={addExistingProject}
         removeProject={removeProject}
-        reconnectProject={reconnectProject}
+        revalidateAll={revalidateAll}
         updateProjectSettings={updateProjectSettings}
       />
       {repairProject && (
