@@ -197,6 +197,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const onAnnotationsChangeRef = useRef(onAnnotationsChange);
   const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const autoPanRafRef = useRef<number | null>(null);
+  // Wall-clock (ms) when the pointer first crossed the viewport edge during the current
+  // drag. Drives time-based auto-pan acceleration so a fully-zoomed view — where the cursor
+  // can only sit barely outside the extent — still ramps up instead of crawling. Reset to
+  // null whenever the pointer returns inside or a new drag begins.
+  const autoPanAccelStartRef = useRef<number | null>(null);
 
   const [containerWidth, setContainerWidth] = useState(0);
 
@@ -922,8 +927,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
         if (overflow !== 0) {
           const absOverflow = Math.abs(overflow);
-          // Gentle acceleration: slow start (~1px/frame at edge), ramps up, capped at 40px/frame
-          const speed = Math.sign(overflow) * Math.min(Math.pow(absOverflow / 40, 1.5), 40);
+          // Two acceleration terms combine:
+          //  1) Overflow-based — the further the pointer is past the edge, the faster (legacy feel).
+          //  2) Time-based — the longer the pointer stays past the edge, the faster. This is what
+          //     rescues the fully-zoomed case: when the cursor can only sit barely outside the
+          //     extent, the overflow term alone crawls, so the time ramp takes over.
+          if (autoPanAccelStartRef.current === null) autoPanAccelStartRef.current = performance.now();
+          const heldSec = (performance.now() - autoPanAccelStartRef.current) / 1000;
+          const timeAccel = Math.min(1 + heldSec * heldSec * 2, 18); // 1×→18× over ~2.9s held
+          // Floor the overflow term so a tiny overflow still moves, then scale by the time ramp
+          // and clamp the result so panning never becomes uncontrollable.
+          const baseSpeed = Math.max(Math.min(Math.pow(absOverflow / 40, 1.5), 40), 0.8);
+          const speed = Math.sign(overflow) * Math.min(baseSpeed * timeAccel, 60);
           const overrunPixels = containerWidth * 0.4;
           const maxScroll = Math.max(0, dur * pps - containerWidth + overrunPixels);
           const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
@@ -955,11 +970,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               processDragAtClientX(pos.clientX);
             }
           }
+        } else {
+          // Pointer is back inside the viewport — reset the time-based pan ramp.
+          autoPanAccelStartRef.current = null;
         }
       }
       autoPanRafRef.current = requestAnimationFrame(tick);
     };
 
+    autoPanAccelStartRef.current = null;
     autoPanRafRef.current = requestAnimationFrame(tick);
     return () => {
       if (autoPanRafRef.current) { cancelAnimationFrame(autoPanRafRef.current); autoPanRafRef.current = null; }
@@ -1726,7 +1745,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               <div
                 className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
                 style={{
-                  top: 16,
+                  // Sit below the 24px cursor bar (bottom at +12 from centre) plus ~0.75ch
+                  // of breathing room so the vertical cursor and the label never overlap.
+                  top: 24,
                   left: '50%',
                   transform: 'translateX(-50%)',
                   color: activeAnnotationTool.color,
