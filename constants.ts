@@ -49,7 +49,9 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
   displayCeil: 0,
 };
 
-export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings, 'activeTrackPath' | 'windowBounds'>> = {
+export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
+  'activeTrackPath' | 'windowBounds' |
+  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectPanelHeight'>> = {
   leftPanelWidth: 224,
   splitRatio: 0.5,
   leftPanelRatio: 0.6,
@@ -58,6 +60,35 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings, 'activeTrackP
   lastDefinedSpeed: 1.5,
   zoomSec: DEFAULT_ZOOM_SEC,
 };
+
+// buzzdetect activations panel defaults.
+export const DEFAULT_BUZZDETECT_PANEL_HEIGHT = 180; // px
+export const MIN_BUZZDETECT_PANEL_HEIGHT = 80;
+export const MAX_BUZZDETECT_PANEL_HEIGHT = 600;
+// Logits: 0 is the natural decision boundary (sigmoid 0.5). Used per neuron
+// until the user sets a custom threshold.
+export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
+
+// Categorical palette for neuron polylines, assigned by neuron order. Chosen to
+// read clearly on the slate-900 panel background and stay distinct from the
+// magma spectrogram colormap.
+export const BUZZDETECT_PALETTE = [
+  '#38bdf8', // sky
+  '#fbbf24', // amber
+  '#4ade80', // green
+  '#f472b6', // pink
+  '#a78bfa', // violet
+  '#22d3ee', // cyan
+  '#facc15', // yellow
+  '#fb923c', // orange
+  '#34d399', // emerald
+  '#e879f9', // fuchsia
+  '#60a5fa', // blue
+  '#a3e635', // lime
+];
+
+export const buzzdetectNeuronColor = (neuronIndex: number): string =>
+  BUZZDETECT_PALETTE[neuronIndex % BUZZDETECT_PALETTE.length];
 
 // Used when the user engages the band-pass filter (F key or slider drag-up
 // from 0) without ever having drawn a band: an audible mid-range default so
@@ -106,10 +137,15 @@ export function interpolateMagmaHex(t: number): string {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
+// Shared lower clamp for magma color selection. Both the gradient randomizer
+// and the GradientPicker constrain t to [MAGMA_MIN_T, 1] so handles can't reach
+// the pure-black end of the colormap (which looks bad for project name colors).
+export const MAGMA_MIN_T = 0.2;
+
 // Pick two colors independently from the Magma colormap, skipping the dark purple end.
 export function randomMagmaGradient(): [string, string] {
-  const t1 = 0.2 + Math.random() * 0.8;
-  const t2 = 0.2 + Math.random() * 0.8;
+  const t1 = MAGMA_MIN_T + Math.random() * (1 - MAGMA_MIN_T);
+  const t2 = MAGMA_MIN_T + Math.random() * (1 - MAGMA_MIN_T);
   return [interpolateMagmaHex(t1), interpolateMagmaHex(t2)];
 }
 

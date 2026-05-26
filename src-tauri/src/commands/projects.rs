@@ -15,6 +15,10 @@ pub struct RegistryEntryRecord {
     pub id: String,
     pub project_dir: String,
     pub last_opened: String,
+    /// Last-known project name (mirrors settings.json `name`). Optional so
+    /// registries written by older builds still load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize)]

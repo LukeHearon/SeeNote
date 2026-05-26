@@ -14,16 +14,13 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust-targets: aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-            rust-targets: x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles dmg
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
           - platform: ubuntu-22.04
-            args: ''
+            args: --bundles appimage
             rust-targets: ''
           - platform: windows-latest
-            args: ''
+            args: --bundles nsis
             rust-targets: ''
 
     runs-on: ${{ matrix.platform }}
@@ -71,43 +68,68 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-  update-cask:
+  rename-assets:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Rename release assets to user-friendly names
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="${GITHUB_REF_NAME}"
+          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id)
+
+          rename_asset() {
+            local from="$1"
+            local to="$2"
+            local asset_id
+            asset_id=$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
+              --jq ".[] | select(.name == \"$from\") | .id")
+            if [ -n "$asset_id" ]; then
+              gh api -X PATCH "repos/${REPO}/releases/assets/${asset_id}" -f name="$to" >/dev/null
+              echo "Renamed: $from -> $to"
+            else
+              echo "Skipped (not found): $from"
+            fi
+          }
+
+          rename_asset "SeeNote_${VERSION}_universal.dmg"    "SeeNote-macOS.dmg"
+          rename_asset "SeeNote_${VERSION}_amd64.AppImage"   "SeeNote-Linux.AppImage"
+          rename_asset "SeeNote_${VERSION}_x64-setup.exe"    "SeeNote-Windows.exe"
+
+  update-cask:
+    needs: rename-assets
     runs-on: macos-latest
     permissions:
       contents: read
     steps:
-      - name: Download macOS DMGs and update Homebrew cask
+      - name: Download macOS DMG and update Homebrew cask
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
+          DMG_NAME="SeeNote-macOS.dmg"
 
           gh release download "$TAG" \
             --repo LukeHearon/SeeNote \
-            --pattern "*.dmg" \
+            --pattern "$DMG_NAME" \
             --dir /tmp/dmgs
 
-          ARM_SHA=$(shasum -a 256 /tmp/dmgs/SeeNote_${VERSION}_aarch64.dmg | awk '{print $1}')
-          X64_SHA=$(shasum -a 256 /tmp/dmgs/SeeNote_${VERSION}_x64.dmg | awk '{print $1}')
+          SHA=$(shasum -a 256 "/tmp/dmgs/${DMG_NAME}" | awk '{print $1}')
 
           git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
           cat > /tmp/tap/Casks/seenote.rb << CASK
           cask "seenote" do
             version "${VERSION}"
+            sha256 "${SHA}"
 
-            on_arm do
-              sha256 "${ARM_SHA}"
-              url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote_#{version}_aarch64.dmg"
-            end
-
-            on_intel do
-              sha256 "${X64_SHA}"
-              url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote_#{version}_x64.dmg"
-            end
-
+            url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"
             name "SeeNote"
             desc "Audio/video annotation tool for building ML training datasets"
             homepage "https://github.com/LukeHearon/SeeNote"

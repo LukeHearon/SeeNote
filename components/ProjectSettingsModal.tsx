@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, FolderOpen, ExternalLink } from 'lucide-react';
+import { X, ExternalLink } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { openDirectoryDialog, checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
+import { checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
-import { makeProjectPath, isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
+import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import GradientPicker from './GradientPicker';
+import DirectoryField from './DirectoryField';
+import CollapsibleSection from './CollapsibleSection';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
 
@@ -15,62 +17,27 @@ interface Props {
   onClose: () => void;
 }
 
-
-const PORTABILITY_WARNING =
-  'This path is outside the project directory; the project will not be portable to other machines unless you also move it.';
-
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
   const [name, setName] = useState(project.settings.name);
   const nameRef = useRef<HTMLDivElement>(null);
   const [mediaDir, setMediaDir] = useState(() => trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs));
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
+  const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
+    project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
   const defaultColors = project.settings.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
   const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
-  const [mediaDirExists, setMediaDirExists] = useState<boolean | null>(null);
-  const [annotationDirExists, setAnnotationDirExists] = useState<boolean | null>(null);
-  const [debouncedMediaDir, setDebouncedMediaDir] = useState(mediaDir);
-  const [debouncedAnnotationDir, setDebouncedAnnotationDir] = useState(annotationDir);
 
-  // Resolved absolute paths — used for all filesystem operations and settings serialisation.
+  // Resolved absolute paths — used for filesystem operations and settings serialisation.
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
-  const resolvedDebouncedMediaDir = resolveInputPath(project.projectDir, debouncedMediaDir);
-  const resolvedDebouncedAnnotationDir = resolveInputPath(project.projectDir, debouncedAnnotationDir);
+  const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
 
   useEffect(() => {
     if (nameRef.current) nameRef.current.textContent = project.settings.name;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedMediaDir(mediaDir), 250);
-    return () => clearTimeout(t);
-  }, [mediaDir]);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedAnnotationDir(annotationDir), 250);
-    return () => clearTimeout(t);
-  }, [annotationDir]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!resolvedDebouncedMediaDir) { setMediaDirExists(null); return; }
-    checkDirExists(resolvedDebouncedMediaDir).then(exists => {
-      if (!cancelled) setMediaDirExists(exists);
-    });
-    return () => { cancelled = true; };
-  }, [resolvedDebouncedMediaDir]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!resolvedDebouncedAnnotationDir) { setAnnotationDirExists(null); return; }
-    checkDirExists(resolvedDebouncedAnnotationDir).then(exists => {
-      if (!cancelled) setAnnotationDirExists(exists);
-    });
-    return () => { cancelled = true; };
-  }, [resolvedDebouncedAnnotationDir]);
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -78,16 +45,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [error, setError] = useState('');
 
   const pendingRef = React.useRef<ProjectSettings | null>(null);
-
-  const handleBrowseMedia = async () => {
-    const dir = await openDirectoryDialog();
-    if (dir) setMediaDir(trimProjectPrefix(project.projectDir, dir));
-  };
-
-  const handleBrowseAnnotation = async () => {
-    const dir = await openDirectoryDialog();
-    if (dir) setAnnotationDir(trimProjectPrefix(project.projectDir, dir));
-  };
 
   const handleFormSubmit = async () => {
     if (!name.trim()) { setError('Project name is required.'); return; }
@@ -106,6 +63,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       name: name.trim(),
       mediaDirectory: makeProjectPath(project.projectDir, resolvedMediaDir),
       annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
+      buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
     };
@@ -197,11 +155,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     onSave(pending);
   };
 
-  const mediaOutside = resolvedDebouncedMediaDir && !isInsideProjectDir(project.projectDir, resolvedDebouncedMediaDir);
-  const annotationOutside = resolvedDebouncedAnnotationDir && !isInsideProjectDir(project.projectDir, resolvedDebouncedAnnotationDir);
-  const mediaIsRelative = debouncedMediaDir && !isAbsolutePath(debouncedMediaDir);
-  const annotationIsRelative = debouncedAnnotationDir && !isAbsolutePath(debouncedAnnotationDir);
-
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
@@ -269,65 +222,21 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 </div>
               </div>
 
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">
-                  {mediaIsRelative ? 'Media Subdirectory' : 'Media Directory'}
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={mediaDir}
-                    onChange={e => setMediaDir(trimProjectPrefix(project.projectDir, e.target.value))}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
-                  <button
-                    onClick={handleBrowseMedia}
-                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <FolderOpen size={16} />
-                  </button>
-                </div>
-                {mediaIsRelative && resolvedDebouncedMediaDir && (
-                  <p className="text-gray-500 text-xs mt-1">→ {resolvedDebouncedMediaDir}</p>
-                )}
-                {mediaOutside && (
-                  <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
-                )}
-                {debouncedMediaDir && mediaDirExists === false && (
-                  <p className="text-yellow-400 text-xs mt-1">Directory does not exist.</p>
-                )}
-              </div>
+              <DirectoryField
+                label="Media"
+                projectDir={project.projectDir}
+                value={mediaDir}
+                onChange={setMediaDir}
+                notExistMessage="Directory does not exist."
+              />
 
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">
-                  {annotationIsRelative ? 'Annotations Subdirectory' : 'Annotations Directory'}
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={annotationDir}
-                    onChange={e => setAnnotationDir(trimProjectPrefix(project.projectDir, e.target.value))}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
-                  <button
-                    onClick={handleBrowseAnnotation}
-                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <FolderOpen size={16} />
-                  </button>
-                </div>
-                {annotationIsRelative && resolvedDebouncedAnnotationDir && (
-                  <p className="text-gray-500 text-xs mt-1">→ {resolvedDebouncedAnnotationDir}</p>
-                )}
-                {annotationOutside && (
-                  <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
-                )}
-                {debouncedAnnotationDir && annotationDirExists === false && (
-                  <p className="text-yellow-400 text-xs mt-1">
-                    Directory does not exist yet; it will be created when the first annotation is saved.
-                  </p>
-                )}
-              </div>
+              <DirectoryField
+                label="Annotations"
+                projectDir={project.projectDir}
+                value={annotationDir}
+                onChange={setAnnotationDir}
+                notExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
+              />
 
               <div>
                 <div className="flex items-center justify-between">
@@ -349,6 +258,18 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   />
                 </div>
               </div>
+
+              <CollapsibleSection title="Advanced" defaultOpen={!!project.buzzdetectDirectoryAbs}>
+                <DirectoryField
+                  label="buzzdetect"
+                  projectDir={project.projectDir}
+                  value={buzzdetectDir}
+                  onChange={setBuzzdetectDir}
+                  placeholder="(optional) directory of {ident}_buzzdetect.csv"
+                  helperText="Activations plotted below the spectrogram, located per track by ident."
+                  notExistMessage="Directory does not exist."
+                />
+              </CollapsibleSection>
 
               {error && (
                 <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>

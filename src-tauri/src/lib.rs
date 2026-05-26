@@ -38,6 +38,7 @@ pub fn run() {
             commands::projects::list_annotation_files,
             commands::window::get_window_bounds,
             commands::window::set_window_bounds,
+            commands::buzzdetect::read_buzzdetect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

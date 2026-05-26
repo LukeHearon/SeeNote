@@ -12,6 +12,9 @@ Quick reference for agents. One phrase per file.
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
 - `components/HelpPanel.tsx` — keyboard shortcut reference panel (keep in sync with behavior changes)
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
+- `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
+- `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
+- `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer
@@ -38,6 +41,7 @@ Quick reference for agents. One phrase per file.
 - `src-tauri/src/commands/filesystem.rs` — file listing, reveal-in-finder, directory ops
 - `src-tauri/src/commands/projects.rs` — project CRUD and annotation read/write
 - `src-tauri/src/commands/audio.rs` — spectrogram decode and PCM range commands
+- `src-tauri/src/commands/buzzdetect.rs` — parses `{ident}_buzzdetect.csv` activations (CSV only; bin width inferred)
 - `src-tauri/src/lib.rs` — registers all commands in `invoke_handler!`
 
 ## Hooks

@@ -157,7 +157,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
-                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (brightness, FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
+                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
                 </p>
               </Section>
 
@@ -217,7 +217,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   and the filter engages automatically.
                 </p>
                 <p>
-                  Drag the two horizontal cutoff lines to retune the band in place. Use the{' '}
+                  Drag the two horizontal cutoff lines to retune the band in place — they're grabbable
+                  any time a band is active, even when the filter tool isn't selected. Use the{' '}
                   <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
                   to mix between dry (0%, source untouched) and fully band-passed (100%).
                   Dragging the slider up from 0 re-enables filtering at the new strength,
@@ -259,6 +260,21 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Clearing all annotations removes the annotation file.
                 </p>
               </Section>
+
+              <Section title="buzzdetect panel" target="buzzdetect-toggle">
+                <p>
+                  Set a <span className="text-white">buzzdetect directory</span> under <span className="text-white">Advanced</span> when
+                  creating or editing a project to plot per-frame neuron activations below the spectrogram, located per track by ident
+                  (<span className="font-mono text-xs text-slate-300">{'{ident}_buzzdetect.csv'}</span>). Toggle the panel with the
+                  <HelpAnchor target="buzzdetect-toggle"> activity icon</HelpAnchor> in the toolbar.
+                </p>
+                <p>
+                  Each neuron is one colored line; its dots are filled where the value meets that neuron's threshold and open below it.
+                  Open the panel's <span className="text-white">sliders</span> popover to set per-neuron thresholds and show/hide neurons.
+                  <span className="text-white"> Click a frame</span> to select (and highlight) its audio on the spectrogram;
+                  drag across frames to extend the selection. Drag the panel's top edge to resize it.
+                </p>
+              </Section>
             </>
           )}
 
@@ -270,9 +286,11 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Key <Kbd>0</Kbd> is always the <span className="text-white">Custom Tool</span> — annotations created with it open immediately for you to type a one-off name.
                 </p>
                 <p>
-                  Click a tool name in the <HelpAnchor target="tool-palette">palette</HelpAnchor> to rename it; all existing annotations update automatically.
-                  Use <Kbd>+</Kbd> to add a tool, or the trash icon to remove one.
-                  Tool configuration is saved per project.
+                  Open <HelpAnchor target="tool-palette">Annotation Tool Settings</HelpAnchor> (gear icon) to manage tools: drag tools between hotkey slots and the Unassigned bin, click a tool's gear to edit its label and color, or hover a tool and click the trash icon to delete it (deletes are undoable). Hover an empty hotkey slot to create a new tool directly on that key.
+                  Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project.
+                </p>
+                <p className="text-slate-400 text-xs">
+                  Inside Annotation Tool Settings, <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd> undo and redo the last tool change.
                 </p>
               </Section>
 
@@ -291,7 +309,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                     <span className="text-white">Bound selection:</span> click the center of an annotation to bind the playhead loop to it.
                     Use <Kbd>Cmd+←</Kbd> / <Kbd>Cmd+→</Kbd> to jump between annotations.
                   </li>
-                  <li><span className="text-white">Rename:</span> click the annotation's text label to edit inline. Custom tool annotations open for editing automatically.</li>
+                  <li><span className="text-white">Rename:</span> hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically.</li>
                   <li><span className="text-white">Delete:</span> select an annotation and press <Kbd>Delete</Kbd> / <Kbd>Backspace</Kbd>, or middle-click it directly.</li>
                   <li><span className="text-white">Undo/Redo:</span> <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd>.</li>
                 </ul>
@@ -327,6 +345,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 { keys: 'Z', label: 'Toggle video zoom state (saves/restores last viewport)' },
                 { keys: 'Shift+Z', label: 'Toggle marquee zoom drawing tool' },
                 { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
+                { keys: 'Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z', label: 'Undo / redo last change in Annotation Tool Settings (while open)' },
               ]} />
 
               <ShortcutGroup title="Annotations" rows={[

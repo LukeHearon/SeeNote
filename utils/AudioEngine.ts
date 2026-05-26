@@ -73,18 +73,18 @@ export interface AudioEngineCallbacks {
   onEnded: () => void;
   /** Called when audio decoding can't keep up and there's a gap. */
   onBufferUnderrun: () => void;
-  /** Optional: emitted for notable engine events (opens, errors, watchdog trips, etc.). */
+  /** Optional: emitted for notable engine events (opens, errors, slow-decode notices, etc.). */
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
 }
 
 /**
- * How long play() is allowed to wait for the first PCM chunk to arrive before
- * we assume the decode path is stuck and abort. This is a safety valve for
- * codecs that open fine but then never deliver samples (e.g. hung format
- * readers). Without it the UI sits in "buffering" forever with no way for the
- * user to try another file.
+ * Interval at which we emit a debug-log notice while play() is still waiting
+ * for the first PCM chunk. The loading spinner already tells the user the app
+ * isn't frozen; this is purely for diagnosing slow-decode reports. The user
+ * can hit pause at any time — _cancelPlayback() will bump playId and tear
+ * down the dangling stream/await chain cleanly.
  */
-const STUCK_PLAY_TIMEOUT_MS = 3000;
+const SLOW_DECODE_LOG_INTERVAL_MS = 5000;
 
 /** Metadata for one scheduled AudioBufferSourceNode. */
 interface ScheduledNode {
@@ -208,9 +208,10 @@ export class AudioEngine {
 
   private rafHandle: number | null = null;
   /** Number of PCM chunks successfully scheduled in the current play(). Used by
-   *  the stuck-play watchdog to detect decodes that open but never deliver. */
+   *  the slow-decode notice to detect when a decode has opened but not yet delivered. */
   private chunksScheduled = 0;
-  private stuckWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private slowDecodeTimer: ReturnType<typeof setInterval> | null = null;
+  private playStartedAtMs = 0;
 
   private callbacks: AudioEngineCallbacks;
 
@@ -369,21 +370,23 @@ export class AudioEngine {
       }
     }
 
-    // ── Stuck-play watchdog ───────────────────────────────────────────────────
-    // If no PCM chunks are scheduled within STUCK_PLAY_TIMEOUT_MS we assume
-    // the Rust decode path is hung (seen with ogg/vorbis) and abort cleanly
-    // so the UI can return to a useful state.
-    this.stuckWatchdog = setTimeout(() => {
-      if (this.playId !== myPlayId) return;
-      if (this.chunksScheduled === 0) {
-        this._log(
-          `watchdog: no chunks scheduled after ${STUCK_PLAY_TIMEOUT_MS}ms — aborting (likely decoder hang)`,
-          'error',
-        );
-        this._cancelPlayback();
-        this.callbacks.onPaused();
+    // ── Slow-decode notice ────────────────────────────────────────────────────
+    // Emit a debug-log line every SLOW_DECODE_LOG_INTERVAL_MS while we're still
+    // waiting on the first chunk. Diagnostic only — playback is not aborted.
+    // The user can pause at any time; _cancelPlayback() handles the dangling
+    // startPcmStream await via the playId guard.
+    this.playStartedAtMs = performance.now();
+    this.slowDecodeTimer = setInterval(() => {
+      if (this.playId !== myPlayId || this.chunksScheduled > 0) {
+        if (this.slowDecodeTimer !== null) {
+          clearInterval(this.slowDecodeTimer);
+          this.slowDecodeTimer = null;
+        }
+        return;
       }
-    }, STUCK_PLAY_TIMEOUT_MS);
+      const elapsedMs = Math.round(performance.now() - this.playStartedAtMs);
+      this._log(`still waiting for first chunk after ${elapsedMs}ms (slow decode)`);
+    }, SLOW_DECODE_LOG_INTERVAL_MS);
 
     this._prefetchLoop(myPlayId);
     this._rafLoop(myPlayId);
@@ -778,9 +781,9 @@ export class AudioEngine {
     // Increment playId — all async loops holding a stale id will exit
     this.playId++;
 
-    if (this.stuckWatchdog !== null) {
-      clearTimeout(this.stuckWatchdog);
-      this.stuckWatchdog = null;
+    if (this.slowDecodeTimer !== null) {
+      clearInterval(this.slowDecodeTimer);
+      this.slowDecodeTimer = null;
     }
 
     if (this.rafHandle !== null) {
@@ -1010,7 +1013,12 @@ export class AudioEngine {
       this.schedCursor = chunkMediaEnd;
       this.chunksScheduled++;
       if (this.chunksScheduled === 1) {
-        this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f`);
+        const elapsedMs = Math.round(performance.now() - this.playStartedAtMs);
+        this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f (${elapsedMs}ms after play)`);
+        if (this.slowDecodeTimer !== null) {
+          clearInterval(this.slowDecodeTimer);
+          this.slowDecodeTimer = null;
+        }
       }
 
       if (reachedEnd) break;

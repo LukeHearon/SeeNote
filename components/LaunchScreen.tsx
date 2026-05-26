@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, AlertCircle } from 'lucide-react';
-import { Project, ProjectListEntry, ProjectSettings } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
-import { openDirectoryDialog } from '../utils/tauriCommands';
-import { isInsideProjectDir } from '../utils/projectPaths';
+import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
+import { isInsideProjectDir, basename } from '../utils/projectPaths';
+import { findFirstValidAncestor } from '../utils/helpers';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
@@ -17,14 +18,13 @@ interface Props {
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
   addExistingProject: (projectDir: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
-  reconnectProject: (id: string) => Promise<ProjectListEntry | undefined>;
+  relinkProject: (
+    id: string,
+    newProjectDir: string,
+    resolve?: (info: RelinkInfo) => RelinkResolution | Promise<RelinkResolution>,
+  ) => Promise<Project | undefined>;
+  revalidateAll: () => Promise<void>;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
-}
-
-function basename(p: string): string {
-  const stripped = p.replace(/[/\\]+$/, '');
-  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf('\\'));
-  return idx >= 0 ? stripped.slice(idx + 1) : stripped;
 }
 
 function fileManagerLabel(): string {
@@ -43,13 +43,69 @@ export default function LaunchScreen({
   createProject,
   addExistingProject,
   removeProject,
-  reconnectProject,
+  relinkProject,
+  revalidateAll,
   updateProjectSettings,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entryId: string } | null>(null);
+  // In-app confirmation dialog. We can't use the browser `confirm()` here: in
+  // the packaged app it routes through Tauri's dialog plugin, which isn't
+  // permitted, and it renders multi-line content poorly. `askConfirm` returns a
+  // promise that resolves when the user picks an action.
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message?: string;
+    bullets?: string[];
+    confirmLabel: string;
+    danger?: boolean;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+
+  const askConfirm = (opts: {
+    title: string;
+    message?: string;
+    bullets?: string[];
+    confirmLabel: string;
+    danger?: boolean;
+  }): Promise<boolean> =>
+    new Promise(resolve => setConfirmState({ ...opts, resolve }));
+
+  const closeConfirm = (ok: boolean) => {
+    setConfirmState(prev => {
+      prev?.resolve(ok);
+      return null;
+    });
+  };
+
+  // Re-link confirmation: shows the directory health of the chosen folder and,
+  // when the on-disk name disagrees with SeeNote's, lets the user pick which to
+  // keep. Promise-based like askConfirm.
+  const [relinkPrompt, setRelinkPrompt] = useState<
+    (RelinkInfo & { resolve: (r: RelinkResolution) => void }) | null
+  >(null);
+  // When the on-disk name disagrees, the user readies one of the two names
+  // before committing the re-link; null means no choice made yet.
+  const [readyName, setReadyName] = useState<string | null>(null);
+  // User-browsed paths for missing dirs, keyed by RelinkDirStatus.label.
+  const [dirOverrides, setDirOverrides] = useState<Record<string, string>>({});
+
+  const closeRelink = (r: RelinkResolution) => {
+    setRelinkPrompt(prev => {
+      prev?.resolve(r);
+      return null;
+    });
+    setReadyName(null);
+    setDirOverrides({});
+  };
+
+  const handleBrowseMissingDir = async (label: string, currentPath: string) => {
+    const startDir = await findFirstValidAncestor(currentPath).catch(() => '');
+    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+    if (dir) setDirOverrides(prev => ({ ...prev, [label]: dir }));
+  };
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -57,6 +113,22 @@ export default function LaunchScreen({
     document.body.addEventListener('mousedown', onDown);
     return () => document.body.removeEventListener('mousedown', onDown);
   }, [contextMenu]);
+
+  // Background re-validation: while the launch screen is mounted, periodically
+  // and on window focus re-check every entry against disk so a project that
+  // reappears flips back to `ok` (restoring its gradient) without a user click.
+  // `revalidateAll` only writes state when a status actually changed.
+  const revalidateRef = useRef(revalidateAll);
+  revalidateRef.current = revalidateAll;
+  useEffect(() => {
+    const run = () => { revalidateRef.current().catch(() => {}); };
+    const interval = window.setInterval(run, 3500);
+    window.addEventListener('focus', run);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', run);
+    };
+  }, []);
 
   const handleCreated = (project: Project) => {
     setShowCreate(false);
@@ -75,28 +147,39 @@ export default function LaunchScreen({
     }
   };
 
-  const handleEntryClick = async (entry: ProjectListEntry) => {
-    if (entry.status === 'ok') {
-      onOpenProject(entry.project);
-      return;
-    }
-    const returned = await reconnectProject(entry.registry.id);
-    if (returned && returned.status === 'ok') {
-      onOpenProject(returned.project);
-      return;
-    }
-    const message = entry.status === 'missing-dir'
-      ? `Project folder not found at\n${entry.registry.projectDir}\n\nRemove from list?`
-      : `Project folder found at\n${entry.registry.projectDir}\nbut .seenote/settings.json could not be read.\n\nRemove from list?`;
-    if (confirm(message)) {
-      await removeProject(entry.registry.id);
-    }
+  // Only `ok` entries are clickable. Non-ok rows are inert (the user removes
+  // them via the X button); they auto-recover to `ok` via background
+  // re-validation when the project reappears on disk.
+  const handleEntryClick = (project: Project) => {
+    onOpenProject(project);
   };
 
   const handleRemove = async (e: React.MouseEvent, entry: ProjectListEntry, name: string) => {
     e.stopPropagation();
-    if (confirm(`Remove "${name}" from the list? Files in the project folder are not deleted.`)) {
-      await removeProject(entry.registry.id);
+    const ok = await askConfirm({
+      title: `Remove “${name}”?`,
+      message: 'This removes the project from the list. Files in the project folder are not deleted.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (ok) await removeProject(entry.registry.id);
+  };
+
+  // Re-link a not-found project: let the user point at the project's new
+  // location on disk. relinkProject validates identity before repointing.
+  const handleLocate = async (e: React.MouseEvent, entry: ProjectListEntry) => {
+    e.stopPropagation();
+    setOpenError(null);
+    const startDir = await findFirstValidAncestor(entry.registry.projectDir).catch(() => '');
+    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+    if (!dir) return;
+    try {
+      const project = await relinkProject(entry.registry.id, dir, info =>
+        new Promise<RelinkResolution>(resolve => setRelinkPrompt({ ...info, resolve })),
+      );
+      if (project) onOpenProject(project);
+    } catch (err) {
+      setOpenError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -198,11 +281,13 @@ export default function LaunchScreen({
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
             {entries.map(entry => {
               const isOk = entry.status === 'ok';
-              const name = isOk ? entry.project.settings.name : basename(entry.registry.projectDir);
+              const name = isOk
+                ? entry.project.settings.name
+                : (entry.registry.name ?? basename(entry.registry.projectDir));
               const gradientColors = isOk ? entry.project.settings.nameGradientColors : undefined;
               const liClass = isOk
                 ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all'
-                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50';
+                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-default transition-all text-gray-500 opacity-50';
 
               let pathLines: React.ReactNode = null;
               if (entry.status === 'ok') {
@@ -233,18 +318,33 @@ export default function LaunchScreen({
               return (
                 <li
                   key={entry.registry.id}
-                  onClick={() => handleEntryClick(entry)}
+                  onClick={entry.status === 'ok' ? () => handleEntryClick(entry.project) : undefined}
                   onContextMenu={e => handleContextMenu(e, entry)}
                   className={liClass}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold truncate">
-                        <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                        {isOk ? (
+                          <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                        ) : (
+                          <span className="text-gray-500">{name}</span>
+                        )}
                       </p>
                       {pathLines}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-2 shrink-0">
+                      {!isOk && (
+                        <button
+                          onClick={e => handleLocate(e, entry)}
+                          className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
+                          data-tooltip="Find this project's folder on disk and re-link it"
+                        >
+                          <FolderSearch size={13} />
+                          Re-link
+                        </button>
+                      )}
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       {isOk && (
                         <button
                           onClick={e => handleGear(e, entry)}
@@ -261,6 +361,7 @@ export default function LaunchScreen({
                       >
                         <X size={15} />
                       </button>
+                      </div>
                     </div>
                   </div>
                   <p className="text-gray-600 text-xs mt-2">
@@ -328,6 +429,180 @@ export default function LaunchScreen({
           }}
           onClose={() => setEditingEntry(null)}
         />
+      )}
+
+      {confirmState && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4"
+          onMouseDown={() => closeConfirm(false)}
+        >
+          <div
+            className="bg-gray-800 rounded-xl border border-gray-700 shadow-2xl w-full max-w-lg p-6 space-y-4"
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
+              <div className="min-w-0">
+                <h3 className="text-white font-semibold text-base">{confirmState.title}</h3>
+                {confirmState.message && (
+                  <p className="text-gray-400 text-sm mt-1">{confirmState.message}</p>
+                )}
+              </div>
+            </div>
+
+            {confirmState.bullets && confirmState.bullets.length > 0 && (
+              <ul className="space-y-1.5 text-sm text-gray-300 list-disc pl-9">
+                {confirmState.bullets.map((b, i) => (
+                  <li key={i} className="whitespace-pre-wrap break-words">{b}</li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => closeConfirm(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => closeConfirm(true)}
+                className={
+                  confirmState.danger
+                    ? 'px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm transition-colors'
+                    : 'px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors'
+                }
+              >
+                {confirmState.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {relinkPrompt && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4"
+          onMouseDown={() => closeRelink({ action: 'cancel' })}
+        >
+          <div
+            className="bg-gray-800 rounded-xl border border-gray-700 shadow-2xl w-full max-w-lg p-6 space-y-4"
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <FolderSearch size={20} className="text-blue-400 flex-none mt-0.5" />
+              <div className="min-w-0">
+                <h3 className="text-white font-semibold text-base">Re-link this project?</h3>
+                <p className="text-gray-400 text-sm mt-1">Here's what's in the folder you selected:</p>
+              </div>
+            </div>
+
+            <ul className="space-y-2 text-sm">
+              {relinkPrompt.dirs.map(d => {
+                const located = !!dirOverrides[d.label];
+                const resolved = d.exists || located;
+                return (
+                  <li key={d.label} className="flex items-start gap-2">
+                    {resolved
+                      ? <CheckCircle2 size={16} className="text-emerald-400 flex-none mt-0.5" />
+                      : <AlertTriangle size={16} className="text-amber-400 flex-none mt-0.5" />}
+                    <span className="min-w-0">
+                      <span className="text-gray-200">{d.label}</span>{' '}
+                      <span className={resolved ? 'text-emerald-400' : 'text-amber-400'}>
+                        {resolved ? 'found' : 'missing'}
+                      </span>
+                      <span className="block text-gray-500 text-xs break-words">
+                        {dirOverrides[d.label] ?? d.path}
+                      </span>
+                      {!d.exists && (
+                        <button
+                          onClick={() => handleBrowseMissingDir(d.label, d.path)}
+                          className="mt-1.5 flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
+                        >
+                          <FolderOpen size={13} />
+                          Locate
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+
+              {relinkPrompt.nameConflict && (
+                <li className="flex items-center gap-2 flex-wrap">
+                  {readyName !== null
+                    ? <CheckCircle2 size={16} className="text-emerald-400 flex-none" />
+                    : <AlertTriangle size={16} className="text-amber-400 flex-none" />}
+                  <span className="min-w-0">
+                    <span className="text-gray-200">Name</span>{' '}
+                    <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
+                      {readyName !== null ? 'selected' : 'differs'}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => setReadyName(relinkPrompt.internalName)}
+                    className={
+                      'px-3 py-1 rounded-lg text-sm transition-colors max-w-[12rem] truncate ' +
+                      (readyName === relinkPrompt.internalName
+                        ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
+                    }
+                    data-tooltip="Keep SeeNote's name (rewrites .seenote/settings.json)"
+                  >
+                    “{relinkPrompt.internalName}”
+                  </button>
+                  <button
+                    onClick={() => setReadyName(relinkPrompt.settingsName)}
+                    className={
+                      'px-3 py-1 rounded-lg text-sm transition-colors max-w-[12rem] truncate ' +
+                      (readyName === relinkPrompt.settingsName
+                        ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
+                    }
+                    data-tooltip="Use the name from the folder's .seenote/settings.json"
+                  >
+                    “{relinkPrompt.settingsName}”
+                  </button>
+                </li>
+              )}
+            </ul>
+
+            <div className="flex gap-3 justify-end pt-1">
+              <button
+                onClick={() => closeRelink({ action: 'cancel' })}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
+              >
+                Cancel
+              </button>
+              {(() => {
+                const requiredDirs = relinkPrompt.dirs.filter(d => d.label !== 'buzzdetect');
+                const allRequiredFound = requiredDirs.every(d => d.exists || !!dirOverrides[d.label]);
+                const nameReady = !relinkPrompt.nameConflict || readyName !== null;
+                const canRelink = allRequiredFound && nameReady;
+                return (
+                  <button
+                    disabled={!canRelink}
+                    onClick={() =>
+                      closeRelink({
+                        action: 'relink',
+                        name: relinkPrompt.nameConflict ? readyName! : relinkPrompt.settingsName,
+                        dirOverrides: Object.keys(dirOverrides).length ? dirOverrides : undefined,
+                      })
+                    }
+                    className={
+                      !canRelink
+                        ? 'px-4 py-2 bg-gray-700 text-gray-500 rounded-lg text-sm cursor-not-allowed'
+                        : 'px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors'
+                    }
+                  >
+                    Re-link
+                  </button>
+                );
+              })()}
+
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

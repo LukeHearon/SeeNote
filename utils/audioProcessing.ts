@@ -106,6 +106,8 @@ export const drawSpectrogramChunk = (
   frequencyScale: FrequencyScale,
   displayFloor: number,  // dBFS lower display bound
   displayCeil: number,   // dBFS upper display bound
+  colMask?: Uint8Array,  // optional per-column (length specWidth) build mask;
+                         // columns with value 0 are rendered fully transparent
 ) => {
   const needed = canvasWidth * canvasHeight * 4;
   if (_scratchPixels.length < needed) {
@@ -118,7 +120,10 @@ export const drawSpectrogramChunk = (
   const imgData = new ImageData(data, canvasWidth, canvasHeight);
 
   // Pre-fill with the spectrogram background color (#0f172a = r:15 g:23 b:42)
-  // so missing chunks and zero-value areas show navy rather than transparent/colormap-dark.
+  // so zero-value areas show navy rather than colormap-dark. Columns flagged
+  // unbuilt by colMask are overwritten to fully transparent below, letting the
+  // build-progress sweep behind the canvas show through; they read identically
+  // to navy when no sweep is present (the container background is #0f172a too).
   for (let i = 0; i < data.length; i += 4) {
     data[i] = 15; data[i + 1] = 23; data[i + 2] = 42; data[i + 3] = 255;
   }
@@ -151,6 +156,15 @@ export const drawSpectrogramChunk = (
 
   for (let x = 0; x < canvasWidth; x++) {
     const colOffset = x * specHeight;
+
+    // Unbuilt columns: leave fully transparent (skip the per-pixel colormap work).
+    // specWidth === canvasWidth in this pipeline, so colMask is indexed by x.
+    if (colMask && colMask[x] === 0) {
+      for (let y = 0; y < canvasHeight; y++) {
+        data[(y * canvasWidth + x) * 4 + 3] = 0;
+      }
+      continue;
+    }
 
     for (let y = 0; y < canvasHeight; y++) {
       const mapBase = y * 3;

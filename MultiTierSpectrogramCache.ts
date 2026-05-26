@@ -145,6 +145,38 @@ export class MultiTierSpectrogramCache {
     return null;
   }
 
+  // ── Build-progress probes (read-only) ─────────────────────────────────────────
+  // These never mutate hysteresis or LRU state, so they are safe to call from a
+  // React render / draw pass to drive a "building spectrogram" indicator.
+
+  /** Number of chunk fetches currently in flight (across all tiers). */
+  pendingCount(): number {
+    return this.pending.size;
+  }
+
+  /**
+   * True once every chunk index spanning [startTime, endTime] is cached at the
+   * given tier — i.e. the visible range can be drawn sharp without falling back
+   * to a coarser tier. Mirrors prefetchViewport's index range exactly. Does NOT
+   * touch LRU order (uses cache.has, not getChunkForTime).
+   */
+  isViewportResolved(startTime: number, endTime: number, tier: number): boolean {
+    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const cache = this.caches.get(tier);
+    if (!tierConfig || !cache) return false;
+
+    const firstIdx = Math.max(0, Math.floor(startTime / tierConfig.chunkDuration) - 1);
+    const lastIdx = Math.floor(endTime / tierConfig.chunkDuration) + 1;
+
+    for (let idx = firstIdx; idx <= lastIdx; idx++) {
+      // Chunks whose start is past the file end are never fetched, so they
+      // can't be "missing" — skip them.
+      if (idx * tierConfig.chunkDuration >= this.duration) break;
+      if (!cache.has(idx)) return false;
+    }
+    return true;
+  }
+
   // ── Prefetching ─────────────────────────────────────────────────────────────
 
   prefetchViewport(startTime: number, endTime: number, tier: number): void {

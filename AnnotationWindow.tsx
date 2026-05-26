@@ -6,11 +6,12 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, isSupportedMediaFile } from './constants';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile } from './constants';
 import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
 import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
+import { createViewportStore } from './utils/viewportStore';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
@@ -22,6 +23,7 @@ import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import Toolbar from './components/Toolbar';
+import BuzzdetectPanel from './components/BuzzdetectPanel';
 
 export interface AnnotationWindowProps {
   project: Project;
@@ -102,6 +104,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(DEFAULT_ANNOTATION_TOOLS);
+  // Mirror of annotationTools for use inside the annotation-load effect without
+  // making it depend on (and re-run on) tool changes — re-running it would
+  // re-read the on-disk file before the debounced autosave has written renames,
+  // clobbering them. See the sync effect below.
+  const annotationToolsRef = useRef(annotationTools);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -223,6 +230,23 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
 
   const [zoomSec, setZoomSec] = useState(project.settings.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
+
+  // buzzdetect activations panel — all UI fields persisted in uiSettings.
+  const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.settings.uiSettings?.buzzdetectEnabled ?? false);
+  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.settings.uiSettings?.buzzdetectThresholds ?? {});
+  const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.settings.uiSettings?.buzzdetectHiddenNeurons ?? []);
+  const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(project.settings.uiSettings?.buzzdetectPanelHeight ?? DEFAULT_BUZZDETECT_PANEL_HEIGHT);
+  const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
+  // The spectrogram's live time→pixel transform, the single source the panel
+  // consumes for pixel-exact x-alignment. Held in a ref-based store, NOT React
+  // state: panning updates it every frame, and going through state would
+  // re-render the whole window per frame (the cause of the pan stutter). The
+  // spectrogram writes it; the panel subscribes and redraws its canvas directly.
+  const viewportStoreRef = useRef(createViewportStore());
+  const publishViewport = useCallback(
+    (v: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => viewportStoreRef.current.set(v),
+    [],
+  );
   const [settings, setSettings] = useState<SpectrogramSettings>({
       ...DEFAULT_SPECTROGRAM_SETTINGS,
       ...project.settings.spectrogramSettings,
@@ -244,6 +268,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRef.current = selection; }, [selection]);
+
+  // Keep annotationToolsRef in sync so the load effect can look up current tools
+  // for color/toolKey matching without depending on annotationTools.
+  useEffect(() => { annotationToolsRef.current = annotationTools; }, [annotationTools]);
 
   // Warm the frame-source cache when the user commits a selection (mouse
   // release) rather than on every drag pixel, to avoid redundant decodes.
@@ -535,6 +563,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return rel.replace(/\.[^/.]+$/, '');
   }, [trackPath, currentDirectory]);
 
+  // Load buzzdetect activations for the current track, located by ident under
+  // the configured buzzdetect directory. `cancelled` guards against the track
+  // changing while the read is in flight.
+  useEffect(() => {
+    const dir = project.buzzdetectDirectoryAbs;
+    if (!dir || !ident) { setBuzzdetectData(null); return; }
+    let cancelled = false;
+    setBuzzdetectData(null);
+    readBuzzdetect(dir, ident)
+      .then(d => { if (!cancelled) setBuzzdetectData(d); })
+      .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
+    return () => { cancelled = true; };
+  }, [ident, project.buzzdetectDirectoryAbs]);
+
   // Annotation history helpers
   const pushAnnotationsToHistory = useCallback((newAnnotations: Annotation[]) => {
     annotationsHistoryRef.current = annotationsHistoryRef.current.slice(0, historyIndexRef.current + 1);
@@ -618,13 +660,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         zoomSec,
         activeTrackPath,
         windowBounds: projectRef.current.settings.uiSettings?.windowBounds,
+        buzzdetectEnabled,
+        buzzdetectThresholds,
+        buzzdetectHiddenNeurons,
+        buzzdetectPanelHeight,
       };
       updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, uiSettings });
     }, 600);
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath]);
+  }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectPanelHeight]);
 
   // Poll the Tauri window for size/position changes and persist them when they
   // settle. A 1Hz poll is cheap and avoids needing a Tauri event listener
@@ -729,7 +775,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             const end = parseFloat(parts[1]);
             const text = parts.slice(2).join('\t');
             if (!isNaN(start) && !isNaN(end)) {
-              const matchedTool = annotationTools.find(t => t.text === text);
+              const matchedTool = annotationToolsRef.current.find(t => t.text === text);
               loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
             }
           }
@@ -747,7 +793,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         addLog(`Error loading annotations: ${err}`, 'error');
       }
     })();
-  }, [trackPath, annotationDirectory, annotationTools]);
+  }, [trackPath, annotationDirectory, currentDirectory]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -768,6 +814,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         ?? (ui.playbackSpeed !== 1 ? ui.playbackSpeed : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
     );
     setZoomSec(ui.zoomSec);
+    setBuzzdetectEnabled(project.settings.uiSettings?.buzzdetectEnabled ?? false);
+    setBuzzdetectThresholds(project.settings.uiSettings?.buzzdetectThresholds ?? {});
+    setBuzzdetectHiddenNeurons(project.settings.uiSettings?.buzzdetectHiddenNeurons ?? []);
+    setBuzzdetectPanelHeight(project.settings.uiSettings?.buzzdetectPanelHeight ?? DEFAULT_BUZZDETECT_PANEL_HEIGHT);
+    setBuzzdetectData(null);
     setFilterToolActive(false);
     setBandPassFilter(project.settings.bandPassFilter ?? null);
     setFilterStrength(project.settings.bandPassFilter?.strength ?? 0.5);
@@ -1139,9 +1190,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       addLog('Exported annotations as TXT');
   };
 
-  const handleCreateTool = useCallback((text: string, color: string) => {
-    setAnnotationTools(prev => [...prev, { key: null, text, color }]);
+  const handleCreateTool = useCallback((text: string, color: string, key?: string | null) => {
+    setAnnotationTools(prev => [...prev, { key: key ?? null, text, color }]);
   }, []);
+
+  // Atomically restore tools + annotations for the Annotation Tool Settings
+  // modal's own undo/redo (e.g. undeleting a tool, which must also put back the
+  // annotations that delete reassigned to Custom). Annotations go through the
+  // shared commit path so the global annotation history stays consistent.
+  const handleRestoreToolsState = useCallback((tools: AnnotationTool[], restoredAnnotations: Annotation[]) => {
+    setAnnotationTools(tools);
+    handleAnnotationsCommit(restoredAnnotations);
+  }, [handleAnnotationsCommit]);
 
   const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
     setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
@@ -1160,15 +1220,32 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }));
   }, [annotationTools]);
 
-  const handleDeleteTool = useCallback((toolIndex: number) => {
+  const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
     const tool = annotationTools[toolIndex];
     if (!tool) return;
-    setAnnotations(prev => prev.map(a =>
-      a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a
-    ));
+    setAnnotations(prev => mode === 'delete'
+      // Remove the tool's linked annotations entirely.
+      ? prev.filter(a => a.toolKey !== tool.key)
+      // Reassign the tool's linked annotations to Custom.
+      : prev.map(a => a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a)
+    );
     setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
     if (activeToolKey === tool.key) setActiveToolKey(null);
   }, [annotationTools, activeToolKey]);
+
+  // Transient live preview while the user drags a color in the edit modal.
+  // Updates ONLY the tool's color and its linked (non-Custom) annotations'
+  // colors via the raw setters — no history push, no Custom reassociation. The
+  // settings list and spectrogram both read these from state, so they update
+  // live; the real commit (with history) happens on Save via handleRenameTool.
+  const handlePreviewToolColor = useCallback((toolIndex: number, color: string) => {
+    const tool = annotationToolsRef.current[toolIndex];
+    if (!tool) return;
+    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, color } : t));
+    setAnnotations(prev => prev.map(a =>
+      a.toolKey === tool.key && a.toolKey !== '0' ? { ...a, color } : a
+    ));
+  }, []);
 
   const handleReorderTools = useCallback((newTools: AnnotationTool[]) => {
     const snapshot = annotationTools;
@@ -1375,6 +1452,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     else activationStack.remove('selection');
   }, [activationStack]);
 
+  // buzzdetect panel callbacks.
+  const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
+    setBuzzdetectThresholds(prev => ({ ...prev, [neuron]: value }));
+  }, []);
+  const handleBuzzdetectToggleNeuron = useCallback((neuron: string, wasEnabled: boolean) => {
+    setBuzzdetectHiddenNeurons(prev => wasEnabled ? [...prev, neuron] : prev.filter(n => n !== neuron));
+  }, []);
+
   return (
     <div
       className="flex flex-col h-screen bg-slate-900 text-slate-200"
@@ -1523,6 +1608,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             videoSrc={videoSrc}
             isProcessing={isProcessing}
             isBuffering={isBuffering}
+            isPlaying={isPlaying}
+            playbackSpeed={playbackSpeed}
             getMediaTime={getMediaTime}
             onDebugLog={addLog}
             onDurationChange={setDuration}
@@ -1547,8 +1634,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                         {/* Level Range */}
                         <div className="space-y-2">
                             <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Level Range (dBFS)</h4>
-                            {/* Dual-thumb slider — two range inputs share the same track */}
+                            {/* Dual-thumb slider — two range inputs share the same track.
+                                Layering (bottom→top): base track → active-range fill → the two
+                                inputs (both with transparent tracks so only their thumbs show on
+                                top of the fill). */}
                             <div className="relative h-5 flex items-center">
+                                {/* Base track */}
+                                <div className="absolute w-full h-1 rounded bg-slate-600 pointer-events-none" />
+                                {/* Active range: the selected dBFS band between the two thumbs.
+                                    Range is [-160, 40] dBFS → span 200. */}
+                                <div
+                                    className="absolute h-1 rounded bg-[#e65161] pointer-events-none"
+                                    style={{
+                                        left: `${((settings.displayFloor + 160) / 200) * 100}%`,
+                                        width: `${((settings.displayCeil - settings.displayFloor) / 200) * 100}%`,
+                                    }}
+                                />
                                 <input
                                     type="range"
                                     min={-160} max={40}
@@ -1558,7 +1659,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                                         setSettings(s => ({...s, displayFloor: v}));
                                         setDisplayFloorDraft(String(v));
                                     }}
-                                    className="absolute w-full appearance-none h-1 rounded bg-slate-600 pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
+                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
                                 />
                                 <input
                                     type="range"
@@ -1694,6 +1795,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                onEnableBandPassFilter={handleEnableBandPassFilter}
                filterStrength={filterStrength}
                setFilterStrength={setFilterStrength}
+               buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
+               buzzdetectEnabled={buzzdetectEnabled}
+               onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1728,8 +1832,32 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterChange={setBandPassFilter}
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
+                onViewportChange={buzzdetectEnabled ? publishViewport : undefined}
              />
              </div>
+
+             {buzzdetectEnabled && (
+               <BuzzdetectPanel
+                 data={buzzdetectData}
+                 viewportStore={viewportStoreRef.current}
+                 duration={duration}
+                 currentTime={currentTime}
+                 selection={selection}
+                 thresholds={buzzdetectThresholds}
+                 hiddenNeurons={buzzdetectHiddenNeurons}
+                 height={buzzdetectPanelHeight}
+                 onThresholdChange={handleBuzzdetectThresholdChange}
+                 onToggleNeuron={handleBuzzdetectToggleNeuron}
+                 onHeightChange={setBuzzdetectPanelHeight}
+                 onSelectionChange={handleSelectionChange}
+                 onSelectionCommit={handleSelectionCommit}
+                 onBoundAnnotationChange={setBoundAnnotationId}
+                 onSeek={seek}
+                 onScrollWheel={(deltaX, deltaY, ctrlKey, metaKey, clientX) =>
+                   spectrogramRef.current?.applyWheel(deltaX, deltaY, ctrlKey, metaKey, clientX)
+                 }
+               />
+             )}
 
              {!videoSrc && (
                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -1758,7 +1886,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onReorderTools={handleReorderTools}
           onRenameTool={handleRenameTool}
           onDeleteTool={handleDeleteTool}
+          onPreviewColor={handlePreviewToolColor}
           onCreateTool={handleCreateTool}
+          onRestoreToolsState={handleRestoreToolsState}
         />
       )}
       <TooltipLayer />
