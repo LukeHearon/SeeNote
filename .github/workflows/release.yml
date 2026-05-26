@@ -81,7 +81,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           REPO="${{ github.repository }}"
           TAG="${GITHUB_REF_NAME}"
-          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id)
+          RELEASE_ID=$(gh release view "$TAG" --repo "$REPO" --json id --jq .id)
 
           rename_asset() {
             local from="$1"
@@ -124,19 +124,8 @@ jobs:
           SHA=$(shasum -a 256 "/tmp/dmgs/${DMG_NAME}" | awk '{print $1}')
 
           git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
-          cat > /tmp/tap/Casks/seenote.rb << CASK
-          cask "seenote" do
-            version "${VERSION}"
-            sha256 "${SHA}"
-
-            url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"
-            name "SeeNote"
-            desc "Audio/video annotation tool for building ML training datasets"
-            homepage "https://github.com/LukeHearon/SeeNote"
-
-            app "SeeNote.app"
-          end
-          CASK
+          printf 'cask "seenote" do\n  version "%s"\n  sha256 "%s"\n\n  url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"\n  name "SeeNote"\n  desc "Audio/video annotation tool for building ML training datasets"\n  homepage "https://github.com/LukeHearon/SeeNote"\n\n  app "SeeNote.app"\nend\n' \
+            "${VERSION}" "${SHA}" > /tmp/tap/Casks/seenote.rb
 
           cd /tmp/tap
           git config user.name "github-actions[bot]"
