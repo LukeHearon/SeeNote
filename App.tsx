@@ -11,7 +11,7 @@ export default function App() {
   const {
     entries, isLoading, loadError, projectsFilePath,
     createProject, addExistingProject, updateProjectSettings,
-    removeProject, touchLastOpened, reconnectProject, relinkProject, revalidateAll,
+    removeProject, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
 
@@ -32,23 +32,18 @@ export default function App() {
   );
 
   const handleOpenProject = useCallback(async (project: Project) => {
-    // The project may have been deleted while the launch screen was open.
-    // Re-validate it first so we can distinguish "project gone" from "media
-    // folder missing". If the project itself is gone, reconnectProject has
-    // already flipped the row to its non-ok status (graying it out); leave it
-    // in the list and abort — don't show the media-repair modal.
-    const resolved = await reconnectProject(project.id);
-    if (resolved && resolved.status !== 'ok') return;
-    const fresh = resolved && resolved.status === 'ok' ? resolved.project : project;
-
-    const touched = await touchLastOpened(fresh.id) ?? fresh;
+    // The LaunchScreen has already lazily re-validated this project (either
+    // via reconnectProject on click, or via relinkProject after a re-link),
+    // so we trust `project` here and don't stat the project dir again — that
+    // would just cost another macOS TCC consent prompt for no new information.
+    const touched = await touchLastOpened(project.id) ?? project;
     const mediaExists = await listDirectory(touched.mediaDirectoryAbs).then(() => true).catch(() => false);
     if (!mediaExists) {
       setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
       return;
     }
     setActiveProject(touched);
-  }, [touchLastOpened, reconnectProject]);
+  }, [touchLastOpened]);
 
   const handleCloseProject = useCallback(() => {
     setActiveProject(null);
@@ -77,7 +72,7 @@ export default function App() {
         addExistingProject={addExistingProject}
         removeProject={removeProject}
         relinkProject={relinkProject}
-        revalidateAll={revalidateAll}
+        reconnectProject={reconnectProject}
         updateProjectSettings={updateProjectSettings}
       />
       {repairProject && (

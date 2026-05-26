@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
@@ -23,7 +23,7 @@ interface Props {
     newProjectDir: string,
     resolve?: (info: RelinkInfo) => RelinkResolution | Promise<RelinkResolution>,
   ) => Promise<Project | undefined>;
-  revalidateAll: () => Promise<void>;
+  reconnectProject: (id: string) => Promise<ProjectListEntry | undefined>;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
 }
 
@@ -44,7 +44,7 @@ export default function LaunchScreen({
   addExistingProject,
   removeProject,
   relinkProject,
-  revalidateAll,
+  reconnectProject,
   updateProjectSettings,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
@@ -114,21 +114,9 @@ export default function LaunchScreen({
     return () => document.body.removeEventListener('mousedown', onDown);
   }, [contextMenu]);
 
-  // Background re-validation: while the launch screen is mounted, periodically
-  // and on window focus re-check every entry against disk so a project that
-  // reappears flips back to `ok` (restoring its gradient) without a user click.
-  // `revalidateAll` only writes state when a status actually changed.
-  const revalidateRef = useRef(revalidateAll);
-  revalidateRef.current = revalidateAll;
-  useEffect(() => {
-    const run = () => { revalidateRef.current().catch(() => {}); };
-    const interval = window.setInterval(run, 3500);
-    window.addEventListener('focus', run);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', run);
-    };
-  }, []);
+  // No background re-validation: see useProjects.ts for the rationale —
+  // proactively stat'ing registered projects costs macOS TCC consent prompts.
+  // Entries are validated lazily on click via reconnectProject.
 
   const handleCreated = (project: Project) => {
     setShowCreate(false);
@@ -147,11 +135,41 @@ export default function LaunchScreen({
     }
   };
 
-  // Only `ok` entries are clickable. Non-ok rows are inert (the user removes
-  // them via the X button); they auto-recover to `ok` via background
-  // re-validation when the project reappears on disk.
-  const handleEntryClick = (project: Project) => {
-    onOpenProject(project);
+  // Launch the locate / re-link flow for a single entry: pick a directory,
+  // hand it to relinkProject (which gathers dir health, then calls the
+  // confirmation modal). Cancelling at either step leaves the entry in its
+  // current non-ok state. Used both by the explicit "Re-link" button and as
+  // the automatic fall-through when a clicked entry fails validation.
+  const launchRelink = async (entry: ProjectListEntry) => {
+    setOpenError(null);
+    const startDir = await findFirstValidAncestor(entry.registry.projectDir).catch(() => '');
+    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+    if (!dir) return;
+    try {
+      const project = await relinkProject(entry.registry.id, dir, info =>
+        new Promise<RelinkResolution>(resolve => setRelinkPrompt({ ...info, resolve })),
+      );
+      if (project) onOpenProject(project);
+    } catch (err) {
+      setOpenError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Every row is clickable. We validate against disk lazily here — that one
+  // read may trigger a macOS TCC consent prompt the first time, but doing it
+  // on click (rather than for every registered project on launch) keeps the
+  // user from being swamped. If the entry resolves cleanly the project opens;
+  // otherwise the locate / re-link flow fires automatically and the row is
+  // left grayed out until the user successfully re-links it.
+  const handleEntryClick = async (entry: ProjectListEntry) => {
+    setOpenError(null);
+    const resolved = await reconnectProject(entry.registry.id);
+    if (!resolved) return;
+    if (resolved.status === 'ok') {
+      onOpenProject(resolved.project);
+      return;
+    }
+    await launchRelink(resolved);
   };
 
   const handleRemove = async (e: React.MouseEvent, entry: ProjectListEntry, name: string) => {
@@ -165,22 +183,11 @@ export default function LaunchScreen({
     if (ok) await removeProject(entry.registry.id);
   };
 
-  // Re-link a not-found project: let the user point at the project's new
-  // location on disk. relinkProject validates identity before repointing.
+  // Re-link button on a non-ok row. Same flow as launchRelink — the button is
+  // kept as an explicit affordance, but row-click handles the same case.
   const handleLocate = async (e: React.MouseEvent, entry: ProjectListEntry) => {
     e.stopPropagation();
-    setOpenError(null);
-    const startDir = await findFirstValidAncestor(entry.registry.projectDir).catch(() => '');
-    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-    if (!dir) return;
-    try {
-      const project = await relinkProject(entry.registry.id, dir, info =>
-        new Promise<RelinkResolution>(resolve => setRelinkPrompt({ ...info, resolve })),
-      );
-      if (project) onOpenProject(project);
-    } catch (err) {
-      setOpenError(err instanceof Error ? err.message : String(err));
-    }
+    await launchRelink(entry);
   };
 
   const handleGear = (e: React.MouseEvent, entry: ProjectListEntry) => {
@@ -281,13 +288,18 @@ export default function LaunchScreen({
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
             {entries.map(entry => {
               const isOk = entry.status === 'ok';
+              const isUnchecked = entry.status === 'unchecked';
+              // Grayed = we've already tried to resolve this entry and it
+              // didn't land cleanly. Unchecked rows look normal — they're
+              // assumed-good until the user clicks and we actually check.
+              const grayed = !isOk && !isUnchecked;
               const name = isOk
                 ? entry.project.settings.name
                 : (entry.registry.name ?? basename(entry.registry.projectDir));
               const gradientColors = isOk ? entry.project.settings.nameGradientColors : undefined;
-              const liClass = isOk
-                ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all'
-                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-default transition-all text-gray-500 opacity-50';
+              const liClass = grayed
+                ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50'
+                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all';
 
               let pathLines: React.ReactNode = null;
               if (entry.status === 'ok') {
@@ -306,6 +318,10 @@ export default function LaunchScreen({
                     </>
                   );
                 }
+              } else if (entry.status === 'unchecked') {
+                pathLines = (
+                  <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>
+                );
               } else {
                 const tag = entry.status === 'missing-dir' ? '(not found)' : '(settings unreadable)';
                 pathLines = (
@@ -318,7 +334,7 @@ export default function LaunchScreen({
               return (
                 <li
                   key={entry.registry.id}
-                  onClick={entry.status === 'ok' ? () => handleEntryClick(entry.project) : undefined}
+                  onClick={() => { handleEntryClick(entry).catch(() => {}); }}
                   onContextMenu={e => handleContextMenu(e, entry)}
                   className={liClass}
                 >
@@ -328,13 +344,13 @@ export default function LaunchScreen({
                         {isOk ? (
                           <GradientProjectName name={name} nameGradientColors={gradientColors} />
                         ) : (
-                          <span className="text-gray-500">{name}</span>
+                          <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
                         )}
                       </p>
                       {pathLines}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {!isOk && (
+                      {grayed && (
                         <button
                           onClick={e => handleLocate(e, entry)}
                           className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"

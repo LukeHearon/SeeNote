@@ -74,7 +74,14 @@ export function useProjects() {
     }
   }, []);
 
-  // Initial load: registry → in parallel resolve each entry's settings + existence.
+  // Initial load: read the registry file but do NOT touch any project
+  // directories. Each registered project is surfaced as `unchecked` and only
+  // gets validated against disk when the user clicks it. This is deliberate:
+  // on macOS, every read inside a TCC-protected location (Documents,
+  // removable volumes, etc.) costs a consent prompt, and for an
+  // unsigned/ad-hoc bundle those grants don't persist across launches.
+  // Eagerly stat'ing every registered project on launch turned the launch
+  // screen into a prompt avalanche.
   useEffect(() => {
     (async () => {
       try {
@@ -84,14 +91,8 @@ export function useProjects() {
         setProjectsFilePath(filePath);
         const registry = await loadRegistry(filePath);
         registry.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
-        const resolved = await Promise.all(registry.map(resolveEntry));
-        setBoth(resolved);
-        // resolveEntry may have learned project names not yet in the registry
-        // file; persist them so missing entries keep showing their real name.
-        if (resolved.some((e, i) => e.registry.name !== registry[i]?.name)) {
-          await persistRegistry(resolved.map(e => e.registry)).catch(err =>
-            console.error('Failed to persist learned project names:', err));
-        }
+        const initial: ProjectListEntry[] = registry.map(r => ({ status: 'unchecked', registry: r }));
+        setBoth(initial);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('Failed to load project registry:', msg);
@@ -100,7 +101,7 @@ export function useProjects() {
         setIsLoading(false);
       }
     })();
-  }, [setBoth, persistRegistry]);
+  }, [setBoth]);
 
   /** Create a brand-new project: write settings.json, append to registry. */
   const createProject = useCallback(async (args: {
@@ -198,15 +199,25 @@ export function useProjects() {
     return updated && updated.status === 'ok' ? updated.project : undefined;
   }, [persistRegistry, setBoth]);
 
-  /** Re-check a non-ok entry. If it resolves cleanly, flips it to `ok`. */
+  /**
+   * Validate a single entry against disk. Used both to flip a non-ok row back
+   * to `ok` if its directory reappeared, and (under lazy validation) to
+   * resolve an `unchecked` row the moment the user clicks it. If resolution
+   * learned a name from settings.json that differs from the registry, the
+   * updated registry is persisted so the launch list stays in sync.
+   */
   const reconnectProject = useCallback(async (id: string): Promise<ProjectListEntry | undefined> => {
     const entry = entriesRef.current.find(e => e.registry.id === id);
     if (!entry) return undefined;
     const resolved = await resolveEntry(entry.registry);
     const next = entriesRef.current.map(e => e.registry.id === id ? resolved : e);
     setBoth(next);
+    if (resolved.registry.name !== entry.registry.name) {
+      await persistRegistry(next.map(e => e.registry)).catch(err =>
+        console.error('Failed to persist learned project name:', err));
+    }
     return resolved;
-  }, [setBoth]);
+  }, [persistRegistry, setBoth]);
 
   /**
    * Re-link a not-found (or unreadable) project to a directory the user has
@@ -310,28 +321,6 @@ export function useProjects() {
     return finalProject;
   }, [persistRegistry, setBoth]);
 
-  /**
-   * Re-resolve every entry against disk (background re-validation). Only writes
-   * state if some entry's status actually changed — e.g. a missing project
-   * reappeared and flips back to `ok`, or an open project vanished. Entries
-   * whose status is unchanged keep their existing object reference so unaffected
-   * rows don't re-render.
-   */
-  const revalidateAll = useCallback(async (): Promise<void> => {
-    const current = entriesRef.current;
-    if (current.length === 0) return;
-    const resolved = await Promise.all(current.map(e => resolveEntry(e.registry)));
-    let changed = false;
-    const next = current.map((prev, i) => {
-      if (resolved[i].status !== prev.status) {
-        changed = true;
-        return resolved[i];
-      }
-      return prev;
-    });
-    if (changed) setBoth(next);
-  }, [setBoth]);
-
   return {
     entries,
     isLoading,
@@ -344,6 +333,5 @@ export function useProjects() {
     touchLastOpened,
     reconnectProject,
     relinkProject,
-    revalidateAll,
   };
 }

@@ -180,10 +180,14 @@ export type RelinkResolution =
 
 /**
  * One row in the launch screen list. `ok` entries have a fully-loaded
- * `project`; other variants only have the registry pointer so the user can
- * be prompted to remove or reconnect.
+ * `project`; `unchecked` entries haven't been validated against disk yet
+ * (the launch screen avoids proactive filesystem access so macOS doesn't
+ * fire a TCC consent prompt for every registered project); other variants
+ * only have the registry pointer so the user can be prompted to remove or
+ * reconnect.
  */
 export type ProjectListEntry =
+  | { status: 'unchecked'; registry: ProjectRegistryEntry }
   | { status: 'ok'; registry: ProjectRegistryEntry; project: Project }
   | { status: 'missing-dir'; registry: ProjectRegistryEntry }
   | { status: 'bad-settings'; registry: ProjectRegistryEntry; error: string };
