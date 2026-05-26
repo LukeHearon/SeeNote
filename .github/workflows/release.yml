@@ -68,26 +68,60 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-  update-cask:
+  rename-assets:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Rename release assets to user-friendly names
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="${GITHUB_REF_NAME}"
+          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id)
+
+          rename_asset() {
+            local from="$1"
+            local to="$2"
+            local asset_id
+            asset_id=$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
+              --jq ".[] | select(.name == \"$from\") | .id")
+            if [ -n "$asset_id" ]; then
+              gh api -X PATCH "repos/${REPO}/releases/assets/${asset_id}" -f name="$to" >/dev/null
+              echo "Renamed: $from -> $to"
+            else
+              echo "Skipped (not found): $from"
+            fi
+          }
+
+          rename_asset "SeeNote_${VERSION}_universal.dmg"    "SeeNote-macOS.dmg"
+          rename_asset "SeeNote_${VERSION}_amd64.AppImage"   "SeeNote-Linux.AppImage"
+          rename_asset "SeeNote_${VERSION}_x64-setup.exe"    "SeeNote-Windows.exe"
+
+  update-cask:
+    needs: rename-assets
     runs-on: macos-latest
     permissions:
       contents: read
     steps:
-      - name: Download macOS DMGs and update Homebrew cask
+      - name: Download macOS DMG and update Homebrew cask
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
+          DMG_NAME="SeeNote-macOS.dmg"
 
           gh release download "$TAG" \
             --repo LukeHearon/SeeNote \
-            --pattern "*_universal.dmg" \
+            --pattern "$DMG_NAME" \
             --dir /tmp/dmgs
 
-          SHA=$(shasum -a 256 /tmp/dmgs/SeeNote_${VERSION}_universal.dmg | awk '{print $1}')
+          SHA=$(shasum -a 256 "/tmp/dmgs/${DMG_NAME}" | awk '{print $1}')
 
           git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
           cat > /tmp/tap/Casks/seenote.rb << CASK
@@ -95,7 +129,7 @@ jobs:
             version "${VERSION}"
             sha256 "${SHA}"
 
-            url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote_#{version}_universal.dmg"
+            url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"
             name "SeeNote"
             desc "Audio/video annotation tool for building ML training datasets"
             homepage "https://github.com/LukeHearon/SeeNote"
