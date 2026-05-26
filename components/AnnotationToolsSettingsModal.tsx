@@ -10,7 +10,10 @@ interface Props {
   onClose: () => void;
   onReorderTools: (newTools: AnnotationTool[]) => void;
   onRenameTool: (toolIndex: number, newText: string, newColor: string) => void;
-  onDeleteTool: (toolIndex: number) => void;
+  // mode 'unlink' reassigns linked annotations to Custom; 'delete' removes them.
+  onDeleteTool: (toolIndex: number, mode: 'unlink' | 'delete') => void;
+  // Transient live preview of a tool's color while it's being edited (no history).
+  onPreviewColor: (toolIndex: number, color: string) => void;
   onCreateTool: (text: string, color: string, key?: string | null) => void;
   // Restore both tools and their linked annotations atomically — used by the
   // modal-local undo/redo so an "undelete" puts back the reassigned annotations
@@ -131,10 +134,14 @@ export default function AnnotationToolsSettingsModal({
   onReorderTools,
   onRenameTool,
   onDeleteTool,
+  onPreviewColor,
   onCreateTool,
   onRestoreToolsState,
 }: Props) {
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
+  // Tool whose trash icon was clicked and that has linked annotations: drives
+  // the delete-confirmation overlay. null = no dialog open.
+  const [deletingToolIndex, setDeletingToolIndex] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
   // Which bin is currently showing the inline create input: the Unassigned bin
   // or a specific empty hotkey slot (its digit). null = none.
@@ -154,6 +161,15 @@ export default function AnnotationToolsSettingsModal({
   currentRef.current = { tools: annotationTools, annotations };
   const onRestoreRef = useRef(onRestoreToolsState);
   onRestoreRef.current = onRestoreToolsState;
+
+  // Pre-edit snapshot captured the moment the edit modal opens. Because color
+  // changes are live-previewed (mutating state before Save), snapshotting at
+  // Save time would capture the already-previewed color — wrong for undo. So we
+  // capture {tools, annotations} here, before any preview, and push that on Save.
+  const editSnapshotRef = useRef<ToolsSnapshot>(currentRef.current);
+  useEffect(() => {
+    if (editingToolIndex !== null) editSnapshotRef.current = currentRef.current;
+  }, [editingToolIndex]);
 
   // Record the pre-mutation snapshot, then run the mutating action. Any new
   // user action clears the redo stack (standard linear-history semantics).
@@ -180,6 +196,15 @@ export default function AnnotationToolsSettingsModal({
     setEditingToolIndex(null);
     undoStack.current.push(currentRef.current);
     onRestoreRef.current(next.tools, next.annotations);
+  };
+
+  // Trash-icon click: if the tool has linked annotations, open the confirmation
+  // dialog (which offers Delete vs Unlink); otherwise delete it outright.
+  const requestDeleteTool = (toolIndex: number) => {
+    const tool = annotationTools[toolIndex];
+    const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
+    if (linkedCount > 0) setDeletingToolIndex(toolIndex);
+    else withSnapshot(() => onDeleteTool(toolIndex, 'delete'));
   };
 
   const beginDrag = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
@@ -275,7 +300,7 @@ export default function AnnotationToolsSettingsModal({
                         onDragStart={() => beginDrag(toolIndex)}
                         onDragEnd={cancelDrag}
                         onGearClick={() => setEditingToolIndex(toolIndex)}
-                        onDeleteClick={() => withSnapshot(() => onDeleteTool(toolIndex))}
+                        onDeleteClick={() => requestDeleteTool(toolIndex)}
                         dim={drag?.sourceIndex === toolIndex}
                       />
                     </div>
@@ -330,7 +355,7 @@ export default function AnnotationToolsSettingsModal({
                     onDragStart={() => beginDrag(toolIndex)}
                     onDragEnd={cancelDrag}
                     onGearClick={() => setEditingToolIndex(toolIndex)}
-                    onDeleteClick={() => withSnapshot(() => onDeleteTool(toolIndex))}
+                    onDeleteClick={() => requestDeleteTool(toolIndex)}
                     dim={drag?.sourceIndex === toolIndex}
                   />
                 </div>
@@ -361,9 +386,54 @@ export default function AnnotationToolsSettingsModal({
           toolIndex={editingToolIndex}
           annotations={annotations}
           onClose={() => setEditingToolIndex(null)}
-          onSave={(idx, text, color) => { withSnapshot(() => onRenameTool(idx, text, color)); setEditingToolIndex(null); }}
+          onPreviewColor={onPreviewColor}
+          // Push the pre-edit snapshot (captured on open, before any live color
+          // preview) so undo restores the original text AND color, then apply
+          // the final values.
+          onSave={(idx, text, color) => {
+            undoStack.current.push(editSnapshotRef.current);
+            redoStack.current = [];
+            onRenameTool(idx, text, color);
+            setEditingToolIndex(null);
+          }}
         />
       )}
+
+      {deletingToolIndex !== null && (() => {
+        const idx = deletingToolIndex;
+        const tool = annotationTools[idx];
+        const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
+        const close = () => setDeletingToolIndex(null);
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl w-80 p-5 shadow-2xl flex flex-col gap-4">
+              <p className="text-sm text-white">
+                Delete "{tool?.text}"? It has {linkedCount} linked annotation(s).
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={close}
+                  className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { withSnapshot(() => onDeleteTool(idx, 'delete')); close(); }}
+                  className="px-3 py-1.5 text-sm text-white bg-red-600 hover:bg-red-500 rounded transition-colors"
+                >
+                  Delete Annotations
+                </button>
+                <button
+                  onClick={() => { withSnapshot(() => onDeleteTool(idx, 'unlink')); close(); }}
+                  className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+                >
+                  Unlink Annotations
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
