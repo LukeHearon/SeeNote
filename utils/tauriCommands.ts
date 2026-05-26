@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { BuzzdetectData } from '../types';
 
 // ── Types returned by Rust ────────────────────────────────────────────────────
 
@@ -110,6 +111,16 @@ export const removeFile = (path: string): Promise<void> =>
 
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
+
+/**
+ * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to
+ * `null` when no file exists for this ident.
+ */
+export const readBuzzdetect = (
+  buzzdetectDir: string,
+  ident: string,
+): Promise<BuzzdetectData | null> =>
+  invoke('read_buzzdetect', { buzzdetectDir, ident });
 
 export const createDirAll = (path: string): Promise<void> =>
   invoke('create_dir_all', { path });

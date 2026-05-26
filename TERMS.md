@@ -33,7 +33,7 @@ When a selection is active. Modifies playback behavior and behavior of annotatio
 # Windows
 
 ## Project Window
-The opening window of SeeNote that lists projects by recency. Implemented by `LaunchScreen`.
+The opening window of SeeNote that lists projects by recency. Implemented by `LaunchScreen`. A project whose folder can't be found on disk is grayed out and inert; its **Locate** button lets the user re-link it by pointing at the folder's new location. The folder must hold a `.seenote/settings.json`; a differing project name or missing annotation/buzzdetect directory only prompts a confirmation (listing what didn't match) rather than blocking.
 
 ## Annotation Window
 The window that shows when the user opens a project for creating annotations. Implemented by `AnnotationWindow`. `App.tsx` is the router that switches between Project Window and Annotation Window.
@@ -67,6 +67,9 @@ The control strip above the spectrogram. Contains transport controls, time field
 
 ### Spectrogram Settings
 Display settings for the spectrogram: frequency range, intensity, FFT size, and frequency scale.
+
+### buzzdetect panel
+An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below). Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the toolbar. Implemented by `BuzzdetectPanel`.
 
 ## Video Panel (top right)
 Shows video frames when the current track is a video file. Implemented by `VideoPane`.

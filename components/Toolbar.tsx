@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity } from 'lucide-react';
 import { Selection, BandPassFilter } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 
@@ -37,6 +37,10 @@ interface ToolbarProps {
   onEnableBandPassFilter: (strength: number) => void;
   filterStrength: number;
   setFilterStrength: (s: number) => void;
+  /** Whether a buzzdetect directory is configured (gates the toggle button). */
+  buzzdetectAvailable?: boolean;
+  buzzdetectEnabled?: boolean;
+  onToggleBuzzdetect?: () => void;
 }
 
 // Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
@@ -91,6 +95,9 @@ export default function Toolbar({
   onEnableBandPassFilter,
   filterStrength,
   setFilterStrength,
+  buzzdetectAvailable,
+  buzzdetectEnabled,
+  onToggleBuzzdetect,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -488,17 +495,29 @@ export default function Toolbar({
         )}
       </div>
 
-      {/* Spectrogram Settings */}
-      {onToggleSettings !== undefined && (
-        <div className="ml-auto flex items-center">
-          <button
-            onClick={onToggleSettings}
-            className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-            data-tooltip="Spectrogram Settings"
-            data-help-target="spectrogram-settings"
-          >
-            <Settings size={16} />
-          </button>
+      {/* Right-aligned controls: buzzdetect toggle + spectrogram settings */}
+      {(onToggleSettings !== undefined || buzzdetectAvailable) && (
+        <div className="ml-auto flex items-center gap-1">
+          {buzzdetectAvailable && (
+            <button
+              onClick={onToggleBuzzdetect}
+              className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${buzzdetectEnabled ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+              data-tooltip="buzzdetect activations panel"
+              data-help-target="buzzdetect-toggle"
+            >
+              <Activity size={16} />
+            </button>
+          )}
+          {onToggleSettings !== undefined && (
+            <button
+              onClick={onToggleSettings}
+              className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+              data-tooltip="Spectrogram Settings"
+              data-help-target="spectrogram-settings"
+            >
+              <Settings size={16} />
+            </button>
+          )}
         </div>
       )}
     </div>

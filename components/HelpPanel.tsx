@@ -217,7 +217,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   and the filter engages automatically.
                 </p>
                 <p>
-                  Drag the two horizontal cutoff lines to retune the band in place. Use the{' '}
+                  Drag the two horizontal cutoff lines to retune the band in place — they're grabbable
+                  any time a band is active, even when the filter tool isn't selected. Use the{' '}
                   <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
                   to mix between dry (0%, source untouched) and fully band-passed (100%).
                   Dragging the slider up from 0 re-enables filtering at the new strength,
@@ -257,6 +258,21 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p>
                   Annotations save automatically every time you make a change. The file structure mirrors the audio directory.
                   Clearing all annotations removes the annotation file.
+                </p>
+              </Section>
+
+              <Section title="buzzdetect panel" target="buzzdetect-toggle">
+                <p>
+                  Set a <span className="text-white">buzzdetect directory</span> under <span className="text-white">Advanced</span> when
+                  creating or editing a project to plot per-frame neuron activations below the spectrogram, located per track by ident
+                  (<span className="font-mono text-xs text-slate-300">{'{ident}_buzzdetect.csv'}</span>). Toggle the panel with the
+                  <HelpAnchor target="buzzdetect-toggle"> activity icon</HelpAnchor> in the toolbar.
+                </p>
+                <p>
+                  Each neuron is one colored line; its dots are filled where the value meets that neuron's threshold and open below it.
+                  Open the panel's <span className="text-white">sliders</span> popover to set per-neuron thresholds and show/hide neurons.
+                  <span className="text-white"> Click a frame</span> to select (and highlight) its audio on the spectrogram;
+                  drag across frames to extend the selection. Drag the panel's top edge to resize it.
                 </p>
               </Section>
             </>
