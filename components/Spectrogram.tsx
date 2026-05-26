@@ -62,12 +62,20 @@ interface SpectrogramProps {
   onSelectionCommit?: (region: Selection) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
+  /**
+   * Fired on scroll, zoom, and resize with the current time→pixel transform.
+   * The single source of truth that the buzzdetect panel consumes for
+   * pixel-exact x-alignment with the spectrogram (`x = t*pps − scrollLeft`).
+   * Optional so callers that don't need it pay nothing.
+   */
+  onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
 }
 
 export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
   scrollToTime: (time: number) => void;
+  applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
 }
 
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
@@ -102,7 +110,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onSelectionChange,
   onSelectionCommit,
   onBoundAnnotationChange,
-  onZoomChange
+  onZoomChange,
+  onViewportChange
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -240,6 +249,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setScrollLeft(0);
   }, [ident]);
 
+  // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
+  // Also fires when `onViewportChange` itself becomes available (e.g. the panel
+  // is toggled on) so a freshly-mounted consumer gets the current viewport
+  // immediately instead of waiting for the next scroll. AnnotationWindow passes
+  // a stable setter, so this never loops.
+  useEffect(() => {
+    onViewportChange?.({ scrollLeft, pixelsPerSecond, containerWidth });
+  }, [onViewportChange, scrollLeft, pixelsPerSecond, containerWidth]);
+
   // Sync scroll with playback — center the playhead once it reaches the center of the
   // currently-visible window. Disabled when a selection is active: the user positioned
   // the canvas intentionally relative to the selection and auto-scroll disrupts that.
@@ -331,8 +349,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const bbWidth = Math.max(1, bbEndCol - bbStartCol);
         const bbStartTime = bbStartCol / cps;
 
-        // Build the column-resolution viewport buffer.
+        // Build the column-resolution viewport buffer. colBuilt marks columns
+        // that received real chunk data (sharp or coarse-fallback); unfilled
+        // columns are left transparent by drawSpectrogramChunk so the
+        // build-progress sweep behind the canvas shows through only there.
         const viewportData = new Uint16Array(bbWidth * nFreqBins);
+        const colBuilt = new Uint8Array(bbWidth);
         for (let i = 0; i < bbWidth; i++) {
           const absCol = bbStartCol + i;
           if (absCol < 0) continue;                // before file start
@@ -356,6 +378,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const srcOffset = col * chunk.nFreqBins;
           const dstOffset = i * nFreqBins;
           viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
+          colBuilt[i] = 1;
         }
 
         // Render the column-resolution image into the offscreen canvas.
@@ -370,6 +393,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           offscreen.width, offscreen.height,
           settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
           settings.displayFloor, settings.displayCeil,
+          colBuilt,
         );
 
         // Blit offscreen → visible canvas with sub-pixel destination shift.
@@ -505,7 +529,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     // 3. Draw Time Ruler
-    const timeRange = endTime - startTime;
+    // Choose tick spacing from the stable configured span (zoomSec), NOT from
+    // endTime-startTime. The latter is derived from the live clientWidth, which
+    // fluctuates by sub-pixel amounts during playback/panning. At round zoom
+    // levels the visible span sits exactly on a timeStep threshold (e.g. 10s),
+    // so those tiny fluctuations flip timeStep between 1 and 2 — making the
+    // odd-second labels flicker in and out. zoomSec is the same value
+    // pixelsPerSecond is derived from (pixelsPerSecond = containerWidth/zoomSec),
+    // so the span across the container is exactly zoomSec.
+    const timeRange = zoomSec;
     let timeStep = 1;
     if (timeRange > 36000) timeStep = 3600;
     else if (timeRange > 7200) timeStep = 600;
@@ -553,7 +585,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -750,12 +782,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const containerWidth = containerRef.current.clientWidth;
     setScrollLeft(Math.max(0, time * pixelsPerSecond - containerWidth / 2));
   }, [pixelsPerSecond]);
-
-  useImperativeHandle(ref, () => ({
-    goToPrevAnnotation,
-    goToNextAnnotation,
-    scrollToTime,
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime]);
 
   // Escape handling lives in AnnotationWindow (universal activation-stack
   // unwind). When `Esc` pops `selection`, AnnotationWindow also clears
@@ -1329,48 +1355,45 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     return () => window.removeEventListener('mouseup', onWindowMouseUp);
   }, []);
 
+  const applyWheel = useCallback((deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => {
+    if (ctrlKey || metaKey) {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = clientX - rect.left;
+      const containerWidth = containerRef.current.clientWidth;
+      const currentPps = containerWidth / zoomSec;
+      const timeAtMouse = (scrollLeft + mouseX) / currentPps;
+      const zoomFactor = 1.1;
+      const direction = deltaY > 0 ? 1 : -1;
+      let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
+      newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
+      const newPixelsPerSecond = containerWidth / newZoomSec;
+      let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
+      const overrunPixels = containerWidth * 0.4;
+      const maxScroll = Math.max(0, (duration * newPixelsPerSecond) - containerWidth + overrunPixels);
+      newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
+      setScrollLeft(newScrollLeft);
+      onZoomChange(newZoomSec);
+    } else {
+      const panAmount = deltaY + deltaX;
+      const containerWidth = containerRef.current?.clientWidth || 0;
+      const overrunPixels = containerWidth * 0.4;
+      const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
+      setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
+    }
+  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
+
   const handleWheel = (e: React.WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-
-        if (!containerRef.current) return;
-
-        const rect = containerRef.current.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const containerWidth = containerRef.current.clientWidth;
-
-        // Compute timeAtMouse from live DOM dimensions (not the potentially-stale
-        // pixelsPerSecond closure value) so the anchor stays exact on every tick.
-        const currentPps = containerWidth / zoomSec;
-        const timeAtMouse = (scrollLeft + mouseX) / currentPps;
-
-        const zoomFactor = 1.1;
-        const direction = e.deltaY > 0 ? 1 : -1;
-
-        let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-        newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
-
-        const newPixelsPerSecond = containerWidth / newZoomSec;
-
-        // Keep timeAtMouse under the same pixel after zoom:
-        // newScrollPx = timeAtMouse * newPixelsPerSecond - mousePxFromCanvasLeft
-        let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
-        // Allow scrolling 40% of the view past the end of the file so the user can
-        // center late events or zoom out with the end visible.
-        const overrunPixels = containerWidth * 0.4;
-        const maxScroll = Math.max(0, (duration * newPixelsPerSecond) - containerWidth + overrunPixels);
-        newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
-
-        setScrollLeft(newScrollLeft);
-        onZoomChange(newZoomSec);
-      } else {
-          const panAmount = e.deltaY + e.deltaX;
-          const containerWidth = containerRef.current?.clientWidth || 0;
-          const overrunPixels = containerWidth * 0.4;
-          const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
-          setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
-      }
+    if (e.ctrlKey || e.metaKey) e.preventDefault();
+    applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
   };
+
+  useImperativeHandle(ref, () => ({
+    goToPrevAnnotation,
+    goToNextAnnotation,
+    scrollToTime,
+    applyWheel,
+  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, applyWheel]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
@@ -1436,7 +1459,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // Render horizontal cutoff handles for the band-pass filter.
   const renderFilterHandles = () => {
-    if (!filterToolActive || !bandPassFilter || creatingFilter) return null;
+    if (!bandPassFilter || creatingFilter) return null;
     const canvasHeight = containerRef.current?.clientHeight ?? 0;
     if (canvasHeight === 0) return null;
 
@@ -1494,7 +1517,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
       >
-      {/* Layer 1: spectrogram canvas (bottom) */}
+      {/* Build-in-progress veil — rendered BEHIND the spectrogram canvas so it
+          shows through only on columns that have no chunk data yet (the canvas
+          leaves those transparent via colMask). Built chunks are opaque and fully
+          occlude the sweep. Suppressed during initial decode. */}
+      {isBuilding && !isProcessing && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <style>{`@keyframes spectroBuildSweep { 0% { transform: translateY(-100%); } 100% { transform: translateY(200%); } }`}</style>
+          <div
+            className="absolute inset-x-0"
+            style={{
+              height: '40%',
+              background: 'linear-gradient(180deg, transparent 0%, rgba(230,81,97,0.30) 45%, rgba(230,81,97,0.50) 50%, rgba(230,81,97,0.30) 55%, transparent 100%)',
+              animation: 'spectroBuildSweep 1.6s linear infinite',
+            }}
+          />
+        </div>
+      )}
+
+      {/* Layer 1: spectrogram canvas — above the veil, transparent on unbuilt columns */}
       <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
 
       {/* Blurred placeholder overlay during initial spectrogram generation (decode phase) */}
@@ -1511,33 +1552,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           <div className="absolute inset-0 bg-slate-900/60" />
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="text-slate-400 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide">Generating spectrogram…</span>
-          </div>
-        </div>
-      )}
-
-      {/* Build-in-progress veil — shown while viewport chunks are still resolving
-          (settings rebuild, or chunks streaming in after decode). Purely visual:
-          dims the existing spectrogram and runs a slow accent-tinted sweep so it's
-          clear work is happening, with no loading spinner. pointer-events-none so
-          it never intercepts clicks/drags. Suppressed during the initial decode,
-          which already shows the stronger "Generating…" treatment above. */}
-      {isBuilding && !isProcessing && (
-        <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
-          {/* Inline, self-contained keyframes — scoped to this veil only. */}
-          <style>{`@keyframes spectroBuildSweep { 0% { transform: translateX(-60%); } 100% { transform: translateX(160%); } }`}</style>
-          {/* Breathing dim over the (blurry/partial) spectrogram. */}
-          <div className="absolute inset-0 bg-slate-900/45 animate-pulse" />
-          {/* Slow diagonal accent sweep. */}
-          <div
-            className="absolute inset-y-0"
-            style={{
-              width: '40%',
-              background: 'linear-gradient(100deg, transparent 0%, rgba(230,81,97,0.10) 45%, rgba(230,81,97,0.18) 50%, rgba(230,81,97,0.10) 55%, transparent 100%)',
-              animation: 'spectroBuildSweep 1.6s linear infinite',
-            }}
-          />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-slate-300 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide border border-[#e65161]/40">Building spectrogram…</span>
           </div>
         </div>
       )}
@@ -1671,8 +1685,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                                     onAnnotationsCommit(pendingAnnotationsRef.current);
                                 }
                             }}
-                            className="absolute left-2 right-2 top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
+                            className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
                             style={{
+                                // Pin the label to the left edge of the spectrogram area while the
+                                // annotation is partially scrolled off the left. When left>=0 this is the
+                                // normal 8px (0.5rem) inset; when left<0 it offsets rightward by -left so
+                                // the text sits ~8px from the container's left edge.
+                                left: `${Math.max(8, 8 - left)}px`,
+                                right: '8px',
                                 color: '#ffffff',
                                 fontWeight: 'bold',
                                 textShadow: '0 1px 2px black',
