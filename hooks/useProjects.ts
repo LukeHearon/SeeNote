@@ -4,6 +4,9 @@ import {
   ProjectListEntry,
   ProjectRegistryEntry,
   ProjectSettings,
+  RelinkDirStatus,
+  RelinkInfo,
+  RelinkResolution,
 } from '../types';
 import {
   getAppDataDir,
@@ -13,7 +16,7 @@ import {
   writeProjectSettings,
   projectDirExists,
 } from '../utils/projectCommands';
-import { buildProject } from '../utils/projectPaths';
+import { buildProject, basename, makeProjectPath } from '../utils/projectPaths';
 
 function getProjectsFilePath(appDataDir: string): string {
   const base = appDataDir.replace(/[/\\]+$/, '');
@@ -25,7 +28,12 @@ async function resolveEntry(registry: ProjectRegistryEntry): Promise<ProjectList
   if (!exists) return { status: 'missing-dir', registry };
   try {
     const settings = await readProjectSettings(registry.projectDir);
-    return { status: 'ok', registry, project: buildProject(registry, settings) };
+    // Mirror the current name into the registry pointer so it survives if the
+    // project later goes missing.
+    const withName = settings.name && settings.name !== registry.name
+      ? { ...registry, name: settings.name }
+      : registry;
+    return { status: 'ok', registry: withName, project: buildProject(withName, settings) };
   } catch (err) {
     return {
       status: 'bad-settings',
@@ -78,6 +86,12 @@ export function useProjects() {
         registry.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
         const resolved = await Promise.all(registry.map(resolveEntry));
         setBoth(resolved);
+        // resolveEntry may have learned project names not yet in the registry
+        // file; persist them so missing entries keep showing their real name.
+        if (resolved.some((e, i) => e.registry.name !== registry[i]?.name)) {
+          await persistRegistry(resolved.map(e => e.registry)).catch(err =>
+            console.error('Failed to persist learned project names:', err));
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('Failed to load project registry:', msg);
@@ -86,7 +100,7 @@ export function useProjects() {
         setIsLoading(false);
       }
     })();
-  }, [setBoth]);
+  }, [setBoth, persistRegistry]);
 
   /** Create a brand-new project: write settings.json, append to registry. */
   const createProject = useCallback(async (args: {
@@ -98,6 +112,7 @@ export function useProjects() {
       id: crypto.randomUUID(),
       projectDir: args.projectDir,
       lastOpened: now,
+      name: args.settings.name,
     };
     await writeProjectSettings(args.projectDir, args.settings);
     const project = buildProject(registry, args.settings);
@@ -118,8 +133,8 @@ export function useProjects() {
     const settings = await readProjectSettings(projectDir); // throws if missing
     const now = new Date().toISOString();
     const registry: ProjectRegistryEntry = dup
-      ? { ...dup.registry, lastOpened: now }
-      : { id: crypto.randomUUID(), projectDir, lastOpened: now };
+      ? { ...dup.registry, lastOpened: now, name: settings.name }
+      : { id: crypto.randomUUID(), projectDir, lastOpened: now, name: settings.name };
     const project = buildProject(registry, settings);
 
     const without = entriesRef.current.filter(e => e.registry.id !== registry.id);
@@ -140,13 +155,22 @@ export function useProjects() {
     const entry = entriesRef.current.find(e => e.registry.id === id);
     if (!entry || entry.status !== 'ok') return undefined;
     await writeProjectSettings(entry.registry.projectDir, settings);
-    const project = buildProject(entry.registry, settings);
+    const registry = entry.registry.name === settings.name
+      ? entry.registry
+      : { ...entry.registry, name: settings.name };
+    const project = buildProject(registry, settings);
     const next = entriesRef.current.map(e =>
-      e.registry.id === id ? { status: 'ok' as const, registry: e.registry, project } : e
+      e.registry.id === id ? { status: 'ok' as const, registry, project } : e
     );
     setBoth(next);
+    // A renamed project must update its registry pointer too, so the new name
+    // survives the project going missing.
+    if (registry !== entry.registry) {
+      await persistRegistry(next.map(e => e.registry)).catch(err =>
+        console.error('Failed to persist renamed project:', err));
+    }
     return project;
-  }, [setBoth]);
+  }, [persistRegistry, setBoth]);
 
   /** Remove a project from the registry only — leaves files on disk untouched. */
   const removeProject = useCallback(async (id: string): Promise<void> => {
@@ -185,6 +209,108 @@ export function useProjects() {
   }, [setBoth]);
 
   /**
+   * Re-link a not-found (or unreadable) project to a directory the user has
+   * located on disk — typically because the project folder was moved.
+   *
+   * The chosen directory must contain a readable `.seenote/settings.json`;
+   * without one there is no project to bind to, so that case throws. Otherwise
+   * the directory health (media / annotations / buzzdetect existence) and any
+   * name conflict between SeeNote's listing and the on-disk settings are
+   * gathered into a `RelinkInfo` and handed to `resolve` so the caller can
+   * confirm and, when the names disagree, choose which one to keep. If `resolve`
+   * cancels (or is absent) the re-link is aborted and `undefined` is returned.
+   *
+   * When the kept name differs from what's on disk, settings.json is rewritten
+   * so the folder and the launch list agree. On success the entry flips to
+   * `ok`, the new path + name are persisted, and the rebuilt `Project` returns.
+   */
+  const relinkProject = useCallback(async (
+    id: string,
+    newProjectDir: string,
+    resolve?: (info: RelinkInfo) => RelinkResolution | Promise<RelinkResolution>,
+  ): Promise<Project | undefined> => {
+    const entry = entriesRef.current.find(e => e.registry.id === id);
+    if (!entry) throw new Error('Project is no longer in the list.');
+
+    let settings: ProjectSettings;
+    try {
+      settings = await readProjectSettings(newProjectDir);
+    } catch {
+      throw new Error(
+        'The selected folder is not a SeeNote project — it has no .seenote/settings.json inside it.',
+      );
+    }
+
+    const candidate: ProjectRegistryEntry = {
+      ...entry.registry,
+      projectDir: newProjectDir,
+      name: settings.name,
+    };
+    const project = buildProject(candidate, settings);
+
+    // Report directory health so the caller can reassure the user the re-link
+    // will land cleanly (or flag what's still missing). buzzdetect is only
+    // listed when the project configures it.
+    const dirSpecs: { label: string; path: string | null }[] = [
+      { label: 'Media', path: project.mediaDirectoryAbs },
+      { label: 'Annotations', path: project.annotationDirectoryAbs },
+      { label: 'buzzdetect', path: project.buzzdetectDirectoryAbs },
+    ];
+    const dirs: RelinkDirStatus[] = [];
+    for (const spec of dirSpecs) {
+      if (!spec.path) continue;
+      const exists = await projectDirExists(spec.path).catch(() => false);
+      dirs.push({ label: spec.label, path: spec.path, exists });
+    }
+
+    const internalName = entry.registry.name ?? basename(entry.registry.projectDir);
+    const info: RelinkInfo = {
+      internalName,
+      settingsName: settings.name,
+      nameConflict: internalName !== settings.name,
+      dirs,
+    };
+
+    const resolution: RelinkResolution = resolve
+      ? await resolve(info)
+      : { action: 'relink', name: settings.name };
+    if (resolution.action === 'cancel') return undefined;
+
+    // Apply any dir overrides the user browsed (missing dirs relocated via "Locate").
+    // Label→settings key mapping mirrors the dirSpecs order above.
+    const labelToKey: Record<string, 'mediaDirectory' | 'annotationDirectory' | 'buzzdetectDirectory'> = {
+      Media: 'mediaDirectory',
+      Annotations: 'annotationDirectory',
+      buzzdetect: 'buzzdetectDirectory',
+    };
+    let finalSettings = settings;
+    const overrides = resolution.action === 'relink' ? (resolution.dirOverrides ?? {}) : {};
+    for (const [label, absPath] of Object.entries(overrides)) {
+      const key = labelToKey[label];
+      if (key) finalSettings = { ...finalSettings, [key]: makeProjectPath(newProjectDir, absPath) };
+    }
+
+    // If the user kept SeeNote's name over the one on disk, apply that too.
+    if (resolution.name !== settings.name) {
+      finalSettings = { ...finalSettings, name: resolution.name };
+    }
+
+    // Write settings.json if anything changed.
+    if (finalSettings !== settings) {
+      await writeProjectSettings(newProjectDir, finalSettings);
+    }
+    const finalRegistry: ProjectRegistryEntry = { ...candidate, name: resolution.name };
+    const finalProject = buildProject(finalRegistry, finalSettings);
+
+    const next = entriesRef.current.map(e =>
+      e.registry.id === id ? { status: 'ok' as const, registry: finalRegistry, project: finalProject } : e,
+    );
+    setBoth(next);
+    await persistRegistry(next.map(e => e.registry));
+    return finalProject;
+  }, [persistRegistry, setBoth]);
+
+  /**
    * Re-resolve every entry against disk (background re-validation). Only writes
    * state if some entry's status actually changed — e.g. a missing project
    * reappeared and flips back to `ok`, or an open project vanished. Entries
@@ -217,6 +343,7 @@ export function useProjects() {
     removeProject,
     touchLastOpened,
     reconnectProject,
+    relinkProject,
     revalidateAll,
   };
 }

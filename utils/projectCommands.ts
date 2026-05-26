@@ -7,14 +7,15 @@ interface RegistryEntryRecord {
   id: string;
   project_dir: string;
   last_opened: string;
+  name?: string | null;
 }
 
 function toRegistry(r: RegistryEntryRecord): ProjectRegistryEntry {
-  return { id: r.id, projectDir: r.project_dir, lastOpened: r.last_opened };
+  return { id: r.id, projectDir: r.project_dir, lastOpened: r.last_opened, name: r.name ?? undefined };
 }
 
 function toRegistryRecord(e: ProjectRegistryEntry): RegistryEntryRecord {
-  return { id: e.id, project_dir: e.projectDir, last_opened: e.lastOpened };
+  return { id: e.id, project_dir: e.projectDir, last_opened: e.lastOpened, name: e.name ?? null };
 }
 
 export const getAppDataDir = (): Promise<string> =>

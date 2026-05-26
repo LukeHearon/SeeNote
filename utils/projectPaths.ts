@@ -4,6 +4,13 @@ function stripTrailingSep(p: string): string {
   return p.replace(/[/\\]+$/, '');
 }
 
+/** Last path segment of a file or directory path (trailing separators ignored). */
+export function basename(p: string): string {
+  const stripped = stripTrailingSep(p);
+  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf('\\'));
+  return idx >= 0 ? stripped.slice(idx + 1) : stripped;
+}
+
 function joinPath(base: string, rest: string): string {
   const baseClean = stripTrailingSep(base);
   const restClean = rest.replace(/^(?:\.[/\\]+)+/, '').replace(/^[/\\]+/, '');
@@ -86,5 +93,8 @@ export function buildProject(
     settings,
     mediaDirectoryAbs: resolveProjectPath(registry.projectDir, settings.mediaDirectory),
     annotationDirectoryAbs: resolveProjectPath(registry.projectDir, settings.annotationDirectory),
+    buzzdetectDirectoryAbs: settings.buzzdetectDirectory
+      ? resolveProjectPath(registry.projectDir, settings.buzzdetectDirectory)
+      : null,
   };
 }

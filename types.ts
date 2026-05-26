@@ -51,6 +51,24 @@ export interface ProjectUiSettings {
   zoomSec?: number;                 // spectrogram visible duration
   activeTrackPath?: string | null;  // path of last-opened track, relative to project.mediaDirectoryAbs
   windowBounds?: WindowBounds;      // app window position and size
+
+  // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
+  buzzdetectEnabled?: boolean;             // panel shown/hidden
+  buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
+  buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
+  buzzdetectPanelHeight?: number;          // px height of the panel
+}
+
+/**
+ * Parsed buzzdetect activations for one track, returned by `read_buzzdetect`.
+ * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
+ * `activation_` prefix already stripped. `binWidth` is inferred from `starts`.
+ */
+export interface BuzzdetectData {
+  binWidth: number;
+  neurons: string[];
+  starts: number[];
+  values: number[][];
 }
 
 /**
@@ -86,6 +104,8 @@ export interface ProjectSettings {
   name: string;
   mediaDirectory: ProjectPath;
   annotationDirectory: ProjectPath;
+  /** Optional directory of buzzdetect `{ident}_buzzdetect.csv` files. */
+  buzzdetectDirectory?: ProjectPath;
   outputFormat: 'txt';
   outputRoundingDecimals?: number;
   annotationTools: AnnotationTool[];
@@ -106,6 +126,13 @@ export interface ProjectRegistryEntry {
   id: string;
   projectDir: string; // absolute, this-machine path
   lastOpened: string; // ISO timestamp
+  /**
+   * Last-known project name, mirrored from settings.json `name` whenever the
+   * project resolves cleanly. Lets a project that has gone missing still show
+   * its real name in the launch list, and lets "Locate" verify the user is
+   * re-linking to the same project rather than a different one.
+   */
+  name?: string;
 }
 
 /**
@@ -121,7 +148,35 @@ export interface Project {
   settings: ProjectSettings;
   mediaDirectoryAbs: string;
   annotationDirectoryAbs: string;
+  /** Resolved absolute buzzdetect directory, or null when not configured. */
+  buzzdetectDirectoryAbs: string | null;
 }
+
+/** Existence of one of a project's configured directories, reported during re-link. */
+export interface RelinkDirStatus {
+  label: string;   // 'Media' | 'Annotations' | 'buzzdetect'
+  path: string;    // resolved absolute path that was checked
+  exists: boolean;
+}
+
+/**
+ * Snapshot handed to the re-link confirmation UI: which directories were found
+ * at the chosen location, and whether the on-disk project name differs from the
+ * name SeeNote has listed for this entry.
+ */
+export interface RelinkInfo {
+  internalName: string;  // name SeeNote has on file for this entry (registry / folder)
+  settingsName: string;  // name read from the chosen folder's .seenote/settings.json
+  nameConflict: boolean;
+  dirs: RelinkDirStatus[];
+}
+
+/** The user's decision in the re-link confirmation UI. `name` is the name to keep.
+ *  `dirOverrides` maps label ('Media' | 'Annotations' | 'buzzdetect') → new absolute path
+ *  for any directories the user relocated via the "Locate" button. */
+export type RelinkResolution =
+  | { action: 'cancel' }
+  | { action: 'relink'; name: string; dirOverrides?: Record<string, string> };
 
 /**
  * One row in the launch screen list. `ok` entries have a fully-loaded
