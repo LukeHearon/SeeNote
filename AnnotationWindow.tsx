@@ -1204,21 +1204,50 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [handleAnnotationsCommit]);
 
   const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
+    const tool = annotationTools[toolIndex];
+    if (!tool) return;
+    const oldText = tool.text;
+
     setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
     setAnnotations(prev => prev.map(a => {
-      const tool = annotationTools[toolIndex];
-      if (!tool) return a;
-      // Update text for annotations linked to this tool
       if (a.toolKey === tool.key && a.toolKey !== '0') {
         return { ...a, text: newText, color: newColor };
       }
-      // Reassociate Custom annotations matching the new name to this tool
       if (a.toolKey === '0' && a.text === newText && tool.key !== null) {
         return { ...a, toolKey: tool.key!, color: newColor };
       }
       return a;
     }));
-  }, [annotationTools]);
+
+    // If only the color changed, no file text updates are needed.
+    if (oldText === newText) return;
+
+    // Rename matching annotations in every other track's annotation file on disk.
+    // The current track's file will be updated by the auto-save triggered above.
+    for (const t of allTracks) {
+      if (t === trackPath) continue;
+      const annotPath = getAnnotationPath(t);
+      if (!annotPath) continue;
+      (async () => {
+        try {
+          const content = await readTextFile(annotPath);
+          if (!content) return;
+          let changed = false;
+          const updated = content.split('\n').map(line => {
+            const parts = line.split('\t');
+            if (parts.length >= 3 && parts.slice(2).join('\t') === oldText) {
+              changed = true;
+              return `${parts[0]}\t${parts[1]}\t${newText}`;
+            }
+            return line;
+          });
+          if (changed) await writeTextFile(annotPath, updated.join('\n'));
+        } catch {
+          // No annotation file for this track — nothing to update.
+        }
+      })();
+    }
+  }, [annotationTools, allTracks, trackPath, getAnnotationPath]);
 
   const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
     const tool = annotationTools[toolIndex];

@@ -80,7 +80,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
         </div>
 
         {willRenameAnnotations && (
-          <p className="text-xs text-amber-400">Will rename {linkedCount} annotation(s)</p>
+          <p className="text-xs text-amber-400">Will rename annotations across all tracks (at least {linkedCount} in current track)</p>
         )}
         {customMatchCount > 0 && (
           <p className="text-xs text-blue-400">Will reassociate {customMatchCount} Custom annotation(s) to this tool</p>
