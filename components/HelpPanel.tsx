@@ -126,7 +126,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
               <Section title="File Panel" target="file-panel">
                 <p>
-                  Lists every track in the project directory. Tracks with existing annotations show a count badge.
+                  Lists every track in the project directory. Tracks with existing annotations are highlighted in the list.
                   Click any track to open it, or use <Kbd>Cmd+↑</Kbd> / <Kbd>Cmd+↓</Kbd> to step through tracks in order.
                   Right-click a track to reveal in Finder or reveal its annotation file.
                 </p>
@@ -140,6 +140,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white"><Kbd>Z</Kbd>:</span> toggle zoom state — restores your last zoomed viewport when turning on, saves it when turning off.</li>
                   <li><span className="text-white"><Kbd>Shift+Z</Kbd>:</span> toggle the marquee drawing tool. While armed, drag a box over the video to zoom into that region. Press <Kbd>Esc</Kbd> mid-drag to cancel.</li>
+                  <li><span className="text-white"><Kbd>=</Kbd> / <Kbd>+</Kbd> / <Kbd>-</Kbd>:</span> zoom in / out from the current viewport center (while zoomed).</li>
                   <li><span className="text-white">Pan:</span> while zoomed, scroll (trackpad two-finger or mouse wheel) over the video panel to pan around.</li>
                   <li><span className="text-white">Zoom in / out / reset:</span> buttons available whenever zoomed in.</li>
                   <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view.</li>
@@ -344,6 +345,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 { keys: 'Shift+F', label: 'Ready filter tool (drag to draw band)' },
                 { keys: 'Z', label: 'Toggle video zoom state (saves/restores last viewport)' },
                 { keys: 'Shift+Z', label: 'Toggle marquee zoom drawing tool' },
+                { keys: '= / + / -', label: 'Zoom video in / out (while zoomed)' },
                 { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
                 { keys: 'Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z', label: 'Undo / redo last change in Annotation Tool Settings (while open)' },
               ]} />
