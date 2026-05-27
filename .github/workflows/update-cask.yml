@@ -1,0 +1,38 @@
+name: Update Homebrew Cask
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-cask:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download macOS DMG and update Homebrew cask
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          DMG_NAME="SeeNote-macOS.dmg"
+
+          gh release download "$TAG" \
+            --repo LukeHearon/SeeNote \
+            --pattern "$DMG_NAME" \
+            --dir /tmp/dmgs
+
+          SHA=$(shasum -a 256 "/tmp/dmgs/${DMG_NAME}" | awk '{print $1}')
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
+          printf 'cask "seenote" do\n  version "%s"\n  sha256 "%s"\n\n  url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"\n  name "SeeNote"\n  desc "Audio/video annotation tool for building ML training datasets"\n  homepage "https://github.com/LukeHearon/SeeNote"\n\n  app "SeeNote.app"\nend\n' \
+            "${VERSION}" "${SHA}" > /tmp/tap/Casks/seenote.rb
+
+          cd /tmp/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/seenote.rb
+          git commit -m "Update seenote cask to ${VERSION}"
+          git push
