@@ -81,7 +81,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           REPO="${{ github.repository }}"
           TAG="${GITHUB_REF_NAME}"
-          RELEASE_ID=$(gh release view "$TAG" --repo "$REPO" --json id --jq .id)
+          RELEASE_ID=$(gh api "repos/${REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
 
           rename_asset() {
             local from="$1"
