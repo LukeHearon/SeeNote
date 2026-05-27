@@ -31,6 +31,12 @@ The time-axis elements that MUST stay in lockstep:
 - **Keep `components/HelpPanel.tsx` current**: when a user-facing behavior or hotkey changes, update the relevant Section and Shortcuts entry in the same change.
 - **Tauri IPC**: never call `invoke()` directly from components. All Rust commands are wrapped in `utils/tauriCommands.ts` or `utils/projectCommands.ts` — add a wrapper there. When adding a new Rust command: implement in `src-tauri/src/commands/*.rs`, register in `src-tauri/src/lib.rs` `invoke_handler!`, then add a TypeScript wrapper.
 
+## Tests
+
+- Frontend (vitest, node env): `npm test`. Specs live in `tests/**/*.test.ts` and target pure functions in `utils/` and `MultiTierSpectrogramCache.ts`. `tests/setup.ts` mocks `@tauri-apps/api/core` so modules that call `invoke()` at construction time don't blow up.
+- Rust: `cargo test --manifest-path src-tauri/Cargo.toml`. Unit tests live alongside the modules they cover (`audio/decoder.rs`, `audio/fft.rs`, `commands/filesystem.rs`). One test in `decoder.rs` (`chunked_matches_oneshot`) is `#[ignore]`d — it needs a real fixture at `local/test.mp3`.
+- When adding new pure functions to `utils/`, add a corresponding test. When touching sample/time/pixel math, FFT layout, path resolution, or annotation export, run the suite — those tests pin the cornerstone time-axis-synchrony invariant and the portable-project path contract.
+
 ## Releasing a new version
 
 `npm version <x.y.z>` then `git push --follow-tags`. This commits, tags, and syncs the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`. The GitHub Actions workflow picks up the tag and builds a draft release.
