@@ -23,6 +23,7 @@ interface ToolbarProps {
   onSeek: (time: number, scroll?: boolean) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
+  onAnnotationBoundsChange?: (start: number, end: number) => void;
   showSettings?: boolean;
   onToggleSettings?: () => void;
   playbackSpeed: number;
@@ -81,6 +82,7 @@ export default function Toolbar({
   onSeek,
   onSelectionChange,
   onBoundAnnotationChange,
+  onAnnotationBoundsChange,
   showSettings,
   onToggleSettings,
   playbackSpeed,
@@ -226,13 +228,22 @@ export default function Toolbar({
   const commitTimeEdit = (raw: string) => {
     if (!editingTimeField) return;
 
-    // selDur without selection: allow negative durations (playhead ± dur), handled before parseTimestamp
-    if (editingTimeField === 'selDur' && !selection && !isPlaying) {
+    const applySelection = (s: { start: number; end: number }) => {
+      onSelectionChange(s);
+      onAnnotationBoundsChange?.(s.start, s.end);
+    };
+
+    // selDur accepts negative values (anchor is always selection.start / currentTime),
+    // so handle it with parseFloat before parseTimestamp (which rejects negatives).
+    if (editingTimeField === 'selDur') {
       const dur = parseFloat(raw.trim());
       if (!isNaN(dur)) {
-        const a = Math.max(0, Math.min(duration, Math.min(currentTime, currentTime + dur)));
-        const b = Math.max(0, Math.min(duration, Math.max(currentTime, currentTime + dur)));
-        if (a !== b) onSelectionChange({ start: a, end: b });
+        const anchor = selection ? selection.start : (!isPlaying ? currentTime : null);
+        if (anchor !== null) {
+          const a = Math.max(0, Math.min(duration, Math.min(anchor, anchor + dur)));
+          const b = Math.max(0, Math.min(duration, Math.max(anchor, anchor + dur)));
+          if (a !== b) applySelection({ start: a, end: b });
+        }
       }
       setEditingTimeField(null);
       setEditingTimeRaw('');
@@ -245,23 +256,15 @@ export default function Toolbar({
       if (editingTimeField === 'time') {
         onSeek(clamped, true);
       } else if (editingTimeField === 'selStart') {
-        if (selection) {
-          onSelectionChange({ start: clamped, end: Math.max(clamped, selection.end) });
-        } else if (!isPlaying) {
-          const a = Math.min(clamped, currentTime);
-          const b = Math.max(clamped, currentTime);
-          if (a !== b) onSelectionChange({ start: a, end: b });
-        }
+        const other = selection ? selection.end : currentTime;
+        const a = Math.max(0, Math.min(duration, Math.min(clamped, other)));
+        const b = Math.max(0, Math.min(duration, Math.max(clamped, other)));
+        if (a !== b) applySelection({ start: a, end: b });
       } else if (editingTimeField === 'selEnd') {
-        if (selection) {
-          onSelectionChange({ start: selection.start, end: Math.max(selection.start, clamped) });
-        } else if (!isPlaying) {
-          const a = Math.min(clamped, currentTime);
-          const b = Math.max(clamped, currentTime);
-          if (a !== b) onSelectionChange({ start: a, end: b });
-        }
-      } else if (editingTimeField === 'selDur' && selection) {
-        onSelectionChange({ start: selection.start, end: Math.min(duration, selection.start + Math.max(0, parsed)) });
+        const other = selection ? selection.start : currentTime;
+        const a = Math.max(0, Math.min(duration, Math.min(clamped, other)));
+        const b = Math.max(0, Math.min(duration, Math.max(clamped, other)));
+        if (a !== b) applySelection({ start: a, end: b });
       }
     }
     setEditingTimeField(null);

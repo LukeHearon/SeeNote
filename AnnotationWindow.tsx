@@ -1481,6 +1481,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     else activationStack.remove('selection');
   }, [activationStack]);
 
+  // Called by Toolbar time-field edits to sync the bound annotation's bounds.
+  const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
+    if (!boundAnnotationId) return;
+    handleAnnotationsCommit(annotations.map(a =>
+      a.id === boundAnnotationId ? { ...a, start, end } : a
+    ));
+  }, [boundAnnotationId, annotations, handleAnnotationsCommit]);
+
   // buzzdetect panel callbacks.
   const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
     setBuzzdetectThresholds(prev => ({ ...prev, [neuron]: value }));
@@ -1809,6 +1817,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                onPlay={togglePlay}
                onSeek={seek}
                onSelectionChange={handleSelectionChange}
+               onAnnotationBoundsChange={handleToolbarAnnotationBoundsChange}
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
