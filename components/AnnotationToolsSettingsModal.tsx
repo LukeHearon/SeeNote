@@ -3,6 +3,7 @@ import { X, GripVertical, Settings, Plus, Trash2 } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
+import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
 
 interface Props {
   annotationTools: AnnotationTool[];
@@ -404,35 +405,15 @@ export default function AnnotationToolsSettingsModal({
         const tool = annotationTools[idx];
         const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
         const close = () => setDeletingToolIndex(null);
-        return (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
-            <div className="bg-gray-900 border border-gray-700 rounded-xl w-80 p-5 shadow-2xl flex flex-col gap-4">
-              <p className="text-sm text-white">
-                Delete "{tool?.text}"? It has {linkedCount} linked annotation(s).
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  onClick={close}
-                  className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => { withSnapshot(() => onDeleteTool(idx, 'delete')); close(); }}
-                  className="px-3 py-1.5 text-sm text-white bg-red-600 hover:bg-red-500 rounded transition-colors"
-                >
-                  Delete Annotations
-                </button>
-                <button
-                  onClick={() => { withSnapshot(() => onDeleteTool(idx, 'unlink')); close(); }}
-                  className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
-                >
-                  Unlink Annotations
-                </button>
-              </div>
-            </div>
-          </div>
-        );
+        return tool ? (
+          <DeleteToolConfirmDialog
+            tool={tool}
+            linkedCount={linkedCount}
+            onClose={close}
+            onDelete={() => { withSnapshot(() => onDeleteTool(idx, 'delete')); close(); }}
+            onUnlink={() => { withSnapshot(() => onDeleteTool(idx, 'unlink')); close(); }}
+          />
+        ) : null;
       })()}
     </div>
   );

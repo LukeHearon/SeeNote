@@ -23,8 +23,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   const [showPicker, setShowPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
-  const linkedCount = annotations.filter(a => a.toolKey === tool.key).length;
-  const willRenameAnnotations = text.trim() !== tool.text && linkedCount > 0;
+  const willRenameAnnotations = text.trim() !== tool.text;
   const customMatchCount = annotations.filter(a => a.toolKey === '0' && a.text === text.trim()).length;
 
   const swatchColors = HOTKEY_COLORS.slice(1).filter(c => c !== '#64748b');
@@ -80,7 +79,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
         </div>
 
         {willRenameAnnotations && (
-          <p className="text-xs text-amber-400">Will rename annotations across all tracks (at least {linkedCount} in current track)</p>
+          <p className="text-xs text-amber-400">Will rename existing annotations across all tracks</p>
         )}
         {customMatchCount > 0 && (
           <p className="text-xs text-blue-400">Will reassociate {customMatchCount} Custom annotation(s) to this tool</p>

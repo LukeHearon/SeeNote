@@ -22,6 +22,8 @@ import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
+import AnnotationToolEditModal from './components/AnnotationToolEditModal';
+import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar from './components/Toolbar';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
 
@@ -51,6 +53,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
+  // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
+  const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
+  const [panelDeletingToolIndex, setPanelDeletingToolIndex] = useState<number | null>(null);
 
   // Derived from project prop
   const annotationDirectory = project.annotationDirectoryAbs ?? null;
@@ -1621,6 +1626,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onToolActivate={handleToolActivate}
                 onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                 onOpenSettings={() => setShowToolSettings(true)}
+                onEditTool={setPanelEditingToolIndex}
+                onRequestDeleteTool={idx => {
+                  const tool = annotationTools[idx];
+                  const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
+                  if (linkedCount > 0) setPanelDeletingToolIndex(idx);
+                  else handleDeleteTool(idx, 'delete');
+                }}
               />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
@@ -1929,6 +1941,34 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onRestoreToolsState={handleRestoreToolsState}
         />
       )}
+      {panelEditingToolIndex !== null && (
+        <AnnotationToolEditModal
+          tool={annotationTools[panelEditingToolIndex]}
+          toolIndex={panelEditingToolIndex}
+          annotations={annotations}
+          onClose={() => setPanelEditingToolIndex(null)}
+          onPreviewColor={handlePreviewToolColor}
+          onSave={(idx, text, color) => {
+            handleRenameTool(idx, text, color);
+            setPanelEditingToolIndex(null);
+          }}
+        />
+      )}
+      {panelDeletingToolIndex !== null && (() => {
+        const idx = panelDeletingToolIndex;
+        const tool = annotationTools[idx];
+        const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
+        const close = () => setPanelDeletingToolIndex(null);
+        return tool ? (
+          <DeleteToolConfirmDialog
+            tool={tool}
+            linkedCount={linkedCount}
+            onClose={close}
+            onDelete={() => { handleDeleteTool(idx, 'delete'); close(); }}
+            onUnlink={() => { handleDeleteTool(idx, 'unlink'); close(); }}
+          />
+        ) : null;
+      })()}
       <TooltipLayer />
     </div>
   );
