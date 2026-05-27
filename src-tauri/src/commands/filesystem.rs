@@ -259,3 +259,204 @@ pub async fn save_file_dialog(
         _ => None,
     }))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    // ── classify_ext ──────────────────────────────────────────────────────────
+    //
+    // Pure function: works on path strings, no filesystem I/O. Each case
+    // documents the expected (is_audio, is_video) tuple for the given extension.
+
+    #[test]
+    fn classify_ext_audio_extensions() {
+        // Every entry in AUDIO_EXTS should classify as audio.
+        for ext in ["mp3", "flac", "wav", "ogg", "aac", "m4a"] {
+            let p = PathBuf::from(format!("/tmp/song.{ext}"));
+            assert_eq!(classify_ext(&p), (true, false), "ext .{ext} should be audio");
+        }
+    }
+
+    #[test]
+    fn classify_ext_video_extensions() {
+        for ext in ["mp4", "mkv", "mov", "avi", "webm", "m4v"] {
+            let p = PathBuf::from(format!("/tmp/clip.{ext}"));
+            assert_eq!(classify_ext(&p), (false, true), "ext .{ext} should be video");
+        }
+    }
+
+    #[test]
+    fn classify_ext_unknown_extension() {
+        assert_eq!(classify_ext(Path::new("/tmp/notes.xyz")), (false, false));
+        assert_eq!(classify_ext(Path::new("/tmp/readme.txt")), (false, false));
+    }
+
+    #[test]
+    fn classify_ext_no_extension() {
+        assert_eq!(classify_ext(Path::new("/tmp/Makefile")), (false, false));
+        assert_eq!(classify_ext(Path::new("/tmp/no_ext_here")), (false, false));
+    }
+
+    #[test]
+    fn classify_ext_uppercase_is_case_insensitive() {
+        // Implementation lowercases the extension before matching, so .MP3
+        // should be treated identically to .mp3.
+        assert_eq!(classify_ext(Path::new("/tmp/SONG.MP3")), (true, false));
+        assert_eq!(classify_ext(Path::new("/tmp/CLIP.MP4")), (false, true));
+        assert_eq!(classify_ext(Path::new("/tmp/CLIP.WeBm")), (false, true));
+    }
+
+    #[test]
+    fn classify_ext_multiple_dots_uses_final_extension() {
+        // Path::extension() returns only the component after the final dot.
+        assert_eq!(classify_ext(Path::new("/tmp/foo.bar.mp3")), (true, false));
+        assert_eq!(classify_ext(Path::new("/tmp/archive.tar.mp4")), (false, true));
+        // Final extension is unknown even though an earlier component looks like audio.
+        assert_eq!(classify_ext(Path::new("/tmp/foo.mp3.bak")), (false, false));
+    }
+
+    #[test]
+    fn classify_ext_empty_path() {
+        assert_eq!(classify_ext(Path::new("")), (false, false));
+    }
+
+    // ── assert_within_roots ───────────────────────────────────────────────────
+    //
+    // This function calls Path::canonicalize(), which is real filesystem I/O —
+    // the paths must exist on disk. We use the OS temp dir to construct a small
+    // sandbox structure and clean it up afterwards. Each test uses a unique
+    // subdirectory so tests can run in parallel.
+
+    /// Create a unique temp directory tree for a test. Returns the root path.
+    /// The caller is responsible for cleanup via `cleanup_tmp`.
+    fn make_tmp_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir()
+            .join(format!("seenote_fs_test_{tag}_{pid}_{nanos}"));
+        std::fs::create_dir_all(&root).expect("create_dir_all tmp root");
+        root
+    }
+
+    fn cleanup_tmp(p: &Path) {
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn assert_within_roots_direct_child_ok() {
+        let root = make_tmp_root("child");
+        let child_dir = root.join("subdir");
+        std::fs::create_dir_all(&child_dir).unwrap();
+        let child_file = child_dir.join("file.txt");
+        std::fs::write(&child_file, b"hi").unwrap();
+
+        let roots = vec![root.to_string_lossy().to_string()];
+        let res = assert_within_roots(&child_file, &roots);
+        assert!(res.is_ok(), "direct child should be inside root: {res:?}");
+
+        cleanup_tmp(&root);
+    }
+
+    #[test]
+    fn assert_within_roots_path_is_root_ok() {
+        // Documents current behavior: a path equal to the root is considered
+        // "within" the root (Path::starts_with treats a path as starting with
+        // itself).
+        let root = make_tmp_root("isroot");
+        let roots = vec![root.to_string_lossy().to_string()];
+        let res = assert_within_roots(&root, &roots);
+        assert!(res.is_ok(), "root itself should be accepted: {res:?}");
+        cleanup_tmp(&root);
+    }
+
+    #[test]
+    fn assert_within_roots_outside_all_roots_err() {
+        let root = make_tmp_root("outside_a");
+        let other = make_tmp_root("outside_b");
+        let other_file = other.join("f.txt");
+        std::fs::write(&other_file, b"x").unwrap();
+
+        let roots = vec![root.to_string_lossy().to_string()];
+        let res = assert_within_roots(&other_file, &roots);
+        assert!(res.is_err(), "path outside all roots should err, got {res:?}");
+
+        cleanup_tmp(&root);
+        cleanup_tmp(&other);
+    }
+
+    #[test]
+    fn assert_within_roots_empty_roots_allows_any_existing_path() {
+        // Documented behavior in the doc-comment: empty roots = check skipped.
+        let root = make_tmp_root("empty_roots");
+        let file = root.join("f.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let roots: Vec<String> = vec![];
+        let res = assert_within_roots(&file, &roots);
+        assert!(res.is_ok(), "empty roots should skip the check: {res:?}");
+
+        cleanup_tmp(&root);
+    }
+
+    #[test]
+    fn assert_within_roots_substring_prefix_not_treated_as_inside() {
+        // SECURITY: if the implementation used naive string prefix matching, a
+        // path like /tmp/<parent>/root_extra/x would appear to "start with"
+        // /tmp/<parent>/root. Path::starts_with works on path components, so
+        // this should correctly reject the substring-prefix case.
+        let parent = make_tmp_root("prefix_parent");
+        let root_a = parent.join("root");
+        let root_a_lookalike = parent.join("root_extra");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_a_lookalike).unwrap();
+        let evil_file = root_a_lookalike.join("evil.txt");
+        std::fs::write(&evil_file, b"x").unwrap();
+
+        let roots = vec![root_a.to_string_lossy().to_string()];
+        let res = assert_within_roots(&evil_file, &roots);
+        assert!(
+            res.is_err(),
+            "path in sibling dir with shared name prefix must be rejected, got {res:?}"
+        );
+
+        cleanup_tmp(&parent);
+    }
+
+    #[test]
+    fn assert_within_roots_multiple_roots_path_in_one_ok() {
+        let root_a = make_tmp_root("multi_a");
+        let root_b = make_tmp_root("multi_b");
+        let file_in_b = root_b.join("f.txt");
+        std::fs::write(&file_in_b, b"x").unwrap();
+
+        let roots = vec![
+            root_a.to_string_lossy().to_string(),
+            root_b.to_string_lossy().to_string(),
+        ];
+        let res = assert_within_roots(&file_in_b, &roots);
+        assert!(res.is_ok(), "path in second root should be accepted: {res:?}");
+
+        cleanup_tmp(&root_a);
+        cleanup_tmp(&root_b);
+    }
+
+    #[test]
+    fn assert_within_roots_nonexistent_path_errs() {
+        // canonicalize() fails for nonexistent paths; this is current behavior.
+        let root = make_tmp_root("nonexistent");
+        let missing = root.join("does_not_exist.txt");
+
+        let roots = vec![root.to_string_lossy().to_string()];
+        let res = assert_within_roots(&missing, &roots);
+        assert!(res.is_err(), "nonexistent path should err on canonicalize, got {res:?}");
+
+        cleanup_tmp(&root);
+    }
+}
