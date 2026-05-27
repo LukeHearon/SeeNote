@@ -1107,7 +1107,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useHotkeys([
       // Help panel — also fires inside text inputs, since help is universal.
       { key: 'F1', allowInInput: true, handler: () => setShowHelp(prev => !prev) },
-      { key: '?', mods: ['shift'], allowInInput: true, handler: () => setShowHelp(prev => !prev) },
 
       // Mod+key bindings. Order matters: more specific (mod+shift+z) before mod+z.
       { key: 'a', mods: ['mod'], handler: selectAllOrAnnotateFullTrack },

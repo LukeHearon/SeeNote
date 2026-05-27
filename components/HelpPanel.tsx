@@ -359,7 +359,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               ]} />
 
               <ShortcutGroup title="App" rows={[
-                { keys: 'F1 / ?', label: 'Toggle this help panel' },
+                { keys: 'F1', label: 'Toggle this help panel' },
                 { keys: '/ (hold)', label: 'Show tooltips instantly' },
               ]} />
             </>
