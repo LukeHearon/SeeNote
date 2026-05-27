@@ -42,8 +42,8 @@ export const DEFAULT_OUTPUT_ROUNDING_DECIMALS = 4;
 // added here first, then referenced from useState/load paths.
 export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
   minFreq: 0,
-  maxFreq: 22050,
-  fftSize: 1024,
+  maxFreq: 10000,
+  fftSize: 2048,
   frequencyScale: 'mel',
   displayFloor: -100,
   displayCeil: 0,
