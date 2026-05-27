@@ -10,7 +10,7 @@ interface Props {
   annotations: Annotation[];
   onClose: () => void;
   onReorderTools: (newTools: AnnotationTool[]) => void;
-  onRenameTool: (toolIndex: number, newText: string, newColor: string) => void;
+  onRenameTool: (toolIndex: number, newText: string, newColor: string, newDescription?: string) => void;
   // mode 'unlink' reassigns linked annotations to Custom; 'delete' removes them.
   onDeleteTool: (toolIndex: number, mode: 'unlink' | 'delete') => void;
   // Transient live preview of a tool's color while it's being edited (no history).
@@ -56,44 +56,45 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
-function ToolItem({ tool, toolIndex, annotations, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim }: {
+function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim }: {
   tool: AnnotationTool;
   toolIndex: number;
-  annotations: Annotation[];
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onGearClick: () => void;
   onDeleteClick: () => void;
   dim?: boolean;
 }) {
-  const linkedCount = annotations.filter(a => a.toolKey === tool.key).length;
-  // The Custom tool (index 0 / key "0") is reserved and can never be deleted.
   const canDelete = toolIndex !== 0 && tool.key !== '0';
   return (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      className="flex items-center gap-2 bg-slate-800 rounded px-2 group/item flex-1 min-w-0 select-none h-8"
-      style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab', opacity: dim ? 0.35 : 1 }}
-    >
-      <GripVertical size={12} className="text-slate-500 flex-none" />
-      <span className="text-xs text-white truncate flex-1">{tool.text}</span>
-      {linkedCount > 0 && <span className="text-[10px] text-slate-500 flex-none">{linkedCount}</span>}
+    <div className="flex items-center gap-1 flex-1 min-w-0" style={{ opacity: dim ? 0.35 : 1 }}>
+      <div
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        className="flex items-center gap-2 bg-slate-800 rounded px-2 flex-1 min-w-0 select-none h-8"
+        style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab' }}
+      >
+        <GripVertical size={12} className="text-slate-500 flex-none" />
+        <span className="text-xs text-white truncate flex-1">{tool.text}</span>
+      </div>
       <button
         onClick={e => { e.stopPropagation(); onGearClick(); }}
-        className="opacity-0 group-hover/item:opacity-100 p-0.5 rounded text-slate-500 hover:text-slate-300 flex-none"
+        className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 flex-none transition-colors"
+        data-tooltip="Edit tool"
       >
-        <Settings size={10} />
+        <Settings size={12} />
       </button>
-      {canDelete && (
+      {canDelete ? (
         <button
           onClick={e => { e.stopPropagation(); onDeleteClick(); }}
-          className="opacity-0 group-hover/item:opacity-100 p-0.5 rounded text-slate-500 hover:text-red-400 flex-none"
-          title="Delete tool"
+          className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-slate-700 flex-none transition-colors"
+          data-tooltip="Delete tool"
         >
-          <Trash2 size={10} />
+          <Trash2 size={12} />
         </button>
+      ) : (
+        <div className="w-[28px] flex-none" />
       )}
     </div>
   );
@@ -297,7 +298,6 @@ export default function AnnotationToolsSettingsModal({
                       <ToolItem
                         tool={tool}
                         toolIndex={toolIndex}
-                        annotations={annotations}
                         onDragStart={() => beginDrag(toolIndex)}
                         onDragEnd={cancelDrag}
                         onGearClick={() => setEditingToolIndex(toolIndex)}
@@ -352,7 +352,6 @@ export default function AnnotationToolsSettingsModal({
                   <ToolItem
                     tool={tool}
                     toolIndex={toolIndex}
-                    annotations={annotations}
                     onDragStart={() => beginDrag(toolIndex)}
                     onDragEnd={cancelDrag}
                     onGearClick={() => setEditingToolIndex(toolIndex)}
@@ -391,10 +390,10 @@ export default function AnnotationToolsSettingsModal({
           // Push the pre-edit snapshot (captured on open, before any live color
           // preview) so undo restores the original text AND color, then apply
           // the final values.
-          onSave={(idx, text, color) => {
+          onSave={(idx, text, color, description) => {
             undoStack.current.push(editSnapshotRef.current);
             redoStack.current = [];
-            onRenameTool(idx, text, color);
+            onRenameTool(idx, text, color, description);
             setEditingToolIndex(null);
           }}
         />

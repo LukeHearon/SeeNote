@@ -99,6 +99,7 @@ export default function AnnotationToolsPanel({
               label="Custom"
               hotkey={custom.key!}
               onClick={() => onToolActivate(custom.key!)}
+              tooltip={custom.description || undefined}
             />
           </div>
         </div>
@@ -119,6 +120,7 @@ export default function AnnotationToolsPanel({
                   label={tool.text}
                   hotkey={tool.key!}
                   onClick={() => onToolActivate(tool.key!)}
+                  tooltip={tool.description || undefined}
                 />
               </div>
             );

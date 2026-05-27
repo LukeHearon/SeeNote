@@ -1582,11 +1582,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
              };
 
              const isHovered = hoveredAnnotationId === annotation.id;
+             const toolDescription = annotationTools.find(t => t.key === annotation.toolKey)?.description;
 
              return (
                  <div
                     key={annotation.id}
                     className="annotation-item absolute rounded transition-colors duration-200"
+                    {...(toolDescription ? { 'data-tooltip': toolDescription } : {})}
                     style={{
                         left: `${left}px`,
                         width: `${Math.max(2, width)}px`,

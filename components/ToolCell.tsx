@@ -3,10 +3,10 @@ import React from 'react';
 // Compact tool button used in the annotation tools panel.
 // Always renders w-full — callers are responsible for constraining the container width.
 function ToolCell({
-  isActive, color, dotColor, label, hotkey, onClick, dotted,
+  isActive, color, dotColor, label, hotkey, onClick, dotted, tooltip,
 }: {
   isActive: boolean; color: string; dotColor: string; label: string;
-  hotkey: string; onClick: () => void; dotted?: boolean;
+  hotkey: string; onClick: () => void; dotted?: boolean; tooltip?: string;
 }) {
   return (
     <button
@@ -22,7 +22,7 @@ function ToolCell({
           ? (isActive ? 'rgba(255,255,255,0.6)' : '#6b7280')
           : (isActive ? color : undefined),
       }}
-      data-tooltip={label}
+      {...(tooltip ? { 'data-tooltip': tooltip } : {})}
     >
       <span className="w-2 h-2 rounded-full flex-none" style={{ backgroundColor: dotColor }} />
       <span className="flex-1 min-w-0 truncate text-left text-slate-100 leading-tight">{label}</span>

@@ -32,6 +32,7 @@ export interface AnnotationTool {
   key: string | null;  // null = unassigned, "0" = custom, "1"-"9" = hotkey
   text: string;
   color: string;
+  description?: string; // internal memo shown as hover tooltip on annotations
 }
 
 export interface WindowBounds {

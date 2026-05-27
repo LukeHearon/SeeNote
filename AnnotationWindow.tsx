@@ -1207,12 +1207,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleAnnotationsCommit(restoredAnnotations);
   }, [handleAnnotationsCommit]);
 
-  const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string) => {
+  const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string, newDescription?: string) => {
     const tool = annotationTools[toolIndex];
     if (!tool) return;
     const oldText = tool.text;
 
-    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor } : t));
+    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor, description: newDescription } : t));
     setAnnotations(prev => prev.map(a => {
       if (a.toolKey === tool.key && a.toolKey !== '0') {
         return { ...a, text: newText, color: newColor };
@@ -1947,8 +1947,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           annotations={annotations}
           onClose={() => setPanelEditingToolIndex(null)}
           onPreviewColor={handlePreviewToolColor}
-          onSave={(idx, text, color) => {
-            handleRenameTool(idx, text, color);
+          onSave={(idx, text, color, description) => {
+            handleRenameTool(idx, text, color, description);
             setPanelEditingToolIndex(null);
           }}
         />

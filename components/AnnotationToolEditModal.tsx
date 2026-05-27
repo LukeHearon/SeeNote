@@ -12,13 +12,14 @@ interface Props {
   toolIndex: number;
   annotations: Annotation[];
   onClose: () => void;
-  onSave: (toolIndex: number, newText: string, newColor: string) => void;
+  onSave: (toolIndex: number, newText: string, newColor: string, newDescription: string) => void;
   // Live (transient) color preview while the user is changing the color.
   onPreviewColor: (toolIndex: number, color: string) => void;
 }
 
 export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave, onPreviewColor }: Props) {
   const [text, setText] = useState(tool.text);
+  const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
   const [showPicker, setShowPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,17 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           />
         </div>
 
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Description</label>
+          <textarea
+            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-white outline-none focus:border-blue-500 resize-none"
+            rows={3}
+            placeholder="When to use this label…"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+          />
+        </div>
+
         {willRenameAnnotations && (
           <p className="text-xs text-amber-400">Will rename existing annotations across all tracks</p>
         )}
@@ -134,7 +146,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             Cancel
           </button>
           <button
-            onClick={() => { onSave(toolIndex, text.trim(), color); onClose(); }}
+            onClick={() => { onSave(toolIndex, text.trim(), color, description.trim()); onClose(); }}
             className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
           >
             Save
