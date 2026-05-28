@@ -42,6 +42,16 @@ export interface WindowBounds {
   height: number;
 }
 
+/**
+ * Video rendering pipeline for the active track.
+ *  - 'off':   no video element at all
+ *  - 'fast':  always the `<video>` element; cheap, but not sample-accurate with audio
+ *  - 'mixed': `<video>` until a selection is committed, then frame-accurate canvas
+ *             for the selected region. Falls back to 'fast' on non-MP4/MOV files.
+ *  - 'high':  always the WebCodecs+canvas path (frame-accurate). Default.
+ */
+export type VideoMode = 'off' | 'fast' | 'mixed' | 'high';
+
 export interface ProjectUiSettings {
   leftPanelWidth?: number;  // px
   splitRatio?: number;      // 0–1, vertical split between video and spectrogram
@@ -52,6 +62,7 @@ export interface ProjectUiSettings {
   zoomSec?: number;                 // spectrogram visible duration
   activeTrackPath?: string | null;  // path of last-opened track, relative to project.mediaDirectoryAbs
   windowBounds?: WindowBounds;      // app window position and size
+  videoMode?: VideoMode;            // see VideoMode docs
 
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
   buzzdetectEnabled?: boolean;             // panel shown/hidden

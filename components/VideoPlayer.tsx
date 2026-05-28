@@ -12,8 +12,9 @@ interface VideoPlayerProps {
   /** Pitch-preserving speed from the engine — mapped to video.playbackRate so
    *  the picture advances naturally between drift corrections. */
   playbackSpeed: number;
-  /** Authoritative media clock (driven by AudioEngine). The element's
-   *  currentTime is reconciled to this when drift exceeds DRIFT_THRESHOLD_SEC. */
+  /** Authoritative media clock (driven by AudioEngine). The element is eased
+   *  toward this clock by the drift controller below (rate-nudge for small
+   *  drift, a one-shot seek only on a genuine jump). */
   getMediaTime: () => number;
   onDurationChange: (d: number) => void;
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
@@ -32,15 +33,13 @@ interface VideoPlayerProps {
 
 // VideoPlayer renders a <video> element for two cases:
 //   1. Audio tracks — shows a music-icon overlay; the element itself is hidden.
-//   2. Non-ISOBMFF video containers (.webm, .avi, …) that can't be handled by
-//      the WebCodecs frame-source path.
-// For MP4/MOV tracks the CanvasVideoPlayer renders instead; this component is
-// never mounted for those files.
+//   2. Video shown through the browser <video> element — either a non-ISOBMFF
+//      container (.webm, .avi, …) that the WebCodecs frame-source can't demux,
+//      or any MP4/MOV in "Fast" mode (and "Mixed" before a selection exists),
+//      where we deliberately trade frame-accuracy for cheapness.
+// The frame-accurate CanvasVideoPlayer renders instead in "High" mode (and
+// "Mixed" once a selection exists) for MP4/MOV.
 // All audio output comes from AudioEngine; this element is always muted.
-// Max tolerated drift between the muted <video> and the audio engine clock
-// before we hard-set currentTime. 100ms is well under perceptual sync threshold
-// while large enough to avoid thrashing the decoder on every rAF tick.
-const DRIFT_THRESHOLD_SEC = 0.1;
 
 export default function VideoPlayer({
   src,
@@ -62,41 +61,129 @@ export default function VideoPlayer({
     return () => onVideoElement?.(null);
   }, [onVideoElement, src]);
 
+  // Live refs so the single rAF loop below always reads fresh values without
+  // tearing down and re-registering every render (which would reset the drift
+  // state and re-attach the 'seeked' listener each time).
+  const isPlayingRef = useRef(isPlaying);
+  const playbackSpeedRef = useRef(playbackSpeed);
+  const getMediaTimeRef = useRef(getMediaTime);
+  const onDebugLogRef = useRef(onDebugLog);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { playbackSpeedRef.current = playbackSpeed; }, [playbackSpeed]);
+  useEffect(() => { getMediaTimeRef.current = getMediaTime; }, [getMediaTime]);
+  useEffect(() => { onDebugLogRef.current = onDebugLog; }, [onDebugLog]);
+
   // Drive the <video> from the AudioEngine clock. The canvas/WebCodecs path
-  // does this natively; this loop is the equivalent for the fallback element
-  // on platforms without VideoDecoder (older macOS WKWebView) or with
-  // non-ISOBMFF containers. Not frame-perfect — sync is bounded by
-  // DRIFT_THRESHOLD_SEC — but matches the tooltip's promise.
+  // does this natively; this loop is the equivalent for the fallback element.
+  //
+  // Mid-playback seeks (currentTime = …) re-decode from the prior keyframe and,
+  // fired per rAF tick, cascade into multi-second freezes on long-GOP codecs —
+  // the next tick sees stale currentTime and stacks another overlapping seek.
+  // So we NEVER seek to fix accumulated drift while playing. Instead, a
+  // three-zone controller:
+  //   • small drift     → leave the picture alone (rate = speed)
+  //   • moderate drift  → ease playbackRate toward the clock (cheap, no
+  //                       re-decode), with HYSTERESIS: start correcting once
+  //                       drift exceeds NUDGE_START_SEC, then keep correcting
+  //                       until it's driven back under NUDGE_STOP_SEC.
+  //   • drift > HARD_SEEK_SEC → a genuine discontinuity (user click, selection
+  //                       replay, loop). Snap once, gated on 'seeked' so seeks
+  //                       never stack.
+  // The hysteresis matters: if we released the instant drift dipped under the
+  // start threshold, the picture would park right at that edge — both clocks
+  // then run at 1.0, drift stays pinned just below the threshold, and the
+  // slightest scheduler/decode jitter re-trips it. That produced a constant
+  // 1.0↔1.05 sawtooth (visible as stutter). Correcting fully back toward zero
+  // parks us clear of the trip point, so corrections stay rare and gentle.
+  // Video here is a supporting cue for sound ID, not a frame-accurate surface
+  // (that's "High" mode), so the thresholds are generous.
   useEffect(() => {
     if (isAudio) return;
     const video = videoRef.current;
     if (!video) return;
 
+    const NUDGE_START_SEC = 0.1;   // begin rate-correcting once drift exceeds this
+    const NUDGE_STOP_SEC = 0.025;  // …and keep correcting until it's back under this
+    const HARD_SEEK_SEC = 0.5;     // above this: a jump — snap once
+    const MAX_RATE_DELTA = 0.05;   // ±5% clamp on the speed nudge
+    const CORRECTION_GAIN = 0.5;   // drift(s) → fractional rate delta
+
     let rAF: number | null = null;
+    let hardSeekInFlight = false;
+    let correcting = false;
+    const onSeeked = () => { hardSeekInFlight = false; };
+    video.addEventListener('seeked', onSeeked);
+
     const tick = () => {
-      const target = getMediaTime();
+      const target = getMediaTimeRef.current();
+      const playing = isPlayingRef.current;
+      const speed = playbackSpeedRef.current;
+
       // Mirror play/pause. Muted autoplay is permitted; swallow the rejected
       // promise so a stale play() during teardown doesn't surface as an error.
-      if (isPlaying && video.paused) {
+      if (playing && video.paused) {
         void video.play().catch(() => { /* */ });
-      } else if (!isPlaying && !video.paused) {
+      } else if (!playing && !video.paused) {
         video.pause();
       }
-      if (video.playbackRate !== playbackSpeed) {
-        video.playbackRate = playbackSpeed;
+
+      // readyState < HAVE_METADATA means currentTime isn't seekable yet.
+      if (video.readyState >= 1) {
+        const drift = target - video.currentTime; // >0: picture behind audio
+        const absDrift = Math.abs(drift);
+
+        if (absDrift > HARD_SEEK_SEC) {
+          // Discontinuity: snap once, gated on 'seeked' so we never issue an
+          // overlapping seek while the previous one is still decoding.
+          if (!hardSeekInFlight) {
+            hardSeekInFlight = true;
+            video.playbackRate = speed;
+            video.currentTime = target;
+            correcting = false;
+          }
+        } else if (!playing) {
+          // Paused: a seek can't stutter (nothing decodes continuously), so
+          // snap to show the exact frame once drift clears the start threshold.
+          if (absDrift > NUDGE_START_SEC && !hardSeekInFlight) {
+            hardSeekInFlight = true;
+            video.currentTime = target;
+          }
+        } else {
+          // Playing: ease the speed toward the clock instead of seeking.
+          // Enter correction at NUDGE_START_SEC; stay in it until drift is
+          // driven back under NUDGE_STOP_SEC (hysteresis — see header note).
+          if (!correcting && absDrift > NUDGE_START_SEC) {
+            correcting = true;
+            onDebugLogRef.current?.(
+              `[video] drift ${(drift * 1000).toFixed(0)}ms — resyncing picture via playbackRate`,
+            );
+          }
+          if (correcting && absDrift < NUDGE_STOP_SEC) {
+            correcting = false;
+          }
+          if (correcting) {
+            const delta = Math.max(
+              -MAX_RATE_DELTA,
+              Math.min(MAX_RATE_DELTA, drift * CORRECTION_GAIN),
+            );
+            const targetRate = speed * (1 + delta);
+            if (Math.abs(video.playbackRate - targetRate) > 0.002) {
+              video.playbackRate = targetRate;
+            }
+          } else if (video.playbackRate !== speed) {
+            video.playbackRate = speed;
+          }
+        }
       }
-      // Reconcile drift. readyState < HAVE_METADATA means currentTime hasn't
-      // been seekable yet — skip until metadata loads.
-      if (video.readyState >= 1 && Math.abs(video.currentTime - target) > DRIFT_THRESHOLD_SEC) {
-        video.currentTime = target;
-      }
+
       rAF = requestAnimationFrame(tick);
     };
     rAF = requestAnimationFrame(tick);
     return () => {
       if (rAF !== null) cancelAnimationFrame(rAF);
+      video.removeEventListener('seeked', onSeeked);
     };
-  }, [isAudio, isPlaying, playbackSpeed, getMediaTime]);
+  }, [isAudio, src]);
 
   useEffect(() => {
     const video = videoRef.current;

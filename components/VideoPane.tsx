@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, VideoOff } from 'lucide-react';
 import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
 import { useHotkeys } from '../hooks/useHotkeys';
+import type { VideoMode } from '../types';
 import {
   DEFAULT_VIEWPORT,
   computeContentRect,
@@ -26,6 +27,14 @@ interface VideoPaneProps {
   getMediaTime: () => number;
   onDebugLog: (msg: string, type?: 'info' | 'error') => void;
   onDurationChange: (d: number) => void;
+  /** Active video-rendering mode. Determines which player is mounted and
+   *  what the inaccuracy warning says. */
+  videoMode: VideoMode;
+  /** Whether the user has an active selection. Used by `mixed` mode to flip
+   *  to the frame-accurate canvas path. */
+  hasSelection: boolean;
+  /** Persist a mode change picked from the corner picker. */
+  onVideoModeChange: (mode: VideoMode) => void;
 }
 
 export default function VideoPane({
@@ -40,9 +49,44 @@ export default function VideoPane({
   getMediaTime,
   onDebugLog,
   onDurationChange,
+  videoMode,
+  hasSelection,
+  onVideoModeChange,
 }: VideoPaneProps) {
-  const usingCanvas = !!frameSource && !isAudioTrack;
-  const hasVideo = !isAudioTrack && (usingCanvas || !!videoSrc);
+  // Pick the renderer based on mode.
+  //   off:   custom "Video Disabled" placeholder (no element to drive)
+  //   fast:  always <video> (cheap, ~100 ms drift vs audio clock)
+  //   mixed: <video> by default; canvas (frame-accurate) once a selection exists
+  //   high:  canvas whenever a frame source is available
+  const canvasAvailable = !!frameSource && !isAudioTrack;
+  const wantsCanvas =
+    videoMode === 'high' ||
+    (videoMode === 'mixed' && hasSelection);
+  const usingCanvas = canvasAvailable && wantsCanvas;
+  // True when mode=off but the active track is a video — the pane displays a
+  // "Video Disabled" placeholder instead of routing through <video>.
+  const showDisabledPlaceholder = videoMode === 'off' && !isAudioTrack && !!videoSrc;
+  const hasVideo = !isAudioTrack && videoMode !== 'off' && (usingCanvas || !!videoSrc);
+
+  // Pick the warning shown in the top-left corner.
+  //   fast                                 → always: "not frame-accurate"
+  //   mixed + no selection                 → "not frame-accurate until you select"
+  //   mixed + selection but no frameSource → "not frame-accurate (this format)"
+  //   high + videoSrc but no frameSource   → "format not supported by frame-accurate pipeline"
+  let warning: string | null = null;
+  if (videoSrc && !isAudioTrack && videoMode !== 'off') {
+    if (videoMode === 'fast') {
+      warning = 'Fast video mode: the picture is not frame-accurate with the audio. Switch to High in Project Settings for frame-perfect playback.';
+    } else if (videoMode === 'mixed') {
+      if (!hasSelection) {
+        warning = 'Mixed video mode: the picture is not frame-accurate until you make a selection. Selected regions are decoded frame-by-frame.';
+      } else if (!frameSource) {
+        warning = "Mixed video mode: this file's format isn't supported by the frame-accurate pipeline, so playback stays in the <video> fallback even inside a selection.";
+      }
+    } else if (videoMode === 'high' && !frameSource) {
+      warning = "This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect.";
+    }
+  }
 
   // ── Zoom state (shared model; reset whenever the track changes) ────────
   const [viewport, setViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
@@ -162,12 +206,17 @@ export default function VideoPane({
       ref={containerRef}
       className="flex-1 relative bg-black flex justify-center items-center"
     >
-      {/* MP4/MOV video tracks use the frame-source path: a canvas driven
-          by the audio engine clock, with frames decoded via WebCodecs and
-          cached by timestamp. All other cases (audio tracks, non-ISOBMFF
-          video containers, or a failed frame-source open) fall back to the
-          original <video>-element player. */}
-      {usingCanvas ? (
+      {/* Renderer selection:
+       *    - "Video Disabled" placeholder when mode=off on a video track
+       *    - canvas: frame-accurate WebCodecs path for MP4/MOV
+       *    - <video>: cheap, drifts ~100 ms vs the audio clock */}
+      {showDisabledPlaceholder ? (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-black text-slate-500 select-none">
+          <VideoOff size={48} className="mb-3 opacity-50" />
+          <p className="text-lg font-medium">Video Disabled</p>
+          <p className="text-xs text-slate-600 mt-1">Switch modes with the picker in the bottom-left</p>
+        </div>
+      ) : usingCanvas ? (
         <CanvasVideoPlayer
           key={frameSourceVersion}
           frameSource={frameSource!}
@@ -217,14 +266,45 @@ export default function VideoPane({
           <Loader2 className="animate-spin text-white" size={40} />
         </div>
       )}
-      {videoSrc && !isAudioTrack && !frameSource && (
+      {warning && (
         <div
           className="absolute top-2 left-2 z-30 text-[#e65161] cursor-default"
-          data-tooltip="This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect."
+          data-tooltip={warning}
         >
           <AlertCircle size={20} />
         </div>
       )}
+
+      {/* Bottom-left video-mode picker. Bottom-right is taken by the zoom
+          minimap when zoomed; this corner is clear. */}
+      <div
+        className="absolute left-2 bottom-2 z-30 flex gap-1 rounded-md bg-slate-900/70 backdrop-blur-sm border border-slate-700 p-1 pointer-events-auto"
+      >
+        {(['off', 'fast', 'mixed', 'high'] as VideoMode[]).map(mode => {
+          const tooltips: Record<VideoMode, string> = {
+            off: 'No video display. Audio only — lightest on the CPU.',
+            fast: "Browser <video> element. Cheap, but the picture drifts up to ~100 ms from the audio.",
+            mixed: 'Cheap <video> until you make a selection, then frame-accurate decoding for that region.',
+            high: 'Frame-accurate WebCodecs decoding throughout. Heaviest on the CPU. MP4/MOV only — other formats fall back automatically.',
+          };
+          const active = videoMode === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onVideoModeChange(mode)}
+              data-tooltip={tooltips[mode]}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                active
+                  ? 'bg-[#e65161] text-white'
+                  : 'text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {mode.charAt(0).toUpperCase() + mode.slice(1)}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

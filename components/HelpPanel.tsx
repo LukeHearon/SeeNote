@@ -132,6 +132,21 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
+              <Section title="Video Mode">
+                <p>
+                  The picker in the <span className="text-white">bottom-left corner of the video pane</span> chooses how video is rendered. Saved per project:
+                </p>
+                <ul className="space-y-1 list-none">
+                  <li><span className="text-white">Off:</span> no video — audio only. Lightest on the CPU.</li>
+                  <li><span className="text-white">Fast:</span> browser <span className="font-mono text-xs">&lt;video&gt;</span> element. Cheap but can drift up to ~100 ms from the audio — not frame-accurate.</li>
+                  <li><span className="text-white">Mixed:</span> <span className="font-mono text-xs">&lt;video&gt;</span> until you make a selection, then frame-accurate decoding for that region. Good for older hardware.</li>
+                  <li><span className="text-white">High:</span> frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU.</li>
+                </ul>
+                <p className="text-slate-400 text-xs">
+                  When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level.
+                </p>
+              </Section>
+
               <Section title="Video Zoom" target="video-panel">
                 <p>
                   When the active track has video, controls appear at the{' '}

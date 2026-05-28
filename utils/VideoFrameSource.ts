@@ -165,15 +165,20 @@ export class VideoFrameSource {
    *  within appendBuffer() before cleanBuffers() destroys the stream data.
    *  We call seek()+start() inside onReady so extraction happens while the
    *  data is still live. */
-  async ensureRange(startSec: number, endSec: number): Promise<void> {
+  async ensureRange(startSec: number, endSec: number, caller = 'unknown'): Promise<void> {
     if (!this.opened || !this.decoder || this.closed || !this.rawBuffer) return;
     if (endSec < startSec) return;
+
+    const callToken = this.rangeToken; // snapshot before any bump
+    this.opts.onDebugLog?.(
+      `[ensureRange] caller=${caller} range=${startSec.toFixed(3)}-${endSec.toFixed(3)}s token-before=${callToken} cached=${this.frameCache.length}`,
+    );
 
     this.activeRange = { start: startSec, end: endSec };
 
     const ts = this.trackTimescale;
     const startCts = startSec * ts;
-    const endCts = endSec * ts;
+    let endCts = endSec * ts;
 
     // Find the RAP at/before startSec and the last sample at/before endSec.
     let keyIdx = -1;
@@ -190,21 +195,51 @@ export class VideoFrameSource {
       endIdx = i;
     }
 
-    // Skip if all frames in this range are already cached — and don't bump the
-    // token so any in-flight decode of an adjacent range isn't cancelled.
-    let allCached = true;
+    // Walk the range to find which samples are missing. The "loosen the
+    // selection" case (extend an already-cached region at either edge) is
+    // common, and on slow hardware we don't want to re-feed the cached middle
+    // through VideoDecoder just to have onDecodedFrame discard the dupes.
+    // Two endpoints we need:
+    //   firstMissingIdx — first uncached sample index ≥ keyIdx
+    //   lastMissingIdx  — last  uncached sample index ≤ endIdx
+    let firstMissingIdx = -1;
+    let lastMissingIdx = -1;
     for (let i = keyIdx; i <= endIdx; i++) {
       const tsMicros = Math.round((this.samples[i].cts / ts) * 1e6);
-      if (!this.hasFrameAt(tsMicros)) { allCached = false; break; }
+      if (!this.hasFrameAt(tsMicros)) {
+        if (firstMissingIdx === -1) firstMissingIdx = i;
+        lastMissingIdx = i;
+      }
     }
-    if (allCached) {
+    if (firstMissingIdx === -1) {
+      // Whole range cached — keep current eviction window, leave token alone
+      // so any in-flight decode of an adjacent range isn't cancelled.
+      this.opts.onDebugLog?.(
+        `[ensureRange] caller=${caller} FAST-PATH all cached, token unchanged at ${this.rangeToken}`,
+      );
       this.evictOutsideWindow();
       return;
     }
 
+    // Narrow the decode to the smallest window that still produces the
+    // missing frames. Delta frames need their GOP's reference frames, so the
+    // decode must start at the latest RAP at-or-before firstMissingIdx; the
+    // upper bound can stop at lastMissingIdx. This skips cleanly past leading
+    // and trailing already-cached GOPs.
+    let narrowKeyIdx = keyIdx;
+    for (let i = firstMissingIdx; i >= 0; i--) {
+      if (this.samples[i].is_sync) { narrowKeyIdx = i; break; }
+    }
+    keyIdx = narrowKeyIdx;
+    endIdx = lastMissingIdx;
+    endCts = this.samples[endIdx].cts;
+
     // Only bump the token (cancelling any previous in-flight decode) when we
     // actually need to do work.
     const token = ++this.rangeToken;
+    this.opts.onDebugLog?.(
+      `[ensureRange] caller=${caller} TOKEN BUMP to ${token} (was ${token - 1}), missing=[${firstMissingIdx}..${lastMissingIdx}] of [${keyIdx}..${endIdx}]`,
+    );
 
     const endSampleNumber = this.samples[endIdx].number;
     const wallStart = performance.now();
