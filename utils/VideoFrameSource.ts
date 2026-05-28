@@ -67,6 +67,11 @@ export class VideoFrameSource {
   private closed = false;
   private currentPlayheadSec = 0;
   private activeRange: { start: number; end: number } | null = null;
+  /** User's current selection — frames in this range are never evicted, even
+   *  under memory pressure.  Set via pinSelectionRange(); cleared to null when
+   *  the selection is cleared. Distinct from activeRange, which is overwritten
+   *  by every ensureRange() call (including the rolling prefetch). */
+  private pinnedRange: { start: number; end: number } | null = null;
   /** Bumped on every ensureRange() call; stale in-flight decode phases ignore
    *  their results when this no longer matches their captured token. */
   private rangeToken = 0;
@@ -81,6 +86,17 @@ export class VideoFrameSource {
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
+
+  /** Mark a range whose frames must never be evicted under memory pressure.
+   *  Call this whenever the user sets/updates a selection; call
+   *  clearPinnedRange() when the selection is cleared. */
+  pinSelectionRange(startSec: number, endSec: number): void {
+    this.pinnedRange = { start: startSec, end: endSec };
+  }
+
+  clearPinnedRange(): void {
+    this.pinnedRange = null;
+  }
 
   async open(assetUrl: string): Promise<{ width: number; height: number; durationSec: number }> {
     if (this.opened) throw new Error('VideoFrameSource already opened');
@@ -178,7 +194,7 @@ export class VideoFrameSource {
 
     const ts = this.trackTimescale;
     const startCts = startSec * ts;
-    let endCts = endSec * ts;
+    const endCts = endSec * ts;
 
     // Find the RAP at/before startSec and the last sample at/before endSec.
     let keyIdx = -1;
@@ -195,44 +211,50 @@ export class VideoFrameSource {
       endIdx = i;
     }
 
-    // Walk the range to find which samples are missing. The "loosen the
-    // selection" case (extend an already-cached region at either edge) is
-    // common, and on slow hardware we don't want to re-feed the cached middle
-    // through VideoDecoder just to have onDecodedFrame discard the dupes.
-    // Two endpoints we need:
-    //   firstMissingIdx — first uncached sample index ≥ keyIdx
-    //   lastMissingIdx  — last  uncached sample index ≤ endIdx
+    // Walk the candidate span to find which *display* frames are missing.
+    // Samples are in DECODE order and, with B-frames (e.g. avc1 High profile),
+    // cts is NOT monotonic in index — so test each sample's cts individually
+    // rather than assuming a contiguous "visible" suffix. Frames whose cts is
+    // outside [startCts, endCts] are decode scaffolding: they're fed to the
+    // decoder for references but must NOT be required resident in the cache.
+    // (An earlier version cut on a decode-order prefix; with B-frame reorder
+    // that swept in pre-selection frames whose cts < startCts. Those sit just
+    // below a pinned selection, get evicted, and forced a full-GOP re-decode on
+    // every replay — the stutter this guards against.)
     let firstMissingIdx = -1;
     let lastMissingIdx = -1;
     for (let i = keyIdx; i <= endIdx; i++) {
-      const tsMicros = Math.round((this.samples[i].cts / ts) * 1e6);
+      const cts = this.samples[i].cts;
+      if (cts < startCts || cts > endCts) continue; // scaffolding, not required resident
+      const tsMicros = Math.round((cts / ts) * 1e6);
       if (!this.hasFrameAt(tsMicros)) {
         if (firstMissingIdx === -1) firstMissingIdx = i;
         lastMissingIdx = i;
       }
     }
     if (firstMissingIdx === -1) {
-      // Whole range cached — keep current eviction window, leave token alone
-      // so any in-flight decode of an adjacent range isn't cancelled.
+      // All visible frames cached — leave token alone so any in-flight decode
+      // of an adjacent range isn't cancelled.
       this.opts.onDebugLog?.(
-        `[ensureRange] caller=${caller} FAST-PATH all cached, token unchanged at ${this.rangeToken}`,
+        `[ensureRange] caller=${caller} FAST-PATH all visible cached, token unchanged at ${this.rangeToken}`,
       );
       this.evictOutsideWindow();
       return;
     }
 
-    // Narrow the decode to the smallest window that still produces the
-    // missing frames. Delta frames need their GOP's reference frames, so the
-    // decode must start at the latest RAP at-or-before firstMissingIdx; the
-    // upper bound can stop at lastMissingIdx. This skips cleanly past leading
-    // and trailing already-cached GOPs.
+    // Narrow the decode to the smallest window that still produces the missing
+    // frames.  Delta frames need their GOP's reference frames, so the decode
+    // must start at the RAP at-or-before firstMissingIdx; the upper bound can
+    // stop at lastMissingIdx, skipping already-cached trailing GOPs.
     let narrowKeyIdx = keyIdx;
     for (let i = firstMissingIdx; i >= 0; i--) {
       if (this.samples[i].is_sync) { narrowKeyIdx = i; break; }
     }
     keyIdx = narrowKeyIdx;
     endIdx = lastMissingIdx;
-    endCts = this.samples[endIdx].cts;
+    // The feed now stops on decode-order sample number (endSampleNumber below),
+    // so endCts is intentionally left at the requested range end and not
+    // narrowed to endIdx's cts.
 
     // Only bump the token (cancelling any previous in-flight decode) when we
     // actually need to do work.
@@ -269,7 +291,15 @@ export class VideoFrameSource {
         file.onSamples = (_id: number, _user: unknown, samples: Sample[]) => {
           if (token !== this.rangeToken || this.closed) { file.stop(); return; }
           for (const sample of samples) {
-            if (sample.cts > endCts) { file.stop(); return; }
+            // Stop strictly on decode-order sample number (below), never on cts.
+            // Samples arrive in DECODE order; with B-frames a high-cts anchor
+            // (e.g. the P-frame of an IBBP group) is decoded *before* the
+            // lower-cts B-frames that reference it. Stopping when cts > endCts
+            // would cut the feed off at that anchor and starve the in-range
+            // B-frames that follow it in decode order — they'd never decode and
+            // would be re-requested on every replay. Feeding the full
+            // [keyIdx..endIdx] decode-order span is safe: H.264 guarantees a
+            // frame's references all precede it in decode order.
             if (!sample.data) {
               this.opts.onDebugLog?.(`[video] sample ${sample.number} has no data`, 'error');
               continue;
@@ -503,13 +533,16 @@ export class VideoFrameSource {
     const keepAfter = (this.currentPlayheadSec + DEFAULT_WINDOW_AFTER_SEC) * 1e6;
     const selStart = this.activeRange ? this.activeRange.start * 1e6 : Infinity;
     const selEnd = this.activeRange ? this.activeRange.end * 1e6 : -Infinity;
+    const pinnedStart = this.pinnedRange ? this.pinnedRange.start * 1e6 : Infinity;
+    const pinnedEnd   = this.pinnedRange ? this.pinnedRange.end   * 1e6 : -Infinity;
 
     const kept: VideoFrame[] = [];
     for (const f of this.frameCache) {
       const t = f.timestamp ?? 0;
       const inPlayWindow = t >= keepBefore && t <= keepAfter;
       const inSel = t >= selStart && t <= selEnd;
-      if (inPlayWindow || inSel) {
+      const inPinned = t >= pinnedStart && t <= pinnedEnd;
+      if (inPlayWindow || inSel || inPinned) {
         kept.push(f);
       } else {
         try { f.close(); } catch { /* */ }
@@ -522,9 +555,13 @@ export class VideoFrameSource {
 
   private enforceMemoryBudget(): void {
     const playMicros = this.currentPlayheadSec * 1e6;
+    const pinnedStartMicros = this.pinnedRange ? this.pinnedRange.start * 1e6 : -Infinity;
+    const pinnedEndMicros   = this.pinnedRange ? this.pinnedRange.end   * 1e6 : -Infinity;
     // Evict past frames first (already played, safe to drop), then future frames
-    // only if we must. The original farthest-from-playhead order was backwards:
-    // it dropped upcoming frames first, leaving the cache stuck in the past.
+    // only if we must. Pinned selection frames are never evicted — without this
+    // guard the rolling prefetch (which decodes from a distant keyframe on
+    // long-GOP videos) fills the cache and evicts the selection frames on every
+    // loop.
     //
     // Sort key (ascending = evicted first):
     //   Past frames  (ts < playMicros): key = ts            → small positive, oldest = smallest
@@ -539,6 +576,11 @@ export class VideoFrameSource {
     const drop = new Set<number>();
     let i = 0;
     while (this.approxCacheBytes > MEMORY_BUDGET_BYTES && i < idxByEvictPriority.length) {
+      const frameTs = this.frameCache[idxByEvictPriority[i].i].timestamp ?? 0;
+      if (frameTs >= pinnedStartMicros && frameTs <= pinnedEndMicros) {
+        i++;
+        continue; // never evict pinned selection frames
+      }
       drop.add(idxByEvictPriority[i].i);
       this.approxCacheBytes -= this.bytesPerFrame;
       i++;

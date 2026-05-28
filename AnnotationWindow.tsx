@@ -293,14 +293,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // for color/toolKey matching without depending on annotationTools.
   useEffect(() => { annotationToolsRef.current = annotationTools; }, [annotationTools]);
 
-  // Warm the frame-source cache when the user commits a selection (mouse
-  // release) rather than on every drag pixel, to avoid redundant decodes.
-  const handleSelectionCommit = useCallback((sel: Selection) => {
-    const source = frameSourceRef.current;
-    if (!source) return;
-    source.ensureRange(sel.start, sel.end, 'selectionCommit').catch(() => {});
-  }, []);
-
   // Pre-decode PCM for the selection so repeat plays are instant. AudioEngine
   // skips the call if the range is already covered by its cache.
   useEffect(() => {
@@ -308,6 +300,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (!engine || !selection) return;
     engine.preloadRange(selection.start, selection.end).catch(() => {});
   }, [selection]);
+
+  // Pre-decode video frames for the selection so the FIRST play is snappy too,
+  // not just replays. Keyed on `selection` (not the commit callback) so it
+  // covers every way a selection is set — drag-create, annotation click,
+  // toolbar edit. Debounced because a drag updates `selection` on every mouse
+  // move and each ensureRange re-decodes its GOP from the keyframe; we warm
+  // once the selection settles. ensureRange fast-paths if already cached, so a
+  // play that beats the timer just decodes in preroll as before.
+  useEffect(() => {
+    if (isAudioTrack || !selection) return;
+    const source = frameSourceRef.current;
+    if (!source) return;
+    const sel = selection;
+    const timer = setTimeout(() => {
+      source.ensureRange(sel.start, sel.end, 'selectionWarm').catch(() => {});
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [selection, isAudioTrack]);
 
   // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
   useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
@@ -1234,6 +1244,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               break;
             case 'selection':
               setSelection(null);
+              frameSourceRef.current?.clearPinnedRange();
               setBoundAnnotationId(null);
               break;
             case 'filterTool':
@@ -1553,8 +1564,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // push/remove.
   const handleSelectionChange = useCallback((s: Selection | null) => {
     setSelection(s);
-    if (s) activationStack.pushIfAbsent('selection');
-    else activationStack.remove('selection');
+    if (s) {
+      activationStack.pushIfAbsent('selection');
+      // Pin here, not only on commit: every non-null selection (drag, edge
+      // resize/move, toolbar time edit, annotation click) flows through this
+      // wrapper, whereas the commit callback only fires on a fresh drag-release.
+      // Pinning here is what keeps the selection's frames resident across the
+      // rolling prefetch's eviction churn so replays hit the cache.
+      frameSourceRef.current?.pinSelectionRange(s.start, s.end);
+    } else {
+      activationStack.remove('selection');
+      frameSourceRef.current?.clearPinnedRange();
+    }
   }, [activationStack]);
 
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
@@ -1948,7 +1969,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onAnnotationsCommit={handleAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
                 onSelectionChange={handleSelectionChange}
-                onSelectionCommit={handleSelectionCommit}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
                 filterToolActive={filterToolActive}
@@ -1974,7 +1994,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  onToggleNeuron={handleBuzzdetectToggleNeuron}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
-                 onSelectionCommit={handleSelectionCommit}
                  onBoundAnnotationChange={setBoundAnnotationId}
                  onSeek={seek}
                  onScrollWheel={(deltaX, deltaY, ctrlKey, metaKey, clientX) =>
