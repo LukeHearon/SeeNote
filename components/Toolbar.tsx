@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity } from 'lucide-react';
-import { Selection, BandPassFilter } from '../types';
+import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
@@ -38,6 +38,7 @@ interface ToolbarProps {
   onEnableBandPassFilter: (strength: number) => void;
   filterStrength: number;
   setFilterStrength: (s: number) => void;
+  videoMode?: VideoMode;
   /** Whether a buzzdetect directory is configured (gates the toggle button). */
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
@@ -97,6 +98,7 @@ export default function Toolbar({
   onEnableBandPassFilter,
   filterStrength,
   setFilterStrength,
+  videoMode,
   buzzdetectAvailable,
   buzzdetectEnabled,
   onToggleBuzzdetect,
@@ -115,6 +117,17 @@ export default function Toolbar({
   useEffect(() => { speedRef.current = playbackSpeed; }, [playbackSpeed]);
   useEffect(() => { filterStrengthRef.current = filterStrength; }, [filterStrength]);
   useEffect(() => { bandPassFilterRef.current = bandPassFilter; }, [bandPassFilter]);
+
+  const freeRunning = videoMode === 'fast' || videoMode === 'mixed';
+  const effectiveSpeedMin = freeRunning ? 0.5 : SPEED_MIN;
+  const effectiveSpeedMax = freeRunning ? 2.0 : SPEED_MAX;
+  const filterDisabledByMode = videoMode === 'fast';
+
+  // Clamp speed into the effective range when video mode changes.
+  useEffect(() => {
+    const clamped = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, playbackSpeed));
+    if (clamped !== playbackSpeed) setPlaybackSpeed(clamped);
+  }, [videoMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [volumeControlEl, setVolumeControlEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -140,7 +153,7 @@ export default function Toolbar({
       const delta = -Math.sign(e.deltaY) * 0.03;
       let newSlider = Math.max(0, Math.min(1, cur + delta));
       if (Math.abs(newSlider - 0.5) < 0.015) newSlider = 0.5;
-      const next = sliderToSpeed(newSlider);
+      const next = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, sliderToSpeed(newSlider)));
       setPlaybackSpeed(next);
       if (next !== 1.0) setLastDefinedSpeed(next);
     };
@@ -153,8 +166,9 @@ export default function Toolbar({
   const commitSpeedEdit = () => {
     const parsed = parseFloat(editingSpeedRaw.replace(/x$/i, '').trim());
     if (!isNaN(parsed)) {
-      setPlaybackSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
-      if (parsed !== 1.0) setLastDefinedSpeed(Math.max(SPEED_MIN, Math.min(SPEED_MAX, parsed)));
+      const clamped = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, parsed));
+      setPlaybackSpeed(clamped);
+      if (clamped !== 1.0) setLastDefinedSpeed(clamped);
     }
     setEditingSpeed(false);
     setEditingSpeedRaw('');
@@ -427,9 +441,10 @@ export default function Toolbar({
           Active visual binds to filterToolActive only; band on/off lives on the
           adjacent toggle so a band can persist after the tool is unreadied. */}
       <button
-        onClick={onToggleFilterTool}
-        className={`p-1.5 rounded transition-colors ml-2 ${filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-        data-tooltip="Filter tool (Shift+F)"
+        onClick={filterDisabledByMode ? undefined : onToggleFilterTool}
+        disabled={filterDisabledByMode}
+        className={`p-1.5 rounded transition-colors ml-2 ${filterDisabledByMode ? 'text-slate-600 cursor-not-allowed' : filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+        data-tooltip={filterDisabledByMode ? "Audio filters not available in Fast mode" : "Filter tool (Shift+F)"}
         data-help-target="filter-tool"
       >
         <Filter size={16} />
@@ -446,14 +461,16 @@ export default function Toolbar({
         <input
           type="range" min="0" max="1" step="0.005"
           value={displayStrength}
-          onChange={handleFilterStrengthChange}
-          className={`appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${filterEnabled ? '[&::-webkit-slider-thumb]:bg-[#e65161]' : '[&::-webkit-slider-thumb]:bg-slate-500'}`}
+          disabled={filterDisabledByMode}
+          onChange={filterDisabledByMode ? undefined : handleFilterStrengthChange}
+          className={`appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${filterDisabledByMode ? 'cursor-not-allowed opacity-30 [&::-webkit-slider-thumb]:bg-slate-600' : filterEnabled ? 'cursor-pointer [&::-webkit-slider-thumb]:bg-[#e65161]' : 'cursor-pointer [&::-webkit-slider-thumb]:bg-slate-500'}`}
           style={{
             writingMode: 'vertical-lr',
             direction: 'rtl',
             width: 4,
             height: 60,
-            background: filterEnabled
+            background: filterDisabledByMode ? '#334155'
+              : filterEnabled
               ? `linear-gradient(to top, #e65161 0%, #e65161 ${displayStrengthPct}%, #64748b ${displayStrengthPct}%, #64748b 100%)`
               : '#475569',
             borderRadius: 2,

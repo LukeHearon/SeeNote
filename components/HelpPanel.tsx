@@ -138,9 +138,9 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">Off:</span> no video — audio only. Lightest on the CPU.</li>
-                  <li><span className="text-white">Fast:</span> browser <span className="font-mono text-xs">&lt;video&gt;</span> element. Cheap but can drift up to ~100 ms from the audio — not frame-accurate.</li>
-                  <li><span className="text-white">Mixed:</span> <span className="font-mono text-xs">&lt;video&gt;</span> until you make a selection, then frame-accurate decoding for that region. Good for older hardware.</li>
-                  <li><span className="text-white">High:</span> frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU.</li>
+                  <li><span className="text-white">Fast:</span> the browser <span className="font-mono text-xs">&lt;video&gt;</span> element shows the picture and plays its <em>own</em> audio, free-running. Smooth and cheap, but not spectrogram-synced — no band-pass filter, no pitch-preserving slow-down, and the playhead is approximate. For machines that can't run Accurate.</li>
+                  <li><span className="text-white">Mixed:</span> <span className="font-mono text-xs">&lt;video&gt;</span> (as in Fast) until you make a selection, then frame-accurate decoding for that region. Good for older hardware.</li>
+                  <li><span className="text-white">Accurate:</span> frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
                   When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level.

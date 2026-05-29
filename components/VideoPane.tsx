@@ -22,8 +22,6 @@ interface VideoPaneProps {
   videoSrc: string | null;
   isProcessing: boolean;
   isBuffering: boolean;
-  isPlaying: boolean;
-  playbackSpeed: number;
   getMediaTime: () => number;
   onDebugLog: (msg: string, type?: 'info' | 'error') => void;
   onDurationChange: (d: number) => void;
@@ -35,6 +33,9 @@ interface VideoPaneProps {
   hasSelection: boolean;
   /** Persist a mode change picked from the corner picker. */
   onVideoModeChange: (mode: VideoMode) => void;
+  /** Exposes the fallback <video> element to the parent so VideoElementEngine
+   *  can drive transport on it (Fast / Mixed-without-selection). */
+  onVideoElement?: (el: HTMLVideoElement | null) => void;
 }
 
 export default function VideoPane({
@@ -44,49 +45,64 @@ export default function VideoPane({
   videoSrc,
   isProcessing,
   isBuffering,
-  isPlaying,
-  playbackSpeed,
   getMediaTime,
   onDebugLog,
   onDurationChange,
   videoMode,
   hasSelection,
   onVideoModeChange,
+  onVideoElement,
 }: VideoPaneProps) {
   // Pick the renderer based on mode.
   //   off:   custom "Video Disabled" placeholder (no element to drive)
-  //   fast:  always <video> (cheap, ~100 ms drift vs audio clock)
+  //   fast:  <video> displays the picture and plays its own audio (free-running)
   //   mixed: <video> by default; canvas (frame-accurate) once a selection exists
-  //   high:  canvas whenever a frame source is available
+  //   accurate: canvas whenever a frame source is available
   const canvasAvailable = !!frameSource && !isAudioTrack;
   const wantsCanvas =
-    videoMode === 'high' ||
+    videoMode === 'accurate' ||
     (videoMode === 'mixed' && hasSelection);
   const usingCanvas = canvasAvailable && wantsCanvas;
   // True when mode=off but the active track is a video — the pane displays a
   // "Video Disabled" placeholder instead of routing through <video>.
   const showDisabledPlaceholder = videoMode === 'off' && !isAudioTrack && !!videoSrc;
   const hasVideo = !isAudioTrack && videoMode !== 'off' && (usingCanvas || !!videoSrc);
+  // The <video> element is the active sound source exactly when it's the live
+  // renderer for a video file (Fast, and Mixed before a selection). Then it
+  // plays its own audio and must not be muted; VideoElementEngine drives it.
+  const videoElementIsTransport =
+    !isAudioTrack && !usingCanvas && !showDisabledPlaceholder && !!videoSrc;
 
   // Pick the warning shown in the top-left corner.
   //   fast                                 → always: "not frame-accurate"
   //   mixed + no selection                 → "not frame-accurate until you select"
   //   mixed + selection but no frameSource → "not frame-accurate (this format)"
-  //   high + videoSrc but no frameSource   → "format not supported by frame-accurate pipeline"
+  //   accurate + videoSrc but no frameSource → "format not supported by frame-accurate pipeline"
   let warning: string | null = null;
   if (videoSrc && !isAudioTrack && videoMode !== 'off') {
     if (videoMode === 'fast') {
-      warning = 'Fast video mode: the picture is not frame-accurate with the audio. Switch to High in Project Settings for frame-perfect playback.';
+      warning = 'Fast mode: video plays independently — the playhead is approximate and audio filters are disabled. Playback rate works (0.5–2×).';
     } else if (videoMode === 'mixed') {
       if (!hasSelection) {
-        warning = 'Mixed video mode: the picture is not frame-accurate until you make a selection. Selected regions are decoded frame-by-frame.';
+        warning = 'Mixed mode: audio filters only apply inside a selection. Outside a selection the video plays independently (0.5–2× rate still works).';
       } else if (!frameSource) {
-        warning = "Mixed video mode: this file's format isn't supported by the frame-accurate pipeline, so playback stays in the <video> fallback even inside a selection.";
+        warning = "Mixed mode: this file's format doesn't support frame-accurate playback, so the picture may not stay perfectly in sync even inside a selection.";
       }
-    } else if (videoMode === 'high' && !frameSource) {
-      warning = "This video format isn't supported by the frame-accurate WebCodecs pipeline. Playback falls back to the browser's <video> element and will not be frame-perfect.";
+    } else if (videoMode === 'accurate' && !frameSource) {
+      warning = "This file's format doesn't support frame-accurate playback. The picture may not stay perfectly in sync with the audio.";
     }
   }
+
+  // ── Video-mode picker expand/collapse on hover ──────────────────────────
+  const [modePickerExpanded, setModePickerExpanded] = useState(false);
+  const modePickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleModePickerEnter = useCallback(() => {
+    modePickerTimerRef.current = setTimeout(() => setModePickerExpanded(true), 200);
+  }, []);
+  const handleModePickerLeave = useCallback(() => {
+    if (modePickerTimerRef.current) clearTimeout(modePickerTimerRef.current);
+    setModePickerExpanded(false);
+  }, []);
 
   // ── Zoom state (shared model; reset whenever the track changes) ────────
   const [viewport, setViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
@@ -175,6 +191,19 @@ export default function VideoPane({
   const [fallbackDims, setFallbackDims] = useState({ w: 0, h: 0 });
   const fallbackVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Stable so VideoPlayer's element-exposure effect (keyed on this callback's
+  // identity) only fires on real mount/unmount/src-change — not on every render.
+  // An unstable callback here re-runs that effect each render, and its cleanup
+  // detaches the element from VideoElementEngine mid-playback (killing the
+  // playhead rAF) before immediately re-attaching.
+  const handleVideoElement = useCallback((el: HTMLVideoElement | null) => {
+    fallbackVideoRef.current = el;
+    onVideoElement?.(el);
+  }, [onVideoElement]);
+  const handleVideoDims = useCallback((w: number, h: number) => {
+    setFallbackDims({ w, h });
+  }, []);
+
   const canvasDims = usingCanvas && frameSource ? frameSource.getDimensions() : null;
   const frameW = usingCanvas ? canvasDims?.width ?? 0 : fallbackDims.w;
   const frameH = usingCanvas ? canvasDims?.height ?? 0 : fallbackDims.h;
@@ -227,17 +256,13 @@ export default function VideoPane({
         <VideoPlayer
           src={videoSrc}
           isAudio={isAudioTrack}
-          isPlaying={isPlaying}
-          playbackSpeed={playbackSpeed}
-          getMediaTime={getMediaTime}
           onDurationChange={onDurationChange}
           onDebugLog={onDebugLog}
           viewport={viewport}
           contentRect={contentRect}
-          onVideoDims={(w, h) => setFallbackDims({ w, h })}
-          onVideoElement={(el) => {
-            fallbackVideoRef.current = el;
-          }}
+          playsOwnAudio={videoElementIsTransport}
+          onVideoDims={handleVideoDims}
+          onVideoElement={handleVideoElement}
         />
       )}
 
@@ -275,35 +300,64 @@ export default function VideoPane({
         </div>
       )}
 
-      {/* Bottom-left video-mode picker. Bottom-right is taken by the zoom
-          minimap when zoomed; this corner is clear. */}
+      {/* Bottom-left video-mode picker. Collapsed to current mode label until hovered. */}
       <div
-        className="absolute left-2 bottom-2 z-30 flex gap-1 rounded-md bg-slate-900/70 backdrop-blur-sm border border-slate-700 p-1 pointer-events-auto"
+        className="absolute left-2 bottom-2 z-30 pointer-events-auto group"
+        onMouseEnter={handleModePickerEnter}
+        onMouseLeave={handleModePickerLeave}
       >
-        {(['off', 'fast', 'mixed', 'high'] as VideoMode[]).map(mode => {
-          const tooltips: Record<VideoMode, string> = {
-            off: 'No video display. Audio only — lightest on the CPU.',
-            fast: "Browser <video> element. Cheap, but the picture drifts up to ~100 ms from the audio.",
-            mixed: 'Cheap <video> until you make a selection, then frame-accurate decoding for that region.',
-            high: 'Frame-accurate WebCodecs decoding throughout. Heaviest on the CPU. MP4/MOV only — other formats fall back automatically.',
-          };
-          const active = videoMode === mode;
-          return (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => onVideoModeChange(mode)}
-              data-tooltip={tooltips[mode]}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                active
-                  ? 'bg-[#e65161] text-white'
-                  : 'text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {mode.charAt(0).toUpperCase() + mode.slice(1)}
-            </button>
-          );
-        })}
+        {/* Collapsed view — fades out when expanded */}
+        <div
+          className={`flex flex-col items-start gap-1 transition-all duration-150 ${
+            modePickerExpanded ? 'opacity-0 pointer-events-none' : 'opacity-100'
+          }`}
+        >
+          <span className="text-[10px] font-medium text-white leading-none px-1">MODE</span>
+          <div className="bg-slate-900/70 backdrop-blur-sm border border-slate-700 group-hover:border-slate-500 rounded-md p-1 transition-colors duration-150">
+            <span className="block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-700 text-slate-300">
+              {videoMode.charAt(0).toUpperCase() + videoMode.slice(1)}
+            </span>
+          </div>
+        </div>
+
+        {/* Expanded picker — slides up and fades in from the pill's position */}
+        <div
+          className={`absolute bottom-0 left-0 flex flex-col transition-all duration-200 ${
+            modePickerExpanded
+              ? 'opacity-100 translate-y-0 pointer-events-auto'
+              : 'opacity-0 translate-y-2 pointer-events-none'
+          }`}
+        >
+          <div className="self-start bg-slate-900/70 backdrop-blur-sm border border-b-0 border-slate-500 rounded-t-md px-2 pt-0 pb-px">
+            <span className="text-[9px] font-semibold tracking-widest text-slate-400 uppercase leading-none">Video Mode</span>
+          </div>
+          <div className="flex gap-1 rounded-b-md rounded-tr-md bg-slate-900/70 backdrop-blur-sm border border-slate-500 p-1">
+            {(['off', 'fast', 'mixed', 'accurate'] as VideoMode[]).map(mode => {
+              const tooltips: Record<VideoMode, string> = {
+                off: 'No video display. Audio only — lightest on the CPU.',
+                fast: "Smooth playback, but video runs independently — audio filters disabled, playhead approximate. Rate adjustable 0.5–2×. Best for slow machines.",
+                mixed: 'Outside a selection, video plays independently (rate 0.5–2×). Inside a selection, audio filters apply and the picture locks to the audio clock.',
+                accurate: 'Full frame-accurate sync throughout. Heaviest on the CPU. MP4/MOV only — other formats fall back automatically.',
+              };
+              const active = videoMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onVideoModeChange(mode)}
+                  data-tooltip={tooltips[mode]}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    active
+                      ? 'bg-[#e65161] text-white'
+                      : 'text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

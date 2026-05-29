@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter } from '../types';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
@@ -69,6 +69,7 @@ interface SpectrogramProps {
    * Optional so callers that don't need it pay nothing.
    */
   onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
+  videoMode?: VideoMode;
 }
 
 export interface SpectrogramHandle {
@@ -111,7 +112,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onSelectionCommit,
   onBoundAnnotationChange,
   onZoomChange,
-  onViewportChange
+  onViewportChange,
+  videoMode,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -500,7 +502,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
       : null;
 
-    if (filterBand) {
+    // In Fast mode the filter has no effect on audio, so don't render it.
+    // In Mixed mode without a selection, the audio is unfiltered (video element
+    // plays audio instead of AudioEngine), so show the band position in gray
+    // without darkening — a visual cue that the filter is staged but inactive.
+    const filterInactive = videoMode === 'fast' || (videoMode === 'mixed' && !selection);
+    if (filterBand && !filterInactive) {
       const darkAlpha = 0.5 * filterBand.strength;
       ctx.fillStyle = `rgba(0, 0, 0, ${darkAlpha})`;
       if (filterBand.yTop > 0) {
@@ -510,6 +517,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.fillRect(0, filterBand.yBottom, width, height - filterBand.yBottom);
       }
       ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
+      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
+      ctx.stroke();
+    } else if (filterBand && videoMode === 'mixed' && !selection) {
+      ctx.strokeStyle = '#64748b';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
@@ -585,7 +599,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, videoMode, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {

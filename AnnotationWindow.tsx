@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode } from './constants';
 import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
 import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
@@ -17,6 +17,7 @@ import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
+import { VideoElementEngine } from './utils/VideoElementEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
@@ -137,6 +138,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
   const engineRef = useRef<AudioEngine | null>(null);
+  // Alternate transport for Fast / Mixed-without-selection: the <video> element
+  // plays its own audio. Exactly one of these two engines is "active" at a time
+  // (see activeTransport); the orchestrator drives them through one interface.
+  const videoEngineRef = useRef<VideoElementEngine | null>(null);
   // Ref so the onEnded closure (created once on mount) can read current isAudioTrack
   const isAudioTrackRef = useRef(false);
   // Ref so the onEnded closure (created once on mount) can read the latest seek function
@@ -174,10 +179,27 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         });
     };
 
+    // Shared playback callbacks — both transports (AudioEngine and
+    // VideoElementEngine) report through these so play/pause/EOF behave
+    // identically regardless of which one is active.
+    const setPlayhead = (t: number) => {
+      setCurrentTime(t);
+      currentTimeRef.current = t;
+    };
+    const onPlaying = () => { setIsPlaying(true); setIsBuffering(false); };
+    const onPaused = () => setIsPlaying(false);
+    const onEnded = () => {
+      // Return playhead to selection start. Do NOT auto-scroll — when playing
+      // within a selection the user positioned the canvas intentionally; jumping
+      // it on every loop is disorienting.
+      const sel = selectionRef.current;
+      if (sel) seekRef.current?.(sel.start, false);
+      setIsPlaying(false);
+    };
+
     engineRef.current = new AudioEngine({
       onTimeUpdate: (t) => {
-        setCurrentTime(t);
-        currentTimeRef.current = t;
+        setPlayhead(t);
         // Rolling video prefetch: keep frames decoded 5 s ahead of the playhead.
         // Only run when the canvas path is the live renderer; in `mixed` without
         // a selection (showing the <video> fallback) and in `fast`/`off`, this
@@ -185,30 +207,33 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         // Refs read current values inside this once-mounted closure.
         const mode = videoModeRef.current;
         const canvasLive =
-          mode === 'high' || (mode === 'mixed' && selectionRef.current !== null);
+          mode === 'accurate' || (mode === 'mixed' && selectionRef.current !== null);
         if (canvasLive && !videoPrefetchBusyRef.current) {
           const bufferedTo = videoPrefetchEndRef.current;
           if (t + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
         }
       },
-      onPlaying: () => { setIsPlaying(true); setIsBuffering(false); },
-      onPaused: () => setIsPlaying(false),
-      onEnded: () => {
-        // Return playhead to selection start. Do NOT auto-scroll — when playing
-        // within a selection the user positioned the canvas intentionally; jumping
-        // it on every loop is disorienting.
-        const sel = selectionRef.current;
-        if (sel) {
-          seekRef.current?.(sel.start, false);
-        }
-        setIsPlaying(false);
-      },
+      onPlaying,
+      onPaused,
+      onEnded,
       onBufferUnderrun: () => setIsBuffering(true),
       onDebugLog: (msg, type = 'info') => addLog(msg, type),
     });
+
+    // The <video>-element transport. No prefetch (the element decodes itself);
+    // no buffer-underrun signal (the browser handles its own buffering).
+    videoEngineRef.current = new VideoElementEngine({
+      onTimeUpdate: setPlayhead,
+      onPlaying,
+      onPaused,
+      onEnded,
+    });
+
     return () => {
       engineRef.current?.dispose();
       engineRef.current = null;
+      videoEngineRef.current?.dispose();
+      videoEngineRef.current = null;
     };
   }, []);
 
@@ -246,10 +271,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Refs let async closures (engine onTimeUpdate, selection commit) read the
   // current mode without being recreated on every render.
   const [videoMode, setVideoMode] = useState<VideoMode>(
-    project.settings.uiSettings?.videoMode ?? DEFAULT_UI_SETTINGS.videoMode,
+    migrateVideoMode(project.settings.uiSettings?.videoMode),
   );
   const videoModeRef = useRef(videoMode);
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
+
+  // Mirror of videoSrc for the synchronous transport predicate below.
+  const videoSrcRef = useRef<string | null>(null);
+  useEffect(() => { videoSrcRef.current = videoSrc; }, [videoSrc]);
 
   // buzzdetect activations panel — all UI fields persisted in uiSettings.
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.settings.uiSettings?.buzzdetectEnabled ?? false);
@@ -452,17 +481,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         //               is itself non-trivial on old hardware).
         //   mixed     → open it so the canvas can light up the moment the user
         //               commits a selection, but skip the t=0 warm decode.
-        //   high      → open + warm (canvas drives playback from the start).
+        //   accurate  → open + warm (canvas drives playback from the start).
         const mode = videoModeRef.current;
         const wantFrameSource = !isAudio && canUseFrameSource(absolutePath)
-            && (mode === 'high' || mode === 'mixed');
+            && (mode === 'accurate' || mode === 'mixed');
         if (wantFrameSource) {
             try {
                 const source = new VideoFrameSource({ onDebugLog: addLog });
                 await source.open(assetUrl);
                 frameSourceRef.current = source;
                 setFrameSourceVersion(v => v + 1);
-                if (mode === 'high') {
+                if (mode === 'accurate') {
                     // Warm the cache around t=0 so the first frame is ready to draw.
                     source.ensureRange(0, Math.min(5, dur), 'trackOpenWarm').catch(() => {});
                 }
@@ -512,7 +541,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => {
     if (!trackPath || isAudioTrack) return;
     const wantsFrameSource =
-      (videoMode === 'high' || videoMode === 'mixed') && canUseFrameSource(trackPath);
+      (videoMode === 'accurate' || videoMode === 'mixed') && canUseFrameSource(trackPath);
     const has = !!frameSourceRef.current;
 
     if (wantsFrameSource && !has) {
@@ -525,7 +554,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           if (trackPathRef.current !== expectedTrack) { source.close(); return; }
           frameSourceRef.current = source;
           setFrameSourceVersion(v => v + 1);
-          if (videoMode === 'high') {
+          if (videoMode === 'accurate') {
             const dur = durationRef.current;
             source.ensureRange(0, Math.min(5, dur || 5), 'modeChangeWarm').catch(() => {});
           } else if (videoMode === 'mixed' && selectionRef.current) {
@@ -547,11 +576,34 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [videoMode, trackPath, isAudioTrack, addLog]);
 
+  // Whether the <video> element — not the AudioEngine — is the active transport:
+  // a video file shown through the element (Fast, or Mixed before a selection).
+  // Audio-only files and the canvas-backed modes always use the AudioEngine.
+  const usesVideoTransport = useCallback((): boolean => {
+    if (isAudioTrackRef.current || !videoSrcRef.current) return false;
+    const mode = videoModeRef.current;
+    return mode === 'fast' || (mode === 'mixed' && selectionRef.current === null);
+  }, []);
+
+  // The active transport. AudioEngine and VideoElementEngine expose the same
+  // play/pause/seek/getMediaTime/setGain/setPlaybackSpeed/isPlaying surface, so
+  // callers never branch on which one is live.
+  const activeTransport = useCallback(
+    () => (usesVideoTransport() ? videoEngineRef.current : engineRef.current),
+    [usesVideoTransport],
+  );
+
   // Stable callback passed to CanvasVideoPlayer's rAF loop. Reading from the
   // engine directly (rather than the currentTime state) avoids a frame of
   // lag: React commits on rAF, so currentTime is always one tick behind.
   const getMediaTime = useCallback((): number => {
-    return engineRef.current?.getMediaTime() ?? 0;
+    return activeTransport()?.getMediaTime() ?? 0;
+  }, [activeTransport]);
+
+  // Stable: bind the <video> element to its transport. Must not change identity
+  // per-render, or VideoPlayer's exposure effect churns and detaches mid-play.
+  const attachVideoElement = useCallback((el: HTMLVideoElement | null) => {
+    videoEngineRef.current?.attach(el);
   }, []);
 
   // Rebuild cache when FFT size changes while a track is open
@@ -898,7 +950,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         ?? (ui.playbackSpeed !== 1 ? ui.playbackSpeed : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
     );
     setZoomSec(ui.zoomSec);
-    setVideoMode(ui.videoMode);
+    setVideoMode(migrateVideoMode(ui.videoMode));
     setBuzzdetectEnabled(project.settings.uiSettings?.buzzdetectEnabled ?? false);
     setBuzzdetectThresholds(project.settings.uiSettings?.buzzdetectThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.settings.uiSettings?.buzzdetectHiddenNeurons ?? []);
@@ -998,7 +1050,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       return;
     }
     setAnnotationTools(updated.settings.annotationTools.length > 0 ? updated.settings.annotationTools : DEFAULT_ANNOTATION_TOOLS);
-    setVideoMode(updated.settings.uiSettings?.videoMode ?? DEFAULT_UI_SETTINGS.videoMode);
+    setVideoMode(migrateVideoMode(updated.settings.uiSettings?.videoMode));
     if (mediaDirChanged) {
       setCurrentDirectory(updated.mediaDirectoryAbs);
       setTrackPath(null);
@@ -1043,63 +1095,92 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [allTracks, getAnnotationPath, annotationDirectory]);
 
   const togglePlay = useCallback(async () => {
+      const transport = activeTransport();
       if (isPlaying || isBuffering) {
-          // Invalidate any in-flight preroll so its resolution can't start engine
+          // Invalidate any in-flight preroll so its resolution can't start playback
           playTokenRef.current += 1;
-          engineRef.current?.pause();
+          transport?.pause();
           setIsPlaying(false);
           setIsBuffering(false);
-      } else {
-          const sel = selectionRef.current;
-          let startSec = currentTime;
-          // If there's a selection and the playhead is outside it, restart from selection start
-          if (sel && (currentTime >= sel.end - 0.05 || currentTime < sel.start)) {
-              startSec = sel.start;
-              seek(sel.start, true);
-          } else if (!sel && duration > 0 && currentTime >= duration - 0.05) {
-              // At end of track with no selection — return to beginning
-              startSec = 0;
-              seek(0, true);
-          }
-          setIsBuffering(true);
-          const token = ++playTokenRef.current;
-          addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`);
-          // For video tracks, pre-roll so the first frame at startSec is decoded
-          // BEFORE the engine schedules audio. Otherwise short selections may end
-          // before any frames render. Audio tracks skip the wait entirely.
-          if (!isAudioTrack) {
-              await prerollVideo(startSec, sel?.end);
-              if (token !== playTokenRef.current) return; // user interrupted
-          }
-          // isPlaying is set to true only when onPlaying fires (first sample emitted).
-          // endSec enables sample-accurate selection stop.
-          engineRef.current?.play(startSec, sel ? sel.end : undefined);
+          return;
       }
-  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration, prerollVideo, addLog]);
+      const sel = selectionRef.current;
+      let startSec = currentTime;
+      // If there's a selection and the playhead is outside it, restart from selection start
+      if (sel && (currentTime >= sel.end - 0.05 || currentTime < sel.start)) {
+          startSec = sel.start;
+          seek(sel.start, true);
+      } else if (!sel && duration > 0 && currentTime >= duration - 0.05) {
+          // At end of track with no selection — return to beginning
+          startSec = 0;
+          seek(0, true);
+      }
+      setIsBuffering(true);
+      const token = ++playTokenRef.current;
+      addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`);
+      // Canvas path only: pre-roll so the first frame at startSec is decoded
+      // BEFORE the engine schedules audio (short selections could otherwise end
+      // before any frame renders). The <video>-element transport decodes itself,
+      // and audio-only tracks have no frames, so both skip the wait.
+      if (frameSourceRef.current && !usesVideoTransport()) {
+          await prerollVideo(startSec, sel?.end);
+          if (token !== playTokenRef.current) return; // user interrupted
+      }
+      // isPlaying is set to true only when onPlaying fires. endSec enables the
+      // bounded selection stop on whichever transport is active.
+      transport?.play(startSec, sel ? sel.end : undefined);
+  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration, prerollVideo, addLog, activeTransport, usesVideoTransport]);
 
   const seek = useCallback(async (time: number, scrollView = false) => {
-      const wasPlaying = engineRef.current?.isPlaying ?? false;
-      engineRef.current?.seek(time);
+      const transport = activeTransport();
+      const wasPlaying = transport?.isPlaying ?? false;
+      // AudioEngine.seek() cancels its scheduled audio (we restart below if it
+      // was playing); VideoElementEngine.seek() just moves currentTime and keeps
+      // the element playing — so the element needs no restart.
+      const prevTime = currentTimeRef.current;
+      transport?.seek(time);
       currentTimeRef.current = time;
       setCurrentTime(time);
       // Notify the frame source so its eviction window follows the scrub position.
       // Kick a small ensureRange while paused so a scrub shows the correct frame
-      // (rather than a stale one from the prior window).
+      // (rather than a stale one from the prior window). On the canvas path,
+      // freeze the canvas at the pre-seek frame synchronously — this prevents
+      // the GOP decode animation from being visible before the React overlay
+      // renders (which is async and can lag several rAF ticks behind).
       if (!isAudioTrack && frameSourceRef.current) {
           frameSourceRef.current.notifyPlayhead(time);
-          if (!wasPlaying) {
+          if (!wasPlaying && !usesVideoTransport()) {
+              frameSourceRef.current.freezeDisplayAt(prevTime);
+              setIsBuffering(true);
+              const token = ++playTokenRef.current;
+              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
+                .then(() => {
+                    if (token === playTokenRef.current) {
+                        frameSourceRef.current?.clearDisplayFreeze();
+                        setIsBuffering(false);
+                    }
+                })
+                .catch(() => {
+                    if (token === playTokenRef.current) {
+                        frameSourceRef.current?.clearDisplayFreeze();
+                        setIsBuffering(false);
+                    }
+                });
+          } else if (!wasPlaying) {
               frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
                 .catch(() => {});
           }
       }
       if (scrollView) spectrogramRef.current?.scrollToTime(time);
-      // If playback was active, restart from the new position (stop if at/past end)
-      if (wasPlaying) {
+      // Restart the AudioEngine from the new position if it was playing. The
+      // <video>-element transport plays straight through a currentTime write, so
+      // it's excluded here.
+      if (wasPlaying && !usesVideoTransport()) {
           if (time < durationRef.current) {
               const sel = selectionRef.current;
               setIsBuffering(true);
               const token = ++playTokenRef.current;
-              if (!isAudioTrack) {
+              if (frameSourceRef.current) {
                   await prerollVideo(time, sel?.end);
                   if (token !== playTokenRef.current) return;
               }
@@ -1109,7 +1190,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               setIsPlaying(false);
           }
       }
-  }, [isAudioTrack, prerollVideo]);
+  }, [isAudioTrack, prerollVideo, activeTransport, usesVideoTransport]);
 
   // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
   useEffect(() => { seekRef.current = seek; }, [seek]);
@@ -1226,8 +1307,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }},
       // `Shift+F`: ready the filter tool (click-drag to define band).
       // `F`: toggle filter state on/off (restore last band). Must come after shift binding.
-      { key: 'f', mods: ['shift'], handler: () => handleToggleFilterTool() },
-      { key: 'f', handler: () => handleToggleFilterState() },
+      { key: 'f', mods: ['shift'], handler: () => { if (videoMode !== 'fast') handleToggleFilterTool(); } },
+      { key: 'f', handler: () => { if (videoMode !== 'fast') handleToggleFilterState(); } },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
       // Escape — universal undo of the most-recently-activated layer. Fires
       // even when a text input has focus (HelpPanel's `stop:true` Esc handler
@@ -1449,16 +1530,35 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       window.addEventListener('mouseup', onUp);
   };
 
-  // Keep the engine's gain in sync with the volume slider and mute button
+  // Keep both transports' gain in sync with the volume slider and mute button.
+  // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
   useEffect(() => {
-    engineRef.current?.setGain(muted ? 0 : volume);
+    const gain = muted ? 0 : volume;
+    engineRef.current?.setGain(gain);
+    videoEngineRef.current?.setGain(gain);
   }, [volume, muted]);
 
-  // Sync playback speed to the engine. Changing speed mid-playback restarts
-  // the engine internally so the new speed takes effect immediately.
+  // Sync playback speed to both transports. AudioEngine preserves pitch; the
+  // <video> element does not (an accepted limitation of Fast mode).
   useEffect(() => {
     engineRef.current?.setPlaybackSpeed(playbackSpeed);
+    videoEngineRef.current?.setPlaybackSpeed(playbackSpeed);
   }, [playbackSpeed]);
+
+  // Switching the active transport mid-play (mode change, or committing/clearing
+  // a selection in Mixed) would otherwise leave the previous one running. Stop
+  // both cleanly whenever the active transport flips.
+  const prevUsesVideoRef = useRef(false);
+  useEffect(() => {
+    const now = usesVideoTransport();
+    if (now === prevUsesVideoRef.current) return;
+    prevUsesVideoRef.current = now;
+    playTokenRef.current += 1;
+    engineRef.current?.pause();
+    videoEngineRef.current?.pause();
+    setIsPlaying(false);
+    setIsBuffering(false);
+  }, [videoMode, isAudioTrack, videoSrc, selection, usesVideoTransport]);
 
   // Keep filterStrength and bandPassFilter.strength in lockstep so the strength
   // slider reflects (and can edit) whichever is current. The slider is the
@@ -1749,14 +1849,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             videoSrc={videoSrc}
             isProcessing={isProcessing}
             isBuffering={isBuffering}
-            isPlaying={isPlaying}
-            playbackSpeed={playbackSpeed}
             getMediaTime={getMediaTime}
             onDebugLog={addLog}
             onDurationChange={setDuration}
             videoMode={videoMode}
             hasSelection={selection !== null}
             onVideoModeChange={setVideoMode}
+            onVideoElement={attachVideoElement}
           />
         </div>
 
@@ -1940,6 +2039,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                onEnableBandPassFilter={handleEnableBandPassFilter}
                filterStrength={filterStrength}
                setFilterStrength={setFilterStrength}
+               videoMode={videoMode}
                buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
@@ -1977,6 +2077,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={buzzdetectEnabled ? publishViewport : undefined}
+                videoMode={videoMode}
              />
              </div>
 

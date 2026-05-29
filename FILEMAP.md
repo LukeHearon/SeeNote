@@ -19,7 +19,8 @@ Quick reference for agents. One phrase per file.
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer
 - `components/VideoZoomLayer.tsx` — marquee-zoom overlay and pan viewfinder UI
-- `components/VideoPlayer.tsx` — `<video>` element wrapper with frame-sync callbacks
+- `components/VideoPlayer.tsx` — presentational `<video>` element (Fast / Mixed-without-selection); transport driven externally by VideoElementEngine
+- `utils/VideoElementEngine.ts` — playback transport backed by a `<video>` element playing its own audio (Fast mode); mirrors the AudioEngine interface
 - `utils/VideoFrameSource.ts` — decodes individual video frames via canvas for spectrogram alignment
 - `utils/videoZoom.ts` — zoom math: marquee → viewport transform, pan clamping
 

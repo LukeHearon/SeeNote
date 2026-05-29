@@ -44,13 +44,24 @@ export interface WindowBounds {
 
 /**
  * Video rendering pipeline for the active track.
- *  - 'off':   no video element at all
- *  - 'fast':  always the `<video>` element; cheap, but not sample-accurate with audio
- *  - 'mixed': `<video>` until a selection is committed, then frame-accurate canvas
- *             for the selected region. Falls back to 'fast' on non-MP4/MOV files.
- *  - 'high':  always the WebCodecs+canvas path (frame-accurate). Default.
+ *  - 'off':   no video element at all (audio-only via AudioEngine)
+ *  - 'fast':  the `<video>` element displays the picture AND plays its own audio
+ *             track, free-running with the browser's built-in A/V sync. Cheap and
+ *             smooth, but NOT sample-accurate with the spectrogram: no band-pass
+ *             filter, no pitch-preserving slow-down (speed changes pitch), and the
+ *             playhead tracks the element's coarse clock. For machines that can't
+ *             run Accurate. Driven by VideoElementEngine.
+ *  - 'mixed': 'fast' until a selection is committed, then frame-accurate canvas
+ *             (WebCodecs + AudioEngine) for the selected region. Falls back to the
+ *             <video> element on non-MP4/MOV files.
+ *  - 'accurate': always the WebCodecs+canvas path with AudioEngine (frame-accurate).
+ *             Default.
+ *
+ * Legacy values ('fast-slave', 'fast-free', and the original audio-master 'fast')
+ * all migrate to 'fast' on load — see migrateVideoMode() in constants.ts.
+ * Legacy value 'high' migrates to 'accurate'.
  */
-export type VideoMode = 'off' | 'fast' | 'mixed' | 'high';
+export type VideoMode = 'off' | 'fast' | 'mixed' | 'accurate';
 
 export interface ProjectUiSettings {
   leftPanelWidth?: number;  // px

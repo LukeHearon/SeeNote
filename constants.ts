@@ -1,4 +1,4 @@
-import type { AnnotationTool, ProjectUiSettings, SpectrogramSettings } from './types';
+import type { AnnotationTool, ProjectUiSettings, SpectrogramSettings, VideoMode } from './types';
 
 // Roseus 'r' perceptually-uniform colormap
 // © 2022 dofuuz — MIT License
@@ -59,8 +59,19 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,
   zoomSec: DEFAULT_ZOOM_SEC,
-  videoMode: 'high',
+  videoMode: 'accurate',
 };
+
+// Coerce a persisted videoMode to the current enum. The experimental
+// 'fast-slave' / 'fast-free' variants (and the original audio-master 'fast')
+// all collapse into the single 'fast' mode (video element plays its own audio).
+// Legacy 'high' migrates to 'accurate'.
+export function migrateVideoMode(mode: VideoMode | string | undefined): VideoMode {
+  if (mode === 'fast' || mode === 'fast-slave' || mode === 'fast-free') return 'fast';
+  if (mode === 'high') return 'accurate';
+  if (mode === 'off' || mode === 'mixed' || mode === 'accurate') return mode;
+  return DEFAULT_UI_SETTINGS.videoMode;
+}
 
 // buzzdetect activations panel defaults.
 export const DEFAULT_BUZZDETECT_PANEL_HEIGHT = 180; // px

@@ -79,6 +79,10 @@ export class VideoFrameSource {
   private bytesPerFrame = 0;
   /** Current zoom/pan viewport applied by drawAt. Default = whole frame. */
   private viewport: Viewport = DEFAULT_VIEWPORT;
+  /** When non-null, drawAt renders the frame nearest this time instead of the
+   *  live playhead — used during paused seeks so intermediate GOP frames don't
+   *  flash on the canvas before the target frame is decoded. */
+  private frozenDisplaySec: number | null = null;
   private opts: VideoFrameSourceOptions;
 
   constructor(opts: VideoFrameSourceOptions = {}) {
@@ -97,6 +101,18 @@ export class VideoFrameSource {
   clearPinnedRange(): void {
     this.pinnedRange = null;
   }
+
+  /** Freeze the displayed frame at `timeSec` (the position before a paused
+   *  seek begins). drawAt still advances currentPlayheadSec for eviction math,
+   *  but the canvas renders the frozen frame until clearDisplayFreeze() fires. */
+  freezeDisplayAt(timeSec: number): void {
+    this.frozenDisplaySec = timeSec;
+  }
+
+  clearDisplayFreeze(): void {
+    this.frozenDisplaySec = null;
+  }
+
 
   async open(assetUrl: string): Promise<{ width: number; height: number; durationSec: number }> {
     if (this.opened) throw new Error('VideoFrameSource already opened');
@@ -369,7 +385,7 @@ export class VideoFrameSource {
    *  a blank canvas — better stale than empty. */
   drawAt(ctx: CanvasRenderingContext2D, tSec: number): void {
     this.currentPlayheadSec = tSec;
-    const frame = this.currentFrame();
+    const frame = this.currentFrame(this.frozenDisplaySec ?? undefined);
     if (!frame) return;
 
     const canvas = ctx.canvas;
@@ -431,6 +447,7 @@ export class VideoFrameSource {
 
   close(): void {
     this.closed = true;
+    this.frozenDisplaySec = null;
     this.rangeToken++;
     for (const f of this.frameCache) {
       try { f.close(); } catch { /* already closed */ }
@@ -507,11 +524,12 @@ export class VideoFrameSource {
     return false;
   }
 
-  /** The cached frame at/before the current playhead, or the earliest cached
-   *  frame as a fallback. null only when the cache is empty. */
-  private currentFrame(): VideoFrame | null {
+  /** The cached frame at/before `atSec` (defaults to currentPlayheadSec), or
+   *  the earliest cached frame as a fallback. null only when cache is empty. */
+  private currentFrame(atSec?: number): VideoFrame | null {
     if (this.frameCache.length === 0) return null;
-    const idx = this.findFrameIdxAtOrBefore(this.currentPlayheadSec * 1e6);
+    const t = (atSec ?? this.currentPlayheadSec) * 1e6;
+    const idx = this.findFrameIdxAtOrBefore(t);
     return idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
   }
 
