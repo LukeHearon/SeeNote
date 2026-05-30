@@ -26,8 +26,13 @@ export const MAGMA_STOPS = [
 export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a']);
 export const SUPPORTED_VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm']);
 
+// Lowercased file extension (no dot), or '' if the path has no extension.
+export function getExt(path: string): string {
+  return path.split('.').pop()?.toLowerCase() ?? '';
+}
+
 export function isSupportedMediaFile(path: string): boolean {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const ext = getExt(path);
   return SUPPORTED_AUDIO_EXTS.has(ext) || SUPPORTED_VIDEO_EXTS.has(ext);
 }
 

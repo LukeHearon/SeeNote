@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
+import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
@@ -59,7 +59,6 @@ interface SpectrogramProps {
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: Selection | null) => void;
-  onSelectionCommit?: (region: Selection) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
   /**
@@ -81,6 +80,13 @@ export interface SpectrogramHandle {
 
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
 const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
+
+// Maximum horizontal scroll (in pixels), allowing a 40%-of-viewport overrun
+// past the end of the file so the last events aren't pinned to the right edge.
+// Single source of truth for the scroll clamp used by auto-pan, right-drag pan,
+// and wheel zoom/pan.
+const computeMaxScroll = (duration: number, pixelsPerSecond: number, containerWidth: number) =>
+  Math.max(0, duration * pixelsPerSecond - containerWidth + containerWidth * 0.4);
 
 const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
@@ -109,7 +115,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onAnnotationsCommit,
   onSelectAnnotation,
   onSelectionChange,
-  onSelectionCommit,
   onBoundAnnotationChange,
   onZoomChange,
   onViewportChange,
@@ -126,7 +131,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   // Y-axis canvas: separate element to the left of the spectrogram area, never layered on top of spectrogram content.
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
-  const interactionRef = useRef<HTMLDivElement>(null);
 
   // Internal scroll state (in pixels)
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -747,9 +751,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
 
-  const canGoPrev = sortedAnnotations.length > 0 && sortedAnnotations.some(a => a.start < currentTime - 0.05);
-  const canGoNext = sortedAnnotations.length > 0 && sortedAnnotations.some(a => a.start > currentTime + 0.05);
-
   const scrollToAnnotation = useCallback((annotStart: number) => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
@@ -1006,8 +1007,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           // and clamp the result so panning never becomes uncontrollable.
           const baseSpeed = Math.max(Math.min(Math.pow(absOverflow / 40, 1.5), 40), 0.8);
           const speed = Math.sign(overflow) * Math.min(baseSpeed * timeAccel, 60);
-          const overrunPixels = containerWidth * 0.4;
-          const maxScroll = Math.max(0, dur * pps - containerWidth + overrunPixels);
+          const maxScroll = computeMaxScroll(dur, pps, containerWidth);
           const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
 
           if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
@@ -1124,8 +1124,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (dragStart) {
       const delta = dragStart.x - e.clientX;
       const containerWidth = containerRef.current?.clientWidth || 0;
-      const overrunPixels = containerWidth * 0.4;
-      const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
+      const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       setScrollLeft(Math.max(0, Math.min(dragStart.scroll + delta, maxScroll)));
       return;
     }
@@ -1330,7 +1329,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const end = Math.max(creatingSelection.start, creatingSelection.current);
       if (end > start) {
         onSelectionChange({ start, end });
-        onSelectionCommit?.({ start, end });
         onBoundAnnotationChange(null);
       } else {
         onSelectionChange(null);
@@ -1383,16 +1381,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
       const newPixelsPerSecond = containerWidth / newZoomSec;
       let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
-      const overrunPixels = containerWidth * 0.4;
-      const maxScroll = Math.max(0, (duration * newPixelsPerSecond) - containerWidth + overrunPixels);
+      const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
       newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
       setScrollLeft(newScrollLeft);
       onZoomChange(newZoomSec);
     } else {
       const panAmount = deltaY + deltaX;
       const containerWidth = containerRef.current?.clientWidth || 0;
-      const overrunPixels = containerWidth * 0.4;
-      const maxScroll = Math.max(0, (duration * pixelsPerSecond) - containerWidth + overrunPixels);
+      const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
     }
   }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
@@ -1571,7 +1567,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       )}
 
       {/* Layer 2: annotation HTML divs and selection handles */}
-      <div ref={interactionRef} className="absolute top-0 left-0 w-full h-full">
+      <div className="absolute top-0 left-0 w-full h-full">
          {layeredAnnotations.map((annotation) => {
              const left = (annotation.start * pixelsPerSecond) - scrollLeft;
              const width = (annotation.end - annotation.start) * pixelsPerSecond;

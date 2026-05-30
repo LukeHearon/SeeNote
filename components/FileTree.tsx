@@ -39,15 +39,12 @@ interface ContextMenuState {
   isAudioRoot?: boolean;
 }
 
-import { isSupportedMediaFile, SUPPORTED_AUDIO_EXTS } from '../constants';
+import { isSupportedMediaFile, SUPPORTED_AUDIO_EXTS, getExt } from '../constants';
+import { stripExt } from '../utils/helpers';
 
 // OS-aware label for the system file browser
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
 const finderLabel = isWindows ? 'File Explorer' : 'Finder';
-
-function getExt(name: string): string {
-  return name.split('.').pop()?.toLowerCase() ?? '';
-}
 
 function computeFileCount(node: TreeNode): number {
   if (!node.isDir) return 1;
@@ -536,7 +533,7 @@ function FileTree({
                 }
 
                 const rel = filePath.substring(rootDirectory.length + 1);
-                const relNoExt = rel.replace(/\.[^/.]+$/, '');
+                const relNoExt = stripExt(rel);
                 const isActive = filePath === currentTrack;
                 const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(filePath));
                 const hasAnnotation = annotatedTracks.has(filePath);

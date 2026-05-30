@@ -53,8 +53,24 @@ export const calculateAnnotationLayers = (annotations: Annotation[]): Annotation
   return result;
 };
 
+// Strip a trailing file extension (the last ".ext" with no slash inside it).
+// Leaves paths with no extension untouched.
+export function stripExt(path: string): string {
+    return path.replace(/\.[^/.]+$/, "");
+}
+
+// Fisher–Yates shuffle returning a NEW array; the input is never mutated.
+export function shuffleArray<T>(arr: T[]): T[] {
+    const out = [...arr];
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+}
+
 const getBaseName = (filename: string) => {
-    return filename.replace(/\.[^/.]+$/, "");
+    return stripExt(filename);
 };
 
 // Helper for file saving via Tauri native dialog
@@ -100,15 +116,6 @@ const roundToDecimals = (v: number, decimals: number): number => {
     return Math.round(v * factor) / factor;
 };
 
-export const generateCSVContent = (annotations: Annotation[], decimals: number = 7): string => {
-    let content = "Label,Start,End\n";
-    annotations.forEach(a => {
-        const safeText = `"${a.text.replace(/"/g, '""')}"`;
-        content += `${safeText},${roundToDecimals(a.start, decimals).toFixed(decimals)},${roundToDecimals(a.end, decimals).toFixed(decimals)}\n`;
-    });
-    return content;
-};
-
 export const generateAudacityContent = (annotations: Annotation[], decimals: number = 7): string => {
     let content = "";
     annotations.forEach(a => {
@@ -117,30 +124,10 @@ export const generateAudacityContent = (annotations: Annotation[], decimals: num
     return content;
 };
 
-export const generateJSONContent = (annotations: Annotation[], decimals: number = 7): string => {
-    const rounded = annotations.map(a => ({
-        ...a,
-        start: roundToDecimals(a.start, decimals),
-        end: roundToDecimals(a.end, decimals),
-    }));
-    return JSON.stringify(rounded, null, 2);
-};
-
-// Export to CSV
-export const exportToCSV = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
-    const path = defaultSavePath(trackPath, trackName, '_annotations', '.csv');
-    await saveFile(generateCSVContent(annotations, decimals), path, '.csv');
-};
-
 // Export to Audacity TXT (Tab delimited)
 export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
     const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
     await saveFile(generateAudacityContent(annotations, decimals), path, '.txt');
-};
-
-export const exportToJSON = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
-    const path = defaultSavePath(trackPath, trackName, '_annotations', '.json');
-    await saveFile(generateJSONContent(annotations, decimals), path, '.json');
 };
 
 // Walks up a filesystem path to find the first ancestor directory that actually

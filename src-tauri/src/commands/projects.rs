@@ -3,8 +3,7 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 use tauri::Manager;
 
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
-const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
+use super::shared::{atomic_write, walk_files, AUDIO_EXTS, VIDEO_EXTS};
 
 /// Slim registry entry stored in `{app_data}/.projects/projects.json`. Maps a
 /// stable id to a project directory on this machine plus a `last_opened`
@@ -63,35 +62,6 @@ pub async fn save_projects(
     }
     let content = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
     atomic_write(path, &content)
-}
-
-/// Write `content` to `path` atomically: stage to a sibling `.tmp` file then
-/// rename over the target, so that a crash mid-write never leaves the file
-/// truncated or corrupt.
-fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
-    let tmp_path = {
-        let mut t = path.to_path_buf();
-        let mut name = t.file_name().unwrap_or_default().to_os_string();
-        name.push(".tmp");
-        t.set_file_name(name);
-        t
-    };
-
-    std::fs::write(&tmp_path, content).map_err(|e| {
-        format!("failed to write temp file '{}': {}", tmp_path.display(), e)
-    })?;
-
-    if let Err(rename_err) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(format!(
-            "failed to rename '{}' to '{}': {}",
-            tmp_path.display(),
-            path.display(),
-            rename_err
-        ));
-    }
-
-    Ok(())
 }
 
 /// Read `{project_dir}/.seenote/settings.json` and return its parsed JSON.
@@ -154,39 +124,28 @@ pub async fn get_orphaned_annotations(
     }
 
     let mut orphans = vec![];
-    collect_orphaned_annotations(ann_root, ann_root, audio_root, &mut orphans);
+    collect_orphaned_annotations(ann_root, audio_root, &mut orphans);
     Ok(orphans)
 }
 
-fn collect_orphaned_annotations(
-    current: &Path,
-    ann_root: &Path,
-    audio_root: &Path,
-    orphans: &mut Vec<String>,
-) {
-    let entries = match std::fs::read_dir(current) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_orphaned_annotations(&path, ann_root, audio_root, orphans);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("txt") {
-            // Derive relative path from annotation root
-            if let Ok(rel) = path.strip_prefix(ann_root) {
-                // Get the stem (remove .txt extension)
-                if let Some(stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) {
-                    // Corresponding audio directory: audio_root / rel_parent
-                    let rel_parent = rel.parent().unwrap_or(Path::new(""));
-                    let audio_dir = audio_root.join(rel_parent);
-                    if !has_media_file_with_stem(&audio_dir, stem) {
-                        orphans.push(path.to_string_lossy().to_string());
-                    }
+fn collect_orphaned_annotations(ann_root: &Path, audio_root: &Path, orphans: &mut Vec<String>) {
+    walk_files(ann_root, &mut |path| {
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            return;
+        }
+        // Derive relative path from annotation root
+        if let Ok(rel) = path.strip_prefix(ann_root) {
+            // Get the stem (remove .txt extension)
+            if let Some(stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) {
+                // Corresponding audio directory: audio_root / rel_parent
+                let rel_parent = rel.parent().unwrap_or(Path::new(""));
+                let audio_dir = audio_root.join(rel_parent);
+                if !has_media_file_with_stem(&audio_dir, stem) {
+                    orphans.push(path.to_string_lossy().to_string());
                 }
             }
         }
-    }
+    });
 }
 
 #[tauri::command]
@@ -221,18 +180,11 @@ pub async fn list_txt_files_recursive(path: String, ext: Option<String>) -> Resu
 }
 
 fn collect_ext_files(dir: &Path, ext: &str, results: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_ext_files(&path, ext, results);
-        } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+    walk_files(dir, &mut |path| {
+        if path.extension().and_then(|e| e.to_str()) == Some(ext) {
             results.push(path.to_string_lossy().to_string());
         }
-    }
+    });
 }
 
 #[tauri::command]
@@ -331,30 +283,19 @@ pub async fn list_annotation_files(
     Ok(results)
 }
 
-fn scan_annotation_files(
-    dir: &Path,
-    root: &Path,
-    ext: &str,
-    results: &mut Vec<String>,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            scan_annotation_files(&path, root, ext, results);
-        } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
-            if let Ok(rel) = path.strip_prefix(root) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
-                let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&format!(".{}", ext)) {
-                    s.to_string()
-                } else {
-                    rel_str
-                };
-                results.push(rel_no_ext);
-            }
+fn scan_annotation_files(dir: &Path, root: &Path, ext: &str, results: &mut Vec<String>) {
+    walk_files(dir, &mut |path| {
+        if path.extension().and_then(|e| e.to_str()) != Some(ext) {
+            return;
         }
-    }
+        if let Ok(rel) = path.strip_prefix(root) {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&format!(".{}", ext)) {
+                s.to_string()
+            } else {
+                rel_str
+            };
+            results.push(rel_no_ext);
+        }
+    });
 }

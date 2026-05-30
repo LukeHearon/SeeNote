@@ -61,7 +61,8 @@
 import { SoundTouch } from 'soundtouchjs';
 import { getFileInfo, startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
 import { PhaseVocoder } from './PhaseVocoder';
-import { BandPassFilter } from '../types';
+import { RafTicker } from './rafTicker';
+import { BandPassFilter, PlaybackTransport } from '../types';
 
 export interface AudioEngineCallbacks {
   /** Called on every animation frame during playback with the current media time. */
@@ -135,7 +136,41 @@ const MAX_PCM_CACHE_ENTRIES = 8;
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-export class AudioEngine {
+/**
+ * Q values for an 8th-order Butterworth response from four cascaded biquads.
+ * Pole-pair angles π/16, 3π/16, 5π/16, 7π/16 → Q = 1/(2 cos θ).
+ */
+const BUTTERWORTH_8_Q = [0.5097955, 0.6013372, 0.9000000, 2.5629154] as const;
+
+/**
+ * Create the cascaded biquad nodes for an 8th-order Butterworth band-pass:
+ * four highpass stages followed by four lowpass stages, each with its
+ * Butterworth Q. Frequencies are left at their defaults — callers set them
+ * (the live graph via setValueAtTime in _applyFilterToGraph; the offline
+ * measurement via .frequency.value before rendering) — and callers also wire
+ * the chain into their surrounding graph, since the endpoints differ. Used by
+ * both the live filter graph and the offline group-delay measurement so the
+ * two stay identical.
+ */
+function buildButterworthCascade(
+  ctx: BaseAudioContext,
+): { hp: BiquadFilterNode[]; lp: BiquadFilterNode[] } {
+  const hp = BUTTERWORTH_8_Q.map(q => {
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.Q.value = q;
+    return f;
+  });
+  const lp = BUTTERWORTH_8_Q.map(q => {
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.Q.value = q;
+    return f;
+  });
+  return { hp, lp };
+}
+
+export class AudioEngine implements PlaybackTransport {
   private ctx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   // Gain value applied at next gainNode creation (set via setGain before play)
@@ -206,7 +241,7 @@ export class AudioEngine {
   // Active Rust stream ID (null when not streaming)
   private streamId: number | null = null;
 
-  private rafHandle: number | null = null;
+  private _raf = new RafTicker();
   /** Number of PCM chunks successfully scheduled in the current play(). Used by
    *  the slow-decode notice to detect when a decode has opened but not yet delivered. */
   private chunksScheduled = 0;
@@ -414,11 +449,6 @@ export class AudioEngine {
     if (this.gainNode) this.gainNode.gain.value = gain;
   }
 
-  setMuted(muted: boolean): void {
-    this._currentGain = muted ? 0 : 1;
-    if (this.gainNode) this.gainNode.gain.value = this._currentGain;
-  }
-
   /**
    * Set the playback speed (0.25x–4.0x). Pitch is preserved.
    * Changing speed during playback restarts from the current playhead so the
@@ -437,10 +467,6 @@ export class AudioEngine {
     }
   }
 
-  getPlaybackSpeed(): number {
-    return this.playbackSpeed;
-  }
-
   /**
    * Apply a band-pass filter to the playback path. `null` removes any active
    * filter. The change is applied to the persistent filter graph in real time
@@ -449,10 +475,6 @@ export class AudioEngine {
   setBandPassFilter(filter: BandPassFilter | null): void {
     this.bandPassFilter = filter;
     this._applyFilterToGraph();
-  }
-
-  getBandPassFilter(): BandPassFilter | null {
-    return this.bandPassFilter;
   }
 
   /**
@@ -509,9 +531,6 @@ export class AudioEngine {
   private _buildFilterGraph(): void {
     if (!this.ctx || !this.gainNode) return;
     const ctx = this.ctx;
-    // Q values for an 8th-order Butterworth response from four cascaded biquads.
-    // Pole-pair angles π/16, 3π/16, 5π/16, 7π/16 → Q = 1/(2 cos θ).
-    const BUTTERWORTH_8_Q = [0.5097955, 0.6013372, 0.9000000, 2.5629154];
     this._filterIn = ctx.createGain();
     this._filterOut = ctx.createGain();
     this._filterDry = ctx.createGain();
@@ -519,18 +538,11 @@ export class AudioEngine {
     // Max delay 0.5s is way more than any realistic biquad group delay.
     this._filterDryDelay = ctx.createDelay(0.5);
 
-    this._filterHP = BUTTERWORTH_8_Q.map(q => {
-      const f = ctx.createBiquadFilter();
-      f.type = 'highpass';
-      f.Q.value = q;
-      return f;
-    });
-    this._filterLP = BUTTERWORTH_8_Q.map(q => {
-      const f = ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.Q.value = q;
-      return f;
-    });
+    // Frequencies are set by _applyFilterToGraph() (called below) via
+    // setValueAtTime; the cascade is built here with just Q + type.
+    const { hp, lp } = buildButterworthCascade(ctx);
+    this._filterHP = hp;
+    this._filterLP = lp;
 
     // Dry path: filterIn → filterDryDelay → filterDry → filterOut.
     // The DelayNode matches the wet branch's group delay so the wet/dry mix
@@ -625,7 +637,6 @@ export class AudioEngine {
    * of audio through 8 biquads.
    */
   private async _measureWetGroupDelay(low: number, high: number, sampleRate: number): Promise<number> {
-    const BUTTERWORTH_8_Q = [0.5097955, 0.6013372, 0.9000000, 2.5629154];
     const length = Math.ceil(0.5 * sampleRate);
     const offline = new OfflineAudioContext(1, length, sampleRate);
     const impulseBuf = offline.createBuffer(1, length, sampleRate);
@@ -633,23 +644,14 @@ export class AudioEngine {
     const source = offline.createBufferSource();
     source.buffer = impulseBuf;
 
+    // Same cascade as the live wet path; set cutoffs before rendering.
+    const { hp, lp } = buildButterworthCascade(offline);
+    for (const f of hp) f.frequency.value = low;
+    for (const f of lp) f.frequency.value = high;
+
     let prev: AudioNode = source;
-    for (const q of BUTTERWORTH_8_Q) {
-      const hp = offline.createBiquadFilter();
-      hp.type = 'highpass';
-      hp.frequency.value = low;
-      hp.Q.value = q;
-      prev.connect(hp);
-      prev = hp;
-    }
-    for (const q of BUTTERWORTH_8_Q) {
-      const lp = offline.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.frequency.value = high;
-      lp.Q.value = q;
-      prev.connect(lp);
-      prev = lp;
-    }
+    for (const node of hp) { prev.connect(node); prev = node; }
+    for (const node of lp) { prev.connect(node); prev = node; }
     prev.connect(offline.destination);
     source.start(0);
 
@@ -786,10 +788,7 @@ export class AudioEngine {
       this.slowDecodeTimer = null;
     }
 
-    if (this.rafHandle !== null) {
-      cancelAnimationFrame(this.rafHandle);
-      this.rafHandle = null;
-    }
+    this._raf.stop();
 
     // Stop all scheduled source nodes immediately
     if (this.ctx) {
@@ -1220,23 +1219,30 @@ export class AudioEngine {
 
   /** rAF loop: drives onTimeUpdate and fires onPlaying once audio starts. */
   private _rafLoop(myPlayId: number): void {
-    if (this.playId !== myPlayId) return;
+    const frame = () => {
+      // Stale play() — stop ticking (also stopped by _cancelPlayback, which
+      // bumps playId; this guards a frame that slips through in between).
+      if (this.playId !== myPlayId) { this._raf.stop(); return; }
 
-    if (this.ctx) {
-      const ctxNow = this.ctx.currentTime;
+      if (this.ctx) {
+        const ctxNow = this.ctx.currentTime;
 
-      // Fire onPlaying the first time audio is actually being emitted. Guarded
-      // by playStartCtxSet so we don't fire while waiting for the first chunk.
-      if (!this.onPlayingFired && this.playStartCtxSet && ctxNow >= this.playStartCtx) {
-        this.onPlayingFired = true;
-        this.isPlayingState = true;
-        this.callbacks.onPlaying();
+        // Fire onPlaying the first time audio is actually being emitted. Guarded
+        // by playStartCtxSet so we don't fire while waiting for the first chunk.
+        if (!this.onPlayingFired && this.playStartCtxSet && ctxNow >= this.playStartCtx) {
+          this.onPlayingFired = true;
+          this.isPlayingState = true;
+          this.callbacks.onPlaying();
+        }
+
+        const mt = this._computeMediaTime();
+        this.callbacks.onTimeUpdate(mt);
       }
-
-      const mt = this._computeMediaTime();
-      this.callbacks.onTimeUpdate(mt);
-    }
-
-    this.rafHandle = requestAnimationFrame(() => this._rafLoop(myPlayId));
+    };
+    // First body run is synchronous (as before); schedule subsequent frames
+    // only if this play() is still current (matches the original guard, which
+    // returned without rescheduling when stale).
+    frame();
+    if (this.playId === myPlayId) this._raf.start(frame);
   }
 }

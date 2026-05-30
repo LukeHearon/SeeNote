@@ -43,6 +43,26 @@ export interface WindowBounds {
 }
 
 /**
+ * Common playback surface implemented by both AudioEngine and VideoElementEngine.
+ * AnnotationWindow's transport layer drives whichever engine is live through this
+ * interface (see `activeTransport()`), never branching on the concrete type.
+ * Signatures must stay satisfiable by both engines as-is.
+ */
+export interface PlaybackTransport {
+  /** True while playback is actively running. */
+  get isPlaying(): boolean;
+  /** Current playback position in seconds (last known position while paused). */
+  getMediaTime(): number;
+  /** Play from `startSec`; if `endSec` is given, stop and fire onEnded there. */
+  play(startSec: number, endSec?: number): void;
+  pause(): void;
+  /** Move the playhead to `sec` without changing the playing state. */
+  seek(sec: number): void;
+  setGain(gain: number): void;
+  setPlaybackSpeed(speed: number): void;
+}
+
+/**
  * Video rendering pipeline for the active track.
  *  - 'off':   no video element at all (audio-only via AudioEngine)
  *  - 'fast':  the `<video>` element displays the picture AND plays its own audio

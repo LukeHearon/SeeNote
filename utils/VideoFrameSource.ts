@@ -42,6 +42,7 @@
 
 import { createFile, DataStream, Endianness, type ISOFile, type Sample, type Track, type MP4BoxBuffer } from 'mp4box';
 import { DEFAULT_VIEWPORT, computeContentRect, drawLetterboxed, regionPx, type Viewport } from './videoZoom';
+import { getExt } from '../constants';
 
 const DEFAULT_WINDOW_BEFORE_SEC = 2;
 const DEFAULT_WINDOW_AFTER_SEC = 30;
@@ -621,6 +622,6 @@ export class VideoFrameSource {
  *  mp4box.js. Other extensions fall back to the <video> element. */
 export function canUseFrameSource(path: string): boolean {
   if (typeof VideoDecoder === 'undefined') return false;
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const ext = getExt(path);
   return ext === 'mp4' || ext === 'mov' || ext === 'm4v';
 }

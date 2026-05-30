@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
+use super::shared::{atomic_write, AUDIO_EXTS, VIDEO_EXTS};
+
 #[derive(Serialize)]
 pub struct DirEntry {
     pub name: String,
@@ -9,9 +11,6 @@ pub struct DirEntry {
     pub is_audio: bool,
     pub is_video: bool,
 }
-
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
-const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
 fn classify_ext(path: &std::path::Path) -> (bool, bool) {
     let ext = path
@@ -106,25 +105,7 @@ pub async fn write_text_file(path: String, content: String, allowed_roots: Optio
     }
 
     // Atomic write: write to a sibling .tmp file then rename over the target.
-    let tmp_path = {
-        let mut t = target.to_path_buf();
-        let mut name = t.file_name().unwrap_or_default().to_os_string();
-        name.push(".tmp");
-        t.set_file_name(name);
-        t
-    };
-
-    std::fs::write(&tmp_path, &content).map_err(|e| {
-        format!("failed to write temp file '{}': {}", tmp_path.display(), e)
-    })?;
-
-    if let Err(rename_err) = std::fs::rename(&tmp_path, target) {
-        // Best-effort cleanup of the temp file before returning the error.
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(format!("failed to rename '{}' to '{}': {}", tmp_path.display(), target.display(), rename_err));
-    }
-
-    Ok(())
+    atomic_write(target, &content)
 }
 
 #[tauri::command]

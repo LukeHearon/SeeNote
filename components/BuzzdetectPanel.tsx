@@ -34,7 +34,6 @@ interface BuzzdetectPanelProps {
   onToggleNeuron: (neuron: string, hidden: boolean) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
-  onSelectionCommit?: (s: Selection) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onSeek: (time: number) => void;
   onScrollWheel?: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
@@ -80,7 +79,6 @@ export default function BuzzdetectPanel({
   onToggleNeuron,
   onHeightChange,
   onSelectionChange,
-  onSelectionCommit,
   onBoundAnnotationChange,
   onSeek,
   onScrollWheel,
@@ -408,7 +406,6 @@ export default function BuzzdetectPanel({
     };
     const onUp = () => {
       setDragging(false);
-      if (dragSelRef.current) onSelectionCommit?.(dragSelRef.current);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -416,7 +413,7 @@ export default function BuzzdetectPanel({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging, binAtClientX, binInterval, onSelectionChange, onSelectionCommit]);
+  }, [dragging, binAtClientX, binInterval, onSelectionChange]);
 
   const handleAreaMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-buzz-ui]')) return;
@@ -429,7 +426,6 @@ export default function BuzzdetectPanel({
     setDragging(true);
     onBoundAnnotationChange(null);
     onSelectionChange(interval);
-    onSelectionCommit?.(interval);
     onSeek(interval.start);
   };
 

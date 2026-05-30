@@ -2,7 +2,7 @@
  * Playback transport backed by a browser <video> element playing its OWN audio
  * track. Used by Fast mode (and Mixed before a selection), where we trade
  * spectrogram-accuracy for the element's flawless built-in A/V sync — the right
- * trade on machines that can't sustain the WebCodecs+canvas "High" path.
+ * trade on machines that can't sustain the WebCodecs+canvas "Accurate" path.
  *
  * It deliberately mirrors the slice of {@link AudioEngine}'s interface that
  * AnnotationWindow's transport layer calls (play/pause/seek/getMediaTime/
@@ -17,8 +17,11 @@
  * audio is the element's own track (no band-pass filter, no pitch-preserving
  * slow-down; playbackRate changes pitch), and the playhead tracks the element's
  * coarse currentTime rather than sample-exact PCM. AudioEngine remains the only
- * sample-accurate path (Off/High/Mixed-with-selection and all audio-only files).
+ * sample-accurate path (Off/Accurate/Mixed-with-selection and all audio-only files).
  */
+import { PlaybackTransport } from '../types';
+import { RafTicker } from './rafTicker';
+
 export interface VideoElementEngineCallbacks {
   /** Fires every animation frame while playing, and once on seek. */
   onTimeUpdate: (mediaTime: number) => void;
@@ -31,11 +34,11 @@ export interface VideoElementEngineCallbacks {
   onEnded: () => void;
 }
 
-export class VideoElementEngine {
+export class VideoElementEngine implements PlaybackTransport {
   private el: HTMLVideoElement | null = null;
   private readonly cb: VideoElementEngineCallbacks;
   private endSec: number | null = null;
-  private raf = 0;
+  private readonly raf = new RafTicker();
   private speed = 1;
   private gain = 1;          // 0..1 (the element can't boost above unity)
   private playingState = false;
@@ -112,8 +115,7 @@ export class VideoElementEngine {
   }
 
   private _startRaf(): void {
-    this._stopRaf();
-    const tick = () => {
+    this.raf.start(() => {
       const el = this.el;
       if (!el || !this.playingState) return;
       const t = el.currentTime;
@@ -122,17 +124,14 @@ export class VideoElementEngine {
       if ((this.endSec !== null && t >= this.endSec) || el.ended) {
         el.pause();
         this.playingState = false;
-        this.raf = 0;
+        this.raf.stop();
         this.cb.onEnded();
         return;
       }
-      this.raf = requestAnimationFrame(tick);
-    };
-    this.raf = requestAnimationFrame(tick);
+    });
   }
 
   private _stopRaf(): void {
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.raf = 0;
+    this.raf.stop();
   }
 }

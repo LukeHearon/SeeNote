@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { BuzzdetectData } from '../types';
+import { BuzzdetectData, WindowBounds } from '../types';
 
 // ── Types returned by Rust ────────────────────────────────────────────────────
 
@@ -166,13 +166,6 @@ export const closePcmStream = (streamId: number): Promise<void> =>
   invoke('close_pcm_stream', { streamId });
 
 // ── Window bounds ─────────────────────────────────────────────────────────────
-
-export interface WindowBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export const getWindowBounds = (): Promise<WindowBounds> =>
   invoke('get_window_bounds');

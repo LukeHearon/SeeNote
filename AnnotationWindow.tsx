@@ -6,10 +6,10 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode } from './constants';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
-import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool } from './utils/helpers';
+import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, stripExt, shuffleArray } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -266,7 +266,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   const [zoomSec, setZoomSec] = useState(project.settings.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
 
-  // Video-rendering mode (off / fast / mixed / high). Drives which player
+  // Video-rendering mode (off / fast / mixed / accurate). Drives which player
   // VideoPane mounts and whether handleOpenTrack opens / warms a frame source.
   // Refs let async closures (engine onTimeUpdate, selection commit) read the
   // current mode without being recreated on every render.
@@ -417,7 +417,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
     const fileName = absolutePath.split('/').pop() ?? absolutePath;
     const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
-    const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+    const ext = getExt(fileName);
     const isAudio = audioExts.includes(ext);
     setIsAudioTrack(isAudio);
     setTrackName(fileName);
@@ -535,7 +535,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, []);
 
   // React to videoMode changes for the currently-loaded track. Toggling
-  // off/fast ↔ mixed/high without this would leave a stale frame source open
+  // off/fast ↔ mixed/accurate without this would leave a stale frame source open
   // (memory + decoder) or, conversely, leave the canvas dark with no decoder.
   // The track itself doesn't need to be reloaded — only the frame source.
   useEffect(() => {
@@ -589,7 +589,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // play/pause/seek/getMediaTime/setGain/setPlaybackSpeed/isPlaying surface, so
   // callers never branch on which one is live.
   const activeTransport = useCallback(
-    () => (usesVideoTransport() ? videoEngineRef.current : engineRef.current),
+    (): PlaybackTransport | null => (usesVideoTransport() ? videoEngineRef.current : engineRef.current),
     [usesVideoTransport],
   );
 
@@ -671,11 +671,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setShuffleMode(prev => {
       const next = !prev;
       if (next) {
-        const shuffled = [...allTracks];
-        for (let i = shuffled.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-        }
+        const shuffled = shuffleArray(allTracks);
         // Pin the currently open file at the front of the queue
         const cur = trackPathRef.current;
         if (cur) {
@@ -695,7 +691,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const ident = useMemo(() => {
     if (!trackPath || !currentDirectory) return null;
     const rel = trackPath.substring(currentDirectory.length + 1);
-    return rel.replace(/\.[^/.]+$/, '');
+    return stripExt(rel);
   }, [trackPath, currentDirectory]);
 
   // Load buzzdetect activations for the current track, located by ident under
@@ -834,7 +830,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
     if (!annotationDirectory || !currentDirectory) return null;
     const rel = trackFilePath.substring(currentDirectory.length);
-    const withoutExt = rel.replace(/\.[^/.]+$/, '');
+    const withoutExt = stripExt(rel);
     return annotationDirectory + withoutExt + '.txt';
   }, [annotationDirectory, currentDirectory]);
 
@@ -978,11 +974,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         setAllMediaFiles(files);
         let firstFile = files[0];
         if (project.settings.shuffleMode && files.length > 0) {
-          const shuffled = [...files];
-          for (let i = shuffled.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-          }
+          const shuffled = shuffleArray(files);
           setShuffledFiles(shuffled);
           firstFile = shuffled[0];
         }
@@ -1018,7 +1010,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       const relPaths = await listAnnotationFiles(annotationDir, 'txt');
       const relToFull = new Map<string, string>();
       for (const f of files) {
-        const rel = f.substring(audioRoot.length + 1).replace(/\.[^/.]+$/, '').replace(/\\/g, '/');
+        const rel = stripExt(f.substring(audioRoot.length + 1)).replace(/\\/g, '/');
         relToFull.set(rel, f);
       }
       const annotated = new Set<string>();
@@ -1469,32 +1461,35 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [annotationTools, activeToolKey]);
 
+  // Shared window-drag scaffold: wires a mousemove listener and a one-shot
+  // mouseup that tears both down. Each handler supplies only its delta math.
+  const startDragSession = (onMove: (e: MouseEvent) => void) => {
+      const move = (e: MouseEvent) => onMove(e);
+      const up = () => {
+          window.removeEventListener('mousemove', move);
+          window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+  };
+
   const handleSplitDrag = (e: React.MouseEvent) => {
       e.preventDefault();
       const startY = e.clientY;
       const startRatio = splitRatio;
-
-      const onMove = (moveEvent: MouseEvent) => {
+      startDragSession((moveEvent) => {
           const delta = moveEvent.clientY - startY;
           const totalHeight = window.innerHeight - 64;
           const newRatio = Math.max(0.2, Math.min(0.8, startRatio + (delta / totalHeight)));
           setSplitRatio(newRatio);
-      };
-
-      const onUp = () => {
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      });
   };
 
   const handleLeftPanelDrag = (e: React.MouseEvent) => {
       e.preventDefault();
       const startY = e.clientY;
       const startRatio = leftPanelRatio;
-
-      const onMove = (moveEvent: MouseEvent) => {
+      startDragSession((moveEvent) => {
           const delta = moveEvent.clientY - startY;
           const totalHeight = window.innerHeight - 64;
           let newRatio = Math.max(0.15, Math.min(0.85, startRatio + (delta / totalHeight)));
@@ -1502,32 +1497,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           const dividerOffset = 8 / totalHeight;
           if (Math.abs(newRatio - (splitRatio - dividerOffset)) < 0.025) newRatio = splitRatio - dividerOffset;
           setLeftPanelRatio(newRatio);
-      };
-
-      const onUp = () => {
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      });
   };
 
   const handleLeftPanelWidthDrag = (e: React.MouseEvent) => {
       e.preventDefault();
       const startX = e.clientX;
       const startWidth = leftPanelWidth;
-
-      const onMove = (moveEvent: MouseEvent) => {
+      startDragSession((moveEvent) => {
           const delta = moveEvent.clientX - startX;
           setLeftPanelWidth(Math.max(160, Math.min(480, startWidth + delta)));
-      };
-
-      const onUp = () => {
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      });
   };
 
   // Keep both transports' gain in sync with the volume slider and mute button.

@@ -3,10 +3,11 @@ import {
   formatTime,
   makeAnnotationFromTool,
   calculateAnnotationLayers,
-  generateCSVContent,
   generateAudacityContent,
-  generateJSONContent,
+  stripExt,
+  shuffleArray,
 } from '../utils/helpers';
+import { getExt } from '../constants';
 import { Annotation, AnnotationTool } from '../types';
 
 // Helper to build an annotation without repeating boilerplate.
@@ -163,40 +164,6 @@ describe('calculateAnnotationLayers', () => {
   });
 });
 
-describe('generateCSVContent', () => {
-  it('emits the header even with no annotations', () => {
-    const csv = generateCSVContent([]);
-    expect(csv).toBe('Label,Start,End\n');
-  });
-
-  it('starts with the canonical header', () => {
-    const csv = generateCSVContent([ann(0, 1, 'a')]);
-    expect(csv.startsWith('Label,Start,End\n')).toBe(true);
-  });
-
-  it('quotes the label and escapes embedded quotes by doubling them', () => {
-    const csv = generateCSVContent([ann(0, 1, 'has "quote" and, comma')]);
-    expect(csv).toContain('"has ""quote"" and, comma"');
-  });
-
-  it('passes decimals through to start/end (7-decimal default = sample-accurate at 192 kHz)', () => {
-    const csv = generateCSVContent([ann(1.23456789, 2.0, 'x')]);
-    // Default 7 decimals: rounds 1.23456789 -> 1.2345679 (printed with trailing zeros as needed).
-    expect(csv).toContain(',1.2345679,2.0000000\n');
-  });
-
-  it('respects a custom decimals argument', () => {
-    const csv = generateCSVContent([ann(1.23456789, 2.5, 'x')], 3);
-    expect(csv).toContain(',1.235,2.500\n');
-  });
-
-  it('rounds the classic 0.1 + 0.2 case cleanly at default precision', () => {
-    const csv = generateCSVContent([ann(0.1 + 0.2, 1, 'x')]);
-    // 0.30000000000000004 -> rounded to 0.3000000
-    expect(csv).toContain(',0.3000000,1.0000000\n');
-  });
-});
-
 describe('generateAudacityContent', () => {
   it('produces an empty string for an empty list', () => {
     expect(generateAudacityContent([])).toBe('');
@@ -218,72 +185,65 @@ describe('generateAudacityContent', () => {
   });
 });
 
-describe('generateJSONContent', () => {
-  it('round-trips through JSON.parse for an empty list', () => {
-    const json = generateJSONContent([]);
-    expect(JSON.parse(json)).toEqual([]);
+describe('getExt', () => {
+  it('returns the lowercased extension without the dot', () => {
+    expect(getExt('foo.MP3')).toBe('mp3');
+    expect(getExt('/a/b/bird.WAV')).toBe('wav');
   });
 
-  it('round-trips annotation fields through JSON.parse', () => {
-    const input = [ann(0.5, 1.5, 'foo', { id: 'abc', toolKey: '2', color: '#fff' })];
-    const parsed = JSON.parse(generateJSONContent(input));
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]).toMatchObject({
-      id: 'abc',
-      toolKey: '2',
-      text: 'foo',
-      color: '#fff',
-      start: 0.5,
-      end: 1.5,
-    });
+  it('returns the trailing segment for dotless paths (current behavior)', () => {
+    // split('.').pop() on a dotless string returns the whole string.
+    expect(getExt('noext')).toBe('noext');
   });
 
-  it('rounds start/end to the configured decimals', () => {
-    const input = [ann(1.23456789, 2.987654321, 'x')];
-    const parsed = JSON.parse(generateJSONContent(input, 3));
-    expect(parsed[0].start).toBe(1.235);
-    expect(parsed[0].end).toBe(2.988);
-  });
-
-  it('rounds the 0.1 + 0.2 case to a clean value', () => {
-    const parsed = JSON.parse(generateJSONContent([ann(0.1 + 0.2, 1, 'x')]));
-    expect(parsed[0].start).toBe(0.3);
-  });
-
-  it('survives commas, quotes, and newlines in text without breaking JSON', () => {
-    const tricky = 'has "quote", comma\nand newline';
-    const parsed = JSON.parse(generateJSONContent([ann(0, 1, tricky)]));
-    expect(parsed[0].text).toBe(tricky);
-  });
-
-  it('produces pretty-printed (indented) JSON', () => {
-    const out = generateJSONContent([ann(0, 1, 'a')]);
-    expect(out).toContain('\n');
-    expect(out).toContain('  '); // two-space indent
+  it('uses the last dot for multi-dot names', () => {
+    expect(getExt('archive.tar.gz')).toBe('gz');
   });
 });
 
-// Cross-cutting: decimal precision is the cornerstone export contract.
-// These assertions document the sample-accuracy guarantee at the boundary
-// between in-memory floats and serialized output.
-describe('export decimal precision (cross-cutting)', () => {
-  it('all three generators agree on rounding behavior for the same input', () => {
-    const a = ann(1.2345678901, 2.3456789012, 'x');
-    const csv = generateCSVContent([a], 7);
-    const aud = generateAudacityContent([a], 7);
-    const json = generateJSONContent([a], 7);
-    // Both text formats print 1.2345679 / 2.3456789
-    expect(csv).toContain('1.2345679');
-    expect(csv).toContain('2.3456789');
-    expect(aud).toContain('1.2345679');
-    expect(aud).toContain('2.3456789');
-    const parsed = JSON.parse(json);
-    expect(parsed[0].start).toBe(1.2345679);
-    expect(parsed[0].end).toBe(2.3456789);
+describe('stripExt', () => {
+  it('removes a trailing extension', () => {
+    expect(stripExt('bird.mp3')).toBe('bird');
+    expect(stripExt('/a/b/clip.wav')).toBe('/a/b/clip');
   });
 
-  it('handles decimals=0 (integer rounding)', () => {
-    const csv = generateCSVContent([ann(1.7, 2.4, 'x')], 0);
-    expect(csv).toContain(',2,2\n');
+  it('strips only the last extension', () => {
+    expect(stripExt('archive.tar.gz')).toBe('archive.tar');
+  });
+
+  it('leaves a path with no extension unchanged', () => {
+    expect(stripExt('noext')).toBe('noext');
+    expect(stripExt('/a/b/dir')).toBe('/a/b/dir');
+  });
+
+  it('does not strip a dot that lives in a directory segment', () => {
+    // The final segment has no dot, so nothing is stripped.
+    expect(stripExt('/a/b.c/file')).toBe('/a/b.c/file');
+  });
+});
+
+describe('shuffleArray', () => {
+  it('returns a permutation (same length and multiset)', () => {
+    const input = [1, 2, 3, 4, 5];
+    const out = shuffleArray(input);
+    expect(out).toHaveLength(input.length);
+    expect([...out].sort((a, b) => a - b)).toEqual([...input].sort((a, b) => a - b));
+  });
+
+  it('does not mutate the input', () => {
+    const input = [1, 2, 3, 4, 5];
+    const snapshot = [...input];
+    shuffleArray(input);
+    expect(input).toEqual(snapshot);
+  });
+
+  it('returns a new array reference', () => {
+    const input = [1, 2, 3];
+    expect(shuffleArray(input)).not.toBe(input);
+  });
+
+  it('handles empty and single-element arrays', () => {
+    expect(shuffleArray([])).toEqual([]);
+    expect(shuffleArray(['a'])).toEqual(['a']);
   });
 });
