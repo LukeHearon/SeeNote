@@ -36,6 +36,10 @@ interface VideoPaneProps {
   /** Exposes the fallback <video> element to the parent so VideoElementEngine
    *  can drive transport on it (Fast / Mixed-without-selection). */
   onVideoElement?: (el: HTMLVideoElement | null) => void;
+  /** When true (and on the <video>-element path), hides the native video layer
+   *  and redraws it to a 2D canvas each frame via ctx.drawImage. Used to test
+   *  whether WKWebView GPU compositing is the source of frame freezes. */
+  debugCanvasMirror?: boolean;
 }
 
 export default function VideoPane({
@@ -52,6 +56,7 @@ export default function VideoPane({
   hasSelection,
   onVideoModeChange,
   onVideoElement,
+  debugCanvasMirror = false,
 }: VideoPaneProps) {
   // Pick the renderer based on mode.
   //   off:   custom "Video Disabled" placeholder (no element to drive)
@@ -153,6 +158,50 @@ export default function VideoPane({
     if (usingCanvas && frameSource) frameSource.setViewport(viewport);
   }, [usingCanvas, frameSource, viewport]);
 
+  // ── Canvas mirror ───────────────────────────────────────────────────────
+  // Draws the <video> element into a 2D canvas each RAF tick via ctx.drawImage,
+  // bypassing WKWebView's native video-texture compositing pipeline. Active only
+  // on the <video>-element path (not when usingCanvas is true).
+  const mirrorCanvasRef = useRef<HTMLCanvasElement>(null);
+  const mirrorLoggedRef = useRef(false);
+  const showCanvasMirror = debugCanvasMirror && !isAudioTrack && !usingCanvas && !!videoSrc;
+
+  useEffect(() => {
+    if (!showCanvasMirror) return;
+    mirrorLoggedRef.current = false;
+    let raf = 0;
+    onDebugLog('[debug] canvas-mirror: started — <video> hidden, drawing to 2D canvas via ctx.drawImage');
+    const tick = () => {
+      const video = fallbackVideoRef.current;
+      const canvas = mirrorCanvasRef.current;
+      const container = containerRef.current;
+      if (!video || !canvas || !container) { raf = requestAnimationFrame(tick); return; }
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        const { width: w, height: h } = container.getBoundingClientRect();
+        const cw = Math.round(w);
+        const ch = Math.round(h);
+        if (canvas.width !== cw || canvas.height !== ch) {
+          canvas.width = cw;
+          canvas.height = ch;
+        }
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          drawLetterboxed(ctx, video, cw, ch, video.videoWidth, video.videoHeight);
+          if (!mirrorLoggedRef.current) {
+            onDebugLog(`[debug] canvas-mirror: first ctx.drawImage call — ${video.videoWidth}×${video.videoHeight} video`);
+            mirrorLoggedRef.current = true;
+          }
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      onDebugLog('[debug] canvas-mirror: stopped');
+    };
+  }, [showCanvasMirror]); // containerRef/fallbackVideoRef/onDebugLog are stable refs
+
   // Change 3b: scroll-to-pan — keep a ref so the non-reactive wheel handler
   // always sees the latest viewport without re-registering the listener.
   const viewportRef = useRef(viewport);
@@ -253,17 +302,30 @@ export default function VideoPane({
           onDebugLog={onDebugLog}
         />
       ) : (
-        <VideoPlayer
-          src={videoSrc}
-          isAudio={isAudioTrack}
-          onDurationChange={onDurationChange}
-          onDebugLog={onDebugLog}
-          viewport={viewport}
-          contentRect={contentRect}
-          playsOwnAudio={videoElementIsTransport}
-          onVideoDims={handleVideoDims}
-          onVideoElement={handleVideoElement}
-        />
+        <>
+          {/* opacity 0.001 (not 0) keeps WKWebView decoding while hiding the
+              native video texture from the compositor — lets ctx.drawImage still
+              read frames when canvas mirror is active. */}
+          <div style={showCanvasMirror ? { opacity: 0.001, position: 'absolute', inset: 0 } : { width: '100%', height: '100%' }}>
+            <VideoPlayer
+              src={videoSrc}
+              isAudio={isAudioTrack}
+              onDurationChange={onDurationChange}
+              onDebugLog={onDebugLog}
+              viewport={viewport}
+              contentRect={contentRect}
+              playsOwnAudio={videoElementIsTransport}
+              onVideoDims={handleVideoDims}
+              onVideoElement={handleVideoElement}
+            />
+          </div>
+          {showCanvasMirror && (
+            <canvas
+              ref={mirrorCanvasRef}
+              className="absolute inset-0 pointer-events-none"
+            />
+          )}
+        </>
       )}
 
       {hasVideo && !isProcessing && (

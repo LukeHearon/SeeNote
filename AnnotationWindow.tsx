@@ -20,7 +20,7 @@ import { AudioEngine } from './utils/AudioEngine';
 import { VideoElementEngine } from './utils/VideoElementEngine';
 import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
-import DebugConsole from './components/DebugConsole';
+import DebugConsole, { type DebugControls, DEFAULT_DEBUG_CONTROLS } from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
@@ -264,6 +264,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
+  const [debugControls, setDebugControls] = useState<DebugControls>(DEFAULT_DEBUG_CONTROLS);
+  const debugControlsRef = useRef<DebugControls>(DEFAULT_DEBUG_CONTROLS);
+  const blobUrlRef = useRef<string | null>(null);
 
   const [zoomSec, setZoomSec] = useState(project.settings.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
 
@@ -315,6 +318,40 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       const time = new Date().toLocaleTimeString();
       setDebugLogs(prev => [...prev, { time, msg, type }]);
   }, []);
+
+  useEffect(() => { debugControlsRef.current = debugControls; }, [debugControls]);
+
+  // Blob URL toggle: fetch the current track as a full ArrayBuffer and create a
+  // blob:// URL for the <video> element, bypassing the Tauri asset protocol.
+  // Re-runs when the toggle changes OR when a new track is loaded so the blob
+  // URL always matches the current file.
+  useEffect(() => {
+    if (!trackPath) return;
+    if (!debugControls.blobUrl) {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+        addLog('[debug] blob URL revoked — <video> using Tauri asset protocol');
+      }
+      setVideoSrc(toAssetUrl(trackPath));
+      return;
+    }
+    let cancelled = false;
+    fetch(toAssetUrl(trackPath))
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        if (cancelled) return;
+        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+        const url = URL.createObjectURL(new Blob([buf]));
+        blobUrlRef.current = url;
+        addLog('[debug] blob URL created — <video> bypassing Tauri asset protocol');
+        setVideoSrc(url);
+      })
+      .catch(e => {
+        if (!cancelled) addLog(`[debug] blob URL failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      });
+    return () => { cancelled = true; };
+  }, [debugControls.blobUrl, trackPath]); // addLog/toAssetUrl are stable
 
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRef.current = selection; }, [selection]);
@@ -1124,7 +1161,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // before any frame renders). The <video>-element transport decodes itself,
       // and audio-only tracks have no frames, so both skip the wait.
       if (frameSourceRef.current && !usesVideoTransport()) {
-          await prerollVideo(startSec, sel?.end);
+          const prerollMode = debugControlsRef.current.prerollTimeout;
+          if (prerollMode === 'skip') {
+              addLog('[debug] preroll skipped — starting AudioEngine immediately');
+          } else if (prerollMode === '2s') {
+              addLog('[debug] preroll with 2s timeout');
+              await Promise.race([
+                  prerollVideo(startSec, sel?.end),
+                  new Promise<void>(resolve => setTimeout(resolve, 2000)),
+              ]);
+          } else {
+              await prerollVideo(startSec, sel?.end);
+          }
           if (token !== playTokenRef.current) return; // user interrupted
       }
       // isPlaying is set to true only when onPlaying fires. endSec enables the
@@ -1750,7 +1798,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         </div>
       </header>
 
-      <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
+      <DebugConsole
+        open={showDebug}
+        onClose={() => setShowDebug(false)}
+        logs={debugLogs}
+        controls={debugControls}
+        onControlsChange={setDebugControls}
+      />
 
       <HelpPanel
         open={showHelp}
@@ -1857,6 +1911,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             hasSelection={selection !== null}
             onVideoModeChange={setVideoMode}
             onVideoElement={attachVideoElement}
+            debugCanvasMirror={debugControls.canvasMirror}
           />
         </div>
 
