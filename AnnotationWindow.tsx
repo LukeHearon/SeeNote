@@ -227,6 +227,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       onPlaying,
       onPaused,
       onEnded,
+      onDebugLog: addLog,
     });
 
     return () => {
