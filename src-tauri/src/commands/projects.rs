@@ -18,6 +18,9 @@ pub struct RegistryEntryRecord {
     /// registries written by older builds still load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Last-known gradient colors (mirrors settings.json `nameGradientColors`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_gradient_colors: Option<[String; 2]>,
 }
 
 #[derive(Deserialize)]

@@ -176,6 +176,8 @@ export interface ProjectRegistryEntry {
    * re-linking to the same project rather than a different one.
    */
   name?: string;
+  /** Last-known gradient colors, mirrored from settings.json `nameGradientColors`. */
+  nameGradientColors?: [string, string];
 }
 
 /**

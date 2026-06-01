@@ -28,12 +28,14 @@ async function resolveEntry(registry: ProjectRegistryEntry): Promise<ProjectList
   if (!exists) return { status: 'missing-dir', registry };
   try {
     const settings = await readProjectSettings(registry.projectDir);
-    // Mirror the current name into the registry pointer so it survives if the
-    // project later goes missing.
-    const withName = settings.name && settings.name !== registry.name
-      ? { ...registry, name: settings.name }
+    // Mirror name and gradient colors so they survive the project going missing.
+    const colors = settings.nameGradientColors;
+    const nameChanged = settings.name && settings.name !== registry.name;
+    const colorsChanged = JSON.stringify(colors ?? null) !== JSON.stringify(registry.nameGradientColors ?? null);
+    const withMirror = (nameChanged || colorsChanged)
+      ? { ...registry, name: settings.name, nameGradientColors: colors }
       : registry;
-    return { status: 'ok', registry: withName, project: buildProject(withName, settings) };
+    return { status: 'ok', registry: withMirror, project: buildProject(withMirror, settings) };
   } catch (err) {
     return {
       status: 'bad-settings',
@@ -114,6 +116,7 @@ export function useProjects() {
       projectDir: args.projectDir,
       lastOpened: now,
       name: args.settings.name,
+      nameGradientColors: args.settings.nameGradientColors,
     };
     await writeProjectSettings(args.projectDir, args.settings);
     const project = buildProject(registry, args.settings);
@@ -134,8 +137,8 @@ export function useProjects() {
     const settings = await readProjectSettings(projectDir); // throws if missing
     const now = new Date().toISOString();
     const registry: ProjectRegistryEntry = dup
-      ? { ...dup.registry, lastOpened: now, name: settings.name }
-      : { id: crypto.randomUUID(), projectDir, lastOpened: now, name: settings.name };
+      ? { ...dup.registry, lastOpened: now, name: settings.name, nameGradientColors: settings.nameGradientColors }
+      : { id: crypto.randomUUID(), projectDir, lastOpened: now, name: settings.name, nameGradientColors: settings.nameGradientColors };
     const project = buildProject(registry, settings);
 
     const without = entriesRef.current.filter(e => e.registry.id !== registry.id);
@@ -156,19 +159,18 @@ export function useProjects() {
     const entry = entriesRef.current.find(e => e.registry.id === id);
     if (!entry || entry.status !== 'ok') return undefined;
     await writeProjectSettings(entry.registry.projectDir, settings);
-    const registry = entry.registry.name === settings.name
+    const colorsMatch = JSON.stringify(settings.nameGradientColors ?? null) === JSON.stringify(entry.registry.nameGradientColors ?? null);
+    const registry = (entry.registry.name === settings.name && colorsMatch)
       ? entry.registry
-      : { ...entry.registry, name: settings.name };
+      : { ...entry.registry, name: settings.name, nameGradientColors: settings.nameGradientColors };
     const project = buildProject(registry, settings);
     const next = entriesRef.current.map(e =>
       e.registry.id === id ? { status: 'ok' as const, registry, project } : e
     );
     setBoth(next);
-    // A renamed project must update its registry pointer too, so the new name
-    // survives the project going missing.
     if (registry !== entry.registry) {
       await persistRegistry(next.map(e => e.registry)).catch(err =>
-        console.error('Failed to persist renamed project:', err));
+        console.error('Failed to persist updated project registry:', err));
     }
     return project;
   }, [persistRegistry, setBoth]);
@@ -212,9 +214,10 @@ export function useProjects() {
     const resolved = await resolveEntry(entry.registry);
     const next = entriesRef.current.map(e => e.registry.id === id ? resolved : e);
     setBoth(next);
-    if (resolved.registry.name !== entry.registry.name) {
+    const colorsChanged = JSON.stringify(resolved.registry.nameGradientColors ?? null) !== JSON.stringify(entry.registry.nameGradientColors ?? null);
+    if (resolved.registry.name !== entry.registry.name || colorsChanged) {
       await persistRegistry(next.map(e => e.registry)).catch(err =>
-        console.error('Failed to persist learned project name:', err));
+        console.error('Failed to persist learned project registry:', err));
     }
     return resolved;
   }, [persistRegistry, setBoth]);
@@ -256,6 +259,7 @@ export function useProjects() {
       ...entry.registry,
       projectDir: newProjectDir,
       name: settings.name,
+      nameGradientColors: settings.nameGradientColors,
     };
     const project = buildProject(candidate, settings);
 

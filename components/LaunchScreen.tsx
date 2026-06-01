@@ -169,6 +169,16 @@ export default function LaunchScreen({
       onOpenProject(resolved.project);
       return;
     }
+    const name = resolved.registry.name ?? basename(resolved.registry.projectDir);
+    const isBadSettings = resolved.status === 'bad-settings';
+    const ok = await askConfirm({
+      title: `"${name}" not found`,
+      message: isBadSettings
+        ? 'The project folder exists but its settings could not be read. You can re-link to a different folder, or cancel.'
+        : 'The project folder could not be found at its last known location. You can re-link to a new location, or cancel.',
+      confirmLabel: 'Re-link',
+    });
+    if (!ok) return;
     await launchRelink(resolved);
   };
 
@@ -296,7 +306,9 @@ export default function LaunchScreen({
               const name = isOk
                 ? entry.project.settings.name
                 : (entry.registry.name ?? basename(entry.registry.projectDir));
-              const gradientColors = isOk ? entry.project.settings.nameGradientColors : undefined;
+              const gradientColors = isOk
+                ? entry.project.settings.nameGradientColors
+                : entry.registry.nameGradientColors;
               const liClass = grayed
                 ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50'
                 : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all';
@@ -341,7 +353,7 @@ export default function LaunchScreen({
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="font-bold truncate">
-                        {isOk ? (
+                        {gradientColors && !grayed ? (
                           <GradientProjectName name={name} nameGradientColors={gradientColors} />
                         ) : (
                           <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
