@@ -189,16 +189,21 @@ export const HOTKEY_COLORS = [
 // depends on key "0" staying as the Custom Annotation Tool. Do NOT replace
 // key "0" with a defined annotation tool — doing so silently breaks the
 // custom annotation UX.
-export const DEFAULT_ANNOTATION_TOOLS = [
+export const DEFAULT_ANNOTATION_TOOLS: AnnotationTool[] = [
   { key: "0", text: "Custom",            color: HOTKEY_COLORS[0] },
-  { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1] },
-  { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2] },
-  { key: "3", text: "ins_buzz_low",      color: HOTKEY_COLORS[3] },
-  { key: "4", text: "ambient_scraping",  color: HOTKEY_COLORS[4] },
-  { key: "5", text: "ambient_rustle",    color: HOTKEY_COLORS[5] },
-  { key: "6", text: "ambient_bang",      color: HOTKEY_COLORS[6] },
-  { key: "7", text: "ins_trill_cicada",  color: HOTKEY_COLORS[7] },
-  { key: "8", text: "ins_trill_cricket", color: HOTKEY_COLORS[8] },
+  { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1], description: "Flight buzz higher in pitch than honey bee; perhaps small solitary bees, mosquitoes, flies" },
+  { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2], description: "Flight buzz similar to that of a honey bee" },
+  { key: "3", text: "ins_buzz_low",      color: HOTKEY_COLORS[3], description: "Flight buzz lower in pitch than honey bee; perhaps bumble bees or other large insects" },
+  { key: "4", text: "ins_trill",         color: HOTKEY_COLORS[4], description: "Sharp or background chirping or tymbaling as of crickets, cicadas, katydids" },
+  { key: "5", text: "mech_auto",         color: HOTKEY_COLORS[5], description: "Ground-based vehicle: trucks, cars, motorcycles" },
+  { key: "6", text: "mech_plane",        color: HOTKEY_COLORS[6], description: "Aircraft in flight: propeller planes or jets" },
+  { key: "7", text: "ambient_scraping",  color: HOTKEY_COLORS[7], description: "The sound of something scraping over the recorder or its stake, amplified by contact" },
+  { key: "8", text: "ambient_bang",      color: HOTKEY_COLORS[8], description: "Brief, loud, atonal sound: gunshot, car backfire, firework" },
+  { key: null, text: "ambient_rain",     color: HOTKEY_COLORS[9], description: "The pitter patter of rain drops or heavy rainfall, often amplified by drumming against the rain cover" },
+  { key: null, text: "ambient_rustle",   color: HOTKEY_COLORS[9], description: "Wind swishing leaves; not sharp and amplified like ambient_scraping" },
+  { key: null, text: "mech_hum_traffic", color: HOTKEY_COLORS[9], description: "Far-off continuous drone of distant highway traffic" },
+  { key: null, text: "human",            color: HOTKEY_COLORS[9], description: "Human vocalization; speaking, laughing, etc." },
+  { key: null, text: "animal_frog",      color: HOTKEY_COLORS[9], description: "Any frog call" },
 ];
 
 export function pickNextToolColor(existingTools: AnnotationTool[]): string {
