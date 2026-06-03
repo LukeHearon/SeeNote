@@ -45,6 +45,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [error, setError] = useState('');
 
   const pendingRef = React.useRef<ProjectSettings | null>(null);
+  const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
 
   const handleFormSubmit = async () => {
     if (!name.trim()) { setError('Project name is required.'); return; }
@@ -90,8 +91,16 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     }
 
     if (annotationDirChanged) {
-      setStep('annotationCopyConfirm');
-      return;
+      setIsBusy(true);
+      let sourceFiles: string[] = [];
+      try {
+        sourceFiles = await listAnnotationFilesRecursive(project.annotationDirectoryAbs, '.txt');
+      } catch { /* old dir doesn't exist */ }
+      setIsBusy(false);
+      if (sourceFiles.length > 0) {
+        setStep('annotationCopyConfirm');
+        return;
+      }
     }
 
     onSave(settings);
@@ -112,31 +121,60 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
     if (annotationDirChanged) {
-      setStep('annotationCopyConfirm');
-    } else {
-      const pending = pendingRef.current;
-      if (!pending) return;
-      onSave(pending);
+      setIsBusy(true);
+      let sourceFiles: string[] = [];
+      try {
+        sourceFiles = await listAnnotationFilesRecursive(project.annotationDirectoryAbs, '.txt');
+      } catch { /* old dir doesn't exist */ }
+      setIsBusy(false);
+      if (sourceFiles.length > 0) {
+        setStep('annotationCopyConfirm');
+        return;
+      }
     }
+
+    const pending = pendingRef.current;
+    if (!pending) return;
+    onSave(pending);
   };
 
-  const handleCopyDecision = (shouldCopy: boolean) => {
+  const handleCopyDecision = async (shouldCopy: boolean) => {
     if (!shouldCopy) {
       const pending = pendingRef.current;
       if (!pending) return;
       onSave(pending);
       return;
     }
-    setStep('conflictConfirm');
+
+    setIsBusy(true);
+    let copies: { src: string; dst: string }[];
+    try {
+      copies = await buildCopiesList(project.annotationDirectoryAbs, resolvedAnnotationDir);
+    } catch (err) {
+      setError(String(err));
+      setIsBusy(false);
+      return;
+    }
+    copiesRef.current = copies;
+
+    let existingDsts = new Set<string>();
+    try {
+      const newDirFiles = await listAnnotationFilesRecursive(resolvedAnnotationDir, '.txt');
+      existingDsts = new Set(newDirFiles);
+    } catch { /* new dir doesn't exist yet — no conflicts */ }
+    setIsBusy(false);
+
+    if (copies.some(c => existingDsts.has(c.dst))) {
+      setStep('conflictConfirm');
+    } else {
+      await handleConflictResolution('skip');
+    }
   };
 
   const handleConflictResolution = async (resolution: 'overwrite' | 'skip') => {
-    const oldDir = project.annotationDirectoryAbs;
-    const newDir = resolvedAnnotationDir;
-
     setIsBusy(true);
     try {
-      const copies = await buildCopiesList(oldDir, newDir);
+      const copies = copiesRef.current ?? await buildCopiesList(project.annotationDirectoryAbs, resolvedAnnotationDir);
       const result = await copyAnnotationFiles(copies, resolution);
       if (result.errors.length > 0) {
         setError(`Copy completed with errors:\n${result.errors.join('\n')}`);
