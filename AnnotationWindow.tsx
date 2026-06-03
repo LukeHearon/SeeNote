@@ -1500,13 +1500,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       });
   };
 
+  const LEFT_PANEL_COLLAPSE_THRESHOLD = 120;
   const handleLeftPanelWidthDrag = (e: React.MouseEvent) => {
       e.preventDefault();
       const startX = e.clientX;
-      const startWidth = leftPanelWidth;
+      const startWidth = filePanelCollapsed ? 40 : leftPanelWidth;
       startDragSession((moveEvent) => {
           const delta = moveEvent.clientX - startX;
-          setLeftPanelWidth(Math.max(160, Math.min(480, startWidth + delta)));
+          const newWidth = startWidth + delta;
+          if (newWidth < LEFT_PANEL_COLLAPSE_THRESHOLD) {
+              setFilePanelCollapsed(true);
+          } else {
+              setFilePanelCollapsed(false);
+              setLeftPanelWidth(Math.max(LEFT_PANEL_COLLAPSE_THRESHOLD, Math.min(480, newWidth)));
+          }
       });
   };
 
@@ -1747,7 +1754,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             allFiles: displayQueue,
             currentTrack: trackPath,
             onFileSelect: handleOpenTrack,
-            onToggleCollapse: () => setFilePanelCollapsed(c => !c),
+            onToggleCollapse: () => setFilePanelCollapsed(c => {
+              if (c) setLeftPanelWidth(180);
+              return !c;
+            }),
             onNavigatePrev: () => navigateFile('prev'),
             onNavigateNext: () => navigateFile('next'),
             canNavigatePrev: currentFileIndex > 0,
@@ -1767,8 +1777,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
           if (filePanelCollapsed) {
             return (
-              <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col h-full">
+              <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col h-full relative">
                 <FileTree {...fileTreeProps} collapsed={true} />
+                <div
+                  className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+                  style={{ right: '-6px', width: '6px' }}
+                  onMouseDown={handleLeftPanelWidthDrag}
+                />
               </div>
             );
           }
