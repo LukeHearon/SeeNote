@@ -75,6 +75,7 @@ export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
   scrollToTime: (time: number) => void;
+  zoomToRange: (startTime: number, endTime: number) => void;
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
 }
 
@@ -1398,12 +1399,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
   };
 
+  const zoomToRange = useCallback((startTime: number, endTime: number) => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth;
+    const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
+    const newPps = containerWidth / newZoomSec;
+    const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
+    setScrollLeft(Math.max(0, Math.min(startTime * newPps, maxScroll)));
+    onZoomChange(newZoomSec);
+  }, [duration, onZoomChange]);
+
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
     goToNextAnnotation,
     scrollToTime,
+    zoomToRange,
     applyWheel,
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, applyWheel]);
+  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, zoomToRange, applyWheel]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 

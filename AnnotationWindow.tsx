@@ -357,9 +357,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
   useEffect(() => { zoomSecRef.current = zoomSec; }, [zoomSec]);
 
+  const preZoomExtentRef = useRef<{ startTime: number; endTime: number } | null>(null);
+
   // Keep trackPathRef in sync so async callbacks can guard against stale closures
   const trackPathRef = useRef<string | null>(null);
-  useEffect(() => { trackPathRef.current = trackPath; }, [trackPath]);
+  useEffect(() => {
+    trackPathRef.current = trackPath;
+    preZoomExtentRef.current = null;
+  }, [trackPath]);
 
   const currentTimeRef = useRef(0);
 
@@ -1272,6 +1277,21 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
+      { key: '0', mods: ['mod'], handler: () => {
+          const dur = durationRef.current;
+          if (!dur) return;
+          const { scrollLeft: sl, pixelsPerSecond: pps } = viewportStoreRef.current.get();
+          const startTime = pps > 0 ? sl / pps : 0;
+          const isAtFullExtent = zoomSecRef.current >= dur;
+          if (isAtFullExtent && preZoomExtentRef.current) {
+            const saved = preZoomExtentRef.current;
+            spectrogramRef.current?.zoomToRange(saved.startTime, saved.endTime);
+            preZoomExtentRef.current = null;
+          } else {
+            preZoomExtentRef.current = { startTime, endTime: startTime + zoomSecRef.current };
+            spectrogramRef.current?.zoomToRange(0, dur);
+          }
+      }},
 
       // Plain arrow keys: scrub playhead ±10% of visible window.
       { key: 'ArrowLeft', handler: () => seek(Math.max(0, currentTimeRef.current - zoomSecRef.current * 0.1)) },
@@ -2066,7 +2086,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterChange={setBandPassFilter}
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
-                onViewportChange={buzzdetectEnabled ? publishViewport : undefined}
+                onViewportChange={publishViewport}
                 videoMode={videoMode}
              />
              </div>
