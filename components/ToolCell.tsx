@@ -22,7 +22,7 @@ function ToolCell({
           ? (isActive ? 'rgba(255,255,255,0.6)' : '#6b7280')
           : (isActive ? color : undefined),
       }}
-      {...(tooltip ? { 'data-tooltip': tooltip } : {})}
+      data-tooltip={tooltip ? `${label}\n${tooltip}` : label}
     >
       <span className="w-2 h-2 rounded-full flex-none" style={{ backgroundColor: dotColor }} />
       <span className="flex-1 min-w-0 truncate text-left text-slate-100 leading-tight">{label}</span>
