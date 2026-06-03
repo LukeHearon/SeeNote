@@ -185,9 +185,9 @@ export default function LaunchScreen({
   const handleRemove = async (e: React.MouseEvent, entry: ProjectListEntry, name: string) => {
     e.stopPropagation();
     const ok = await askConfirm({
-      title: `Remove “${name}”?`,
+      title: `Unlink “${name}”?`,
       message: 'This removes the project from the list. Files in the project folder are not deleted.',
-      confirmLabel: 'Remove',
+      confirmLabel: 'Unlink',
       danger: true,
     });
     if (ok) await removeProject(entry.registry.id);
@@ -385,7 +385,7 @@ export default function LaunchScreen({
                       <button
                         onClick={e => handleRemove(e, entry, name)}
                         className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                        data-tooltip="Remove project"
+                        data-tooltip="Unlink project"
                       >
                         <X size={15} />
                       </button>
@@ -445,6 +445,11 @@ export default function LaunchScreen({
           onCreated={handleCreated}
           onClose={() => setShowCreate(false)}
           createProject={createProject}
+          onOpenExisting={async (dir) => {
+            const project = await addExistingProject(dir);
+            setShowCreate(false);
+            onOpenProject(project);
+          }}
         />
       )}
 
@@ -557,40 +562,44 @@ export default function LaunchScreen({
               })}
 
               {relinkPrompt.nameConflict && (
-                <li className="flex items-center gap-2 flex-wrap">
-                  {readyName !== null
-                    ? <CheckCircle2 size={16} className="text-emerald-400 flex-none" />
-                    : <AlertTriangle size={16} className="text-amber-400 flex-none" />}
-                  <span className="min-w-0">
-                    <span className="text-gray-200">Name</span>{' '}
-                    <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
-                      {readyName !== null ? 'selected' : 'differs'}
+                <li className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    {readyName !== null
+                      ? <CheckCircle2 size={16} className="text-emerald-400 flex-none" />
+                      : <AlertTriangle size={16} className="text-amber-400 flex-none" />}
+                    <span>
+                      <span className="text-gray-200">Name</span>{' '}
+                      <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
+                        {readyName !== null ? 'selected' : 'differs'}
+                      </span>
                     </span>
-                  </span>
-                  <button
-                    onClick={() => setReadyName(relinkPrompt.internalName)}
-                    className={
-                      'px-3 py-1 rounded-lg text-sm transition-colors max-w-[12rem] truncate ' +
-                      (readyName === relinkPrompt.internalName
-                        ? 'bg-blue-600 text-white ring-2 ring-blue-400'
-                        : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
-                    }
-                    data-tooltip="Keep SeeNote's name (rewrites .seenote/settings.json)"
-                  >
-                    “{relinkPrompt.internalName}”
-                  </button>
-                  <button
-                    onClick={() => setReadyName(relinkPrompt.settingsName)}
-                    className={
-                      'px-3 py-1 rounded-lg text-sm transition-colors max-w-[12rem] truncate ' +
-                      (readyName === relinkPrompt.settingsName
-                        ? 'bg-blue-600 text-white ring-2 ring-blue-400'
-                        : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
-                    }
-                    data-tooltip="Use the name from the folder's .seenote/settings.json"
-                  >
-                    “{relinkPrompt.settingsName}”
-                  </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pl-6">
+                    <button
+                      onClick={() => setReadyName(relinkPrompt.internalName)}
+                      className={
+                        'px-3 py-1 rounded-lg text-sm transition-colors ' +
+                        (readyName === relinkPrompt.internalName
+                          ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
+                      }
+                      data-tooltip="Keep SeeNote's name (rewrites .seenote/settings.json)"
+                    >
+                      "{relinkPrompt.internalName}"
+                    </button>
+                    <button
+                      onClick={() => setReadyName(relinkPrompt.settingsName)}
+                      className={
+                        'px-3 py-1 rounded-lg text-sm transition-colors ' +
+                        (readyName === relinkPrompt.settingsName
+                          ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
+                      }
+                      data-tooltip="Use the name from the folder's .seenote/settings.json"
+                    >
+                      "{relinkPrompt.settingsName}"
+                    </button>
+                  </div>
                 </li>
               )}
             </ul>

@@ -13,9 +13,10 @@ interface Props {
   onCreated: (project: Project) => void;
   onClose: () => void;
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
+  onOpenExisting?: (projectDir: string) => Promise<void>;
 }
 
-export default function CreateProjectModal({ onCreated, onClose, createProject }: Props) {
+export default function CreateProjectModal({ onCreated, onClose, createProject, onOpenExisting }: Props) {
   const [projectDir, setProjectDir] = useState('');
   const [name, setName] = useState('');
   const [mediaDir, setMediaDir] = useState('');
@@ -141,9 +142,19 @@ export default function CreateProjectModal({ onCreated, onClose, createProject }
               </button>
             </div>
             {existingProjectName && (
-              <p className="text-red-400 text-xs mt-1">
-                Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
-              </p>
+              <div className="flex items-start gap-2 mt-1">
+                <p className="text-red-400 text-xs flex-1">
+                  Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
+                </p>
+                {onOpenExisting && (
+                  <button
+                    onClick={() => onOpenExisting(projectDir)}
+                    className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-md transition-colors shrink-0"
+                  >
+                    Open Existing Project
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
