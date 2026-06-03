@@ -315,7 +315,7 @@ export default function VideoPane({
           <span className="text-[10px] font-medium text-white leading-none px-1">MODE</span>
           <div className="bg-slate-900/70 backdrop-blur-sm border border-slate-700 group-hover:border-slate-500 rounded-md p-1 transition-colors duration-150">
             <span className="block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-700 text-slate-300">
-              {videoMode.charAt(0).toUpperCase() + videoMode.slice(1)}
+              {isAudioTrack ? 'Off' : videoMode.charAt(0).toUpperCase() + videoMode.slice(1)}
             </span>
           </div>
         </div>
@@ -339,7 +339,7 @@ export default function VideoPane({
                 mixed: 'Outside a selection, video plays independently (rate 0.5–2×). Inside a selection, audio filters apply and the picture locks to the audio clock.',
                 accurate: 'Full frame-accurate sync throughout. Heaviest on the CPU. MP4/MOV only — other formats fall back automatically.',
               };
-              const active = videoMode === mode;
+              const active = isAudioTrack ? mode === 'off' : videoMode === mode;
               return (
                 <button
                   key={mode}
