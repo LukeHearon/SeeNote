@@ -7,8 +7,7 @@ export const PORTABILITY_WARNING =
   'This path is outside the project directory; the project will not be portable to other machines unless you also move it.';
 
 interface DirectoryFieldProps {
-  /** Base label, e.g. "Media" — rendered as "{label} Directory" or, when the
-   *  value is a relative path, "{label} Subdirectory". */
+  /** Base label, e.g. "Media" — rendered as "{label} Directory". */
   label: string;
   /** Project directory used to resolve and trim relative paths. */
   projectDir: string;
@@ -58,7 +57,7 @@ export default function DirectoryField({
   return (
     <div>
       <label className="text-gray-400 text-sm block mb-1">
-        {label} {isRelative ? 'Subdirectory' : 'Directory'}
+        {label} Directory
       </label>
       <div className="flex gap-2">
         <input
