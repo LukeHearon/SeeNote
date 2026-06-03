@@ -1,4 +1,4 @@
-import { getSpectrogramChunk, getOverviewSpectrogram } from './utils/tauriCommands';
+import { getSpectrogramChunk } from './utils/tauriCommands';
 import { TIER_CONFIGS, TierConfig } from './constants';
 
 export interface CachedChunk {
@@ -24,7 +24,6 @@ export class MultiTierSpectrogramCache {
   private caches: Map<number, Map<number, CachedChunk>>; // tier -> (chunkIdx -> chunk)
   private pending = new Set<string>(); // "tier:chunkIdx"
   private activeTierIndex: number = -1; // for hysteresis
-  private ultraOverview: CachedChunk | null = null;
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
   private generationId: number = 0;
 
@@ -59,9 +58,6 @@ export class MultiTierSpectrogramCache {
     for (const t of this.tiers) {
       this.caches.set(t.tier, new Map());
     }
-
-    // Preload ultra-overview (whole file, ~1200 columns)
-    this.loadUltraOverview();
   }
 
   // ── Tier selection ──────────────────────────────────────────────────────────
@@ -135,11 +131,6 @@ export class MultiTierSpectrogramCache {
     for (let i = preferredTier + 1; i < this.tiers.length; i++) {
       const fallback = this.getChunkForTime(i, timeSec);
       if (fallback) return { chunk: fallback, tier: i };
-    }
-
-    // Last resort: ultra-overview
-    if (this.ultraOverview) {
-      return { chunk: this.ultraOverview, tier: -1 };
     }
 
     return null;
@@ -251,34 +242,6 @@ export class MultiTierSpectrogramCache {
     if (lruKey !== undefined) cache.delete(lruKey);
   }
 
-  private async loadUltraOverview(): Promise<void> {
-    const generation = this.generationId;
-    try {
-      // Request 1200 columns for the whole file — enough for any screen width.
-      // The Rust side caps to available samples so this is always safe.
-      const nColumns = 1200;
-      if (nColumns <= 0) return;
-
-      const result = await getOverviewSpectrogram(this.filePath, nColumns, this.fftSize);
-
-      // Discard result if invalidate() was called while this fetch was in flight.
-      if (this.generationId !== generation) return;
-
-      this.ultraOverview = {
-        data: result.data,
-        nCols: result.n_cols,
-        nFreqBins: result.n_freq_bins,
-        startSec: 0,
-        actualDurationSec: result.actual_duration_sec,
-        sampleRate: result.sample_rate,
-        lastAccessed: Date.now(),
-      };
-      this.onChunkLoaded();
-    } catch (err) {
-      console.error('MultiTierCache: failed to load ultra-overview:', err);
-    }
-  }
-
   /** Clears all cached data (call when fftSize changes). */
   invalidate(): void {
     // Bump generation so any in-flight fetches discard their results.
@@ -287,8 +250,6 @@ export class MultiTierSpectrogramCache {
       cache.clear();
     }
     this.pending.clear();
-    this.ultraOverview = null;
     this.activeTierIndex = -1;
-    this.loadUltraOverview();
   }
 }

@@ -72,16 +72,6 @@ export const getSpectrogramChunk = async (
   return parseSpectrogramBuffer(buffer);
 };
 
-export const getOverviewSpectrogram = async (
-  path: string,
-  nColumns: number,
-  fftSize: number,
-): Promise<SpectrogramChunkResult> => {
-  const buffer = await invoke<ArrayBuffer>('get_overview_spectrogram', {
-    req: { path, n_columns: nColumns, fft_size: fftSize },
-  });
-  return parseSpectrogramBuffer(buffer);
-};
 
 export const listDirectory = (path: string): Promise<DirEntry[]> =>
   invoke('list_directory', { path });

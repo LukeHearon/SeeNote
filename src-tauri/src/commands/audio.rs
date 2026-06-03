@@ -215,49 +215,6 @@ pub async fn get_spectrogram_chunk(
     Ok(Response::new(bytes))
 }
 
-// ── Overview spectrogram ──────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct OverviewRequest {
-    pub path: String,
-    pub n_columns: usize,
-    pub fft_size: usize,
-}
-
-#[tauri::command]
-pub async fn get_overview_spectrogram(
-    req: OverviewRequest,
-) -> Result<Response, String> {
-    let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
-    let duration = info.duration_secs;
-    let n_freq_bins = req.fft_size / 2;
-
-    if duration <= 0.0 || req.n_columns == 0 {
-        let bytes = build_spectrogram_response(0, n_freq_bins, 0.0, 0.0, info.sample_rate, &[]);
-        return Ok(Response::new(bytes));
-    }
-
-    let window_dur = req.fft_size as f64 / info.sample_rate as f64;
-    let mut output = vec![0u16; req.n_columns * n_freq_bins];
-
-    for col in 0..req.n_columns {
-        let t = (col as f64 / req.n_columns as f64) * duration;
-        if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
-            if samples.len() >= req.fft_size {
-                let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
-                for bin in 0..n_freq_bins {
-                    output[col * n_freq_bins + bin] = col_data.get(bin).copied().unwrap_or(0);
-                }
-            }
-        }
-    }
-
-    let bytes = build_spectrogram_response(
-        req.n_columns, n_freq_bins, 0.0, duration, info.sample_rate, &output,
-    );
-    Ok(Response::new(bytes))
-}
-
 // ── PCM streaming commands ────────────────────────────────────────────────────
 
 #[derive(Serialize)]
