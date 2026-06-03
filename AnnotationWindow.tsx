@@ -1814,12 +1814,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                 onOpenSettings={() => setShowToolSettings(true)}
                 onEditTool={setPanelEditingToolIndex}
-                onRequestDeleteTool={idx => {
-                  const tool = annotationTools[idx];
-                  const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
-                  if (linkedCount > 0) setPanelDeletingToolIndex(idx);
-                  else handleDeleteTool(idx, 'delete');
-                }}
+                onRequestDeleteTool={setPanelDeletingToolIndex}
               />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
@@ -2146,12 +2141,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       {panelDeletingToolIndex !== null && (() => {
         const idx = panelDeletingToolIndex;
         const tool = annotationTools[idx];
-        const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
         const close = () => setPanelDeletingToolIndex(null);
         return tool ? (
           <DeleteToolConfirmDialog
             tool={tool}
-            linkedCount={linkedCount}
             onClose={close}
             onDelete={() => { handleDeleteTool(idx, 'delete'); close(); }}
             onUnlink={() => { handleDeleteTool(idx, 'unlink'); close(); }}

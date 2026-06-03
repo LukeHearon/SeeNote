@@ -13,7 +13,7 @@ function ToolCell({
       onClick={onClick}
       className={`w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-xs transition-all border
         ${isActive ? 'opacity-100' : 'opacity-60 hover:opacity-100'}
-        ${!dotted && isActive ? 'ring-1 ring-white/50' : ''}
+
         ${dotted ? 'border-dashed' : 'border-transparent hover:border-slate-600'}`}
       style={{
         backgroundColor: isActive ? color + '40' : color + '18',

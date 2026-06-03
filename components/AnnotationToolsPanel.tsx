@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Settings, Trash2 } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
 
@@ -31,6 +31,7 @@ export default function AnnotationToolsPanel({
 }: AnnotationToolsPanelProps) {
   const custom = annotationTools[0];
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [hoveredToolKey, setHoveredToolKey] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,8 +90,10 @@ export default function AnnotationToolsPanel({
           </div>
           {/* Custom (annotationTools[0]) */}
           <div
-            className="flex-1 min-w-0"
+            className="flex-1 min-w-0 relative"
             onContextMenu={e => openContextMenu(e, 0, false)}
+            onMouseEnter={() => setHoveredToolKey(custom.key!)}
+            onMouseLeave={() => setHoveredToolKey(null)}
           >
             <ToolCell
               isActive={custom.key === activeToolKey}
@@ -101,6 +104,19 @@ export default function AnnotationToolsPanel({
               onClick={() => onToolActivate(custom.key!)}
               tooltip={custom.description || undefined}
             />
+            {hoveredToolKey === custom.key && (
+              <div
+                className="absolute right-0 inset-y-0 flex items-center gap-0.5 pr-1 pl-4 pointer-events-none"
+                style={{ background: 'linear-gradient(to right, transparent, rgba(15,23,42,0.9) 35%)' }}
+              >
+                <button
+                  className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                  onClick={e => { e.stopPropagation(); onEditTool(0); }}
+                >
+                  <Settings size={10} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -111,7 +127,10 @@ export default function AnnotationToolsPanel({
             return (
               <div
                 key={tool.key}
+                className="relative"
                 onContextMenu={e => openContextMenu(e, toolIndex, true)}
+                onMouseEnter={() => setHoveredToolKey(tool.key!)}
+                onMouseLeave={() => setHoveredToolKey(null)}
               >
                 <ToolCell
                   isActive={tool.key === activeToolKey}
@@ -122,6 +141,25 @@ export default function AnnotationToolsPanel({
                   onClick={() => onToolActivate(tool.key!)}
                   tooltip={tool.description || undefined}
                 />
+                {hoveredToolKey === tool.key && (
+                  <div
+                    className="absolute right-0 inset-y-0 flex items-center gap-0.5 pr-1 pl-4 pointer-events-none"
+                    style={{ background: 'linear-gradient(to right, transparent, rgba(15,23,42,0.9) 35%)' }}
+                  >
+                    <button
+                      className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                      onClick={e => { e.stopPropagation(); onEditTool(toolIndex); }}
+                    >
+                      <Settings size={10} />
+                    </button>
+                    <button
+                      className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-600/60 transition-colors"
+                      onClick={e => { e.stopPropagation(); onRequestDeleteTool(toolIndex); }}
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

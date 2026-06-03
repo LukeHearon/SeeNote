@@ -203,10 +203,7 @@ export default function AnnotationToolsSettingsModal({
   // Trash-icon click: if the tool has linked annotations, open the confirmation
   // dialog (which offers Delete vs Unlink); otherwise delete it outright.
   const requestDeleteTool = (toolIndex: number) => {
-    const tool = annotationTools[toolIndex];
-    const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
-    if (linkedCount > 0) setDeletingToolIndex(toolIndex);
-    else withSnapshot(() => onDeleteTool(toolIndex, 'delete'));
+    setDeletingToolIndex(toolIndex);
   };
 
   const beginDrag = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
@@ -402,12 +399,10 @@ export default function AnnotationToolsSettingsModal({
       {deletingToolIndex !== null && (() => {
         const idx = deletingToolIndex;
         const tool = annotationTools[idx];
-        const linkedCount = tool ? annotations.filter(a => a.toolKey === tool.key).length : 0;
         const close = () => setDeletingToolIndex(null);
         return tool ? (
           <DeleteToolConfirmDialog
             tool={tool}
-            linkedCount={linkedCount}
             onClose={close}
             onDelete={() => { withSnapshot(() => onDeleteTool(idx, 'delete')); close(); }}
             onUnlink={() => { withSnapshot(() => onDeleteTool(idx, 'unlink')); close(); }}
