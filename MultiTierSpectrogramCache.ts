@@ -22,7 +22,11 @@ interface ResolvedTier {
 export class MultiTierSpectrogramCache {
   private tiers: ResolvedTier[];
   private caches: Map<number, Map<number, CachedChunk>>; // tier -> (chunkIdx -> chunk)
-  private pending = new Set<string>(); // "tier:chunkIdx"
+  // Cap concurrent Tauri IPC/FFT calls so the first chunks in view complete
+  // quickly rather than all chunks competing for CPU simultaneously.
+  private static readonly MAX_CONCURRENT = 4;
+  private inFlight = new Set<string>(); // "tier:chunkIdx" currently being fetched
+  private fetchQueue: Array<{ tier: number; chunkIndex: number }> = [];
   private activeTierIndex: number = -1; // for hysteresis
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
   private generationId: number = 0;
@@ -140,9 +144,9 @@ export class MultiTierSpectrogramCache {
   // These never mutate hysteresis or LRU state, so they are safe to call from a
   // React render / draw pass to drive a "building spectrogram" indicator.
 
-  /** Number of chunk fetches currently in flight (across all tiers). */
+  /** Number of chunk fetches in flight or queued (across all tiers). */
   pendingCount(): number {
-    return this.pending.size;
+    return this.inFlight.size + this.fetchQueue.length;
   }
 
   /**
@@ -176,18 +180,49 @@ export class MultiTierSpectrogramCache {
 
     const firstIdx = Math.max(0, Math.floor(startTime / tierConfig.chunkDuration) - 1);
     const lastIdx = Math.floor(endTime / tierConfig.chunkDuration) + 1;
+    const cache = this.caches.get(tier);
 
-    for (let idx = firstIdx; idx <= lastIdx; idx++) {
-      this.fetchChunkIfNeeded(tier, idx);
+    // Build center-out ordered list so the chunk under the viewport center
+    // (and playhead) renders first, expanding outward.
+    const centerIdx = Math.round((firstIdx + lastIdx) / 2);
+    const ordered: Array<{ tier: number; chunkIndex: number }> = [];
+    let lo = centerIdx, hi = centerIdx + 1;
+    while (lo >= firstIdx || hi <= lastIdx) {
+      if (lo >= firstIdx) ordered.push({ tier, chunkIndex: lo-- });
+      if (hi <= lastIdx) ordered.push({ tier, chunkIndex: hi++ });
     }
+
+    // Replace queue with new viewport, skipping already-cached or in-flight chunks.
+    // In-flight fetches continue undisturbed; stale queued items are dropped.
+    this.fetchQueue = ordered.filter(({ tier: t, chunkIndex }) => {
+      const key = `${t}:${chunkIndex}`;
+      const startSec = chunkIndex * tierConfig.chunkDuration;
+      return startSec < this.duration && !cache?.has(chunkIndex) && !this.inFlight.has(key);
+    });
+
+    this.drainQueue();
   }
 
   // ── Internal fetch/cache ────────────────────────────────────────────────────
 
-  private fetchChunkIfNeeded(tier: number, chunkIndex: number): void {
+  private drainQueue(): void {
+    while (
+      this.inFlight.size < MultiTierSpectrogramCache.MAX_CONCURRENT &&
+      this.fetchQueue.length > 0
+    ) {
+      const next = this.fetchQueue.shift()!;
+      const key = `${next.tier}:${next.chunkIndex}`;
+      const cache = this.caches.get(next.tier);
+      // Re-check: may have been cached by a concurrent in-flight fetch.
+      if (cache?.has(next.chunkIndex) || this.inFlight.has(key)) continue;
+      this.dispatchFetch(next.tier, next.chunkIndex);
+    }
+  }
+
+  private dispatchFetch(tier: number, chunkIndex: number): void {
     const key = `${tier}:${chunkIndex}`;
     const cache = this.caches.get(tier);
-    if (!cache || cache.has(chunkIndex) || this.pending.has(key)) return;
+    if (!cache || cache.has(chunkIndex) || this.inFlight.has(key)) return;
 
     const tierConfig = this.tiers.find(t => t.tier === tier);
     if (!tierConfig) return;
@@ -195,7 +230,7 @@ export class MultiTierSpectrogramCache {
     const startSec = chunkIndex * tierConfig.chunkDuration;
     if (startSec >= this.duration) return;
 
-    this.pending.add(key);
+    this.inFlight.add(key);
     const generation = this.generationId;
 
     getSpectrogramChunk(
@@ -227,7 +262,8 @@ export class MultiTierSpectrogramCache {
         console.error(`MultiTierCache: failed to fetch tier ${tier} chunk ${chunkIndex}:`, err);
       })
       .finally(() => {
-        this.pending.delete(key);
+        this.inFlight.delete(key);
+        this.drainQueue();
       });
   }
 
@@ -249,7 +285,8 @@ export class MultiTierSpectrogramCache {
     for (const cache of this.caches.values()) {
       cache.clear();
     }
-    this.pending.clear();
+    this.inFlight.clear();
+    this.fetchQueue = [];
     this.activeTierIndex = -1;
   }
 }
