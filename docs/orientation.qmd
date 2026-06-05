@@ -33,12 +33,11 @@ the project folder, and open it.
 
 1. Launch SeeNote
 
-   ![](media/image8.png){width="6.5in"}
+   ![](media/orientation/launch_screen.png)
 
 2. Select "+ New Project"
 
-   ![](media/image7.png){width="6.5in"}
-
+   ![](media/orientation/new_project_dialog.png)
    Enter the project information:
 
    a. **Project Directory:** the parent folder that holds your media
@@ -59,21 +58,21 @@ the project folder, and open it.
 
 3. You're done! Create your project.
 
-![](media/image9.png){width="6.5in"}
+![](media/orientation/new_project_filled.png)
 
 ### If the project folder moves...
 
 If you rename or move the project folder, SeeNote won't be able to find
 it.
 
-![](media/image4.png){width="6.5in"}
+![](media/orientation/project_not_found.png)
 
 A Re-link dialogue lets you browse to the new location and restore the
 project in your launch screen. If there are any conflicts between the
 project in your list and the project that you're re-linking, SeeNote
 will ask you to resolve them.
 
-![](media/image5.png){width="6.5in"}
+![](media/orientation/relink_dialog.png)
 
 ### Unlinking a project
 
@@ -82,11 +81,11 @@ launch screen. However, SeeNote cannot delete project data from your
 computer. You must do this yourself, manually. This protects critical
 project data from accidental deletion.
 
-![](media/image6.png){width="6.5in"}
+![](media/orientation/unlink_dialog.png)
 
 ## Annotation Screen
 
-![](media/image11.png){width="6.5in"}
+![](media/orientation/annotation_screen.png)
 
 ### Top Bar
 
@@ -106,7 +105,7 @@ up with blue text (white text, when they're the active track).
 - **File icon with media dir name:** right click this for the option to show
   the root annotations or media dirs
 
-  ![](media/image2.png){width="4.3in"}
+  ![](media/orientation/file_browser_context_menu.png)
 
 - **Collapse/expand button:** close or open all folders
 - **Refresh button:** if files change during annotation, click this button
@@ -131,7 +130,7 @@ Click the gear icon at top right to open the Annotation Tools Settings.
 
 ### Annotation Tools Settings
 
-![](media/image3.png){width="6.5in"}
+![](media/orientation/annotation_tool_settings.png)
 
 On this screen, you can drag and drop annotations to re-bind their
 hotkeys, or you can un-assign them from hotkeys. Unassigning an
@@ -147,22 +146,22 @@ Each annotation tool has its own settings. These consist of:
 - **Description:** a short description of when to use the label
 - **Color:** the color of the annotation on the spectrogram track
 
-![](media/image1.png){width="3.1in"}
+![](media/orientation/annotation_tool_editor.png)
 
 ### Toolbar
 
 ::: {.callout-note}
-This section needs to be written.
+## Under construction!
 :::
 
 ### Video Panel
 
 ::: {.callout-note}
-This section needs to be written.
+## Under construction!
 :::
 
 ### Timeline Panel
 
 ::: {.callout-note}
-This section needs to be written.
+## Under construction!
 :::

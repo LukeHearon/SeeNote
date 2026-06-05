@@ -3,39 +3,25 @@ title: "SeeNote"
 subtitle: "Annotate audio and video to build ML training datasets"
 ---
 
-This protocol provides comprehensive instructions for annotating audio
-events in data used for buzzdetect model training and testing.
+SeeNote is a tool for annotating events in audio and video files, primarily oriented towards bioacoustic data.
 
-::: {.callout-note}
-The canonical version of this protocol is maintained in
-[Google Docs](https://docs.google.com/document/d/1Efwxs4nEFczTx0Xw2-RcCwnpCOO7R367Cn1A0w47rZU/edit?usp=sharing).
-:::
+## Overview
 
-## Software setup
+SeeNote follows a project-based workflow. Pick a folder to serve as your project folder. A `.seenote` subdirectory will be made to store project metadata. Within that folder, point SeeNote at a folder containing your media files (audio, video) and another where you want your annotations to be written. SeeNote aims to be a frictionless annotation experience, automating and streamlining away all of the little frustrations encountered during data labeling. It's easy to navigate within files and easy to move between them, annotation files are updated automatically, and you can save your most common labels as predefined tools.
 
-### Installing SeeNote
+## Features
 
-Navigate to [the SeeNote repository on GitHub](https://github.com/LukeHearon/SeeNote)
-and download using the installation buttons in the Install section. Or, use the
-following links:
-
-- [macOS](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-macOS.dmg)
-- [Windows](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Windows.exe)
-- [Linux](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage)
-
-On macOS, you'll need to walk through the [macOS woes](#macos-woes) section to
-allow the program to run.
-
-### macOS woes {#macos-woes}
-
-::: {.callout-warning}
-This section needs to be written. The original link pointed at the Linux
-AppImage by mistake. Document the Gatekeeper / "app is damaged" workaround here.
-:::
+- User-definable annotation tools allow quick, repeated labeling. Hotkeys make them quick to place, color coding makes them quick to read. Renaming a tool updates all associated annotations across the project.
+- The "Custom" annotation tool allows you to label one-off events.
+- Click on a label or select a region to play back only that selection, letting you fine-tune annotation boundaries. Text entry allows you to edit the selected region or annotation to exact-second extents.
+- Auto Save — every change to annotations is immediately saved to disk.
+- Audio filtering allows you to isolate sounds of interest and block out noise, with adjustable filtering strength.
+- Playback speed can be adjusted on-the-fly (preserving pitch!) to plow through audio more quickly or get a slowed-down view of a fast-flying insect. Single-frame scrubbing of video with `,` and `.`.
+- Zoom in tight to video to get a closer look.
 
 ## Where to next
 
 - [Orientation](orientation.qmd) — projects, the annotation screen, and the tools palette.
-- [Annotation Workflow](annotation-workflow.qmd) — the step-by-step labeling process.
-- [Tips for Annotating](tips-for-annotating.qmd) — what we label and what we don't.
-- [Classification Dictionary](classification-dictionary.qmd) — the full buzzdetect class list.
+- [Annotation Workflow](aworkflow.qmd) — the step-by-step labeling process.
+- [Tips for Annotating](tips.qmd) — what we label and what we don't.
+- [Classification Dictionary](dictionary.qmd) — the full buzzdetect class list.

@@ -1,5 +1,9 @@
 /* SeeNote docs overrides */
 
+a, a:hover, a:visited, a:focus {
+  text-decoration: none;
+}
+
 /* Render label epithets (ins_buzz_bee, etc.) in monospace where inline code is used */
 code {
   font-size: 0.9em;

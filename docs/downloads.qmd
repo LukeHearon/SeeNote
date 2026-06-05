@@ -1,0 +1,59 @@
+---
+title: "Downloads"
+---
+
+## All releases
+See all of the past releases [on our GitHub](https://github.com/LukeHearon/SeeNote/releases)
+
+##  macOS
+### Direct download (.dmg)
+<div style="text-align:left;">
+  <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-macOS.dmg">
+    <img src="https://img.shields.io/badge/Download-macOS-000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS">
+  </a>
+</div>
+
+### Homebrew
+
+```sh
+brew install --cask LukeHearon/seenote/seenote
+```
+
+Or download the `.dmg` above, open it, and drag SeeNote to `/Applications`.
+
+SeeNote is not code-signed, so macOS will block it on first launch. See [macOS woes](#macos-woes) below.
+
+### macOS woes {#macos-woes}
+
+SeeNote is not code-signed. Because of this, macOS will block it on first launch. Here's how to get past it:
+
+1. Install SeeNote to `/Applications` (drag from DMG or use Homebrew).
+2. Open SeeNote. You'll see a "SeeNote.app" Not Opened popup. Click "Done".
+3. Open System Settings → Privacy & Security, scroll to the Security section near the bottom. You should see ""SeeNote.app" was blocked to protect your Mac". Click "Open Anyway".
+4. macOS will show one last dialog titled "Open 'SeeNote.app'?". Click "Open Anyway".
+
+You will only have to do this once. Each time you open a project, you'll need to approve reading from the folder it's contained in.
+
+## Windows
+### Direct download (.exe)
+<div style="text-align:left;">
+  <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Windows.exe">
+    <img src="https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows">
+  </a>
+</div>
+
+
+## Linux
+### Direct download (.AppImage)
+<div style="text-align:left;">
+  <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage">
+    <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download Linux">
+  </a>
+</div>
+
+Download the `.AppImage` above, make it executable, and run it:
+
+```sh
+chmod +x SeeNote-Linux.AppImage
+./SeeNote-Linux.AppImage
+```
