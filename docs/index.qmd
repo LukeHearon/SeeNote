@@ -1,0 +1,41 @@
+---
+title: "SeeNote"
+subtitle: "Annotate audio and video to build ML training datasets"
+---
+
+This protocol provides comprehensive instructions for annotating audio
+events in data used for buzzdetect model training and testing.
+
+::: {.callout-note}
+The canonical version of this protocol is maintained in
+[Google Docs](https://docs.google.com/document/d/1Efwxs4nEFczTx0Xw2-RcCwnpCOO7R367Cn1A0w47rZU/edit?usp=sharing).
+:::
+
+## Software setup
+
+### Installing SeeNote
+
+Navigate to [the SeeNote repository on GitHub](https://github.com/LukeHearon/SeeNote)
+and download using the installation buttons in the Install section. Or, use the
+following links:
+
+- [macOS](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-macOS.dmg)
+- [Windows](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Windows.exe)
+- [Linux](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage)
+
+On macOS, you'll need to walk through the [macOS woes](#macos-woes) section to
+allow the program to run.
+
+### macOS woes {#macos-woes}
+
+::: {.callout-warning}
+This section needs to be written. The original link pointed at the Linux
+AppImage by mistake. Document the Gatekeeper / "app is damaged" workaround here.
+:::
+
+## Where to next
+
+- [Orientation](orientation.qmd) — projects, the annotation screen, and the tools palette.
+- [Annotation Workflow](annotation-workflow.qmd) — the step-by-step labeling process.
+- [Tips for Annotating](tips-for-annotating.qmd) — what we label and what we don't.
+- [Classification Dictionary](classification-dictionary.qmd) — the full buzzdetect class list.

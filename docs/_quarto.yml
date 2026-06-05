@@ -1,0 +1,34 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "SeeNote"
+  description: "Annotate audio/video files to build ML training datasets."
+  site-url: https://lukehearon.github.io/SeeNote/
+  repo-url: https://github.com/LukeHearon/SeeNote
+  repo-actions: [edit, issue]
+  page-navigation: true
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - href: orientation.qmd
+        text: Orientation
+      - href: annotation-workflow.qmd
+        text: Workflow
+      - href: tips-for-annotating.qmd
+        text: Tips
+      - href: classification-dictionary.qmd
+        text: Classification Dictionary
+    right:
+      - icon: github
+        href: https://github.com/LukeHearon/SeeNote
+        aria-label: GitHub
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    css: styles.css
