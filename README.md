@@ -8,6 +8,7 @@ SeeNote is a tool for annotating events in audio and video files.
 I'm developing SeeNote to facilitate building training data for [buzzdetect](https://github.com/OSU-Bee-Lab/buzzdetect) models;
 as such, it's primarily oriented towards bioacoustic data.
 
+[Read the full documentation here](https://lukehearon.github.io/SeeNote/).
 
 ### Warning: vibes
 I'm creating SeeNote pretty much entirely via LLMs. I don't know typescript, rust, react, or any other language this thing uses.
