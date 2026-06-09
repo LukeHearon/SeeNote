@@ -141,6 +141,7 @@ Routine environmental sound
 
 An absence of any particular event.
 Usually, this label is inferred by the absence of other labels.
+Whether or not ambient_background should be explicitly labeled depends on the annotation project.
 
 #### LABEL: `ambient_scraping`
 

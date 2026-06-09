@@ -6,7 +6,7 @@ The following is a good workflow for producing high-quality annotations using Se
 
 ## TL;DR
 - **Listen to every second of the track.** Annotating visually, based on the spectrogram, is okay as a start, but is not acceptable for the finished state.
-- **Ensure labels are tight to the event.**
+- **Ensure labels are tight to the event.** Annotations should start exactly when the event starts and end exactly when it ends. No slop. Check by repeatedly playing through the active selection and nudging the selection handles.
 
 ## Step 0: spectrogram configuration
 
