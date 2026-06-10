@@ -77,6 +77,8 @@ export interface SpectrogramHandle {
   scrollToTime: (time: number) => void;
   zoomToRange: (startTime: number, endTime: number) => void;
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
 }
 
 // Helpers for scale mapping (duplicated locally for Y-axis calculation)
@@ -1376,7 +1378,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const containerWidth = containerRef.current.clientWidth;
       const currentPps = containerWidth / zoomSec;
       const timeAtMouse = (scrollLeft + mouseX) / currentPps;
-      const zoomFactor = 1.1;
+      const zoomFactor = 1.25;
       const direction = deltaY > 0 ? 1 : -1;
       let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
@@ -1409,13 +1411,29 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     onZoomChange(newZoomSec);
   }, [duration, onZoomChange]);
 
+  const zoomIn = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth;
+    const rect = containerRef.current.getBoundingClientRect();
+    applyWheel(0, -100, true, false, rect.left + containerWidth / 2);
+  }, [applyWheel]);
+
+  const zoomOut = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth;
+    const rect = containerRef.current.getBoundingClientRect();
+    applyWheel(0, 100, true, false, rect.left + containerWidth / 2);
+  }, [applyWheel]);
+
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
     goToNextAnnotation,
     scrollToTime,
     zoomToRange,
     applyWheel,
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, zoomToRange, applyWheel]);
+    zoomIn,
+    zoomOut,
+  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 

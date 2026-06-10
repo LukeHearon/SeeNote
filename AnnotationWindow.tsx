@@ -1277,6 +1277,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
+      { key: '=', mods: ['mod'], handler: () => { spectrogramRef.current?.zoomIn(); preZoomExtentRef.current = null; } },
+      { key: '+', mods: ['mod', 'shift'], handler: () => { spectrogramRef.current?.zoomIn(); preZoomExtentRef.current = null; } },
+      { key: '-', mods: ['mod'], handler: () => { spectrogramRef.current?.zoomOut(); preZoomExtentRef.current = null; } },
       { key: '0', mods: ['mod'], handler: () => {
           const dur = durationRef.current;
           if (!dur) return;

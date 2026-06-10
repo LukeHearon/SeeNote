@@ -343,6 +343,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <ShortcutGroup title="Spectrogram" rows={[
                 { keys: 'Right-drag / Scroll', label: 'Pan' },
                 { keys: 'Cmd/Ctrl + Scroll', label: 'Zoom' },
+                { keys: 'Cmd/Ctrl + =', label: 'Zoom in' },
+                { keys: 'Cmd/Ctrl + -', label: 'Zoom out' },
                 { keys: 'Cmd/Ctrl+0', label: 'Zoom to full track (press again while at full extent to restore previous view)' },
                 { keys: 'Left-click (Selection Mode)', label: 'Seek' },
               ]} />
