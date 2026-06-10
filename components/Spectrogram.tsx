@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
@@ -139,6 +139,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const [scrollLeft, setScrollLeft] = useState(0);
   const scrollLeftRef = useRef(0);
   useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
+  // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
+  // for a brief window after manual panning so the two don't fight each other.
+  const lastManualScrollRef = useRef(0);
   const [dragStart, setDragStart] = useState<{ x: number; scroll: number } | null>(null);
 
   // Custom cursor position (relative to the spectrogram container)
@@ -272,17 +275,22 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // the canvas intentionally relative to the selection and auto-scroll disrupts that.
   // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
   // the playhead can travel the full width of the screen without the view moving.
-  useEffect(() => {
-      if (isPlaying && !selection && containerRef.current) {
-          const containerWidth = containerRef.current.clientWidth;
-          const pps = pixelsPerSecondRef.current;
-          if (duration * pps <= containerWidth) return;
-          const curScroll = scrollLeftRef.current;
-          const visibleCenterTime = (curScroll + containerWidth / 2) / pps;
-          if (currentTime >= visibleCenterTime) {
-              const targetScroll = currentTime * pps - containerWidth / 2;
-              setScrollLeft(Math.max(0, targetScroll));
-          }
+  //
+  // useLayoutEffect (not useEffect) so this batches with the currentTime render before
+  // the browser paints — eliminates the one-frame lag where the playhead appears at the
+  // wrong position relative to the spectrogram.
+  useLayoutEffect(() => {
+      if (!isPlaying || selection || !containerRef.current) return;
+      // Suppress auto-scroll for 500 ms after the user manually panned, so the two
+      // don't fight each other (trackpad inertia vs. auto-scroll → violent jitter).
+      if (Date.now() - lastManualScrollRef.current < 500) return;
+      const containerWidth = containerRef.current.clientWidth;
+      const pps = pixelsPerSecondRef.current;
+      if (duration * pps <= containerWidth) return;
+      const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
+      if (currentTime >= visibleCenterTime) {
+          const targetScroll = currentTime * pps - containerWidth / 2;
+          setScrollLeft(Math.max(0, targetScroll));
       }
   }, [isPlaying, currentTime, zoomSec, selection, duration]);
 
@@ -1128,6 +1136,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const delta = dragStart.x - e.clientX;
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
+      lastManualScrollRef.current = Date.now();
       setScrollLeft(Math.max(0, Math.min(dragStart.scroll + delta, maxScroll)));
       return;
     }
@@ -1392,6 +1401,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const panAmount = deltaY + deltaX;
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
+      lastManualScrollRef.current = Date.now();
       setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
     }
   }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
