@@ -387,6 +387,19 @@ export class AudioEngine implements PlaybackTransport {
       + `speed=${this.playbackSpeed.toFixed(2)}x ctx.sr=${this.ctx.sampleRate} file.sr=${this.fileSampleRate} ch=${this.fileChannels} ctx.state=${this.ctx.state}`,
     );
 
+    // Only surface latency when it's high enough to perceptibly desync the
+    // playhead (>20ms). At that point _outputLatencySec() is actively shifting
+    // the cursor, and the log explains why. Stays silent on normal wired output.
+    const latencySec = this._outputLatencySec();
+    if (latencySec > 0.02) {
+      const ol = (this.ctx as { outputLatency?: number }).outputLatency;
+      this._log(
+        `output latency ${(latencySec * 1000).toFixed(0)}ms `
+        + `(outLatency=${typeof ol === 'number' ? ol.toFixed(3) : 'n/a'}s baseLatency=${this.ctx.baseLatency?.toFixed(3) ?? 'n/a'}s) `
+        + `— playhead compensated`,
+      );
+    }
+
     // ── PCM cache fast path ───────────────────────────────────────────────────
     // For bounded plays, skip Rust IPC entirely if we have cached decoded PCM
     // covering [startSec, endSec] (preload may have cached a larger range).
@@ -522,6 +535,30 @@ export class AudioEngine implements PlaybackTransport {
 
   // ── Private ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Output latency (seconds) between scheduling a sample at ctx.currentTime and
+   * it actually reaching the speakers. `ctx.currentTime` advances the instant a
+   * buffer is scheduled, but the audio subsystem buffers it for this long before
+   * it's audible. On built-in/wired output this is a few ms; on Bluetooth it can
+   * be 200–300ms; WKWebView's Web Audio render pipeline buffers heavily on macOS
+   * regardless of the physical device. Subtracting it from the playhead keeps the
+   * cursor on the audio actually leaving the speakers rather than the audio just
+   * scheduled — same correction pattern as _filterDelaySec.
+   *
+   * Prefer `outputLatency` (full path to the output device); fall back to
+   * `baseLatency` (context → audio subsystem) when unavailable; 0 if neither is
+   * reported (no correction, original behaviour).
+   */
+  private _outputLatencySec(): number {
+    const ctx = this.ctx;
+    if (!ctx) return 0;
+    const ol = (ctx as { outputLatency?: number }).outputLatency;
+    if (typeof ol === 'number' && isFinite(ol) && ol > 0) return ol;
+    const bl = ctx.baseLatency;
+    if (typeof bl === 'number' && isFinite(bl) && bl > 0) return bl;
+    return 0;
+  }
+
   private _computeMediaTime(): number {
     if (!this.ctx || !this.isPlayingState) {
       // Not playing: return the last known position. pausedAt is kept in sync
@@ -529,10 +566,10 @@ export class AudioEngine implements PlaybackTransport {
       // whether we're paused, between play() and first sample, or at rest.
       return this.pausedAt;
     }
-    // Subtract the band-pass filter's group delay so the playhead reflects
-    // what's emerging from the speakers, not what's been scheduled into the
-    // filter chain. _filterDelaySec is 0 when no filter is active.
-    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this._filterDelaySec;
+    // Subtract the band-pass filter's group delay AND the audio output latency so
+    // the playhead reflects what's emerging from the speakers, not what's been
+    // scheduled. Both are 0 when inactive/unreported.
+    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this._filterDelaySec - this._outputLatencySec();
     if (elapsedCtx < 0) return this.playStartMedia;
     const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.fileDurationSec);
     // Clamp to endSec so the playhead never visually overshoots the selection
@@ -1053,7 +1090,7 @@ export class AudioEngine implements PlaybackTransport {
       const lastCtxEnd = this.queue.length > 0
         ? this.queue[this.queue.length - 1].ctxEnd
         : this.ctx?.currentTime ?? 0;
-      const waitMs = Math.max(0, (lastCtxEnd - (this.ctx?.currentTime ?? 0)) * 1000 + 50);
+      const waitMs = Math.max(0, (lastCtxEnd - (this.ctx?.currentTime ?? 0) + this._outputLatencySec()) * 1000 + 50);
       await sleep(waitMs);
       if (this.playId === myPlayId) {
         this._cancelPlayback();
@@ -1226,8 +1263,10 @@ export class AudioEngine implements PlaybackTransport {
     this.schedCursor = endSec;
     this.chunksScheduled = 1;
 
-    // Fire onEnded after the buffer finishes playing
-    const waitMs = Math.max(0, (ctxEnd - ctx.currentTime) * 1000 + 50);
+    // Fire onEnded after the buffer finishes playing. Add output latency so the
+    // teardown (which snapshots pausedAt via _computeMediaTime) lands after the
+    // audio is actually audible through endSec, not when it was merely scheduled.
+    const waitMs = Math.max(0, (ctxEnd - ctx.currentTime + this._outputLatencySec()) * 1000 + 50);
     setTimeout(() => {
       if (this.playId !== myPlayId) return;
       this._cancelPlayback();
