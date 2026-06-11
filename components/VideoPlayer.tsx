@@ -110,8 +110,7 @@ export default function VideoPlayer({
       {isAudio && (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 z-10 pointer-events-none">
           <Music size={64} className="mb-4 opacity-50" />
-          <p className="text-xl font-medium">Audio File Active</p>
-          <p className="text-sm opacity-70">Visualization below</p>
+          <p className="text-xl font-medium">Audio Track Active</p>
         </div>
       )}
       {(() => {

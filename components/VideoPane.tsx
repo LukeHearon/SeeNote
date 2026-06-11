@@ -97,8 +97,9 @@ export default function VideoPane({
   const [modePickerExpanded, setModePickerExpanded] = useState(false);
   const modePickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleModePickerEnter = useCallback(() => {
+    if (isAudioTrack) return;
     modePickerTimerRef.current = setTimeout(() => setModePickerExpanded(true), 200);
-  }, []);
+  }, [isAudioTrack]);
   const handleModePickerLeave = useCallback(() => {
     if (modePickerTimerRef.current) clearTimeout(modePickerTimerRef.current);
     setModePickerExpanded(false);
