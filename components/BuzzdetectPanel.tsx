@@ -8,6 +8,8 @@ import {
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
 } from '../constants';
+import { clamp } from '../utils/helpers';
+import { timeToX, xToTime } from '../utils/viewportTransform';
 
 // Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
 // same x and the two stay column-for-column aligned.
@@ -149,9 +151,9 @@ export default function BuzzdetectPanel({
     const rect = areaRef.current?.getBoundingClientRect();
     if (!rect) return null;
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
-    const t = (scrollLeft + (clientX - rect.left)) / pixelsPerSecond;
+    const t = xToTime(clientX - rect.left, scrollLeft, pixelsPerSecond);
     const i = Math.floor((t - data.starts[0]) / data.binWidth);
-    return Math.max(0, Math.min(data.starts.length - 1, i));
+    return clamp(i, 0, data.starts.length - 1);
   }, [data, viewportStore]);
 
   // The half-open interval [start, start+binWidth) for a bin, end clamped to EOF.
@@ -192,7 +194,7 @@ export default function BuzzdetectPanel({
     const { starts, binWidth, neurons, values } = data;
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + width / pixelsPerSecond;
-    const xOf = (t: number) => t * pixelsPerSecond - scrollLeft;
+    const xOf = (t: number) => timeToX(t, scrollLeft, pixelsPerSecond);
 
     // Visible bin index range (with a one-bin margin so partial edges connect).
     const iLeft = Math.max(0, Math.floor((startTime - starts[0]) / binWidth) - 1);
@@ -444,7 +446,7 @@ export default function BuzzdetectPanel({
     const startHeight = height;
     const onMove = (ev: MouseEvent) => {
       // Drag up → taller.
-      const next = Math.max(MIN_BUZZDETECT_PANEL_HEIGHT, Math.min(MAX_BUZZDETECT_PANEL_HEIGHT, startHeight + (startY - ev.clientY)));
+      const next = clamp(startHeight + (startY - ev.clientY), MIN_BUZZDETECT_PANEL_HEIGHT, MAX_BUZZDETECT_PANEL_HEIGHT);
       onHeightChange(next);
     };
     const onUp = () => {

@@ -1,6 +1,18 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
 
+// Clamp `v` into the inclusive range [lo, hi]. Assumes lo <= hi.
+export const clamp = (v: number, lo: number, hi: number): number =>
+  Math.max(lo, Math.min(hi, v));
+
+// Return a new annotations array with the annotation matching `id` replaced by
+// `updater(a)`; all others are passed through unchanged (inputs not mutated).
+export const updateAnnotation = (
+  annotations: Annotation[],
+  id: string | null,
+  updater: (a: Annotation) => Annotation,
+): Annotation[] => annotations.map(a => (a.id === id ? updater(a) : a));
+
 export const formatTime = (seconds: number): string => {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -69,10 +81,6 @@ export function shuffleArray<T>(arr: T[]): T[] {
     return out;
 }
 
-const getBaseName = (filename: string) => {
-    return stripExt(filename);
-};
-
 // Helper for file saving via Tauri native dialog
 const saveFile = async (
     content: string,
@@ -90,7 +98,7 @@ const saveFile = async (
 // Derives the default save path next to the source file.
 // trackPath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
 const defaultSavePath = (trackPath: string | null, filename: string, suffix: string, ext: string): string => {
-    const base = getBaseName(filename);
+    const base = stripExt(filename);
     const outName = `${base}${suffix}${ext}`;
     if (trackPath) {
         // Split on either separator so this works on Windows paths too

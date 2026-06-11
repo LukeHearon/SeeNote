@@ -6,6 +6,8 @@ import {
   generateAudacityContent,
   stripExt,
   shuffleArray,
+  clamp,
+  updateAnnotation,
 } from '../utils/helpers';
 import { getExt } from '../constants';
 import { Annotation, AnnotationTool } from '../types';
@@ -245,5 +247,49 @@ describe('shuffleArray', () => {
   it('handles empty and single-element arrays', () => {
     expect(shuffleArray([])).toEqual([]);
     expect(shuffleArray(['a'])).toEqual(['a']);
+  });
+});
+
+describe('clamp', () => {
+  it('passes values already inside the range through unchanged', () => {
+    expect(clamp(5, 0, 10)).toBe(5);
+    expect(clamp(0, 0, 10)).toBe(0);
+    expect(clamp(10, 0, 10)).toBe(10);
+  });
+
+  it('clamps to the lower and upper bounds', () => {
+    expect(clamp(-3, 0, 10)).toBe(0);
+    expect(clamp(42, 0, 10)).toBe(10);
+  });
+
+  it('works with negative and fractional ranges', () => {
+    expect(clamp(-7.5, -5, 5)).toBe(-5);
+    expect(clamp(1.25, -5, 5)).toBe(1.25);
+  });
+});
+
+describe('updateAnnotation', () => {
+  it('replaces only the matching annotation, leaving others by reference', () => {
+    const a = ann(0, 1, 'a', { id: 'a' });
+    const b = ann(2, 3, 'b', { id: 'b' });
+    const out = updateAnnotation([a, b], 'b', x => ({ ...x, text: 'B' }));
+    expect(out[0]).toBe(a); // untouched item keeps its reference
+    expect(out[1]).not.toBe(b);
+    expect(out[1].text).toBe('B');
+  });
+
+  it('returns a new array and never mutates the input', () => {
+    const a = ann(0, 1, 'a', { id: 'a' });
+    const input = [a];
+    const out = updateAnnotation(input, 'a', x => ({ ...x, start: 5 }));
+    expect(out).not.toBe(input);
+    expect(input[0].start).toBe(0);
+    expect(out[0].start).toBe(5);
+  });
+
+  it('is a no-op (content-wise) when no id matches, including null', () => {
+    const a = ann(0, 1, 'a', { id: 'a' });
+    expect(updateAnnotation([a], 'missing', x => ({ ...x, text: 'X' }))).toEqual([a]);
+    expect(updateAnnotation([a], null, x => ({ ...x, text: 'X' }))).toEqual([a]);
   });
 });

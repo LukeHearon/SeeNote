@@ -63,6 +63,7 @@ import { getFileInfo, startPcmStream, readPcmChunk, closePcmStream } from './tau
 import { PhaseVocoder } from './PhaseVocoder';
 import { RafTicker } from './rafTicker';
 import { BandPassFilter, PlaybackTransport } from '../types';
+import { clamp } from './helpers';
 
 export interface AudioEngineCallbacks {
   /** Called on every animation frame during playback with the current media time. */
@@ -438,7 +439,7 @@ export class AudioEngine implements PlaybackTransport {
 
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
-    this.pausedAt = Math.max(0, Math.min(sec, this.fileDurationSec));
+    this.pausedAt = clamp(sec, 0, this.fileDurationSec);
     this._cancelPlayback();
     // Cancel any in-flight preload for the old position (finding 6).
     this.preloadId++;
@@ -456,7 +457,7 @@ export class AudioEngine implements PlaybackTransport {
    * audio horizon drains.
    */
   setPlaybackSpeed(speed: number): void {
-    const next = Math.max(0.25, Math.min(4.0, speed));
+    const next = clamp(speed, 0.25, 4.0);
     if (Math.abs(next - this.playbackSpeed) < 0.001) return;
     const wasPlaying = this.isPlayingState;
     const resumeFrom = wasPlaying ? this._computeMediaTime() : this.pausedAt;
@@ -605,11 +606,11 @@ export class AudioEngine implements PlaybackTransport {
     const t = this.ctx.currentTime;
     if (this.bandPassFilter) {
       const { low, high, strength } = this.bandPassFilter;
-      const safeLow = Math.max(20, Math.min(low, this.fileSampleRate / 2 - 20));
-      const safeHigh = Math.max(safeLow + 20, Math.min(high, this.fileSampleRate / 2 - 1));
+      const safeLow = clamp(low, 20, this.fileSampleRate / 2 - 20);
+      const safeHigh = clamp(high, safeLow + 20, this.fileSampleRate / 2 - 1);
       for (const hp of this._filterHP) hp.frequency.setValueAtTime(safeLow, t);
       for (const lp of this._filterLP) lp.frequency.setValueAtTime(safeHigh, t);
-      const s = Math.max(0, Math.min(1, strength));
+      const s = clamp(strength, 0, 1);
       this._filterDry.gain.setValueAtTime(1 - s, t);
       this._filterWet.gain.setValueAtTime(s, t);
       void this._updateFilterDelay(safeLow, safeHigh);
@@ -1161,7 +1162,7 @@ export class AudioEngine implements PlaybackTransport {
 
       let framesToCache = chunk.frames_read;
       if (chunkMediaEnd >= endSec) {
-        framesToCache = Math.max(0, Math.min(Math.round((endSec - chunkMediaStart) * sr), chunk.frames_read));
+        framesToCache = clamp(Math.round((endSec - chunkMediaStart) * sr), 0, chunk.frames_read);
         reachedEnd = true;
       }
 

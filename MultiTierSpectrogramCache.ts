@@ -21,6 +21,7 @@ interface ResolvedTier {
 
 export class MultiTierSpectrogramCache {
   private tiers: ResolvedTier[];
+  private tierByNumber: Map<number, ResolvedTier>; // tier number -> resolved tier
   private caches: Map<number, Map<number, CachedChunk>>; // tier -> (chunkIdx -> chunk)
   // Cap concurrent Tauri IPC/FFT calls so the first chunks in view complete
   // quickly rather than all chunks competing for CPU simultaneously.
@@ -56,6 +57,9 @@ export class MultiTierSpectrogramCache {
         maxChunks: tc.maxChunks,
       };
     });
+
+    // Index tiers by their tier number for O(1) lookup.
+    this.tierByNumber = new Map(this.tiers.map(t => [t.tier, t]));
 
     // Initialize per-tier caches
     this.caches = new Map();
@@ -100,7 +104,7 @@ export class MultiTierSpectrogramCache {
   // ── Chunk access ────────────────────────────────────────────────────────────
 
   getChunkForTime(tier: number, timeSec: number): CachedChunk | null {
-    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const tierConfig = this.tierByNumber.get(tier);
     if (!tierConfig) return null;
     const idx = Math.floor(timeSec / tierConfig.chunkDuration);
     const cache = this.caches.get(tier);
@@ -156,7 +160,7 @@ export class MultiTierSpectrogramCache {
    * touch LRU order (uses cache.has, not getChunkForTime).
    */
   isViewportResolved(startTime: number, endTime: number, tier: number): boolean {
-    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const tierConfig = this.tierByNumber.get(tier);
     const cache = this.caches.get(tier);
     if (!tierConfig || !cache) return false;
 
@@ -175,7 +179,7 @@ export class MultiTierSpectrogramCache {
   // ── Prefetching ─────────────────────────────────────────────────────────────
 
   prefetchViewport(startTime: number, endTime: number, tier: number): void {
-    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const tierConfig = this.tierByNumber.get(tier);
     if (!tierConfig) return;
 
     const firstIdx = Math.max(0, Math.floor(startTime / tierConfig.chunkDuration) - 1);
@@ -224,7 +228,7 @@ export class MultiTierSpectrogramCache {
     const cache = this.caches.get(tier);
     if (!cache || cache.has(chunkIndex) || this.inFlight.has(key)) return;
 
-    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const tierConfig = this.tierByNumber.get(tier);
     if (!tierConfig) return;
 
     const startSec = chunkIndex * tierConfig.chunkDuration;
@@ -268,7 +272,7 @@ export class MultiTierSpectrogramCache {
   }
 
   private evictLRU(tier: number): void {
-    const tierConfig = this.tiers.find(t => t.tier === tier);
+    const tierConfig = this.tierByNumber.get(tier);
     const cache = this.caches.get(tier);
     if (!tierConfig || !cache || cache.size < tierConfig.maxChunks) return;
 

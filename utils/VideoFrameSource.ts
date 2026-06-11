@@ -47,6 +47,8 @@ import { getExt } from '../constants';
 const DEFAULT_WINDOW_BEFORE_SEC = 2;
 const DEFAULT_WINDOW_AFTER_SEC = 30;
 const MEMORY_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+// WebCodecs timestamps are microseconds; this converts seconds ↔ µs.
+const MICROS_PER_SEC = 1e6;
 
 export interface VideoFrameSourceOptions {
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
@@ -243,7 +245,7 @@ export class VideoFrameSource {
     for (let i = keyIdx; i <= endIdx; i++) {
       const cts = this.samples[i].cts;
       if (cts < startCts || cts > endCts) continue; // scaffolding, not required resident
-      const tsMicros = Math.round((cts / ts) * 1e6);
+      const tsMicros = Math.round((cts / ts) * MICROS_PER_SEC);
       if (!this.hasFrameAt(tsMicros)) {
         if (firstMissingIdx === -1) firstMissingIdx = i;
         lastMissingIdx = i;
@@ -325,8 +327,8 @@ export class VideoFrameSource {
               try {
                 this.decoder.decode(new EncodedVideoChunk({
                   type: sample.is_sync ? 'key' : 'delta',
-                  timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
-                  duration: Math.round((sample.duration / sample.timescale) * 1e6),
+                  timestamp: Math.round((sample.cts / sample.timescale) * MICROS_PER_SEC),
+                  duration: Math.round((sample.duration / sample.timescale) * MICROS_PER_SEC),
                   data: sample.data,
                 }));
                 fed++;
@@ -529,7 +531,7 @@ export class VideoFrameSource {
    *  the earliest cached frame as a fallback. null only when cache is empty. */
   private currentFrame(atSec?: number): VideoFrame | null {
     if (this.frameCache.length === 0) return null;
-    const t = (atSec ?? this.currentPlayheadSec) * 1e6;
+    const t = (atSec ?? this.currentPlayheadSec) * MICROS_PER_SEC;
     const idx = this.findFrameIdxAtOrBefore(t);
     return idx >= 0 ? this.frameCache[idx] : this.frameCache[0];
   }
@@ -548,12 +550,12 @@ export class VideoFrameSource {
   }
 
   private evictOutsideWindow(): void {
-    const keepBefore = (this.currentPlayheadSec - DEFAULT_WINDOW_BEFORE_SEC) * 1e6;
-    const keepAfter = (this.currentPlayheadSec + DEFAULT_WINDOW_AFTER_SEC) * 1e6;
-    const selStart = this.activeRange ? this.activeRange.start * 1e6 : Infinity;
-    const selEnd = this.activeRange ? this.activeRange.end * 1e6 : -Infinity;
-    const pinnedStart = this.pinnedRange ? this.pinnedRange.start * 1e6 : Infinity;
-    const pinnedEnd   = this.pinnedRange ? this.pinnedRange.end   * 1e6 : -Infinity;
+    const keepBefore = (this.currentPlayheadSec - DEFAULT_WINDOW_BEFORE_SEC) * MICROS_PER_SEC;
+    const keepAfter = (this.currentPlayheadSec + DEFAULT_WINDOW_AFTER_SEC) * MICROS_PER_SEC;
+    const selStart = this.activeRange ? this.activeRange.start * MICROS_PER_SEC : Infinity;
+    const selEnd = this.activeRange ? this.activeRange.end * MICROS_PER_SEC : -Infinity;
+    const pinnedStart = this.pinnedRange ? this.pinnedRange.start * MICROS_PER_SEC : Infinity;
+    const pinnedEnd   = this.pinnedRange ? this.pinnedRange.end   * MICROS_PER_SEC : -Infinity;
 
     const kept: VideoFrame[] = [];
     for (const f of this.frameCache) {
@@ -573,9 +575,9 @@ export class VideoFrameSource {
   }
 
   private enforceMemoryBudget(): void {
-    const playMicros = this.currentPlayheadSec * 1e6;
-    const pinnedStartMicros = this.pinnedRange ? this.pinnedRange.start * 1e6 : -Infinity;
-    const pinnedEndMicros   = this.pinnedRange ? this.pinnedRange.end   * 1e6 : -Infinity;
+    const playMicros = this.currentPlayheadSec * MICROS_PER_SEC;
+    const pinnedStartMicros = this.pinnedRange ? this.pinnedRange.start * MICROS_PER_SEC : -Infinity;
+    const pinnedEndMicros   = this.pinnedRange ? this.pinnedRange.end   * MICROS_PER_SEC : -Infinity;
     // Evict past frames first (already played, safe to drop), then future frames
     // only if we must. Pinned selection frames are never evicted — without this
     // guard the rolling prefetch (which decodes from a distant keyframe on

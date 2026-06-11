@@ -140,8 +140,9 @@ pub async fn get_spectrogram_chunk(
             if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
                 if samples.len() >= req.fft_size {
                     let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
-                    for bin in 0..n_freq_bins {
-                        output[col * n_freq_bins + bin] = col_data.get(bin).copied().unwrap_or(0);
+                    if col_data.len() >= n_freq_bins {
+                        output[col * n_freq_bins..(col + 1) * n_freq_bins]
+                            .copy_from_slice(&col_data[..n_freq_bins]);
                     }
                 }
             }

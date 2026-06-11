@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
-import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool } from '../utils/helpers';
+import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
+import { timeToX, xToTime } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
 import { X, Pencil } from 'lucide-react';
@@ -81,9 +82,6 @@ export interface SpectrogramHandle {
   zoomOut: () => void;
 }
 
-// Helpers for scale mapping (duplicated locally for Y-axis calculation)
-const toMel = (f: number) => 2595 * Math.log10(1 + f / 700);
-
 // Maximum horizontal scroll (in pixels), allowing a 40%-of-viewport overrun
 // past the end of the file so the last events aren't pinned to the right edge.
 // Single source of truth for the scroll clamp used by auto-pan, right-drag pan,
@@ -139,6 +137,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const [scrollLeft, setScrollLeft] = useState(0);
   const scrollLeftRef = useRef(0);
   useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
+  // Update both the ref (read synchronously by RAF/resize code) and React state
+  // in one call, so the two never momentarily disagree on the scroll position.
+  const setScroll = useCallback((v: number) => {
+    scrollLeftRef.current = v;
+    setScrollLeft(v);
+  }, []);
   // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
   // for a brief window after manual panning so the two don't fight each other.
   const lastManualScrollRef = useRef(0);
@@ -583,8 +587,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       : selection;
 
     if (activeSelection) {
-      const selStartX = Math.max(0, (activeSelection.start * pixelsPerSecond) - scrollLeft);
-      const selEndX = Math.min(width, (activeSelection.end * pixelsPerSecond) - scrollLeft);
+      const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft, pixelsPerSecond));
+      const selEndX = Math.min(width, timeToX(activeSelection.end, scrollLeft, pixelsPerSecond));
 
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       // Left dark region
@@ -645,7 +649,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     // 2. Draw Playhead Line
-    const playheadX = (currentTime * pixelsPerSecond) - scrollLeft;
+    const playheadX = timeToX(currentTime, scrollLeft, pixelsPerSecond);
     if (playheadX >= 0 && playheadX <= width) {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -684,7 +688,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const firstTimeTick = Math.floor(startTime / timeStep) * timeStep;
     for (let s = firstTimeTick; s <= tickEndTime; s += timeStep) {
         if (s <= 0) continue;
-        const x = (s * pixelsPerSecond) - scrollLeft;
+        const x = timeToX(s, scrollLeft, pixelsPerSecond);
         if (x >= 0 && x <= width) {
             ctx.beginPath();
             ctx.strokeStyle = 'white';
@@ -748,21 +752,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const MIN_LABEL_SPACING = 13;
 
     const renderTick = (freq: number) => {
-      let y = 0;
-      if (settings.frequencyScale === 'linear') {
-        const pct = (freq - settings.minFreq) / (settings.maxFreq - settings.minFreq);
-        y = height - (pct * height);
-      } else if (settings.frequencyScale === 'log') {
-        const minSafe = Math.max(settings.minFreq, 1);
-        const pct = Math.log(freq / minSafe) / Math.log(settings.maxFreq / minSafe);
-        y = height - (pct * height);
-      } else if (settings.frequencyScale === 'mel') {
-        const minM = toMel(settings.minFreq);
-        const maxM = toMel(settings.maxFreq);
-        const m = toMel(freq);
-        const pct = (m - minM) / (maxM - minM);
-        y = height - (pct * height);
-      }
+      // Use the shared freq→y mapping so axis labels stay in exact lockstep
+      // with the spectrogram renderer (same function, no drift).
+      const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
 
       if (y < 0 || y > height) return;
       if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
@@ -846,8 +838,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
           const newPps = newWidth / zoomSecRef.current;
           const newScrollLeft = leftEdgeTime * newPps;
-          scrollLeftRef.current = newScrollLeft;
-          setScrollLeft(newScrollLeft);
+          setScroll(newScrollLeft);
         }
         setContainerWidth(newWidth);
         const dpr = window.devicePixelRatio || 1;
@@ -946,19 +937,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!containerRef.current) return 0;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const absoluteX = x + scrollLeft;
-    const t = absoluteX / pixelsPerSecond;
-    return Math.max(0, Math.min(t, duration));
+    const t = xToTime(x, scrollLeft, pixelsPerSecond);
+    return clamp(t, 0, duration);
   };
 
   // Updates drag state using only refs — safe to call from a RAF loop or window handler.
   const processDragAtClientX = useCallback((clientX: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const t = Math.max(0, Math.min(
-      (clientX - rect.left + scrollLeftRef.current) / pixelsPerSecondRef.current,
-      durationRef.current
-    ));
+    const t = clamp(
+      xToTime(clientX - rect.left, scrollLeftRef.current, pixelsPerSecondRef.current),
+      0,
+      durationRef.current,
+    );
 
     const ca = creatingAnnotationRef.current;
     if (ca) { setCreatingAnnotation({ ...ca, current: t }); return; }
@@ -974,8 +965,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     const ra = resizingAnnotationRef.current;
     if (ra) {
-      const updated = annotationsRef.current.map(a => {
-        if (a.id !== ra.id) return a;
+      const updated = updateAnnotation(annotationsRef.current, ra.id, a => {
         if (ra.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
         return { ...a, end: Math.max(t, a.start + 0.05) };
       });
@@ -990,10 +980,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     const da = draggedAnnotationRef.current;
     if (da) {
-      const updated = annotationsRef.current.map(a => {
-        if (a.id !== da.id) return a;
+      const updated = updateAnnotation(annotationsRef.current, da.id, a => {
         const dur = a.end - a.start;
-        const newStart = Math.max(0, Math.min(t - da.startOffset, durationRef.current - dur));
+        const newStart = clamp(t - da.startOffset, 0, durationRef.current - dur);
         return { ...a, start: newStart, end: newStart + dur };
       });
       pendingAnnotationsRef.current = updated;
@@ -1010,9 +999,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       else newEnd = Math.max(t, sel.start + 0.05);
       onSelectionChangeRef.current({ start: newStart, end: newEnd });
       if (boundAnnotationIdRef.current) {
-        const updated = annotationsRef.current.map(a =>
-          a.id === boundAnnotationIdRef.current ? { ...a, start: newStart, end: newEnd } : a
-        );
+        const updated = updateAnnotation(annotationsRef.current, boundAnnotationIdRef.current, a => ({ ...a, start: newStart, end: newEnd }));
         pendingAnnotationsRef.current = updated;
         onAnnotationsChangeRef.current(updated);
       }
@@ -1051,7 +1038,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (!container) return;
       const rect = container.getBoundingClientRect();
       const canvasHeight = container.clientHeight;
-      const localY = Math.max(0, Math.min(canvasHeight, e.clientY - rect.top));
+      const localY = clamp(e.clientY - rect.top, 0, canvasHeight);
 
       if (resizingFilterEdge !== null && bandPassFilter) {
         const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
@@ -1136,19 +1123,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const baseSpeed = Math.max(Math.min(Math.pow(absOverflow / 40, 1.5), 40), 0.8);
           const speed = Math.sign(overflow) * Math.min(baseSpeed * timeAccel, 60);
           const maxScroll = computeMaxScroll(dur, pps, containerWidth);
-          const newScroll = Math.max(0, Math.min(scrollLeftRef.current + speed, maxScroll));
+          const newScroll = clamp(scrollLeftRef.current + speed, 0, maxScroll);
 
           if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
-            scrollLeftRef.current = newScroll;
-            setScrollLeft(newScroll);
+            setScroll(newScroll);
             const da = draggedAnnotationRef.current;
             if (da) {
               // Pin the appropriate boundary to the visible edge so the annotation
               // stays fully visible: start→left edge when panning left, end→right edge when panning right.
               const viewLeft = newScroll / pps;
               const viewRight = (newScroll + containerWidth) / pps;
-              const updated = annotationsRef.current.map(a => {
-                if (a.id !== da.id) return a;
+              const updated = updateAnnotation(annotationsRef.current, da.id, a => {
                 const annotDur = a.end - a.start;
                 const newStart = overflow < 0
                   ? Math.max(0, viewLeft)
@@ -1254,14 +1239,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
-      setScrollLeft(Math.max(0, Math.min(dragStart.scroll + delta, maxScroll)));
+      setScrollLeft(clamp(dragStart.scroll + delta, 0, maxScroll));
       return;
     }
 
     if (resizingFilterEdge !== null && bandPassFilter) {
       const canvasHeight = containerRef.current?.clientHeight ?? 0;
       const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
-      const localY = Math.max(0, Math.min(canvasHeight, e.clientY - rectY));
+      const localY = clamp(e.clientY - rectY, 0, canvasHeight);
       const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
       if (resizingFilterEdge === 'low') {
         const newLow = Math.min(freq, bandPassFilter.high - 1);
@@ -1276,7 +1261,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (creatingFilter !== null) {
       const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
       const canvasHeight = containerRef.current?.clientHeight ?? 0;
-      const y = Math.max(0, Math.min(canvasHeight, e.clientY - rectY));
+      const y = clamp(e.clientY - rectY, 0, canvasHeight);
       setCreatingFilter({ ...creatingFilter, y1: y });
       return;
     }
@@ -1342,12 +1327,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     if (resizingAnnotation) {
-      const updated = annotations.map(a => {
-        if (a.id === resizingAnnotation.id) {
-          if (resizingAnnotation.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
-          return { ...a, end: Math.max(t, a.start + 0.05) };
-        }
-        return a;
+      const updated = updateAnnotation(annotations, resizingAnnotation.id, a => {
+        if (resizingAnnotation.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
+        return { ...a, end: Math.max(t, a.start + 0.05) };
       });
       pendingAnnotationsRef.current = updated;
       onAnnotationsChange(updated);
@@ -1365,15 +1347,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
        const pps = pixelsPerSecondRef.current;
        const viewLeft = scrollLeftRef.current / pps;
        const viewRight = (scrollLeftRef.current + (containerRef.current?.clientWidth ?? 0)) / pps;
-       const updated = annotations.map(a => {
-           if (a.id === draggedAnnotation.id) {
-               const dur = a.end - a.start;
-               const desired = t - draggedAnnotation.startOffset;
-               // Clamp so neither edge exits the visible viewport (auto-pan handles scrolling).
-               const newStart = Math.max(0, Math.max(viewLeft, Math.min(desired, Math.min(durationRef.current - dur, viewRight - dur))));
-               return { ...a, start: newStart, end: newStart + dur };
-           }
-           return a;
+       const updated = updateAnnotation(annotations, draggedAnnotation.id, a => {
+           const dur = a.end - a.start;
+           const desired = t - draggedAnnotation.startOffset;
+           // Clamp so neither edge exits the visible viewport (auto-pan handles scrolling).
+           const newStart = Math.max(0, Math.max(viewLeft, Math.min(desired, Math.min(durationRef.current - dur, viewRight - dur))));
+           return { ...a, start: newStart, end: newStart + dur };
        });
        pendingAnnotationsRef.current = updated;
        onAnnotationsChange(updated);
@@ -1395,10 +1374,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSelectionChange({ start: newStart, end: newEnd });
       // If there's a bound annotation, update its extent to match
       if (boundAnnotationId) {
-        const updated = annotations.map(a => {
-          if (a.id === boundAnnotationId) return { ...a, start: newStart, end: newEnd };
-          return a;
-        });
+        const updated = updateAnnotation(annotations, boundAnnotationId, a => ({ ...a, start: newStart, end: newEnd }));
         pendingAnnotationsRef.current = updated;
         onAnnotationsChange(updated);
       }
@@ -1511,7 +1487,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const newPixelsPerSecond = containerWidth / newZoomSec;
       let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
       const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
-      newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
+      newScrollLeft = clamp(newScrollLeft, 0, maxScroll);
       setScrollLeft(newScrollLeft);
       onZoomChange(newZoomSec);
     } else {
@@ -1519,7 +1495,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
-      setScrollLeft(prev => Math.max(0, Math.min(prev + panAmount, maxScroll)));
+      setScrollLeft(prev => clamp(prev + panAmount, 0, maxScroll));
     }
   }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
 
@@ -1534,7 +1510,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
     const newPps = containerWidth / newZoomSec;
     const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
-    setScrollLeft(Math.max(0, Math.min(startTime * newPps, maxScroll)));
+    setScrollLeft(clamp(startTime * newPps, 0, maxScroll));
     onZoomChange(newZoomSec);
   }, [duration, onZoomChange]);
 
@@ -1569,7 +1545,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!creatingAnnotation || activeAnnotationTool === null) return null;
     const s = Math.min(creatingAnnotation.start, creatingAnnotation.current);
     const eTime = Math.max(creatingAnnotation.start, creatingAnnotation.current);
-    const left = (s * pixelsPerSecond) - scrollLeft;
+    const left = timeToX(s, scrollLeft, pixelsPerSecond);
     const width = ((eTime - s) * pixelsPerSecond);
 
     return (
@@ -1588,8 +1564,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const activeSelection = selection;
     if (!activeSelection || creatingSelection) return null;
 
-    const leftX = (activeSelection.start * pixelsPerSecond) - scrollLeft;
-    const rightX = (activeSelection.end * pixelsPerSecond) - scrollLeft;
+    const leftX = timeToX(activeSelection.start, scrollLeft, pixelsPerSecond);
+    const rightX = timeToX(activeSelection.end, scrollLeft, pixelsPerSecond);
     const containerWidth = containerRef.current?.clientWidth ?? 1000;
 
     return (
@@ -1726,7 +1702,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       {/* Layer 2: annotation HTML divs and selection handles */}
       <div className="absolute top-0 left-0 w-full h-full">
          {layeredAnnotations.map((annotation) => {
-             const left = (annotation.start * pixelsPerSecond) - scrollLeft;
+             const left = timeToX(annotation.start, scrollLeft, pixelsPerSecond);
              const width = (annotation.end - annotation.start) * pixelsPerSecond;
              const isSelected = selectedAnnotationId === annotation.id;
              const isBound = boundAnnotationId === annotation.id;
@@ -1817,18 +1793,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             value={annotation.text}
                             onChange={(e) => {
                                 const newText = e.target.value;
-                                const newAnnotations = annotations.map(a => {
-                                    if (a.id === annotation.id) {
-                                        const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
-                                        if (matchingTool) {
-                                             return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
-                                        }
-                                        if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
-                                            return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
-                                        }
-                                        return { ...a, text: newText };
+                                const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
+                                    const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
+                                    if (matchingTool) {
+                                         return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
                                     }
-                                    return a;
+                                    if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
+                                        return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
+                                    }
+                                    return { ...a, text: newText };
                                 });
                                 pendingAnnotationsRef.current = newAnnotations;
                                 onAnnotationsChange(newAnnotations);

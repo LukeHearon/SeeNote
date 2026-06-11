@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
+import { clamp } from '../utils/helpers';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
@@ -128,7 +129,7 @@ export default function Toolbar({
 
   // Clamp speed into the effective range when video mode changes.
   useEffect(() => {
-    const clamped = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, playbackSpeed));
+    const clamped = clamp(playbackSpeed, effectiveSpeedMin, effectiveSpeedMax);
     if (clamped !== playbackSpeed) setPlaybackSpeed(clamped);
   }, [videoMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -139,7 +140,7 @@ export default function Toolbar({
       e.preventDefault();
       const cur = gainToSlider(mutedRef.current ? 0 : volumeRef.current);
       const delta = -Math.sign(e.deltaY) * 0.03;
-      const newSlider = Math.max(0, Math.min(1, cur + delta));
+      const newSlider = clamp(cur + delta, 0, 1);
       setVolume(sliderToGain(newSlider));
       setMuted(false);
     };
@@ -154,9 +155,9 @@ export default function Toolbar({
       e.preventDefault();
       const cur = speedToSlider(speedRef.current);
       const delta = -Math.sign(e.deltaY) * 0.03;
-      let newSlider = Math.max(0, Math.min(1, cur + delta));
+      let newSlider = clamp(cur + delta, 0, 1);
       if (Math.abs(newSlider - 0.5) < 0.015) newSlider = 0.5;
-      const next = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, sliderToSpeed(newSlider)));
+      const next = clamp(sliderToSpeed(newSlider), effectiveSpeedMin, effectiveSpeedMax);
       setPlaybackSpeed(next);
       if (next !== 1.0) setLastDefinedSpeed(next);
     };
@@ -169,7 +170,7 @@ export default function Toolbar({
   const commitSpeedEdit = () => {
     const parsed = parseFloat(editingSpeedRaw.replace(/x$/i, '').trim());
     if (!isNaN(parsed)) {
-      const clamped = Math.max(effectiveSpeedMin, Math.min(effectiveSpeedMax, parsed));
+      const clamped = clamp(parsed, effectiveSpeedMin, effectiveSpeedMax);
       setPlaybackSpeed(clamped);
       if (clamped !== 1.0) setLastDefinedSpeed(clamped);
     }
@@ -185,11 +186,11 @@ export default function Toolbar({
       // Wheeling up from disabled re-enables the filter at the new strength.
       if (!bandPassFilterRef.current) {
         if (Math.sign(e.deltaY) >= 0) return; // wheeling down on a disabled filter is a no-op
-        const next = Math.max(0, Math.min(1, -Math.sign(e.deltaY) * 0.05));
+        const next = clamp(-Math.sign(e.deltaY) * 0.05, 0, 1);
         if (next > 0) onEnableBandPassFilter(next);
         return;
       }
-      const next = Math.max(0, Math.min(1, filterStrengthRef.current + Math.sign(e.deltaY) * 0.05));
+      const next = clamp(filterStrengthRef.current + Math.sign(e.deltaY) * 0.05, 0, 1);
       if (next === 0) { onDisableBandPassFilter(); return; }
       setFilterStrength(next);
       setBandPassFilter({ ...bandPassFilterRef.current, strength: next });
@@ -201,7 +202,7 @@ export default function Toolbar({
   const filterEnabled = bandPassFilter !== null;
   // Display 0 when disabled so the slider snaps to bottom; filterStrength is
   // still preserved as the remembered value that F-toggle will restore.
-  const displayStrength = filterEnabled ? Math.max(0, Math.min(1, filterStrength)) : 0;
+  const displayStrength = filterEnabled ? clamp(filterStrength, 0, 1) : 0;
   const displayStrengthPct = displayStrength * 100;
 
   const handleFilterStrengthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -257,8 +258,8 @@ export default function Toolbar({
       if (!isNaN(dur)) {
         const anchor = selection ? selection.start : (!isPlaying ? currentTime : null);
         if (anchor !== null) {
-          const a = Math.max(0, Math.min(duration, Math.min(anchor, anchor + dur)));
-          const b = Math.max(0, Math.min(duration, Math.max(anchor, anchor + dur)));
+          const a = clamp(Math.min(anchor, anchor + dur), 0, duration);
+          const b = clamp(Math.max(anchor, anchor + dur), 0, duration);
           if (a !== b) applySelection({ start: a, end: b });
         }
       }
@@ -269,18 +270,18 @@ export default function Toolbar({
 
     const parsed = parseTimestamp(raw);
     if (parsed !== null) {
-      const clamped = Math.max(0, Math.min(duration, parsed));
+      const clamped = clamp(parsed, 0, duration);
       if (editingTimeField === 'time') {
         onSeek(clamped, true);
       } else if (editingTimeField === 'selStart') {
         const other = selection ? selection.end : currentTime;
-        const a = Math.max(0, Math.min(duration, Math.min(clamped, other)));
-        const b = Math.max(0, Math.min(duration, Math.max(clamped, other)));
+        const a = clamp(Math.min(clamped, other), 0, duration);
+        const b = clamp(Math.max(clamped, other), 0, duration);
         if (a !== b) applySelection({ start: a, end: b });
       } else if (editingTimeField === 'selEnd') {
         const other = selection ? selection.start : currentTime;
-        const a = Math.max(0, Math.min(duration, Math.min(clamped, other)));
-        const b = Math.max(0, Math.min(duration, Math.max(clamped, other)));
+        const a = clamp(Math.min(clamped, other), 0, duration);
+        const b = clamp(Math.max(clamped, other), 0, duration);
         if (a !== b) applySelection({ start: a, end: b });
       }
     }

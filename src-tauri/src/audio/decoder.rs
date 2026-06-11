@@ -419,9 +419,9 @@ impl PcmStream {
                     false => { self.eof = true; break; }
                     true => {}
                 }
-                if self.pending_pos >= self.pending.len() {
-                    break;
-                }
+                // fill_next_packet resets pending_pos to 0 and only returns
+                // true when it produced a non-empty packet, so pending is
+                // guaranteed non-empty here.
             }
 
             let pending_frame = self.abs_frame + (self.pending_pos / ch) as u64;

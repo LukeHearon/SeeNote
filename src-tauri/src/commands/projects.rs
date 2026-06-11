@@ -293,13 +293,14 @@ pub async fn list_annotation_files(
 }
 
 fn scan_annotation_files(dir: &Path, root: &Path, ext: &str, results: &mut Vec<String>) {
+    let dot_ext = format!(".{}", ext);
     walk_files(dir, &mut |path| {
         if path.extension().and_then(|e| e.to_str()) != Some(ext) {
             return;
         }
         if let Ok(rel) = path.strip_prefix(root) {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&format!(".{}", ext)) {
+            let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&dot_ext) {
                 s.to_string()
             } else {
                 rel_str
