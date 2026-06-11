@@ -948,11 +948,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [pixelsPerSecond]);
 
   const goToPrevAnnotation = useCallback(() => {
-    // Any active selection (free or bound): jump to selection start
     if (selection !== null) {
-      onSeek(selection.start);
-      scrollToAnnotation(selection.start);
-      return;
+      const t = currentTimeStore.get();
+      if (Math.abs(t - selection.start) <= 0.05) {
+        // Second press: already at selection start — clear selection and fall through to prev annotation
+        onSelectionChange(null);
+        onBoundAnnotationChange(null);
+      } else {
+        // First press: jump to selection start
+        onSeek(selection.start);
+        scrollToAnnotation(selection.start);
+        return;
+      }
     }
     const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTimeStore.get() - 0.05);
     if (prev) {
@@ -962,7 +969,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedAnnotations, currentTimeStore, onSeek, scrollToAnnotation, selection]);
+  }, [sortedAnnotations, currentTimeStore, onSeek, scrollToAnnotation, selection, onSelectionChange, onBoundAnnotationChange]);
 
   const goToNextAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection end
