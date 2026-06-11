@@ -202,6 +202,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const requestRef = useRef<number | null>(null);
   const pendingAnnotationsRef = useRef<Annotation[]>(annotations);
 
+  // Reusable buffers for draw() — allocated once and grown as needed, never freed.
+  // Avoids the ~500KB-per-frame Uint16Array allocation that causes GC pauses.
+  const viewportDataBuf = useRef<Uint16Array>(new Uint16Array(0));
+  const colBuiltBuf = useRef<Uint8Array>(new Uint8Array(0));
+
+  // Dirty flag: set whenever draw/drawYAxis deps change so the rAF loop only
+  // calls the expensive spectrogram render when the background actually changed.
+  const drawDirtyRef = useRef(true);
+  const drawRef = useRef<() => void>(() => {});
+  const drawYAxisRef = useRef<() => void>(() => {});
+
   // Refs for out-of-bounds drag handling (auto-pan + window-level events)
   // These mirror state/props so the RAF loop can read them without stale closures.
   const pixelsPerSecondRef = useRef(0);
@@ -370,8 +381,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         // that received real chunk data (sharp or coarse-fallback); unfilled
         // columns are left transparent by drawSpectrogramChunk so the
         // build-progress sweep behind the canvas shows through only there.
-        const viewportData = new Uint16Array(bbWidth * nFreqBins);
-        const colBuilt = new Uint8Array(bbWidth);
+        //
+        // Reuse component-level buffers (viewportDataBuf / colBuiltBuf) so we
+        // never allocate on the hot path. Grow-only: round up to the nearest 64
+        // columns so minor bbWidth fluctuations during auto-scroll don't trigger
+        // a new allocation every other frame.
+        const vdNeeded = bbWidth * nFreqBins;
+        if (viewportDataBuf.current.length < vdNeeded) {
+          const allocCols = Math.ceil(bbWidth / 64) * 64;
+          viewportDataBuf.current = new Uint16Array(allocCols * nFreqBins);
+        } else {
+          viewportDataBuf.current.fill(0, 0, vdNeeded);
+        }
+        const viewportData = viewportDataBuf.current.subarray(0, vdNeeded);
+
+        if (colBuiltBuf.current.length < bbWidth) {
+          colBuiltBuf.current = new Uint8Array(Math.ceil(bbWidth / 64) * 64);
+        } else {
+          colBuiltBuf.current.fill(0, 0, bbWidth);
+        }
+        const colBuilt = colBuiltBuf.current.subarray(0, bbWidth);
         for (let i = 0; i < bbWidth; i++) {
           const absCol = bbStartCol + i;
           if (absCol < 0) continue;                // before file start
@@ -709,12 +738,31 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
+  // Keep drawRef/drawYAxisRef current and mark dirty whenever the spectrogram
+  // background needs a redraw (scroll, zoom, data, settings changed).
+  // useLayoutEffect so the flag is set before the useEffect below can read it.
+  useLayoutEffect(() => {
+    drawRef.current = draw;
+    drawYAxisRef.current = drawYAxis;
+    drawDirtyRef.current = true;
+  }, [draw, drawYAxis]);
+
+  // Overlay runs every rAF frame (smooth playhead). Spectrogram and y-axis only
+  // run when their inputs actually changed — skipping the expensive pixel rebuild
+  // on frames where only currentTime moved (pre-center playback, selection playback).
   useEffect(() => {
-    requestRef.current = requestAnimationFrame(() => { draw(); drawOverlay(); drawYAxis(); });
+    requestRef.current = requestAnimationFrame(() => {
+      if (drawDirtyRef.current) {
+        drawRef.current();
+        drawYAxisRef.current();
+        drawDirtyRef.current = false;
+      }
+      drawOverlay();
+    });
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [draw, drawOverlay, drawYAxis]);
+  }, [drawOverlay]);
 
   // Handle Resize — keep all canvases in sync with their container dimensions
   useEffect(() => {
