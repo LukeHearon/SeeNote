@@ -650,7 +650,6 @@ function FileTree({
           >
             {`Show media in ${finderLabel}`}
           </button>
-          {/* Only show "Show Annotations in Finder" for files that have an annotation */}
           {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (
             <button
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
@@ -662,7 +661,17 @@ function FileTree({
               {`Show Annotations in ${finderLabel}`}
             </button>
           )}
-          {/* Show annotations root folder for the audio root */}
+          {contextMenu.isDir && !contextMenu.isAudioRoot && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                onRevealAnnotations(contextMenu.path);
+                setContextMenu(null);
+              }}
+            >
+              {`Show Annotations in ${finderLabel}`}
+            </button>
+          )}
           {contextMenu.isAudioRoot && onRevealAnnotationsRoot && (
             <button
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"

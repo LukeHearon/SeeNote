@@ -1047,9 +1047,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, []);
 
   const handleRevealAnnotations = useCallback((audioFilePath: string) => {
-    // If path is not in the known audio files list, treat as a directory
     if (!allTracks.includes(audioFilePath)) {
-      if (annotationDirectory) revealInFileManager(annotationDirectory).catch(() => {});
+      if (annotationDirectory && currentDirectory && audioFilePath.startsWith(currentDirectory)) {
+        const relSubdir = audioFilePath.substring(currentDirectory.length);
+        revealInFileManager(annotationDirectory + relSubdir).catch(() => {
+          if (annotationDirectory) revealInFileManager(annotationDirectory).catch(() => {});
+        });
+      } else if (annotationDirectory) {
+        revealInFileManager(annotationDirectory).catch(() => {});
+      }
       return;
     }
     const annotPath = getAnnotationPath(audioFilePath);
@@ -1060,7 +1066,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     } else if (annotationDirectory) {
       revealInFileManager(annotationDirectory).catch(() => {});
     }
-  }, [allTracks, getAnnotationPath, annotationDirectory]);
+  }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
   const togglePlay = useCallback(async () => {
       const transport = activeTransport();
