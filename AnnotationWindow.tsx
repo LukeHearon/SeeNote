@@ -350,6 +350,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
   useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
 
+  // If the bound annotation was deleted by an external path (e.g. empty-text
+  // auto-delete on blur), clean up the tool state so handleToolActivate doesn't
+  // get stuck in the bound-annotation branch with a missing target.
+  useEffect(() => {
+    if (boundAnnotationId !== null && !annotations.some(a => a.id === boundAnnotationId)) {
+      setBoundAnnotationId(null);
+      setActiveToolKey(null);
+      activationStack.remove('annotationTool');
+    }
+  }, [annotations, boundAnnotationId, activationStack]);
+
   const durationRef = useRef(0);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
