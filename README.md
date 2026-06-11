@@ -12,8 +12,8 @@ as such, it's primarily oriented towards bioacoustic data.
 
 ### Warning: vibes
 I'm creating SeeNote pretty much entirely via LLMs. I don't know typescript, rust, react, or any other language this thing uses.
-I am, however, paying a lot of attention to the user experience, documentation, and overall polish; and I do use this tool in my regular bioacoustics work.
-As such, I can 
+I am, however, paying a lot of attention to the user experience, documentation, and overall polish; and I (and a small team of undergrads) do use this tool regularly in my bioacoustics research.
+As such, I can give reasonable assurance that this application will be accurate, performant, and slopless.
 
 
 ## Install
