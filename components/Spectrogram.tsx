@@ -213,6 +213,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const drawRef = useRef<() => void>(() => {});
   const drawYAxisRef = useRef<() => void>(() => {});
 
+  // Incremental-scroll state: tracks what the offscreen canvas last rendered so
+  // draw() can shift it by columnsShifted and only paint the new right-edge columns.
+  const prevBbStartColRef = useRef<number | null>(null);
+  const prevCacheVersionRef = useRef<number>(-1);
+  // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
+  const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   // Refs for out-of-bounds drag handling (auto-pan + window-level events)
   // These mirror state/props so the RAF loop can read them without stale closures.
   const pixelsPerSecondRef = useRef(0);
@@ -377,70 +384,132 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const bbWidth = Math.max(1, bbEndCol - bbStartCol);
         const bbStartTime = bbStartCol / cps;
 
-        // Build the column-resolution viewport buffer. colBuilt marks columns
-        // that received real chunk data (sharp or coarse-fallback); unfilled
-        // columns are left transparent by drawSpectrogramChunk so the
-        // build-progress sweep behind the canvas shows through only there.
+        // Decide between incremental scroll update and full redraw.
         //
-        // Reuse component-level buffers (viewportDataBuf / colBuiltBuf) so we
-        // never allocate on the hot path. Grow-only: round up to the nearest 64
-        // columns so minor bbWidth fluctuations during auto-scroll don't trigger
-        // a new allocation every other frame.
-        const vdNeeded = bbWidth * nFreqBins;
-        if (viewportDataBuf.current.length < vdNeeded) {
-          const allocCols = Math.ceil(bbWidth / 64) * 64;
-          viewportDataBuf.current = new Uint16Array(allocCols * nFreqBins);
-        } else {
-          viewportDataBuf.current.fill(0, 0, vdNeeded);
-        }
-        const viewportData = viewportDataBuf.current.subarray(0, vdNeeded);
+        // Incremental path: the offscreen canvas already contains the rendered
+        // spectrogram for the previous bbStartCol. If the viewport only shifted
+        // forward by a small number of columns (columnsShifted ≤ half the buffer),
+        // we can self-blit the offscreen canvas to scroll it left and only render
+        // the new right-edge columns — typically 1-2 per frame at 1× playback.
+        // This reduces per-pixel work from O(bbWidth × height) to O(delta × height),
+        // matching what any native scrolling spectrogram (e.g. Audacity) does.
+        //
+        // Fall back to full redraw on: first call, seek, zoom/tier change, resize,
+        // or when new chunk data arrived (cacheVersion changed).
+        const prevStartCol = prevBbStartColRef.current;
+        const columnsShifted = prevStartCol !== null ? bbStartCol - prevStartCol : Infinity;
+        const offscreenReady =
+            offscreen.width === bbWidth && offscreen.height === canvas.height;
+        const canIncremental =
+            columnsShifted > 0 &&
+            columnsShifted <= Math.floor(bbWidth / 2) &&
+            offscreenReady &&
+            cacheVersion === prevCacheVersionRef.current;
 
-        if (colBuiltBuf.current.length < bbWidth) {
-          colBuiltBuf.current = new Uint8Array(Math.ceil(bbWidth / 64) * 64);
-        } else {
-          colBuiltBuf.current.fill(0, 0, bbWidth);
-        }
-        const colBuilt = colBuiltBuf.current.subarray(0, bbWidth);
-        for (let i = 0; i < bbWidth; i++) {
-          const absCol = bbStartCol + i;
-          if (absCol < 0) continue;                // before file start
-          const t = absCol / cps;
-          if (t >= duration) continue;             // past file end
-          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-          if (!result) continue;
-          const { chunk } = result;
-          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
-
-          // Map t into a column index inside this chunk. After the Rust-side
-          // cps-drift fix (audio.rs), chunk.nCols / chunk.actualDurationSec equals
-          // the chunk's true cps, so this is exact for STFT chunks. Overview
-          // chunks (sampled at evenly spaced points) use their own ratio.
-          const chunkCps = chunk.nCols / chunk.actualDurationSec;
-          let col = Math.round((t - chunk.startSec) * chunkCps);
-          if (col < 0) col = 0;
-          if (col >= chunk.nCols) col = chunk.nCols - 1;
-
-          const bins = Math.min(nFreqBins, chunk.nFreqBins);
-          const srcOffset = col * chunk.nFreqBins;
-          const dstOffset = i * nFreqBins;
-          viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
-          colBuilt[i] = 1;
-        }
-
-        // Render the column-resolution image into the offscreen canvas.
-        // Offscreen canvas gets one pixel per column horizontally and matches the
-        // visible canvas's physical-pixel height (so vertical resolution stays sharp).
         if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
         if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
         const offCtx = offscreen.getContext('2d');
         if (!offCtx) return;
-        drawSpectrogramChunk(
-          offCtx, viewportData, bbWidth, nFreqBins,
-          offscreen.width, offscreen.height,
-          settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
-          settings.displayFloor, settings.displayCeil,
-          colBuilt,
-        );
+
+        if (canIncremental) {
+          // ── Incremental path ────────────────────────────────────────────────
+          // 1. Shift the offscreen canvas left by columnsShifted pixels.
+          offCtx.drawImage(offscreen, -columnsShifted, 0);
+
+          // 2. Build data for only the new right-edge columns.
+          const newCols = columnsShifted;
+          const newColStartAbs = bbEndCol - newCols;
+
+          const vdNew = new Uint16Array(newCols * nFreqBins);
+          const cbNew = new Uint8Array(newCols);
+          for (let i = 0; i < newCols; i++) {
+            const absCol = newColStartAbs + i;
+            if (absCol < 0) continue;
+            const t = absCol / cps;
+            if (t >= duration) continue;
+            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+            if (!result) continue;
+            const { chunk } = result;
+            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+            const chunkCps = chunk.nCols / chunk.actualDurationSec;
+            let col = Math.round((t - chunk.startSec) * chunkCps);
+            if (col < 0) col = 0;
+            if (col >= chunk.nCols) col = chunk.nCols - 1;
+            const bins = Math.min(nFreqBins, chunk.nFreqBins);
+            vdNew.set(chunk.data.subarray(col * chunk.nFreqBins, col * chunk.nFreqBins + bins), i * nFreqBins);
+            cbNew[i] = 1;
+          }
+
+          // 3. Render those new columns to a small fixed-width canvas and blit
+          //    only the used portion onto the right edge of the offscreen canvas.
+          //    Width is capped at 8 so the canvas is never resized during playback.
+          const INCR_CANVAS_W = 8;
+          if (!incrCanvasRef.current) incrCanvasRef.current = document.createElement('canvas');
+          const incrCanvas = incrCanvasRef.current;
+          if (incrCanvas.width !== INCR_CANVAS_W) incrCanvas.width = INCR_CANVAS_W;
+          if (incrCanvas.height !== offscreen.height) incrCanvas.height = offscreen.height;
+          const incrCtx = incrCanvas.getContext('2d');
+          if (incrCtx) {
+            drawSpectrogramChunk(
+              incrCtx, vdNew, newCols, nFreqBins,
+              newCols, offscreen.height,
+              settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
+              settings.displayFloor, settings.displayCeil,
+              cbNew,
+            );
+            // Blit only the newCols-wide left portion of incrCanvas onto the right edge.
+            offCtx.drawImage(incrCanvas, 0, 0, newCols, offscreen.height,
+                             bbWidth - newCols, 0, newCols, offscreen.height);
+          }
+        } else {
+          // ── Full redraw path ─────────────────────────────────────────────────
+          // Reuse component-level buffers — grow-only, rounded to 64-col buckets.
+          const vdNeeded = bbWidth * nFreqBins;
+          if (viewportDataBuf.current.length < vdNeeded) {
+            viewportDataBuf.current = new Uint16Array(Math.ceil(bbWidth / 64) * 64 * nFreqBins);
+          } else {
+            viewportDataBuf.current.fill(0, 0, vdNeeded);
+          }
+          const viewportData = viewportDataBuf.current.subarray(0, vdNeeded);
+
+          if (colBuiltBuf.current.length < bbWidth) {
+            colBuiltBuf.current = new Uint8Array(Math.ceil(bbWidth / 64) * 64);
+          } else {
+            colBuiltBuf.current.fill(0, 0, bbWidth);
+          }
+          const colBuilt = colBuiltBuf.current.subarray(0, bbWidth);
+
+          for (let i = 0; i < bbWidth; i++) {
+            const absCol = bbStartCol + i;
+            if (absCol < 0) continue;
+            const t = absCol / cps;
+            if (t >= duration) continue;
+            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+            if (!result) continue;
+            const { chunk } = result;
+            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+            const chunkCps = chunk.nCols / chunk.actualDurationSec;
+            let col = Math.round((t - chunk.startSec) * chunkCps);
+            if (col < 0) col = 0;
+            if (col >= chunk.nCols) col = chunk.nCols - 1;
+            const bins = Math.min(nFreqBins, chunk.nFreqBins);
+            const srcOffset = col * chunk.nFreqBins;
+            const dstOffset = i * nFreqBins;
+            viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
+            colBuilt[i] = 1;
+          }
+
+          drawSpectrogramChunk(
+            offCtx, viewportData, bbWidth, nFreqBins,
+            offscreen.width, offscreen.height,
+            settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
+            settings.displayFloor, settings.displayCeil,
+            colBuilt,
+          );
+        }
+
+        prevBbStartColRef.current = bbStartCol;
+        prevCacheVersionRef.current = cacheVersion;
 
         // Blit offscreen → visible canvas with sub-pixel destination shift.
         // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
