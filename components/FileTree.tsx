@@ -340,6 +340,25 @@ function FileTree({
     }
   }, []);
 
+  // When the active track changes, nudge the scroll so the item is visible:
+  // - if it's above the viewport, make it the first visible row
+  // - if it's below the viewport, make it the last visible row
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const activeEl = el.querySelector('[data-active-file]') as HTMLElement | null;
+    if (!activeEl) return;
+    const containerRect = el.getBoundingClientRect();
+    const elRect = activeEl.getBoundingClientRect();
+    const topRelative = elRect.top - containerRect.top;
+    const bottomRelative = elRect.bottom - containerRect.top;
+    if (topRelative < 0) {
+      el.scrollTop += topRelative;
+    } else if (bottomRelative > el.clientHeight) {
+      el.scrollTop += bottomRelative - el.clientHeight;
+    }
+  }, [currentTrack, expandedDirs]);
+
   useLayoutEffect(syncScrollbar, [currentTrack, allFiles, expandedDirs, shuffleMode, syncScrollbar]);
 
   useEffect(() => {
