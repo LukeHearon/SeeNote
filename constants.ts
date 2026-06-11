@@ -55,7 +55,7 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
 };
 
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
-  'activeTrackPath' | 'windowBounds' |
+  'activeTrackPath' |
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectPanelHeight'>> = {
   leftPanelWidth: 224,
   splitRatio: 0.5,

@@ -35,13 +35,6 @@ export interface AnnotationTool {
   description?: string; // internal memo shown as hover tooltip on annotations
 }
 
-export interface WindowBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 /**
  * Common playback surface implemented by both AudioEngine and VideoElementEngine.
  * AnnotationWindow's transport layer drives whichever engine is live through this
@@ -92,7 +85,6 @@ export interface ProjectUiSettings {
   lastDefinedSpeed?: number;        // last non-1.0 speed picked by user; restored on speed toggle
   zoomSec?: number;                 // spectrogram visible duration
   activeTrackPath?: string | null;  // path of last-opened track, relative to project.mediaDirectoryAbs
-  windowBounds?: WindowBounds;      // app window position and size
   videoMode?: VideoMode;            // see VideoMode docs
 
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).

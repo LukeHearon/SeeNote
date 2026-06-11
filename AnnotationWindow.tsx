@@ -8,7 +8,6 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
-import { getWindowBounds, setWindowBounds } from './utils/tauriCommands';
 import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, stripExt, shuffleArray } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
@@ -795,7 +794,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         lastDefinedSpeed,
         zoomSec,
         activeTrackPath,
-        windowBounds: projectRef.current.settings.uiSettings?.windowBounds,
         buzzdetectEnabled,
         buzzdetectThresholds,
         buzzdetectHiddenNeurons,
@@ -808,28 +806,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
   }, [leftPanelWidth, splitRatio, leftPanelRatio, volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectPanelHeight, videoMode]);
-
-  // Poll the Tauri window for size/position changes and persist them when they
-  // settle. A 1Hz poll is cheap and avoids needing a Tauri event listener
-  // (which would need its own capability wiring). Persists only when the
-  // value actually differs from what we last wrote.
-  useEffect(() => {
-    let cancelled = false;
-    const interval = setInterval(async () => {
-      if (cancelled) return;
-      try {
-        const wb = await getWindowBounds();
-        const cur = projectRef.current?.settings.uiSettings?.windowBounds;
-        if (!cur || cur.x !== wb.x || cur.y !== wb.y || cur.width !== wb.width || cur.height !== wb.height) {
-          if (projectRef.current) {
-            const ui: ProjectUiSettings = { ...projectRef.current.settings.uiSettings, windowBounds: wb };
-            updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, uiSettings: ui });
-          }
-        }
-      } catch { /* window API not available — silently skip */ }
-    }, 1000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [updateProjectSettings]);
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
@@ -968,11 +944,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setVideoSrc(null);
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
-
-    // Restore saved window bounds (best-effort; silently no-ops if unset or
-    // off-screen — Tauri handles the latter).
-    const wb = project.settings.uiSettings?.windowBounds;
-    if (wb) setWindowBounds(wb).catch(() => {});
 
     listMediaFilesRecursive(project.mediaDirectoryAbs)
       .then(files => {
