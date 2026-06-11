@@ -246,14 +246,20 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        let win_path = p.canonicalize()
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_start_matches(r"\\?\")
+            .to_string();
         if p.is_dir() {
             std::process::Command::new("explorer")
-                .arg(&path)
+                .arg(&win_path)
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else {
             std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path))
+                .arg(format!("/select,{}", win_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }

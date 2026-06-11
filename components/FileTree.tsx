@@ -648,11 +648,7 @@ function FileTree({
               setContextMenu(null);
             }}
           >
-            {contextMenu.isDir
-              ? `Show Folder in ${finderLabel}`
-              : SUPPORTED_AUDIO_EXTS.has(getExt(contextMenu.path.split('/').pop() ?? ''))
-                ? `Show Audio in ${finderLabel}`
-                : `Show Video in ${finderLabel}`}
+            {`Show media in ${finderLabel}`}
           </button>
           {/* Only show "Show Annotations in Finder" for files that have an annotation */}
           {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (
