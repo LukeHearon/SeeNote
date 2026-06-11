@@ -2,6 +2,7 @@ import React from 'react';
 import { X, BookOpen, Keyboard, Layers } from 'lucide-react';
 import { HelpAnchor } from './HelpAnchor';
 import { useHotkeys } from '../hooks/useHotkeys';
+import { KeyboardShortcutsView } from './KeyboardShortcutsView';
 
 type Tab = 'guide' | 'annotations' | 'shortcuts';
 
@@ -69,7 +70,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
       role="dialog"
       aria-label="SeeNote Help"
       aria-modal="true"
-      className={`fixed top-0 right-0 bottom-0 z-50 w-80 bg-slate-800 border-l border-slate-700 shadow-2xl flex flex-col transition-transform duration-300 ease-in-out ${open ? 'translate-x-0' : 'translate-x-full'}`}
+      className={`fixed top-0 right-0 bottom-0 z-50 bg-slate-800 border-l border-slate-700 shadow-2xl flex flex-col transition-[transform,width] duration-300 ease-in-out ${tab === 'shortcuts' ? 'w-[520px]' : 'w-80'} ${open ? 'translate-x-0' : 'translate-x-full'}`}
     >
         {/* Header */}
         <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-800">
@@ -106,7 +107,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
           role="tabpanel"
           id={tabPanelId}
           aria-labelledby={`help-tab-${tab}`}
-          className="flex-1 overflow-y-auto px-4 py-4 space-y-5 text-sm text-slate-300"
+          className={`flex-1 px-4 py-4 text-sm text-slate-300 ${tab === 'shortcuts' ? 'flex flex-col min-h-0' : 'overflow-y-auto space-y-5'}`}
         >
 
           {tab === 'guide' && (
@@ -336,56 +337,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
             </>
           )}
 
-          {tab === 'shortcuts' && (
-            <>
-              <ShortcutGroup title="Playback" rows={[
-                { keys: 'Space', label: 'Play / Pause' },
-                { keys: 'R', label: 'Toggle speed (1× ↔ last defined)' },
-                { keys: 'M', label: 'Mute / Unmute' },
-              ]} />
-
-              <ShortcutGroup title="Spectrogram" rows={[
-                { keys: 'Right-drag / Scroll', label: 'Pan' },
-                { keys: 'Cmd/Ctrl + Scroll', label: 'Zoom' },
-                { keys: 'Cmd/Ctrl + =', label: 'Zoom in' },
-                { keys: 'Cmd/Ctrl + -', label: 'Zoom out' },
-                { keys: 'Cmd/Ctrl+0', label: 'Zoom to full track (press again while at full extent to restore previous view)' },
-                { keys: 'Left-click (Selection Mode)', label: 'Seek' },
-              ]} />
-
-              <ShortcutGroup title="Navigation" rows={[
-                { keys: '← / →', label: 'Scrub playhead ±10% zoom' },
-                { keys: ', / .', label: 'Scrub back / forward one frame (video tracks)' },
-                { keys: 'Cmd+← / →', label: 'Prev / Next annotation' },
-                { keys: 'Cmd+↑ / ↓', label: 'Prev / Next file' },
-              ]} />
-
-              <ShortcutGroup title="Tools" rows={[
-                { keys: '0 – 9', label: 'Activate annotation tool' },
-                { keys: 'S', label: 'Select tool (no annotation tool)' },
-                { keys: 'F', label: 'Toggle filter on/off (saves/restores last band)' },
-                { keys: 'Shift+F', label: 'Ready filter tool (drag to draw band)' },
-                { keys: 'Z', label: 'Toggle video zoom state (saves/restores last viewport)' },
-                { keys: 'Shift+Z', label: 'Toggle marquee zoom drawing tool' },
-                { keys: '= / + / -', label: 'Zoom video in / out (while zoomed)' },
-                { keys: 'Esc', label: 'Undo the most recently activated layer (clears band / unreadies filter / deselects / drops to Select, in activation order)' },
-                { keys: 'Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z', label: 'Undo / redo last change in Annotation Tool Settings (while open)' },
-              ]} />
-
-              <ShortcutGroup title="Annotations" rows={[
-                { keys: 'Cmd/Ctrl+A', label: 'Select whole track (annotate full track if a tool is active)' },
-                { keys: 'Delete / Backspace', label: 'Delete selected annotation' },
-                { keys: 'Middle-click', label: 'Delete annotation instantly' },
-                { keys: 'Cmd/Ctrl+Z', label: 'Undo' },
-                { keys: 'Cmd/Ctrl+Shift+Z / Cmd+Y', label: 'Redo' },
-              ]} />
-
-              <ShortcutGroup title="App" rows={[
-                { keys: 'F1', label: 'Toggle this help panel' },
-                { keys: '/ (hold)', label: 'Show tooltips instantly' },
-              ]} />
-            </>
-          )}
+          {tab === 'shortcuts' && <KeyboardShortcutsView />}
 
         </div>
       </div>
