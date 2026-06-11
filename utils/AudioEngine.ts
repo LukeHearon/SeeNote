@@ -485,6 +485,23 @@ export class AudioEngine implements PlaybackTransport {
     return this._computeMediaTime();
   }
 
+  /**
+   * Close and discard the current AudioContext so the next play() creates a
+   * fresh one. Useful when the OS audio device changes (e.g. Bluetooth
+   * headphones reconnected on Windows). Playback is cancelled first; the
+   * file metadata and PCM cache are preserved so playback can resume
+   * immediately after the context is recreated.
+   */
+  async restart(): Promise<void> {
+    this._cancelPlayback();
+    if (this.ctx) {
+      await this.ctx.close().catch(() => {});
+      this.ctx = null;
+      this.gainNode = null;
+      this._teardownFilterGraph();
+    }
+  }
+
   /** Fully tear down the engine. Call on component unmount. */
   dispose(): void {
     this._cancelPlayback();

@@ -2027,6 +2027,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
+               onRestartAudio={() => { engineRef.current?.restart(); }}
              />
 
              <div className="flex-1 relative overflow-hidden">

@@ -207,6 +207,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   The{' '}
                   <HelpAnchor target="volume-control">volume slider</HelpAnchor>{' '}
                   supports up to 2× gain boost (slider past center). Press <Kbd>M</Kbd> to mute.
+                  Right-click the volume control to access <strong>Restart Audio</strong>, which
+                  re-initialises the audio engine (useful after an audio device change on Windows).
                 </p>
               </Section>
 

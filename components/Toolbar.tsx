@@ -43,6 +43,7 @@ interface ToolbarProps {
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
   onToggleBuzzdetect?: () => void;
+  onRestartAudio?: () => void;
 }
 
 // Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
@@ -102,9 +103,11 @@ export default function Toolbar({
   buzzdetectAvailable,
   buzzdetectEnabled,
   onToggleBuzzdetect,
+  onRestartAudio,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
+  const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const volumeRef = useRef(volume);
@@ -338,7 +341,12 @@ export default function Toolbar({
       </div>
 
       {/* Volume Control */}
-      <div ref={setVolumeControlEl} className="flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1" data-help-target="volume-control">
+      <div
+        ref={setVolumeControlEl}
+        className="relative flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1"
+        data-help-target="volume-control"
+        onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+      >
         <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
           {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
@@ -362,6 +370,23 @@ export default function Toolbar({
           <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }}></div>
         </div>
       </div>
+
+      {volumeCtxMenu && onRestartAudio && (
+        <>
+          <div className="fixed inset-0 z-50" onClick={() => setVolumeCtxMenu(null)} />
+          <div
+            className="fixed z-50 bg-slate-800 border border-slate-600 rounded shadow-lg py-1 min-w-[140px]"
+            style={{ left: volumeCtxMenu.x, top: volumeCtxMenu.y }}
+          >
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
+              onClick={() => { setVolumeCtxMenu(null); onRestartAudio(); }}
+            >
+              Restart Audio
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Time display — current time + selection fields to the right */}
       <div className="flex items-center gap-2 ml-2 tabular-nums" data-help-target="time-display">
