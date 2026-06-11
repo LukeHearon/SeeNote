@@ -3,14 +3,27 @@ import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2,
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
+import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
+
+// Live playback-time readout. Subscribes to the currentTime store and holds its
+// own state so it — and not the whole memoized Toolbar — re-renders per tick.
+function TimeDisplay({ currentTimeStore }: { currentTimeStore: CurrentTimeStore }) {
+  const [t, setT] = useState(currentTimeStore.get());
+  useEffect(() => {
+    setT(currentTimeStore.get());
+    return currentTimeStore.subscribe(() => setT(currentTimeStore.get()));
+  }, [currentTimeStore]);
+  return <>{t.toFixed(2)}s</>;
+}
 
 interface ToolbarProps {
   isPlaying: boolean;
   isBuffering: boolean;
   videoSrc: string | null;
-  currentTime: number;
+  // Playback time via the ref-based store so ticks don't re-render the toolbar.
+  currentTimeStore: CurrentTimeStore;
   duration: number;
   selection: Selection | null;
   volume: number;
@@ -67,11 +80,11 @@ const sliderToSpeed = (s: number): number => {
   return Math.exp(lnMin + s * (lnMax - lnMin));
 };
 
-export default function Toolbar({
+function Toolbar({
   isPlaying,
   isBuffering,
   videoSrc,
-  currentTime,
+  currentTimeStore,
   duration,
   selection,
   volume,
@@ -256,7 +269,7 @@ export default function Toolbar({
     if (editingTimeField === 'selDur') {
       const dur = parseFloat(raw.trim());
       if (!isNaN(dur)) {
-        const anchor = selection ? selection.start : (!isPlaying ? currentTime : null);
+        const anchor = selection ? selection.start : (!isPlaying ? currentTimeStore.get() : null);
         if (anchor !== null) {
           const a = clamp(Math.min(anchor, anchor + dur), 0, duration);
           const b = clamp(Math.max(anchor, anchor + dur), 0, duration);
@@ -274,12 +287,12 @@ export default function Toolbar({
       if (editingTimeField === 'time') {
         onSeek(clamped, true);
       } else if (editingTimeField === 'selStart') {
-        const other = selection ? selection.end : currentTime;
+        const other = selection ? selection.end : currentTimeStore.get();
         const a = clamp(Math.min(clamped, other), 0, duration);
         const b = clamp(Math.max(clamped, other), 0, duration);
         if (a !== b) applySelection({ start: a, end: b });
       } else if (editingTimeField === 'selEnd') {
-        const other = selection ? selection.start : currentTime;
+        const other = selection ? selection.start : currentTimeStore.get();
         const a = clamp(Math.min(clamped, other), 0, duration);
         const b = clamp(Math.max(clamped, other), 0, duration);
         if (a !== b) applySelection({ start: a, end: b });
@@ -408,9 +421,9 @@ export default function Toolbar({
             <button
               className="flex items-center justify-end px-2 py-1 w-[5rem] bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
               data-tooltip="Click to jump to time"
-              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTime.toFixed(2)); }}
+              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTimeStore.get().toFixed(2)); }}
             >
-              {currentTime.toFixed(2)}s
+              <TimeDisplay currentTimeStore={currentTimeStore} />
             </button>
           )}
         </div>
@@ -569,3 +582,7 @@ export default function Toolbar({
     </div>
   );
 }
+
+// Memoized so playback ticks (which now flow through the currentTime store, not
+// props) don't re-render the whole toolbar — only the small TimeDisplay updates.
+export default React.memo(Toolbar);

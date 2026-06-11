@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Sliders, GripHorizontal } from 'lucide-react';
 import { BuzzdetectData, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
+import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import {
   buzzdetectNeuronColor,
   DEFAULT_BUZZDETECT_THRESHOLD,
@@ -25,7 +26,9 @@ interface BuzzdetectPanelProps {
   // panel reads the latest values at draw time and redraws its canvas directly.
   viewportStore: ViewportStore;
   duration: number;
-  currentTime: number;
+  // Same store the spectrogram playhead reads, so the panel's playhead line
+  // stays x-aligned with it. Subscribed below; read at draw time.
+  currentTimeStore: CurrentTimeStore;
   selection: Selection | null;
   // Persisted UI state.
   thresholds: Record<string, number>;
@@ -72,7 +75,7 @@ export default function BuzzdetectPanel({
   data,
   viewportStore,
   duration,
-  currentTime,
+  currentTimeStore,
   selection,
   thresholds,
   hiddenNeurons,
@@ -270,7 +273,7 @@ export default function BuzzdetectPanel({
     ctx.setLineDash([]);
 
     // Playhead.
-    const px = xOf(currentTime);
+    const px = xOf(currentTimeStore.get());
     if (px >= 0 && px <= width) {
       ctx.strokeStyle = 'rgba(255,255,255,0.45)';
       ctx.lineWidth = 1;
@@ -347,7 +350,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, fileWideRange, viewportStore, currentTime, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, fileWideRange, viewportStore, currentTimeStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
 
   // Coalesce redraws into a single rAF (matches the spectrogram's cadence).
   // `drawRef` always holds the latest `draw` so the viewport subscription (which
@@ -370,6 +373,9 @@ export default function BuzzdetectPanel({
   // notifies, we read the new viewport at draw time. This is what keeps panning
   // smooth while the panel is open.
   useEffect(() => viewportStore.subscribe(scheduleDraw), [viewportStore, scheduleDraw]);
+  // Redraw the playhead line as playback advances (time flows through the store,
+  // not a prop), keeping it x-aligned with the spectrogram playhead.
+  useEffect(() => currentTimeStore.subscribe(scheduleDraw), [currentTimeStore, scheduleDraw]);
 
   // Keep canvases sized to the drawing area.
   useEffect(() => {

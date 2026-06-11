@@ -11,6 +11,7 @@ import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, DEFAULT_BAND_
 import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, stripExt, shuffleArray } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
+import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
@@ -43,7 +44,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [isAudioTrack, setIsAudioTrack] = useState(false);
   const [sampleRate, setSampleRate] = useState(44100);
   const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -182,8 +182,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // VideoElementEngine) report through these so play/pause/EOF behave
     // identically regardless of which one is active.
     const setPlayhead = (t: number) => {
-      setCurrentTime(t);
       currentTimeRef.current = t;
+      currentTimeStoreRef.current.set(t);
     };
     const onPlaying = () => { setIsPlaying(true); setIsBuffering(false); };
     const onPaused = () => setIsPlaying(false);
@@ -366,6 +366,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [trackPath]);
 
   const currentTimeRef = useRef(0);
+  // Ref-based pub/sub for playback time. Updated ~50/sec by the engine's
+  // onTimeUpdate; canvas consumers (spectrogram playhead, buzzdetect line,
+  // toolbar readout) subscribe and redraw imperatively instead of re-rendering
+  // the whole window tree. Set ONLY from the media clock — same place the old
+  // currentTime state was set — so the playhead stays sample-locked to playback.
+  const currentTimeStoreRef = useRef(createCurrentTimeStore());
 
   // Keep isAudioTrackRef in sync so the onEnded closure (created once on mount) reads the current value
   useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
@@ -414,7 +420,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setDebugLogs([]);
     setTrackPath(absolutePath);
     // Reset playhead to beginning of track
-    setCurrentTime(0);
+    currentTimeRef.current = 0;
+    currentTimeStoreRef.current.set(0);
     // Reset undo/redo history for new track
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
@@ -661,14 +668,36 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Annotation navigation helpers (used by toolbar buttons and keyboard shortcuts)
   const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
-  const canGoPrevAnnotation = useMemo(
-    () => sortedAnnotations.some(a => a.start < currentTime - 0.05),
-    [sortedAnnotations, currentTime]
-  );
-  const canGoNextAnnotation = useMemo(
-    () => sortedAnnotations.some(a => a.start > currentTime + 0.05),
-    [sortedAnnotations, currentTime]
-  );
+  // Mirror of sortedAnnotations so the playback-time subscriber can read the
+  // current list without re-subscribing on every annotation change.
+  const sortedAnnotationsRef = useRef(sortedAnnotations);
+  useEffect(() => { sortedAnnotationsRef.current = sortedAnnotations; }, [sortedAnnotations]);
+
+  // Prev/next-annotation button enablement. These depend on playback time, which
+  // updates ~50/sec via the currentTime store. Recomputing them through a memo
+  // keyed on a per-tick state value would re-render the whole window every tick;
+  // instead we hold them as state and update only when the boolean actually
+  // flips (i.e. when the playhead crosses an annotation boundary), driven by a
+  // store subscription. The values are derived from the same store the playhead
+  // reads, so they stay in lockstep with playback (cornerstone).
+  const [canGoPrevAnnotation, setCanGoPrevAnnotation] = useState(false);
+  const [canGoNextAnnotation, setCanGoNextAnnotation] = useState(false);
+  const canGoPrevRef = useRef(false);
+  const canGoNextRef = useRef(false);
+  const recomputeCanGo = useCallback(() => {
+    const t = currentTimeStoreRef.current.get();
+    const anns = sortedAnnotationsRef.current;
+    const prev = anns.some(a => a.start < t - 0.05);
+    const next = anns.some(a => a.start > t + 0.05);
+    if (prev !== canGoPrevRef.current) { canGoPrevRef.current = prev; setCanGoPrevAnnotation(prev); }
+    if (next !== canGoNextRef.current) { canGoNextRef.current = next; setCanGoNextAnnotation(next); }
+  }, []);
+  // Subscribe once on mount: recompute on every playback tick (cheap, only sets
+  // state on an actual boundary crossing).
+  useEffect(() => currentTimeStoreRef.current.subscribe(recomputeCanGo), [recomputeCanGo]);
+  // Also recompute when the annotation set changes (a new/removed annotation can
+  // flip enablement without the playhead moving).
+  useEffect(() => { recomputeCanGo(); }, [sortedAnnotations, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
   const toggleShuffle = useCallback(() => {
@@ -1079,12 +1108,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           return;
       }
       const sel = selectionRef.current;
-      let startSec = currentTime;
+      const curTime = currentTimeRef.current;
+      let startSec = curTime;
       // If there's a selection and the playhead is outside it, restart from selection start
-      if (sel && (currentTime >= sel.end - 0.05 || currentTime < sel.start)) {
+      if (sel && (curTime >= sel.end - 0.05 || curTime < sel.start)) {
           startSec = sel.start;
           seek(sel.start, true);
-      } else if (!sel && duration > 0 && currentTime >= duration - 0.05) {
+      } else if (!sel && duration > 0 && curTime >= duration - 0.05) {
           // At end of track with no selection — return to beginning
           startSec = 0;
           seek(0, true);
@@ -1103,7 +1133,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // isPlaying is set to true only when onPlaying fires. endSec enables the
       // bounded selection stop on whichever transport is active.
       transport?.play(startSec, sel ? sel.end : undefined);
-  }, [isPlaying, isBuffering, isAudioTrack, currentTime, duration, prerollVideo, addLog, activeTransport, usesVideoTransport]);
+  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport]);
 
   const seek = useCallback(async (time: number, scrollView = false) => {
       const transport = activeTransport();
@@ -1114,7 +1144,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       const prevTime = currentTimeRef.current;
       transport?.seek(time);
       currentTimeRef.current = time;
-      setCurrentTime(time);
+      currentTimeStoreRef.current.set(time);
       // Notify the frame source so its eviction window follows the scrub position.
       // Kick a small ensureRange while paused so a scrub shows the correct frame
       // (rather than a stale one from the prior window). On the canvas path,
@@ -2000,7 +2030,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                isPlaying={isPlaying}
                isBuffering={isBuffering}
                videoSrc={videoSrc}
-               currentTime={currentTime}
+               currentTimeStore={currentTimeStoreRef.current}
                duration={duration}
                selection={selection}
                volume={volume}
@@ -2042,7 +2072,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 chunkCache={chunkCacheRef.current}
                 sampleRate={sampleRate}
                 cacheVersion={cacheVersion}
-                currentTime={currentTime}
+                currentTimeStore={currentTimeStoreRef.current}
                 duration={duration}
                 isPlaying={isPlaying}
                 isProcessing={isProcessing}
@@ -2077,7 +2107,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  data={buzzdetectData}
                  viewportStore={viewportStoreRef.current}
                  duration={duration}
-                 currentTime={currentTime}
+                 currentTimeStore={currentTimeStoreRef.current}
                  selection={selection}
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}

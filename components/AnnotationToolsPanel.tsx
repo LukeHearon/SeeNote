@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Settings, Trash2 } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
@@ -20,7 +20,7 @@ interface AnnotationToolsPanelProps {
   onRequestDeleteTool: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolsPanel({
+function AnnotationToolsPanel({
   annotationTools,
   activeToolKey,
   onToolActivate,
@@ -30,6 +30,12 @@ export default function AnnotationToolsPanel({
   onRequestDeleteTool,
 }: AnnotationToolsPanelProps) {
   const custom = annotationTools[0];
+  // Defined (non-custom, keyed) tools sorted by key — memoized so this doesn't
+  // re-run on every render.
+  const definedTools = useMemo(
+    () => annotationTools.slice(1).filter(t => t.key !== null).sort((a, b) => Number(a.key) - Number(b.key)),
+    [annotationTools],
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [hoveredToolKey, setHoveredToolKey] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -122,7 +128,7 @@ export default function AnnotationToolsPanel({
 
         {/* Defined labels — single scrollable column */}
         <div className="flex flex-col gap-1">
-          {annotationTools.slice(1).filter(t => t.key !== null).sort((a, b) => Number(a.key) - Number(b.key)).map((tool) => {
+          {definedTools.map((tool) => {
             const toolIndex = annotationTools.indexOf(tool);
             return (
               <div
@@ -191,3 +197,5 @@ export default function AnnotationToolsPanel({
     </div>
   );
 }
+
+export default React.memo(AnnotationToolsPanel);

@@ -5,6 +5,7 @@ import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, u
 import { timeToX, xToTime } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
+import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { X, Pencil } from 'lucide-react';
 
 // Format time for the spectrogram ruler.
@@ -33,7 +34,9 @@ interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
   cacheVersion: number;
-  currentTime: number;
+  // Playback time arrives via a ref-based pub/sub store (not a prop) so a
+  // playback tick redraws the canvas imperatively without re-rendering the tree.
+  currentTimeStore: CurrentTimeStore;
   duration: number;
   isPlaying: boolean;
   isProcessing: boolean;
@@ -93,7 +96,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
   sampleRate,
   cacheVersion,
-  currentTime,
+  currentTimeStore,
   duration,
   isPlaying,
   isProcessing,
@@ -210,6 +213,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Avoids the ~500KB-per-frame Uint16Array allocation that causes GC pauses.
   const viewportDataBuf = useRef<Uint16Array>(new Uint16Array(0));
   const colBuiltBuf = useRef<Uint8Array>(new Uint8Array(0));
+  // Same grow-only reuse for the incremental-scroll path's new-column buffers,
+  // which otherwise allocated a fresh pair every animation frame during playback.
+  const incrVdBuf = useRef<Uint16Array>(new Uint16Array(0));
+  const incrCbBuf = useRef<Uint8Array>(new Uint8Array(0));
 
   // Dirty flag: set whenever draw/drawYAxis deps change so the rAF loop only
   // calls the expensive spectrogram render when the background actually changed.
@@ -298,23 +305,34 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
   // the playhead can travel the full width of the screen without the view moving.
   //
-  // useLayoutEffect (not useEffect) so this batches with the currentTime render before
-  // the browser paints — eliminates the one-frame lag where the playhead appears at the
-  // wrong position relative to the spectrogram.
-  useLayoutEffect(() => {
-      if (!isPlaying || selection || !containerRef.current) return;
-      // Suppress auto-scroll for 500 ms after the user manually panned, so the two
-      // don't fight each other (trackpad inertia vs. auto-scroll → violent jitter).
-      if (Date.now() - lastManualScrollRef.current < 500) return;
-      const containerWidth = containerRef.current.clientWidth;
-      const pps = pixelsPerSecondRef.current;
-      if (duration * pps <= containerWidth) return;
-      const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
-      if (currentTime >= visibleCenterTime) {
-          const targetScroll = currentTime * pps - containerWidth / 2;
-          setScrollLeft(Math.max(0, targetScroll));
-      }
-  }, [isPlaying, currentTime, zoomSec, selection, duration]);
+  // Driven by the currentTime store rather than React state: the store fires its
+  // subscribers on each media-clock tick (same cadence as the old per-tick render),
+  // and we run the identical centering check imperatively. setScrollLeft only fires
+  // when the playhead reaches the visible centre, so this triggers a render only on
+  // an actual scroll step — never the whole-tree per-tick render we used to pay.
+  // Re-subscribes only when these (infrequently changing) inputs change; reads the
+  // live time from the store so the playhead and the scroll stay in lockstep.
+  useEffect(() => {
+      const autoScroll = () => {
+          if (!isPlaying || selection || !containerRef.current) return;
+          // Suppress auto-scroll for 500 ms after the user manually panned, so the two
+          // don't fight each other (trackpad inertia vs. auto-scroll → violent jitter).
+          if (Date.now() - lastManualScrollRef.current < 500) return;
+          const containerWidth = containerRef.current.clientWidth;
+          const pps = pixelsPerSecondRef.current;
+          if (duration * pps <= containerWidth) return;
+          const t = currentTimeStore.get();
+          const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
+          if (t >= visibleCenterTime) {
+              const targetScroll = t * pps - containerWidth / 2;
+              setScrollLeft(Math.max(0, targetScroll));
+          }
+      };
+      // Run once immediately so a seek/zoom while playing recentres without waiting
+      // for the next tick, matching the old layout-effect behaviour.
+      autoScroll();
+      return currentTimeStore.subscribe(autoScroll);
+  }, [isPlaying, currentTimeStore, zoomSec, selection, duration]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
@@ -424,8 +442,22 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const newCols = columnsShifted;
           const newColStartAbs = bbEndCol - newCols;
 
-          const vdNew = new Uint16Array(newCols * nFreqBins);
-          const cbNew = new Uint8Array(newCols);
+          // Reuse grow-only buffers (rounded to 64-col buckets) instead of
+          // allocating a Uint16Array/Uint8Array pair every frame.
+          const ivNeeded = newCols * nFreqBins;
+          if (incrVdBuf.current.length < ivNeeded) {
+            incrVdBuf.current = new Uint16Array(Math.ceil(newCols / 64) * 64 * nFreqBins);
+          } else {
+            incrVdBuf.current.fill(0, 0, ivNeeded);
+          }
+          const vdNew = incrVdBuf.current.subarray(0, ivNeeded);
+
+          if (incrCbBuf.current.length < newCols) {
+            incrCbBuf.current = new Uint8Array(Math.ceil(newCols / 64) * 64);
+          } else {
+            incrCbBuf.current.fill(0, 0, newCols);
+          }
+          const cbNew = incrCbBuf.current.subarray(0, newCols);
           for (let i = 0; i < newCols; i++) {
             const absCol = newColStartAbs + i;
             if (absCol < 0) continue;
@@ -564,6 +596,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Read playback time from the store at draw time — this runs every rAF frame,
+    // so the playhead is always the value the media clock produced this frame.
+    const currentTime = currentTimeStore.get();
 
     const dpr = window.devicePixelRatio || 1;
     // Use the container's CSS width rather than canvas.width/dpr to avoid
@@ -716,7 +752,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTime, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, videoMode, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, videoMode, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -808,22 +844,47 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     drawDirtyRef.current = true;
   }, [draw, drawYAxis]);
 
-  // Overlay runs every rAF frame (smooth playhead). Spectrogram and y-axis only
-  // run when their inputs actually changed — skipping the expensive pixel rebuild
-  // on frames where only currentTime moved (pre-center playback, selection playback).
+  // The overlay (playhead/selection/ruler) must animate every frame during
+  // playback, but playback time no longer flows through React state — so we can't
+  // rely on a per-render effect to reschedule the frame. Instead a single
+  // self-scheduling rAF loop runs for the component's lifetime and repaints each
+  // layer only when its dirty flag is set:
+  //   • drawDirty  — expensive spectrogram background (scroll/zoom/data/settings)
+  //   • overlayDirty — cheap overlay (playhead moved, selection/filter changed)
+  // When idle both flags stay clear and the loop costs two boolean checks/frame.
+  const drawOverlayRef = useRef(drawOverlay);
+  const overlayDirtyRef = useRef(true);
+  useLayoutEffect(() => {
+    drawOverlayRef.current = drawOverlay;
+    overlayDirtyRef.current = true;
+  }, [drawOverlay]);
+
+  // Each media-clock tick marks the overlay dirty so the loop repaints the
+  // playhead on the next frame — same cadence as the old per-tick state render,
+  // but without re-rendering the React tree.
+  useEffect(
+    () => currentTimeStore.subscribe(() => { overlayDirtyRef.current = true; }),
+    [currentTimeStore],
+  );
+
   useEffect(() => {
-    requestRef.current = requestAnimationFrame(() => {
+    const tick = () => {
       if (drawDirtyRef.current) {
         drawRef.current();
         drawYAxisRef.current();
         drawDirtyRef.current = false;
       }
-      drawOverlay();
-    });
+      if (overlayDirtyRef.current) {
+        drawOverlayRef.current();
+        overlayDirtyRef.current = false;
+      }
+      requestRef.current = requestAnimationFrame(tick);
+    };
+    requestRef.current = requestAnimationFrame(tick);
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [drawOverlay]);
+  }, []);
 
   // Handle Resize — keep all canvases in sync with their container dimensions
   useEffect(() => {
@@ -884,7 +945,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       scrollToAnnotation(selection.start);
       return;
     }
-    const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTime - 0.05);
+    const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTimeStore.get() - 0.05);
     if (prev) {
       onSeek(prev.start);
       scrollToAnnotation(prev.start);
@@ -892,7 +953,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(0);
       scrollToAnnotation(0);
     }
-  }, [sortedAnnotations, currentTime, onSeek, scrollToAnnotation, selection]);
+  }, [sortedAnnotations, currentTimeStore, onSeek, scrollToAnnotation, selection]);
 
   const goToNextAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection end
@@ -901,7 +962,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       scrollToAnnotation(selection.end);
       return;
     }
-    const next = sortedAnnotations.find(a => a.start > currentTime + 0.05);
+    const next = sortedAnnotations.find(a => a.start > currentTimeStore.get() + 0.05);
     if (next) {
       onSeek(next.start);
       scrollToAnnotation(next.start);
@@ -909,7 +970,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       onSeek(duration);
       scrollToAnnotation(duration);
     }
-  }, [sortedAnnotations, currentTime, duration, onSeek, scrollToAnnotation, selection]);
+  }, [sortedAnnotations, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
 
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
@@ -1189,8 +1250,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
       // Shift+click while paused: extend/create from playhead to click point
       if (e.shiftKey && !isPlaying) {
-        const selStart = Math.min(currentTime, t);
-        const selEnd = Math.max(currentTime, t);
+        const playT = currentTimeStore.get();
+        const selStart = Math.min(playT, t);
+        const selEnd = Math.max(playT, t);
         if (selEnd - selStart > 0.001) {
           if (activeAnnotationTool === null) {
             onSelectionChange({ start: selStart, end: selEnd });
