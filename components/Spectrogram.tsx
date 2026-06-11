@@ -325,7 +325,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
           if (t >= visibleCenterTime) {
               const targetScroll = t * pps - containerWidth / 2;
-              setScrollLeft(Math.max(0, targetScroll));
+              setScroll(Math.max(0, targetScroll));
           }
       };
       // Run once immediately so a seek/zoom while playing recentres without waiting
@@ -611,8 +611,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    const startTime = scrollLeft / pixelsPerSecond;
-    const timePerPixel = 1 / pixelsPerSecond;
+    const scrollLeft_live = scrollLeftRef.current;
+    const pixelsPerSecond_live = pixelsPerSecondRef.current || pixelsPerSecond;
+    const startTime = scrollLeft_live / pixelsPerSecond_live;
+    const timePerPixel = 1 / pixelsPerSecond_live;
     const endTime = startTime + (width * timePerPixel);
 
     // 1. Selection region darkening — draw FIRST so other elements render on top
@@ -623,8 +625,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       : selection;
 
     if (activeSelection) {
-      const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft, pixelsPerSecond));
-      const selEndX = Math.min(width, timeToX(activeSelection.end, scrollLeft, pixelsPerSecond));
+      const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
+      const selEndX = Math.min(width, timeToX(activeSelection.end, scrollLeft_live, pixelsPerSecond_live));
 
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       // Left dark region
@@ -685,7 +687,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     // 2. Draw Playhead Line
-    const playheadX = timeToX(currentTime, scrollLeft, pixelsPerSecond);
+    const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
     if (playheadX >= 0 && playheadX <= width) {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -724,7 +726,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const firstTimeTick = Math.floor(startTime / timeStep) * timeStep;
     for (let s = firstTimeTick; s <= tickEndTime; s += timeStep) {
         if (s <= 0) continue;
-        const x = timeToX(s, scrollLeft, pixelsPerSecond);
+        const x = timeToX(s, scrollLeft_live, pixelsPerSecond_live);
         if (x >= 0 && x <= width) {
             ctx.beginPath();
             ctx.strokeStyle = 'white';
