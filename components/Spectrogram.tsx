@@ -248,6 +248,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onAnnotationsChangeRef = useRef(onAnnotationsChange);
   const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  // Set to true at drag/resize initiation when the playhead is within 0.5s of
+  // the annotation start, so the playhead follows the start for the whole gesture.
+  const playheadFollowsAnnotationStartRef = useRef(false);
   const autoPanRafRef = useRef<number | null>(null);
   // Wall-clock (ms) when the pointer first crossed the viewport edge during the current
   // drag. Drives time-based auto-pan acceleration so a fully-zoomed view — where the cursor
@@ -1344,6 +1347,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         const dragAnnotation = annotations.find(a => a.id === clickDownRef.current!.annotationId);
         if (dragAnnotation) {
           setDraggedAnnotation({ id: clickDownRef.current.annotationId, startOffset: clickDownRef.current.pointerTime - dragAnnotation.start });
+          playheadFollowsAnnotationStartRef.current =
+            Math.abs(currentTimeStore.get() - dragAnnotation.start) <= 0.5;
         }
         clickDownRef.current = null;
       }
@@ -1400,12 +1405,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       });
       pendingAnnotationsRef.current = updated;
       onAnnotationsChange(updated);
-      // If resizing a bound annotation, update selection region to match
-      if (resizingAnnotation.id === boundAnnotationId) {
-        const updatedAnnotation = updated.find(a => a.id === resizingAnnotation.id);
-        if (updatedAnnotation) {
-          onSelectionChange({ start: updatedAnnotation.start, end: updatedAnnotation.end });
-        }
+      const updatedAnnotation = updated.find(a => a.id === resizingAnnotation.id);
+      if (updatedAnnotation) {
+        if (resizingAnnotation.id === boundAnnotationId) onSelectionChange({ start: updatedAnnotation.start, end: updatedAnnotation.end });
+        if (playheadFollowsAnnotationStartRef.current && resizingAnnotation.side === 'start') onSeek(updatedAnnotation.start);
       }
       return;
     }
@@ -1423,9 +1426,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
        });
        pendingAnnotationsRef.current = updated;
        onAnnotationsChange(updated);
-       if (boundAnnotationId === draggedAnnotation.id) {
-         const moved = updated.find(a => a.id === draggedAnnotation.id);
-         if (moved) onSelectionChange({ start: moved.start, end: moved.end });
+       const moved = updated.find(a => a.id === draggedAnnotation.id);
+       if (moved) {
+         if (boundAnnotationId === draggedAnnotation.id) onSelectionChange({ start: moved.start, end: moved.end });
+         if (playheadFollowsAnnotationStartRef.current) onSeek(moved.start);
        }
        return;
     }
@@ -1511,11 +1515,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (resizingAnnotation) {
       onAnnotationsCommit(pendingAnnotationsRef.current);
       setResizingAnnotation(null);
+      playheadFollowsAnnotationStartRef.current = false;
     }
 
     if (draggedAnnotation) {
       onAnnotationsCommit(pendingAnnotationsRef.current);
       setDraggedAnnotation(null);
+      playheadFollowsAnnotationStartRef.current = false;
     }
 
     if (resizingSelectionHandle) {
@@ -1836,6 +1842,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             clickDownRef.current = null;
                             onSelectAnnotation(annotation.id);
                             setResizingAnnotation({ id: annotation.id, side: 'start', originalTime: annotation.start });
+                            playheadFollowsAnnotationStartRef.current =
+                              Math.abs(currentTimeStore.get() - annotation.start) <= 0.5;
                         }}
                     >
                         {width > 20 && <div className="w-[1px] h-3 bg-white/50" />}

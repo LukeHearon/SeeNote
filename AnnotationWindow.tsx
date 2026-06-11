@@ -1699,10 +1699,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
     if (!boundAnnotationId) return;
+    const old = annotations.find(a => a.id === boundAnnotationId);
+    if (old && Math.abs(currentTimeRef.current - old.start) <= 0.5) {
+      seek(start, false);
+    }
     handleAnnotationsCommit(annotations.map(a =>
       a.id === boundAnnotationId ? { ...a, start, end } : a
     ));
-  }, [boundAnnotationId, annotations, handleAnnotationsCommit]);
+  }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek]);
 
   // buzzdetect panel callbacks.
   const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
