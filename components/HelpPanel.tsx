@@ -171,6 +171,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li><span className="text-white">Zoom:</span> <Kbd>Cmd/Ctrl</Kbd> + scroll wheel.</li>
                   <li><span className="text-white">Seek:</span> Left-click (in Selection Mode) to move the playhead.</li>
                   <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
+                  <li><span className="text-white">Toggle speed (1× ↔ last):</span> <Kbd>R</Kbd>.</li>
                 </ul>
                 <p className="text-slate-400 text-xs">
                   <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
@@ -339,6 +340,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
             <>
               <ShortcutGroup title="Playback" rows={[
                 { keys: 'Space', label: 'Play / Pause' },
+                { keys: 'R', label: 'Toggle speed (1× ↔ last defined)' },
                 { keys: 'M', label: 'Mute / Unmute' },
               ]} />
 

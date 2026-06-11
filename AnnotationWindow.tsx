@@ -1320,6 +1320,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       // Plain keys.
       { key: ' ', handler: togglePlay },
+      { key: 'r', handler: () => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1) },
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
       // tool, or band.
