@@ -24,7 +24,7 @@ interface VideoPaneProps {
   isBuffering: boolean;
   getMediaTime: () => number;
   onDebugLog: (msg: string, type?: 'info' | 'error') => void;
-  onDurationChange: (d: number) => void;
+  onDurationChange?: (d: number) => void;
   /** Active video-rendering mode. Determines which player is mounted and
    *  what the inaccuracy warning says. */
   videoMode: VideoMode;

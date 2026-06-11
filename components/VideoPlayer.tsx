@@ -7,7 +7,7 @@ import type { Rect, Viewport } from '../utils/videoZoom';
 interface VideoPlayerProps {
   src: string | null;
   isAudio: boolean;
-  onDurationChange: (d: number) => void;
+  onDurationChange?: (d: number) => void;
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
   /** Zoom/pan viewport. When zoomed, the <video> is positioned to the
    *  content rect and a CSS transform exposes the visible region — kept
@@ -60,7 +60,7 @@ export default function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    const handleDuration = () => onDurationChange(video.duration);
+    const handleDuration = () => onDurationChange?.(video.duration);
     const handleError = () => {
       const err = video.error;
       const codeMap: Record<number, string> = {

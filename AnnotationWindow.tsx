@@ -1879,7 +1879,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             isBuffering={isBuffering}
             getMediaTime={getMediaTime}
             onDebugLog={addLog}
-            onDurationChange={setDuration}
+            onDurationChange={isAudioTrack ? undefined : setDuration}
             videoMode={videoMode}
             hasSelection={selection !== null}
             onVideoModeChange={setVideoMode}

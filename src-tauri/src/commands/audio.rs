@@ -254,6 +254,16 @@ pub async fn get_spectrogram_chunk(
     let zero_pad = half_window.saturating_sub(pre_samples_decoded);
     let mut samples = vec![0.0f32; zero_pad];
     samples.extend_from_slice(&raw_samples);
+    // Right-pad with half a window of zeros, mirroring the left-side zero-pad.
+    // At EOF the decoder stops early, leaving the last column's right half
+    // truncated, which makes n_cols * hop/sr fall short of the file's true
+    // duration; the frontend then clamps every pixel in that gap to the last
+    // real column, producing a visible horizontal smear. Adding half_window
+    // zeros ensures actual_duration_sec >= duration so the clamp never fires.
+    // For non-EOF chunks it adds one extra STFT column beyond req.duration_sec,
+    // but the nCols/actualDurationSec ratio is preserved so the t→col mapping
+    // is unaffected and the extra column is never rendered.
+    samples.resize(samples.len() + half_window, 0.0);
 
     let data = fft::compute_stft(&samples, req.fft_size, req.hop_size);
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
