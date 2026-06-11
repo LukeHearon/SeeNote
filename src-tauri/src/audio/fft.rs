@@ -1,4 +1,5 @@
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
@@ -36,9 +37,10 @@ fn get_fft_and_window(fft_size: usize) -> (Arc<dyn Fft<f32>>, Vec<f32>) {
 /// Each u16 encodes dBFS linearly: 0 → −140 dBFS, 65535 → 0 dBFS (~0.00214 dB/step).
 /// Values below −140 dBFS clamp to 0; values above 0 dBFS clamp to 65535.
 ///
-/// Normalization:
-///   mag_norm = mag * 4 / fft_size   (Hanning coherent amplitude gain → 0 dBFS = 0 dB)
-///   val      = 20 * log10(mag_norm + 1e-6)  (dBFS)
+/// Normalization (computed without a sqrt — see `norm_sq` below):
+///   mag_norm  = mag * 4 / fft_size           (Hanning coherent amplitude gain → 0 dBFS = 0 dB)
+///   val       = 20 * log10(mag_norm + 1e-6)
+///             = 10 * log10(mag_norm² + 1e-12) (dBFS)  — the form actually evaluated
 pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u16> {
     let n_freq_bins = fft_size / 2;
 
@@ -53,36 +55,55 @@ pub fn compute_stft(samples: &[f32], fft_size: usize, hop_size: usize) -> Vec<u1
     let mut output = vec![0u16; n_cols * n_freq_bins];
 
     let (fft, window) = get_fft_and_window(fft_size);
-    let mut scratch = vec![Complex::new(0.0f32, 0.0f32); fft.get_outofplace_scratch_len()];
+    let scratch_len = fft.get_outofplace_scratch_len();
 
-    let mut buf_in = vec![Complex::new(0.0f32, 0.0f32); fft_size];
-    let mut buf_out = vec![Complex::new(0.0f32, 0.0f32); fft_size];
+    // dBFS = 20*log10(mag_norm) = 10*log10(mag_norm²), where mag_norm = mag*4/fft_size.
+    // Pre-square the amplitude-normalization constant so we never take a sqrt:
+    // mag_norm² = (re²+im²) * (4/fft_size)². The +1e-12 floor is the square of the
+    // old +1e-6 amplitude floor, so silence still maps to −120 dBFS.
+    let norm_sq = (4.0 / fft_size as f32).powi(2);
 
-    for col in 0..n_cols {
-        let start = col * hop_size;
+    // Columns are fully independent: each reads samples[start..start+fft_size] and
+    // writes only its own n_freq_bins slice of `output`. Parallelize across cores
+    // (rayon) — the result is bit-for-bit identical regardless of scheduling.
+    // for_each_init gives each worker thread its own reusable FFT scratch buffers,
+    // so we never allocate per column.
+    output
+        .par_chunks_mut(n_freq_bins)
+        .enumerate()
+        .for_each_init(
+            || {
+                (
+                    vec![Complex::new(0.0f32, 0.0f32); fft_size],   // buf_in
+                    vec![Complex::new(0.0f32, 0.0f32); fft_size],   // buf_out
+                    vec![Complex::new(0.0f32, 0.0f32); scratch_len], // scratch
+                )
+            },
+            |(buf_in, buf_out, scratch), (col, out_col)| {
+                let start = col * hop_size;
 
-        // Apply Hanning window
-        for i in 0..fft_size {
-            buf_in[i] = Complex::new(samples[start + i] * window[i], 0.0);
-        }
+                // Apply Hanning window
+                for i in 0..fft_size {
+                    buf_in[i] = Complex::new(samples[start + i] * window[i], 0.0);
+                }
 
-        fft.process_outofplace_with_scratch(&mut buf_in, &mut buf_out, &mut scratch);
+                fft.process_outofplace_with_scratch(buf_in, buf_out, scratch);
 
-        // Write magnitude to output column
-        for bin in 0..n_freq_bins {
-            let re = buf_out[bin].re;
-            let im = buf_out[bin].im;
-            let mag = (re * re + im * im).sqrt();
+                // Write magnitude to output column
+                for bin in 0..n_freq_bins {
+                    let re = buf_out[bin].re;
+                    let im = buf_out[bin].im;
+                    let mag_norm_sq = (re * re + im * im) * norm_sq;
 
-            let mag_norm = mag * 4.0 / fft_size as f32;
-            let val = 20.0 * (mag_norm + 1e-6f32).log10();
-            // −140..0 dBFS mapped linearly to 0..65535
-            let quantized = ((val + 140.0) / 140.0 * 65535.0).clamp(0.0, 65535.0) as u16;
+                    let val = 10.0 * (mag_norm_sq + 1e-12f32).log10();
+                    // −140..0 dBFS mapped linearly to 0..65535
+                    let quantized = ((val + 140.0) / 140.0 * 65535.0).clamp(0.0, 65535.0) as u16;
 
-            // JS layout: outputData[col * height + (height - 1 - bin)]
-            output[col * n_freq_bins + (n_freq_bins - 1 - bin)] = quantized;
-        }
-    }
+                    // JS layout: outputData[col * height + (height - 1 - bin)]
+                    out_col[n_freq_bins - 1 - bin] = quantized;
+                }
+            },
+        );
 
     output
 }

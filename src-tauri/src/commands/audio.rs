@@ -125,7 +125,6 @@ pub async fn get_spectrogram_chunk(
     // seek to each column position and decode one FFT window instead of
     // decoding the entire range and running a full STFT.
     if req.hop_size >= (sample_rate as usize) / 2 {
-        let window_dur = req.fft_size as f64 / sample_rate as f64;
         let actual_end = (req.start_sec + req.duration_sec).min(info.duration_secs);
         let chunk_duration = actual_end - req.start_sec;
         let n_cols = ((chunk_duration * sample_rate as f64) / req.hop_size as f64).floor() as usize + 1;
@@ -135,14 +134,64 @@ pub async fn get_spectrogram_chunk(
         let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
         let mut output = vec![0u16; n_cols * n_freq_bins];
-        for col in 0..n_cols {
-            let t = req.start_sec + (col as f64 * req.hop_size as f64 / sample_rate as f64);
-            if let Ok((samples, _)) = decoder::decode_audio_range(&req.path, t, window_dur) {
-                if samples.len() >= req.fft_size {
-                    let col_data = fft::compute_stft(&samples[..req.fft_size], req.fft_size, req.fft_size);
+
+        // Walk a SINGLE PcmStream forward instead of re-opening the file (full
+        // symphonia probe + seek) once per column — that was O(n_cols) decoder
+        // opens and the reason coarse overviews of long files crawled. Reusing
+        // PcmStream is also CLAUDE.md's canonical sample-accurate decode path.
+        //
+        // Per column: read exactly fft_size mono frames (this column's window),
+        // run a 1-column STFT, then skip hop_size - fft_size frames to land on
+        // the next column centre. Column k therefore starts at frame k*hop_size
+        // → start_sec + k*hop/sample_rate, identical to the old per-column seek.
+        if let Ok(mut stream) = decoder::PcmStream::open(&req.path, req.start_sec) {
+            let ch = stream.channels().max(1) as usize;
+            let skip_frames = req.hop_size.saturating_sub(req.fft_size);
+            let mut window_mono = vec![0.0f32; req.fft_size];
+
+            'cols: for col in 0..n_cols {
+                // Read this column's fft_size-frame window, mixing down to mono.
+                let mut filled = 0usize;
+                while filled < req.fft_size {
+                    let (interleaved, frames_read) = match stream.read(req.fft_size - filled) {
+                        Ok(r) => r,
+                        Err(_) => break 'cols,
+                    };
+                    if frames_read == 0 {
+                        break; // EOF — partial window left; skipped by the guard below
+                    }
+                    for frame in 0..frames_read {
+                        let mut sum = 0.0f32;
+                        for c in 0..ch {
+                            sum += interleaved[frame * ch + c];
+                        }
+                        window_mono[filled + frame] = sum / ch as f32;
+                    }
+                    filled += frames_read;
+                }
+
+                // Only emit a column when the full window was filled (matches the
+                // old `samples.len() >= fft_size` guard; partial tail stays 0).
+                if filled >= req.fft_size {
+                    let col_data = fft::compute_stft(&window_mono, req.fft_size, req.fft_size);
                     if col_data.len() >= n_freq_bins {
                         output[col * n_freq_bins..(col + 1) * n_freq_bins]
                             .copy_from_slice(&col_data[..n_freq_bins]);
+                    }
+                }
+
+                // Advance to the next column centre.
+                if col + 1 < n_cols {
+                    let mut to_skip = skip_frames;
+                    while to_skip > 0 {
+                        let (_, frames_read) = match stream.read(to_skip) {
+                            Ok(r) => r,
+                            Err(_) => break 'cols,
+                        };
+                        if frames_read == 0 {
+                            break 'cols; // EOF — remaining columns stay 0
+                        }
+                        to_skip -= frames_read;
                     }
                 }
             }
