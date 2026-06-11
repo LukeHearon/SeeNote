@@ -2099,6 +2099,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={publishViewport}
                 videoMode={videoMode}
+                isAudioTrack={isAudioTrack}
              />
              </div>
 
