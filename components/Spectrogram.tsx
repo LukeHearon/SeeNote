@@ -1201,16 +1201,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const speed = Math.sign(overflow) * Math.min(baseSpeed * timeAccel, 60);
           const maxScroll = computeMaxScroll(dur, pps, containerWidth);
           const newScroll = clamp(scrollLeftRef.current + speed, 0, maxScroll);
+          const scrollChanged = Math.abs(newScroll - scrollLeftRef.current) > 0.01;
+          if (scrollChanged) setScroll(newScroll);
 
-          if (Math.abs(newScroll - scrollLeftRef.current) > 0.01) {
-            setScroll(newScroll);
-            const da = draggedAnnotationRef.current;
-            if (da) {
-              // Pin the appropriate boundary to the visible edge so the annotation
-              // stays fully visible: start→left edge when panning left, end→right edge when panning right.
+          const da2 = draggedAnnotationRef.current;
+          if (da2) {
+            // Pin the appropriate boundary to the visible edge so the annotation
+            // stays fully visible: start→left edge when panning left, end→right edge when panning right.
+            // Only meaningful when the view actually moved.
+            if (scrollChanged) {
               const viewLeft = newScroll / pps;
               const viewRight = (newScroll + containerWidth) / pps;
-              const updated = updateAnnotation(annotationsRef.current, da.id, a => {
+              const updated = updateAnnotation(annotationsRef.current, da2.id, a => {
                 const annotDur = a.end - a.start;
                 const newStart = overflow < 0
                   ? Math.max(0, viewLeft)
@@ -1219,13 +1221,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
               });
               pendingAnnotationsRef.current = updated;
               onAnnotationsChangeRef.current(updated);
-              if (da.id === boundAnnotationIdRef.current) {
-                const moved = updated.find(a => a.id === da.id);
+              if (da2.id === boundAnnotationIdRef.current) {
+                const moved = updated.find(a => a.id === da2.id);
                 if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
               }
-            } else {
-              processDragAtClientX(pos.clientX);
             }
+          } else {
+            // Always drive the drag endpoint from the (clamped) pointer position while it's
+            // outside the panel — even when the view is already pinned at 0/end and can't scroll
+            // further. Otherwise the selection freezes at the last in-panel sample instead of
+            // reaching the extent the pointer is past.
+            processDragAtClientX(pos.clientX);
           }
         } else {
           // Pointer is back inside the viewport — reset the time-based pan ramp.
