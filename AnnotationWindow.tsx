@@ -1223,6 +1223,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
               activationStack.pushIfAbsent('annotationTool');
+              setFilterToolActive(false);
+              activationStack.remove('filterTool');
               if (isCustom && newText === '') {
                   setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
               }
@@ -1234,6 +1236,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setBoundAnnotationId(newAnnotation.id);
           setActiveToolKey(key);
           activationStack.pushIfAbsent('annotationTool');
+          setFilterToolActive(false);
+          activationStack.remove('filterTool');
       } else {
           setActiveToolKey(prev => {
             if (prev === key) {
@@ -1241,6 +1245,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               return null;
             }
             activationStack.pushIfAbsent('annotationTool');
+            setFilterToolActive(false);
+            activationStack.remove('filterTool');
             return key;
           });
       }
