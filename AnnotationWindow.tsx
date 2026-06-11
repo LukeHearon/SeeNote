@@ -1223,6 +1223,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
               activationStack.pushIfAbsent('annotationTool');
+              if (isCustom && newText === '') {
+                  setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
+              }
           }
       } else if (activeToolKey === null && selection !== null) {
           const newAnnotation = makeAnnotationFromTool(tool, selection.start, selection.end);

@@ -84,6 +84,7 @@ export interface SpectrogramHandle {
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  focusAnnotationInput: (id: string) => void;
 }
 
 // Maximum horizontal scroll (in pixels), allowing a 40%-of-viewport overrun
@@ -1609,6 +1610,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     applyWheel,
     zoomIn,
     zoomOut,
+    focusAnnotationInput: (id: string) => {
+      inputRefs.current[id]?.focus();
+    },
   }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
