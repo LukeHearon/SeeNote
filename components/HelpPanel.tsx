@@ -130,6 +130,9 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Lists every track in the project directory. Tracks with existing annotations are highlighted in the list.
                   Click any track to open it, or use <Kbd>Cmd+↑</Kbd> / <Kbd>Cmd+↓</Kbd> to step through tracks in order.
                   Right-click a track or folder to reveal its media location or annotation file in the system file manager.
+                  Right-click a track and choose <span className="text-white">Import annotations…</span> to load annotations
+                  from an external file; they are filed under that track's ident. If the track already has annotations, you
+                  can <span className="text-white">Overwrite</span> them or <span className="text-white">Merge</span> (append the imported ones).
                 </p>
               </Section>
 

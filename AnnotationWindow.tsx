@@ -8,8 +8,8 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
-import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect } from './utils/tauriCommands';
+import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -906,22 +906,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         if (trackPathRef.current !== expectedTrackPath) return;
         if (!content) return;
 
-        const loaded: Annotation[] = [];
-
-        // Audacity .txt
-        const lines = content.trim().split('\n');
-        for (const line of lines) {
-          const parts = line.split('\t');
-          if (parts.length >= 3) {
-            const start = parseFloat(parts[0]);
-            const end = parseFloat(parts[1]);
-            const text = parts.slice(2).join('\t');
-            if (!isNaN(start) && !isNaN(end)) {
-              const matchedTool = annotationToolsRef.current.find(t => t.text === text);
-              loaded.push({ id: Math.random().toString(36).substring(2, 9), toolKey: matchedTool?.key ?? '0', start, end, text, color: matchedTool?.color ?? '#ffffff' });
-            }
-          }
-        }
+        const loaded = parseAudacityContent(content, annotationToolsRef.current);
 
         if (loaded.length > 0) {
           skipAutoSaveRef.current = true;
@@ -1096,6 +1081,87 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       revealInFileManager(annotationDirectory).catch(() => {});
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
+
+  // ── Import annotations ──────────────────────────────────────────────────────
+  // Pending state for the overwrite/merge confirmation when the target track
+  // already has annotations on disk.
+  const [pendingImport, setPendingImport] = useState<{
+    trackPath: string;
+    incoming: Annotation[];
+    existing: Annotation[];
+    sourceName: string;
+  } | null>(null);
+
+  // Write `next` as the annotation file for `targetTrack`, mirroring auto-save.
+  // If `targetTrack` is the currently-open track, also drive in-memory state so
+  // the spectrogram updates live; otherwise just persist to disk.
+  const writeAnnotationsForTrack = useCallback(async (targetTrack: string, next: Annotation[]) => {
+    const annotPath = getAnnotationPath(targetTrack);
+    if (!annotPath) return;
+    const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
+    if (targetTrack === trackPathRef.current) {
+      // Live track: route through commit so undo history + auto-save apply.
+      handleAnnotationsCommit(next);
+    } else {
+      await writeTextFile(annotPath, generateAudacityContent(next, decimals));
+    }
+    setAnnotatedFiles(prev => {
+      const updated = new Set(prev);
+      if (next.length > 0) updated.add(targetTrack);
+      else updated.delete(targetTrack);
+      return updated;
+    });
+  }, [getAnnotationPath, handleAnnotationsCommit]);
+
+  const handleImportAnnotations = useCallback(async (targetTrack: string) => {
+    if (!annotationDirectory || !currentDirectory) return;
+    try {
+      const sourcePath = await openFileDialog(targetTrack, [
+        { name: 'Annotation File', extensions: ['txt'] },
+      ]);
+      if (!sourcePath) return;
+      const content = await readTextFile(sourcePath);
+      if (!content) {
+        addLog('Import: selected file was empty', 'error');
+        return;
+      }
+      const incoming = parseAudacityContent(content, annotationToolsRef.current);
+      if (incoming.length === 0) {
+        addLog('Import: no annotations found in selected file', 'error');
+        return;
+      }
+      const sourceName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
+
+      // Read whatever is on disk for this track to decide whether to confirm.
+      const annotPath = getAnnotationPath(targetTrack);
+      const existingContent = annotPath ? await readTextFile(annotPath).catch(() => null) : null;
+      const existing = existingContent
+        ? parseAudacityContent(existingContent, annotationToolsRef.current)
+        : [];
+
+      if (existing.length > 0) {
+        setPendingImport({ trackPath: targetTrack, incoming, existing, sourceName });
+        return;
+      }
+      await writeAnnotationsForTrack(targetTrack, incoming);
+      addLog(`Imported ${incoming.length} annotations from ${sourceName}`);
+    } catch (err) {
+      addLog(`Import error: ${err}`, 'error');
+    }
+  }, [annotationDirectory, currentDirectory, getAnnotationPath, writeAnnotationsForTrack]);
+
+  const resolveImport = useCallback(async (mode: 'overwrite' | 'merge') => {
+    if (!pendingImport) return;
+    const { trackPath: targetTrack, incoming, existing, sourceName } = pendingImport;
+    setPendingImport(null);
+    try {
+      const next = mode === 'merge' ? mergeAnnotations(existing, incoming) : incoming;
+      await writeAnnotationsForTrack(targetTrack, next);
+      addLog(`${mode === 'merge' ? 'Merged' : 'Imported'} ${incoming.length} annotations from ${sourceName}`);
+    } catch (err) {
+      addLog(`Import error: ${err}`, 'error');
+    }
+  }, [pendingImport, writeAnnotationsForTrack]);
 
   const togglePlay = useCallback(async () => {
       const transport = activeTransport();
@@ -1783,6 +1849,40 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         onClose={() => setShowHelp(false)}
       />
 
+      {/* Import-annotations conflict confirmation */}
+      {pendingImport && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
+          <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">Annotations already exist</h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-4">
+              This track already has {pendingImport.existing.length} annotation{pendingImport.existing.length !== 1 ? 's' : ''}.
+              Importing {pendingImport.incoming.length} from <span className="text-slate-100">{pendingImport.sourceName}</span> —
+              overwrite the existing ones, or merge (append) the new ones onto them?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                className="px-3 py-1.5 text-xs rounded text-slate-300 hover:bg-slate-700"
+                onClick={() => setPendingImport(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
+                onClick={() => resolveImport('overwrite')}
+              >
+                Overwrite
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs rounded bg-[#e65161] text-white hover:bg-[#e65161]/80"
+                onClick={() => resolveImport('merge')}
+              >
+                Merge
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <div className="flex-1 flex relative overflow-hidden select-none">
         {/* Left Panel: File Tree (top) + Labels Panel (bottom) */}
@@ -1810,6 +1910,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onRevealAnnotationsRoot: annotationDirectory
               ? () => revealInFileManager(annotationDirectory).catch(() => {})
               : undefined,
+            onImportAnnotations: handleImportAnnotations,
             onRefresh: handleRefreshFiles,
           };
 

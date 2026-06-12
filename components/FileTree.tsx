@@ -28,6 +28,7 @@ interface FileTreeProps {
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
   onRevealAnnotationsRoot?: () => void;
+  onImportAnnotations: (audioFilePath: string) => void;
   onRefresh: () => void;
 }
 
@@ -244,6 +245,7 @@ function FileTree({
   onRevealInFinder,
   onRevealAnnotations,
   onRevealAnnotationsRoot,
+  onImportAnnotations,
   onRefresh,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
@@ -669,6 +671,17 @@ function FileTree({
           >
             {`Show media in ${finderLabel}`}
           </button>
+          {!contextMenu.isDir && isSupportedMediaFile(contextMenu.path) && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                onImportAnnotations(contextMenu.path);
+                setContextMenu(null);
+              }}
+            >
+              Import annotations…
+            </button>
+          )}
           {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (
             <button
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"

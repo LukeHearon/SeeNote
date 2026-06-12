@@ -20,6 +20,7 @@ pub fn run() {
             commands::filesystem::open_directory_dialog,
             commands::filesystem::open_directory_dialog_at,
             commands::filesystem::save_file_dialog,
+            commands::filesystem::open_file_dialog,
             commands::filesystem::remove_file,
             commands::filesystem::check_dir_exists,
             commands::projects::get_app_data_dir,
