@@ -72,7 +72,8 @@ interface SpectrogramProps {
    * Optional so callers that don't need it pay nothing.
    */
   onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
-  onWheelDiagnostic?: (info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number }) => void;
+  onWheelDiagnostic?: (info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number; ctrl: boolean }) => void;
+  onScrollDiagnostic?: (info: { scrollLeft: number; delta: number; ts: number; source: string }) => void;
   videoMode?: VideoMode;
   isAudioTrack?: boolean;
 }
@@ -125,6 +126,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onZoomChange,
   onViewportChange,
   onWheelDiagnostic,
+  onScrollDiagnostic,
   videoMode,
   isAudioTrack = false,
 }, ref) => {
@@ -143,13 +145,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Internal scroll state (in pixels)
   const [scrollLeft, setScrollLeft] = useState(0);
   const scrollLeftRef = useRef(0);
-  useEffect(() => { scrollLeftRef.current = scrollLeft; }, [scrollLeft]);
-  // Update both the ref (read synchronously by RAF/resize code) and React state
-  // in one call, so the two never momentarily disagree on the scroll position.
-  const setScroll = useCallback((v: number) => {
+  // scrollLeftRef is the source of truth, written synchronously by setScroll;
+  // the state is a render mirror. There must be NO backward state→ref sync:
+  // React commits from different tasks (wheel vs ResizeObserver) can land out
+  // of order, and syncing the ref from a stale commit regresses it — the
+  // resize handler then re-derives scroll from the regressed ref and re-queues
+  // the stale value, producing a self-sustaining two-position oscillation
+  // (the "violent jitter" bug). Every scroll write must go through setScroll.
+  const setScroll = useCallback((v: number, source: string = '?') => {
+    const prev = scrollLeftRef.current;
     scrollLeftRef.current = v;
     setScrollLeft(v);
-  }, []);
+    onScrollDiagnostic?.({ scrollLeft: v, delta: v - prev, ts: performance.now(), source });
+  }, [onScrollDiagnostic]);
   // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
   // for a brief window after manual panning so the two don't fight each other.
   const lastManualScrollRef = useRef(0);
@@ -294,8 +302,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // Reset scroll position to 0 when switching tracks
   useEffect(() => {
-    setScrollLeft(0);
-  }, [ident]);
+    setScroll(0, 'identReset');
+  }, [ident, setScroll]);
 
   // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
   // Also fires when `onViewportChange` itself becomes available (e.g. the panel
@@ -332,7 +340,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
           if (t >= visibleCenterTime) {
               const targetScroll = t * pps - containerWidth / 2;
-              setScroll(Math.max(0, targetScroll));
+              setScroll(Math.max(0, targetScroll), 'autoScroll');
           }
       };
       // Run once immediately so a seek/zoom while playing recentres without waiting
@@ -909,7 +917,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
           const newPps = newWidth / zoomSecRef.current;
           const newScrollLeft = leftEdgeTime * newPps;
-          setScroll(newScrollLeft);
+          setScroll(newScrollLeft, 'resize');
         }
         setContainerWidth(newWidth);
         const dpr = window.devicePixelRatio || 1;
@@ -945,8 +953,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
     const targetScrollLeft = (annotStart * pixelsPerSecond) - (containerWidth * 0.25);
-    setScrollLeft(Math.max(0, targetScrollLeft));
-  }, [pixelsPerSecond]);
+    setScroll(Math.max(0, targetScrollLeft), 'scrollToAnnotation');
+  }, [pixelsPerSecond, setScroll]);
 
   const goToPrevAnnotation = useCallback(() => {
     if (selection !== null) {
@@ -992,8 +1000,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
-    setScrollLeft(centerScrollLeft(time, pixelsPerSecond, containerWidth, duration));
-  }, [pixelsPerSecond, duration]);
+    setScroll(centerScrollLeft(time, pixelsPerSecond, containerWidth, duration), 'scrollToTime');
+  }, [pixelsPerSecond, duration, setScroll]);
 
   // Recenter the playhead in the visible window without changing zoom.
   const recenterPlayhead = useCallback(() => {
@@ -1208,7 +1216,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const maxScroll = computeMaxScroll(dur, pps, containerWidth);
           const newScroll = clamp(scrollLeftRef.current + speed, 0, maxScroll);
           const scrollChanged = Math.abs(newScroll - scrollLeftRef.current) > 0.01;
-          if (scrollChanged) setScroll(newScroll);
+          if (scrollChanged) setScroll(newScroll, 'dragEdge');
 
           const da2 = draggedAnnotationRef.current;
           if (da2) {
@@ -1329,7 +1337,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
-      setScrollLeft(clamp(dragStart.scroll + delta, 0, maxScroll));
+      setScroll(clamp(dragStart.scroll + delta, 0, maxScroll), 'rightDragPan');
       return;
     }
 
@@ -1574,6 +1582,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const currentPps = containerWidth / zoomSec;
       const timeAtMouse = (scrollLeft + mouseX) / currentPps;
       const zoomFactor = 1.25;
+      // Trackpad inertia tails deliver horizontal-only events (deltaY === 0).
+      // `deltaY > 0 ? 1 : -1` would treat every one of those as a zoom-in step,
+      // making the view zoom by itself while Ctrl is held after a pan gesture.
+      if (deltaY === 0) return;
       const direction = deltaY > 0 ? 1 : -1;
       let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
@@ -1581,26 +1593,27 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
       const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
       newScrollLeft = clamp(newScrollLeft, 0, maxScroll);
-      setScrollLeft(newScrollLeft);
+      setScroll(newScrollLeft, 'zoom');
       onZoomChange(newZoomSec);
     } else {
       const panAmount = deltaY + deltaX;
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
-      setScrollLeft(prev => clamp(prev + panAmount, 0, maxScroll));
+      setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
   }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
-    if (onWheelDiagnostic && !e.ctrlKey && !e.metaKey) {
+    if (onWheelDiagnostic) {
       onWheelDiagnostic({
         deltaX: e.deltaX,
         deltaY: e.deltaY,
         deltaMode: e.deltaMode,
         panAmount: e.deltaY + e.deltaX,
         ts: performance.now(),
+        ctrl: e.ctrlKey || e.metaKey,
       });
     }
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
@@ -1612,9 +1625,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
     const newPps = containerWidth / newZoomSec;
     const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
-    setScrollLeft(clamp(startTime * newPps, 0, maxScroll));
+    setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
     onZoomChange(newZoomSec);
-  }, [duration, onZoomChange]);
+  }, [duration, onZoomChange, setScroll]);
 
   const zoomIn = useCallback(() => {
     if (!containerRef.current) return;

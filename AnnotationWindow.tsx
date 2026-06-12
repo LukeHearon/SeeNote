@@ -320,49 +320,99 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // range, deltaY range, panAmount range, and inter-event interval range.
   const wheelBatchRef = useRef<{
     count: number;
+    ctrlCount: number;
     modes: Set<number>;
     dxMin: number; dxMax: number;
     dyMin: number; dyMax: number;
     paMin: number; paMax: number;
     dtMin: number; dtMax: number;
     prevTs: number;
+    prevDx: number | null;
+    prevDy: number | null;
+    dxReversals: number;
+    dyReversals: number;
     timer: ReturnType<typeof setTimeout> | null;
   } | null>(null);
 
-  const handleWheelDiagnostic = useCallback((info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number }) => {
+  const handleWheelDiagnostic = useCallback((info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number; ctrl: boolean }) => {
     if (!wheelBatchRef.current) {
       wheelBatchRef.current = {
-        count: 0, modes: new Set(),
+        count: 0, ctrlCount: 0, modes: new Set(),
         dxMin: Infinity, dxMax: -Infinity,
         dyMin: Infinity, dyMax: -Infinity,
         paMin: Infinity, paMax: -Infinity,
         dtMin: Infinity, dtMax: -Infinity,
-        prevTs: info.ts, timer: null,
+        prevTs: info.ts, prevDx: null, prevDy: null,
+        dxReversals: 0, dyReversals: 0, timer: null,
       };
     }
     const b = wheelBatchRef.current;
     const dt = b.count === 0 ? 0 : info.ts - b.prevTs;
     b.count++;
+    if (info.ctrl) b.ctrlCount++;
     b.modes.add(info.deltaMode);
     b.dxMin = Math.min(b.dxMin, info.deltaX); b.dxMax = Math.max(b.dxMax, info.deltaX);
     b.dyMin = Math.min(b.dyMin, info.deltaY); b.dyMax = Math.max(b.dyMax, info.deltaY);
     b.paMin = Math.min(b.paMin, info.panAmount); b.paMax = Math.max(b.paMax, info.panAmount);
     if (dt > 0) { b.dtMin = Math.min(b.dtMin, dt); b.dtMax = Math.max(b.dtMax, dt); }
+    // Count sign reversals to detect jitter (direction oscillation)
+    if (b.prevDx !== null && Math.sign(info.deltaX) !== 0 && Math.sign(b.prevDx) !== 0 && Math.sign(info.deltaX) !== Math.sign(b.prevDx)) b.dxReversals++;
+    if (b.prevDy !== null && Math.sign(info.deltaY) !== 0 && Math.sign(b.prevDy) !== 0 && Math.sign(info.deltaY) !== Math.sign(b.prevDy)) b.dyReversals++;
+    if (info.deltaX !== 0) b.prevDx = info.deltaX;
+    if (info.deltaY !== 0) b.prevDy = info.deltaY;
     b.prevTs = info.ts;
     if (b.timer) clearTimeout(b.timer);
     b.timer = setTimeout(() => {
       const d = wheelBatchRef.current!;
       const modeStr = [...d.modes].map(m => ['pixel','line','page'][m] ?? m).join('+');
       const fmt = (v: number) => v === Infinity || v === -Infinity ? '—' : v.toFixed(1);
+      const jitter = d.dxReversals >= 3 || d.dyReversals >= 3;
+      const ctrlNote = d.ctrlCount > 0 ? `  ctrl=${d.ctrlCount}/${d.count}` : '';
+      const jitterNote = jitter ? `  *** JITTER dxRev=${d.dxReversals} dyRev=${d.dyReversals} ***` : '';
       addLog(
-        `[wheel] ${d.count} events  mode=${modeStr}` +
+        `[wheel] ${d.count} events  mode=${modeStr}${ctrlNote}` +
         `  dX[${fmt(d.dxMin)}…${fmt(d.dxMax)}]` +
         `  dY[${fmt(d.dyMin)}…${fmt(d.dyMax)}]` +
         `  pan[${fmt(d.paMin)}…${fmt(d.paMax)}]` +
-        (d.dtMin !== Infinity ? `  dt[${fmt(d.dtMin)}…${fmt(d.dtMax)}]ms` : '')
+        (d.dtMin !== Infinity ? `  dt[${fmt(d.dtMin)}…${fmt(d.dtMax)}]ms` : '') +
+        jitterNote,
+        jitter ? 'error' : undefined,
       );
       wheelBatchRef.current = null;
     }, 150);
+  }, [addLog]);
+
+  // Scroll-position diagnostics: detect jitter (rapid direction reversals in scrollLeft).
+  // Maintains a rolling 400ms buffer of (ts, delta, source) tuples; logs a summary and
+  // flags JITTER when ≥3 sign reversals occur within the window.
+  const scrollEventBufRef = useRef<{ ts: number; delta: number; source: string }[]>([]);
+  const scrollJitterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleScrollDiagnostic = useCallback((info: { scrollLeft: number; delta: number; ts: number; source: string }) => {
+    const buf = scrollEventBufRef.current;
+    buf.push({ ts: info.ts, delta: info.delta, source: info.source });
+    // Trim entries older than 400ms
+    const cutoff = info.ts - 400;
+    while (buf.length > 0 && buf[0].ts < cutoff) buf.shift();
+
+    if (scrollJitterTimerRef.current) clearTimeout(scrollJitterTimerRef.current);
+    scrollJitterTimerRef.current = setTimeout(() => {
+      const b = scrollEventBufRef.current;
+      if (b.length === 0) return;
+      let reversals = 0;
+      for (let i = 1; i < b.length; i++) {
+        if (Math.sign(b[i].delta) !== 0 && Math.sign(b[i - 1].delta) !== 0 && Math.sign(b[i].delta) !== Math.sign(b[i - 1].delta)) reversals++;
+      }
+      const sources = [...new Set(b.map(e => e.source))].join('+');
+      const jitter = reversals >= 3;
+      const deltas = b.map(e => e.delta.toFixed(1)).join(', ');
+      addLog(
+        `[scroll] ${b.length} moves  sources=${sources}  reversals=${reversals}  deltas=[${deltas}]` +
+        (jitter ? '  *** JITTER ***' : ''),
+        jitter ? 'error' : 'info',
+      );
+      scrollEventBufRef.current = [];
+    }, 200);
   }, [addLog]);
 
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
@@ -2335,6 +2385,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={publishViewport}
                 onWheelDiagnostic={showDebug ? handleWheelDiagnostic : undefined}
+                onScrollDiagnostic={showDebug ? handleScrollDiagnostic : undefined}
                 videoMode={videoMode}
                 isAudioTrack={isAudioTrack}
              />
