@@ -83,7 +83,7 @@ export const computeLabelPlacement = (
     selEndX > annStartX &&
     selStartX < annEndX;
   if (selectionOverlaps) {
-    leftX = Math.max(leftX, selStartX as number);
+    leftX = Math.max(leftX, (selStartX as number) + 6);
   }
 
   // Right-justify fallback: if the text wouldn't fit between leftX and the

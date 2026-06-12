@@ -65,7 +65,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 60,
     });
-    expect(p).toEqual({ leftX: 300, rightJustified: false });
+    expect(p).toEqual({ leftX: 306, rightJustified: false });
   });
 
   it('takes the rightmost of the screen-left pin and the selection start', () => {
@@ -79,7 +79,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 60,
     });
-    expect(p).toEqual({ leftX: 200, rightJustified: false });
+    expect(p).toEqual({ leftX: 206, rightJustified: false });
   });
 
   it('ignores a selection that does not overlap the annotation', () => {
@@ -119,7 +119,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 0,
     });
-    expect(p).toEqual({ leftX: 360, rightJustified: false });
+    expect(p).toEqual({ leftX: 366, rightJustified: false });
   });
 });
 
