@@ -132,6 +132,50 @@ export const generateAudacityContent = (annotations: Annotation[], decimals: num
     return content;
 };
 
+// Parse Audacity TXT (tab-delimited: start \t end \t text) into annotations.
+// Pure: matches each row's text against `tools` to recover the originating
+// tool's key/color, falling back to the Custom tool ('0') and white. Used by
+// both the auto-load effect and annotation import so the two never diverge.
+export const parseAudacityContent = (
+    content: string,
+    tools: AnnotationTool[],
+): Annotation[] => {
+    const loaded: Annotation[] = [];
+    const lines = content.trim().split('\n');
+    for (const line of lines) {
+        const parts = line.split('\t');
+        if (parts.length >= 3) {
+            const start = parseFloat(parts[0]);
+            const end = parseFloat(parts[1]);
+            const text = parts.slice(2).join('\t');
+            if (!isNaN(start) && !isNaN(end)) {
+                const matchedTool = tools.find(t => t.text === text);
+                loaded.push({
+                    id: generateId(),
+                    toolKey: matchedTool?.key ?? '0',
+                    start,
+                    end,
+                    text,
+                    color: matchedTool?.color ?? '#ffffff',
+                });
+            }
+        }
+    }
+    return loaded;
+};
+
+// Merge imported annotations onto existing ones by appending. Incoming
+// annotations are given fresh ids so they never collide with existing ids.
+// The result is sorted by start time for stable display. Pure — inputs are
+// not mutated.
+export const mergeAnnotations = (
+    existing: Annotation[],
+    incoming: Annotation[],
+): Annotation[] => {
+    const appended = incoming.map(a => ({ ...a, id: generateId() }));
+    return [...existing, ...appended].sort((a, b) => a.start - b.start);
+};
+
 // Export to Audacity TXT (Tab delimited)
 export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
     const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');

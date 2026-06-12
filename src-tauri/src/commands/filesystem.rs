@@ -149,6 +149,38 @@ pub async fn open_directory_dialog_at(app: tauri::AppHandle, start_path: String)
     }))
 }
 
+/// Open a native single-file picker, optionally seeded at `start_path`'s
+/// directory and constrained by `filters`. Returns the chosen absolute path,
+/// or `None` if the user cancelled. Mirrors `save_file_dialog` but for reads.
+#[tauri::command]
+pub async fn open_file_dialog(
+    app: tauri::AppHandle,
+    start_path: Option<String>,
+    filters: Vec<DialogFilter>,
+) -> Result<Option<String>, String> {
+    let mut dialog = app.dialog().file();
+    if let Some(sp) = start_path.as_deref() {
+        let p = std::path::Path::new(sp);
+        let dir = if p.is_dir() { Some(p) } else { p.parent() };
+        if let Some(d) = dir {
+            if d.is_dir() {
+                dialog = dialog.set_directory(d);
+            }
+        }
+    }
+    for f in &filters {
+        let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
+        dialog = dialog.add_filter(&f.name, &exts);
+    }
+
+    let result = dialog.blocking_pick_file();
+
+    Ok(result.and_then(|p| match p {
+        FilePath::Path(pb) => Some(pb.to_string_lossy().to_string()),
+        _ => None,
+    }))
+}
+
 #[tauri::command]
 pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, String> {
     let root = std::path::Path::new(&path);

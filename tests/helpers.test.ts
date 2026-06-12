@@ -4,6 +4,8 @@ import {
   makeAnnotationFromTool,
   calculateAnnotationLayers,
   generateAudacityContent,
+  parseAudacityContent,
+  mergeAnnotations,
   stripExt,
   shuffleArray,
   clamp,
@@ -291,5 +293,76 @@ describe('updateAnnotation', () => {
     const a = ann(0, 1, 'a', { id: 'a' });
     expect(updateAnnotation([a], 'missing', x => ({ ...x, text: 'X' }))).toEqual([a]);
     expect(updateAnnotation([a], null, x => ({ ...x, text: 'X' }))).toEqual([a]);
+  });
+});
+
+describe('parseAudacityContent', () => {
+  const tools: AnnotationTool[] = [
+    { key: '1', text: 'bird', color: '#ff0000' },
+    { key: '2', text: 'noise', color: '#00ff00' },
+  ];
+
+  it('parses tab-delimited rows and matches tools by text', () => {
+    const content = '0.5\t1.5\tbird\n2.0\t3.0\tnoise\n';
+    const result = parseAudacityContent(content, tools);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ start: 0.5, end: 1.5, text: 'bird', toolKey: '1', color: '#ff0000' });
+    expect(result[1]).toMatchObject({ start: 2.0, end: 3.0, text: 'noise', toolKey: '2', color: '#00ff00' });
+  });
+
+  it('falls back to Custom tool (key 0) and white for unmatched text', () => {
+    const result = parseAudacityContent('1\t2\tunknown\n', tools);
+    expect(result[0]).toMatchObject({ toolKey: '0', color: '#ffffff', text: 'unknown' });
+  });
+
+  it('preserves tabs inside the label text', () => {
+    const result = parseAudacityContent('1\t2\ta\tb\n', tools);
+    expect(result[0].text).toBe('a\tb');
+  });
+
+  it('skips malformed rows (too few columns or non-numeric times)', () => {
+    const result = parseAudacityContent('bad\nrow\tonly\nx\ty\tlabel\n0\t1\tbird\n', tools);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe('bird');
+  });
+
+  it('returns empty array for empty content', () => {
+    expect(parseAudacityContent('', tools)).toEqual([]);
+  });
+
+  it('round-trips through generateAudacityContent', () => {
+    const original = [ann(0.25, 1.75, 'bird', { toolKey: '1', color: '#ff0000' })];
+    const text = generateAudacityContent(original);
+    const parsed = parseAudacityContent(text, tools);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ start: 0.25, end: 1.75, text: 'bird', toolKey: '1' });
+  });
+});
+
+describe('mergeAnnotations', () => {
+  it('appends incoming onto existing, sorted by start', () => {
+    const existing = [ann(2, 3, 'a', { id: 'e1' })];
+    const incoming = [ann(0, 1, 'b', { id: 'i1' }), ann(5, 6, 'c', { id: 'i2' })];
+    const merged = mergeAnnotations(existing, incoming);
+    expect(merged.map(a => a.text)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('gives incoming annotations fresh ids to avoid collisions', () => {
+    const existing = [ann(0, 1, 'a', { id: 'dup' })];
+    const incoming = [ann(2, 3, 'b', { id: 'dup' })];
+    const merged = mergeAnnotations(existing, incoming);
+    const ids = merged.map(a => a.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toContain('dup'); // existing id is preserved
+  });
+
+  it('does not mutate its inputs', () => {
+    const existing = [ann(0, 1, 'a', { id: 'e1' })];
+    const incoming = [ann(2, 3, 'b', { id: 'i1' })];
+    const existingCopy = [...existing];
+    const incomingCopy = [...incoming];
+    mergeAnnotations(existing, incoming);
+    expect(existing).toEqual(existingCopy);
+    expect(incoming).toEqual(incomingCopy);
   });
 });

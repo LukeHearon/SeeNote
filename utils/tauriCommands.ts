@@ -121,6 +121,15 @@ export const saveFileDialog = (
 ): Promise<string | null> =>
   invoke('save_file_dialog', { defaultPath, filters });
 
+/** Open a native single-file picker. `startPath` seeds the dialog directory
+ * (a file path uses its parent dir). Resolves to the chosen absolute path, or
+ * null if the user cancelled. */
+export const openFileDialog = (
+  startPath: string | null,
+  filters: DialogFilter[],
+): Promise<string | null> =>
+  invoke('open_file_dialog', { startPath, filters });
+
 /** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src. */
 export const toAssetUrl = (absolutePath: string): string =>
   convertFileSrc(absolutePath);
