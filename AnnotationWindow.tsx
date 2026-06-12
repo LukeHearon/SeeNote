@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft } from 'lucide-react';
+import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
@@ -49,6 +49,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [isProcessing, setIsProcessing] = useState(false);
   const [allTracks, setAllMediaFiles] = useState<string[]>([]);
   const [filePanelCollapsed, setFilePanelCollapsed] = useState(false);
+  const [videoCollapsed, setVideoCollapsed] = useState(false);
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
@@ -1125,23 +1126,30 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [getAnnotationPath, handleAnnotationsCommit]);
 
   const handleImportAnnotations = useCallback(async (targetTrack: string) => {
-    if (!annotationDirectory || !currentDirectory) return;
+    addLog(`[import] triggered — annotationDirectory=${annotationDirectory ?? 'null'} currentDirectory=${currentDirectory ?? 'null'}`);
+    if (!annotationDirectory || !currentDirectory) {
+      addLog('[import] aborted: no annotation directory or project directory', 'error');
+      return;
+    }
     try {
       const sourcePath = await openFileDialog(targetTrack, [
         { name: 'Annotation File', extensions: ['txt'] },
       ]);
+      addLog(`[import] file dialog returned: ${sourcePath ?? 'cancelled'}`);
       if (!sourcePath) return;
       const content = await readTextFile(sourcePath);
+      addLog(`[import] read ${content?.length ?? 0} chars`);
       if (!content) {
         addLog('Import: selected file was empty', 'error');
         return;
       }
+      const sourceName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
       const incoming = parseAudacityContent(content, annotationToolsRef.current);
+      addLog(`[import] parsed ${incoming.length} annotations`);
       if (incoming.length === 0) {
-        addLog('Import: no annotations found in selected file', 'error');
+        addLog(`Import: "${sourceName}" could not be parsed as an annotation file`, 'error');
         return;
       }
-      const sourceName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
 
       // Read whatever is on disk for this track to decide whether to confirm.
       const annotPath = getAnnotationPath(targetTrack);
@@ -1592,15 +1600,26 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       window.addEventListener('mouseup', up);
   };
 
+  // Dragging the video/spectrogram divider above this ratio collapses the
+  // video pane to a bar (mirrors the file-panel drag-to-collapse, where the
+  // collapse threshold equals the expanded minimum). Kept in sync with the
+  // collapsed bar's pixel height so a drag back down resumes from the bar.
+  const VIDEO_COLLAPSE_MIN_RATIO = 0.2;
+  const VIDEO_COLLAPSED_BAR_PX = 32;
   const handleSplitDrag = (e: React.MouseEvent) => {
       e.preventDefault();
       const startY = e.clientY;
-      const startRatio = splitRatio;
+      const totalHeight = window.innerHeight - 64;
+      const startRatio = videoCollapsed ? VIDEO_COLLAPSED_BAR_PX / totalHeight : splitRatio;
       startDragSession((moveEvent) => {
           const delta = moveEvent.clientY - startY;
-          const totalHeight = window.innerHeight - 64;
-          const newRatio = Math.max(0.2, Math.min(0.8, startRatio + (delta / totalHeight)));
-          setSplitRatio(newRatio);
+          const newRatio = startRatio + (delta / totalHeight);
+          if (newRatio < VIDEO_COLLAPSE_MIN_RATIO) {
+              setVideoCollapsed(true);
+          } else {
+              setVideoCollapsed(false);
+              setSplitRatio(Math.min(0.8, newRatio));
+          }
       });
   };
 
@@ -1988,8 +2007,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         {/* Right: video + spectrogram stacked */}
         <div className="flex-1 flex flex-col relative overflow-hidden">
 
-        {/* Video Pane */}
-        <div style={{ height: `${splitRatio * 100}%` }} className="bg-black relative flex" data-help-target="video-panel">
+        {/* Video Pane — kept mounted when collapsed (the <video> element is the
+            audio transport in Fast/Mixed mode) but squished behind an opaque bar. */}
+        <div
+          style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
+          className="bg-black relative flex flex-none overflow-hidden"
+          data-help-target="video-panel"
+        >
           <VideoPane
             frameSource={frameSourceRef.current}
             frameSourceVersion={frameSourceVersion}
@@ -2005,6 +2029,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onVideoModeChange={setVideoMode}
             onVideoElement={attachVideoElement}
           />
+          {videoCollapsed && (
+            <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
+              <button
+                type="button"
+                onClick={() => setVideoCollapsed(false)}
+                className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
+                data-tooltip="Expand video panel"
+              >
+                <ChevronDown size={16} />
+                <span className="text-xs font-medium uppercase tracking-wide">Video</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Resizer Handle */}
@@ -2016,7 +2053,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         </div>
 
         {/* Spectrogram Pane */}
-        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="relative bg-slate-900 border-t border-slate-700 flex flex-col" data-help-target="spectrogram-canvas">
+        <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col" data-help-target="spectrogram-canvas">
 
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (

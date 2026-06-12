@@ -149,6 +149,9 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p className="text-slate-400 text-xs">
                   When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level.
                 </p>
+                <p className="text-slate-400 text-xs">
+                  Drag the divider below the video all the way up to collapse the pane to a bar; click the bar (or drag it back down) to restore it. Playback keeps running while collapsed.
+                </p>
               </Section>
 
               <Section title="Video Zoom" target="video-panel">
