@@ -1095,6 +1095,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
   // ── Import annotations ──────────────────────────────────────────────────────
+  const [importError, setImportError] = useState<string | null>(null);
+
   // Pending state for the overwrite/merge confirmation when the target track
   // already has annotations on disk.
   const [pendingImport, setPendingImport] = useState<{
@@ -1148,6 +1150,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       addLog(`[import] parsed ${incoming.length} annotations`);
       if (incoming.length === 0) {
         addLog(`Import: "${sourceName}" could not be parsed as an annotation file`, 'error');
+        setImportError(`"${sourceName}" could not be parsed as an annotation file.`);
         return;
       }
 
@@ -1915,6 +1918,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onClick={() => resolveImport('merge')}
               >
                 Merge
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import parse error */}
+      {importError && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
+          <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">Could not import annotations</h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-4">{importError}</p>
+            <div className="flex justify-end">
+              <button
+                className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
+                onClick={() => setImportError(null)}
+              >
+                OK
               </button>
             </div>
           </div>
