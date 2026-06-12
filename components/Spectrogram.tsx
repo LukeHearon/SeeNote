@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
-import { timeToX, xToTime } from '../utils/viewportTransform';
+import { timeToX, xToTime, computeLabelPlacement } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -1810,6 +1810,30 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
              const isHovered = hoveredAnnotationId === annotation.id;
 
+             // Horizontal placement of the name label. Composes the existing
+             // screen-left pinning (annotation start scrolled off the left) with
+             // the selection "pop": an overlapping selection pushes the label to
+             // the selection's start, right-justifying against the annotation's
+             // right edge when there's no room for the text. LABEL_INSET matches
+             // the 8px (0.5rem) inset used below. Text width is estimated from
+             // the character count (~6.2px/char at text-xs bold); 0 when empty so
+             // the right-justify fallback is skipped (placeholder is short).
+             const LABEL_INSET = 8;
+             const labelTextWidth = annotation.text ? annotation.text.length * 6.2 : 0;
+             const labelPlacement = computeLabelPlacement({
+                 annStartX: left,
+                 annEndX: left + width,
+                 selStartX: selection ? timeToX(selection.start, scrollLeft, pixelsPerSecond) : null,
+                 selEndX: selection ? timeToX(selection.end, scrollLeft, pixelsPerSecond) : null,
+                 inset: LABEL_INSET,
+                 textWidth: labelTextWidth,
+             });
+             // Convert container-px placement to a style relative to the
+             // annotation div (whose origin is at container x = left).
+             const labelStyle = labelPlacement.rightJustified
+                 ? { right: `${LABEL_INSET}px` }
+                 : { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
+
              return (
                  <div
                     key={annotation.id}
@@ -1914,12 +1938,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                             }}
                             className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
                             style={{
-                                // Pin the label to the left edge of the spectrogram area while the
-                                // annotation is partially scrolled off the left. When left>=0 this is the
-                                // normal 8px (0.5rem) inset; when left<0 it offsets rightward by -left so
-                                // the text sits ~8px from the container's left edge.
-                                left: `${Math.max(8, 8 - left)}px`,
-                                right: '8px',
+                                // Horizontal placement (screen-left pinning + selection pop +
+                                // right-justify fallback) is computed by computeLabelPlacement above.
+                                ...labelStyle,
+                                textAlign: labelPlacement.rightJustified ? 'right' : 'left',
                                 color: '#ffffff',
                                 fontWeight: 'bold',
                                 textShadow: '0 1px 2px black',

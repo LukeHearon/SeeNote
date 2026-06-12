@@ -193,6 +193,11 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   </li>
                 </ul>
                 <p className="text-slate-400 text-xs">
+                  A selection that overlaps an annotation pops that annotation's name to the selection's
+                  start, so the label stays next to where you're looking. If there's no room before the
+                  annotation's right edge, the name right-justifies against it instead.
+                </p>
+                <p className="text-slate-400 text-xs">
                   <Kbd>Esc</Kbd> is the universal undo-layer key: it pops the most recently activated layer
                   (band, filter-tool, selection, annotation tool) in the reverse order you turned them on.
                 </p>
