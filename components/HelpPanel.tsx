@@ -215,6 +215,13 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
                 <p>
                   The{' '}
+                  <HelpAnchor target="recenter-playhead">recenter button</HelpAnchor>{' '}
+                  (or <Kbd>C</Kbd>) pans the spectrogram so the playhead sits back in the
+                  center of the visible window, without changing the zoom level. Useful after
+                  scrolling away or jumping to a time off-screen.
+                </p>
+                <p>
+                  The{' '}
                   <HelpAnchor target="volume-control">volume slider</HelpAnchor>{' '}
                   supports up to 2× gain boost (slider past center). Press <Kbd>M</Kbd> to mute.
                   Right-click the volume control to access <strong>Restart Audio</strong>, which
