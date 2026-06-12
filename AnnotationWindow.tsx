@@ -315,6 +315,56 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setDebugLogs(prev => [...prev, { time, msg, type }]);
   }, []);
 
+  // Wheel-event diagnostics: batch events over 100ms and emit a single summary
+  // line so the debug console doesn't flood. Logs: count, deltaMode, deltaX
+  // range, deltaY range, panAmount range, and inter-event interval range.
+  const wheelBatchRef = useRef<{
+    count: number;
+    modes: Set<number>;
+    dxMin: number; dxMax: number;
+    dyMin: number; dyMax: number;
+    paMin: number; paMax: number;
+    dtMin: number; dtMax: number;
+    prevTs: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null>(null);
+
+  const handleWheelDiagnostic = useCallback((info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number }) => {
+    if (!wheelBatchRef.current) {
+      wheelBatchRef.current = {
+        count: 0, modes: new Set(),
+        dxMin: Infinity, dxMax: -Infinity,
+        dyMin: Infinity, dyMax: -Infinity,
+        paMin: Infinity, paMax: -Infinity,
+        dtMin: Infinity, dtMax: -Infinity,
+        prevTs: info.ts, timer: null,
+      };
+    }
+    const b = wheelBatchRef.current;
+    const dt = b.count === 0 ? 0 : info.ts - b.prevTs;
+    b.count++;
+    b.modes.add(info.deltaMode);
+    b.dxMin = Math.min(b.dxMin, info.deltaX); b.dxMax = Math.max(b.dxMax, info.deltaX);
+    b.dyMin = Math.min(b.dyMin, info.deltaY); b.dyMax = Math.max(b.dyMax, info.deltaY);
+    b.paMin = Math.min(b.paMin, info.panAmount); b.paMax = Math.max(b.paMax, info.panAmount);
+    if (dt > 0) { b.dtMin = Math.min(b.dtMin, dt); b.dtMax = Math.max(b.dtMax, dt); }
+    b.prevTs = info.ts;
+    if (b.timer) clearTimeout(b.timer);
+    b.timer = setTimeout(() => {
+      const d = wheelBatchRef.current!;
+      const modeStr = [...d.modes].map(m => ['pixel','line','page'][m] ?? m).join('+');
+      const fmt = (v: number) => v === Infinity || v === -Infinity ? '—' : v.toFixed(1);
+      addLog(
+        `[wheel] ${d.count} events  mode=${modeStr}` +
+        `  dX[${fmt(d.dxMin)}…${fmt(d.dxMax)}]` +
+        `  dY[${fmt(d.dyMin)}…${fmt(d.dyMax)}]` +
+        `  pan[${fmt(d.paMin)}…${fmt(d.paMax)}]` +
+        (d.dtMin !== Infinity ? `  dt[${fmt(d.dtMin)}…${fmt(d.dtMax)}]ms` : '')
+      );
+      wheelBatchRef.current = null;
+    }, 150);
+  }, [addLog]);
+
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRef.current = selection; }, [selection]);
 
@@ -2284,6 +2334,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={publishViewport}
+                onWheelDiagnostic={showDebug ? handleWheelDiagnostic : undefined}
                 videoMode={videoMode}
                 isAudioTrack={isAudioTrack}
              />

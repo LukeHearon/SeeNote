@@ -72,6 +72,7 @@ interface SpectrogramProps {
    * Optional so callers that don't need it pay nothing.
    */
   onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
+  onWheelDiagnostic?: (info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number }) => void;
   videoMode?: VideoMode;
   isAudioTrack?: boolean;
 }
@@ -123,6 +124,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onBoundAnnotationChange,
   onZoomChange,
   onViewportChange,
+  onWheelDiagnostic,
   videoMode,
   isAudioTrack = false,
 }, ref) => {
@@ -1592,6 +1594,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
+    if (onWheelDiagnostic && !e.ctrlKey && !e.metaKey) {
+      onWheelDiagnostic({
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        panAmount: e.deltaY + e.deltaX,
+        ts: performance.now(),
+      });
+    }
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
   };
 
