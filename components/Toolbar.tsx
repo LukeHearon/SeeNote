@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity, LocateFixed } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
@@ -351,6 +351,15 @@ function Toolbar({
           data-tooltip="Skip to end"
         >
           <SkipForward size={15} />
+        </button>
+        <button
+          onClick={() => spectrogramRef.current?.recenterPlayhead()}
+          disabled={!videoSrc}
+          className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
+          data-tooltip="Recenter view on playhead (C)"
+          data-help-target="recenter-playhead"
+        >
+          <LocateFixed size={15} />
         </button>
       </div>
 

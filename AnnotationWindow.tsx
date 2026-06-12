@@ -1336,6 +1336,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'f', mods: ['shift'], handler: () => { if (videoMode !== 'fast') handleToggleFilterTool(); } },
       { key: 'f', handler: () => { if (videoMode !== 'fast') handleToggleFilterState(); } },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
+      // `C`: recenter the visible window on the playhead (no zoom change).
+      { key: 'c', handler: () => spectrogramRef.current?.recenterPlayhead() },
       // Escape — universal undo of the most-recently-activated layer. Fires
       // even when a text input has focus (HelpPanel's `stop:true` Esc handler
       // still wins when help is open). Layer kinds & clear actions:

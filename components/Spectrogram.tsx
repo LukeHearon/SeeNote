@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
-import { timeToX, xToTime } from '../utils/viewportTransform';
+import { timeToX, xToTime, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -80,6 +80,7 @@ export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
   scrollToTime: (time: number) => void;
+  recenterPlayhead: () => void;
   zoomToRange: (startTime: number, endTime: number) => void;
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
   zoomIn: () => void;
@@ -87,12 +88,10 @@ export interface SpectrogramHandle {
   focusAnnotationInput: (id: string) => void;
 }
 
-// Maximum horizontal scroll (in pixels), allowing a 40%-of-viewport overrun
-// past the end of the file so the last events aren't pinned to the right edge.
-// Single source of truth for the scroll clamp used by auto-pan, right-drag pan,
-// and wheel zoom/pan.
-const computeMaxScroll = (duration: number, pixelsPerSecond: number, containerWidth: number) =>
-  Math.max(0, duration * pixelsPerSecond - containerWidth + containerWidth * 0.4);
+// The scroll clamp (40%-of-viewport overrun past the end) lives in
+// utils/viewportTransform as `maxScroll`, imported here as `computeMaxScroll`
+// so auto-pan, right-drag pan, wheel zoom/pan, and the recenter action all
+// share one source of truth.
 
 const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
@@ -991,8 +990,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
-    setScrollLeft(Math.max(0, time * pixelsPerSecond - containerWidth / 2));
-  }, [pixelsPerSecond]);
+    setScrollLeft(centerScrollLeft(time, pixelsPerSecond, containerWidth, duration));
+  }, [pixelsPerSecond, duration]);
+
+  // Recenter the playhead in the visible window without changing zoom.
+  const recenterPlayhead = useCallback(() => {
+    scrollToTime(currentTimeStore.get());
+  }, [scrollToTime, currentTimeStore]);
 
   // Escape handling lives in AnnotationWindow (universal activation-stack
   // unwind). When `Esc` pops `selection`, AnnotationWindow also clears
@@ -1613,6 +1617,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     goToPrevAnnotation,
     goToNextAnnotation,
     scrollToTime,
+    recenterPlayhead,
     zoomToRange,
     applyWheel,
     zoomIn,
@@ -1620,7 +1625,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     focusAnnotationInput: (id: string) => {
       inputRefs.current[id]?.focus();
     },
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, zoomToRange, applyWheel, zoomIn, zoomOut]);
+  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
