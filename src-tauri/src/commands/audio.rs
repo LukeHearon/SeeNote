@@ -73,6 +73,25 @@ pub async fn get_file_info(path: String) -> Result<FileInfoResult, String> {
         .map_err(|e| e.to_string())
 }
 
+// ── Peak amplitude (for loudness normalization) ────────────────────────────────
+
+/// Peak absolute sample amplitude of the whole file, on the mono mixdown (the
+/// same averaged-across-channels signal the playback path produces). Returned
+/// in [0, 1] for normal float PCM. Used by the example-clip player to compute a
+/// normalization gain so quiet and loud clips preview at a comparable level.
+///
+/// Decodes the entire file; intended for the short example clips, not full
+/// recordings.
+#[tauri::command]
+pub async fn audio_peak(path: String) -> Result<f32, String> {
+    let info = decoder::get_file_info(&path).map_err(|e| e.to_string())?;
+    let dur = info.duration_secs.max(0.0);
+    let (samples, _sr) =
+        decoder::decode_audio_range(&path, 0.0, dur).map_err(|e| e.to_string())?;
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    Ok(peak)
+}
+
 // ── Spectrogram chunk ─────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

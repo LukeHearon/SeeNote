@@ -1,3 +1,4 @@
+pub mod annotation_tools;
 pub mod audio;
 pub mod buzzdetect;
 pub mod filesystem;

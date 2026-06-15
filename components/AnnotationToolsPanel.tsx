@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Settings, Trash2 } from 'lucide-react';
+import { Settings, Trash2, Play, Square } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
 
@@ -18,6 +18,11 @@ interface AnnotationToolsPanelProps {
   onOpenSettings: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
+  // Example-clip playback: id of the tool currently auditioning (null = none),
+  // a toggle to play/stop a tool's next example, and the "Show examples" library.
+  playingExampleToolId: string | null;
+  onPlayExample: (tool: AnnotationTool) => void;
+  onShowExamples: (toolIndex: number) => void;
 }
 
 function AnnotationToolsPanel({
@@ -28,6 +33,9 @@ function AnnotationToolsPanel({
   onOpenSettings,
   onEditTool,
   onRequestDeleteTool,
+  playingExampleToolId,
+  onPlayExample,
+  onShowExamples,
 }: AnnotationToolsPanelProps) {
   const custom = annotationTools[0];
   // Defined (non-custom, keyed) tools sorted by key — memoized so this doesn't
@@ -130,6 +138,9 @@ function AnnotationToolsPanel({
         <div className="flex flex-col gap-1">
           {definedTools.map((tool) => {
             const toolIndex = annotationTools.indexOf(tool);
+            const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
+            const isPlaying = playingExampleToolId === tool.id;
+            const showOverlay = hoveredToolKey === tool.key || isPlaying;
             return (
               <div
                 key={tool.key}
@@ -147,20 +158,31 @@ function AnnotationToolsPanel({
                   onClick={() => onToolActivate(tool.key!)}
                   tooltip={tool.description || undefined}
                 />
-                {hoveredToolKey === tool.key && (
+                {showOverlay && (
                   <div
                     className="absolute right-0 inset-y-0 flex items-center gap-0.5 pr-1 pl-4 pointer-events-none"
                     style={{ background: 'linear-gradient(to right, transparent, rgba(15,23,42,0.9) 35%)' }}
                   >
+                    {hasExamples && (
+                      <button
+                        className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                        onClick={e => { e.stopPropagation(); onPlayExample(tool); }}
+                        data-tooltip={isPlaying ? 'Stop example' : 'Play example clip'}
+                      >
+                        {isPlaying ? <Square size={10} /> : <Play size={10} />}
+                      </button>
+                    )}
                     <button
                       className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
                       onClick={e => { e.stopPropagation(); onEditTool(toolIndex); }}
+                      data-tooltip="Edit tool"
                     >
                       <Settings size={10} />
                     </button>
                     <button
                       className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-600/60 transition-colors"
                       onClick={e => { e.stopPropagation(); onRequestDeleteTool(toolIndex); }}
+                      data-tooltip="Delete tool"
                     >
                       <Trash2 size={10} />
                     </button>
@@ -184,6 +206,14 @@ function AnnotationToolsPanel({
           >
             Edit
           </button>
+          {(annotationTools[contextMenu.toolIndex]?.exampleFiles?.length ?? 0) > 0 && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
+              onClick={() => { onShowExamples(contextMenu.toolIndex); setContextMenu(null); }}
+            >
+              Show examples
+            </button>
+          )}
           {contextMenu.canDelete && (
             <button
               className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-slate-700 transition-colors"

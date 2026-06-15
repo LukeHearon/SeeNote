@@ -7,12 +7,14 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_ANNOTATION_TOOLS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
-import { exportToAudacity, generateAudacityContent, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog } from './utils/tauriCommands';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
+import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool } from './utils/tauriCommands';
+import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
+import { useExamplePlayer } from './hooks/useExamplePlayer';
 import { useActivationStack } from './hooks/useActivationStack';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
@@ -24,8 +26,10 @@ import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
+import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar from './components/Toolbar';
+import LevelRangeSlider from './components/LevelRangeSlider';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
 
 export interface AnnotationWindowProps {
@@ -57,6 +61,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
   const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
   const [panelDeletingToolIndex, setPanelDeletingToolIndex] = useState<number | null>(null);
+  // Index of the tool whose example-clip library is open (null = closed).
+  const [libraryToolIndex, setLibraryToolIndex] = useState<number | null>(null);
 
   // Derived from project prop
   const annotationDirectory = project.annotationDirectoryAbs ?? null;
@@ -109,7 +115,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-  const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(DEFAULT_ANNOTATION_TOOLS);
+  const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(() => [makeCustomTool(HOTKEY_COLORS[0])]);
   // Mirror of annotationTools for use inside the annotation-load effect without
   // making it depend on (and re-run on) tool changes — re-running it would
   // re-read the on-disk file before the debounced autosave has written renames,
@@ -300,10 +306,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       ...DEFAULT_SPECTROGRAM_SETTINGS,
       ...project.settings.spectrogramSettings,
   });
-  // Draft strings for the display-range inputs — let the user type freely;
-  // only parse and validate when they blur or press Enter.
-  const [displayFloorDraft, setDisplayFloorDraft] = useState(String(project.settings.spectrogramSettings?.displayFloor ?? DEFAULT_SPECTROGRAM_SETTINGS.displayFloor));
-  const [displayCeilDraft, setDisplayCeilDraft] = useState(String(project.settings.spectrogramSettings?.displayCeil ?? DEFAULT_SPECTROGRAM_SETTINGS.displayCeil));
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
@@ -314,6 +316,23 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       const time = new Date().toLocaleTimeString();
       setDebugLogs(prev => [...prev, { time, msg, type }]);
   }, []);
+
+  // Shared example-clip player for the tool-chip play buttons (palette + tool
+  // settings). Independent of the main track's AudioEngine.
+  const examplePlayer = useExamplePlayer(addLog);
+  // True while the example-library modal is actively playing a clip.
+  const [libraryPlaying, setLibraryPlaying] = useState(false);
+  // An example clip is sounding via either path (chip preview or the modal).
+  // While true the main track's audio is parked so the two never overlap, and
+  // the spectrogram shows a dimmed "example audio is playing" veil.
+  const exampleAudioActive = examplePlayer.playingToolId !== null || libraryPlaying;
+
+  // Open the read-only example library for a tool; stop any chip-button preview
+  // first so the two don't play over each other.
+  const handleShowExamples = useCallback((toolIndex: number) => {
+    examplePlayer.stop();
+    setLibraryToolIndex(toolIndex);
+  }, [examplePlayer]);
 
   // Wheel-event diagnostics: batch events over 100ms and emit a single summary
   // line so the debug console doesn't flood. Logs: count, deltaMode, deltaX
@@ -666,6 +685,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     [usesVideoTransport],
   );
 
+  // Mutual exclusion: whenever an example clip starts sounding, park the main
+  // transport so the two files never play at once. The main play button shows
+  // the existing buffering spinner (a "waiting" state) for the duration.
+  useEffect(() => {
+    if (!exampleAudioActive) return;
+    activeTransport()?.pause();
+    setIsPlaying(false);
+  }, [exampleAudioActive, activeTransport]);
+
   // Stable callback passed to CanvasVideoPlayer's rAF loop. Reading from the
   // engine directly (rather than the currentTime state) avoids a frame of
   // lag: React commits on rAF, so currentTime is always one tick behind.
@@ -833,16 +861,69 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProjectIdRef = useRef<string | null>(null);
+  // Last tool snapshot known to match the on-disk folders. The reconcile
+  // effect diffs against this to derive folder create/rename/update/delete ops.
+  const prevPersistedToolsRef = useRef<PersistedTool[]>([]);
+  // Set by the load path so the reconcile effect skips the setAnnotationTools
+  // it triggers (the loaded array already matches the folders).
+  const skipToolPersistRef = useRef(false);
+
+  // Assemble the in-memory tool array from the project's tool folders +
+  // hotkey map. Used on mount and after the project settings modal saves.
+  const loadAnnotationTools = useCallback(async (proj: Project) => {
+    try {
+      const folderTools = await listAnnotationTools(proj.projectDir);
+      const tools = assembleTools(
+        folderTools,
+        proj.settings.toolHotkeys ?? {},
+        proj.settings.customToolColor ?? HOTKEY_COLORS[0],
+        () => generateId(),
+      );
+      prevPersistedToolsRef.current = toPersistedTools(tools);
+      skipToolPersistRef.current = true;
+      setAnnotationTools(tools);
+    } catch (err) {
+      addLog(`Error loading annotation tools: ${err}`, 'error');
+    }
+  }, []);
+
+  // Reconcile in-memory tools to disk: folder ops from the snapshot diff, then
+  // the hotkey map + Custom color into settings.json. Debounced so rapid
+  // changes (e.g. live color preview drags) collapse into one write.
   useEffect(() => {
     // Skip persistence when switching projects (avoids overwriting with stale tools)
     if (prevProjectIdRef.current !== project.id) {
       prevProjectIdRef.current = project.id;
       return;
     }
+    if (skipToolPersistRef.current) {
+      skipToolPersistRef.current = false;
+      return;
+    }
     if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
-    toolPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      updateProjectSettings(projectRef.current.id, { ...projectRef.current.settings, annotationTools });
+    toolPersistRef.current = setTimeout(async () => {
+      const proj = projectRef.current;
+      if (!proj) return;
+      const next = toPersistedTools(annotationTools);
+      const ops = diffToolFolders(prevPersistedToolsRef.current, next);
+      try {
+        // Deletes first so a freed label can be reused by a rename or create
+        // in the same batch (e.g. undo of a delete recreates the same label
+        // under a new id).
+        for (const d of ops.deletes) await deleteAnnotationTool(proj.projectDir, d);
+        for (const r of ops.renames) await renameAnnotationTool(proj.projectDir, r.from, r.to);
+        for (const c of ops.creates) await createAnnotationTool(proj.projectDir, c.text, c.color, c.description);
+        for (const u of ops.updates) await updateAnnotationTool(proj.projectDir, u.text, u.color, u.description);
+        prevPersistedToolsRef.current = next;
+      } catch (err) {
+        addLog(`Error saving annotation tools: ${err}`, 'error');
+      }
+      const custom = annotationTools.find(t => t.id === CUSTOM_TOOL_ID);
+      updateProjectSettings(proj.id, {
+        ...proj.settings,
+        toolHotkeys: buildHotkeyMap(annotationTools),
+        customToolColor: custom?.color ?? HOTKEY_COLORS[0],
+      });
     }, 500);
     return () => {
       if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
@@ -986,11 +1067,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Initialize state from project prop on mount
   useEffect(() => {
-    setAnnotationTools(project.settings.annotationTools.length > 0 ? project.settings.annotationTools : DEFAULT_ANNOTATION_TOOLS);
+    loadAnnotationTools(project);
     const sg = { ...DEFAULT_SPECTROGRAM_SETTINGS, ...project.settings.spectrogramSettings };
     setSettings(sg);
-    setDisplayFloorDraft(String(sg.displayFloor));
-    setDisplayCeilDraft(String(sg.displayCeil));
     setShuffleMode(project.settings.shuffleMode ?? false);
     const ui = { ...DEFAULT_UI_SETTINGS, ...project.settings.uiSettings };
     setSplitRatio(ui.splitRatio);
@@ -1093,7 +1172,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setShowProjectSettings(false);
       return;
     }
-    setAnnotationTools(updated.settings.annotationTools.length > 0 ? updated.settings.annotationTools : DEFAULT_ANNOTATION_TOOLS);
+    loadAnnotationTools(updated);
     setVideoMode(migrateVideoMode(updated.settings.uiSettings?.videoMode));
     if (mediaDirChanged) {
       setCurrentDirectory(updated.mediaDirectoryAbs);
@@ -1110,7 +1189,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProjectSettings, handleOpenTrack]);
+  }, [project, updateProjectSettings, handleOpenTrack, loadAnnotationTools]);
 
   const handleToggleFileFilter = useCallback(() => {
     const current = project.settings.fileFilter ?? 'all';
@@ -1245,6 +1324,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setIsBuffering(false);
           return;
       }
+      // Starting main playback stops any example clip — they can't both sound.
+      examplePlayer.stop();
       const sel = selectionRef.current;
       const curTime = currentTimeRef.current;
       let startSec = curTime;
@@ -1271,7 +1352,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // isPlaying is set to true only when onPlaying fires. endSec enables the
       // bounded selection stop on whichever transport is active.
       transport?.play(startSec, sel ? sel.end : undefined);
-  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport]);
+  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport, examplePlayer]);
 
   const seek = useCallback(async (time: number, scrollView = false) => {
       const transport = activeTransport();
@@ -1521,7 +1602,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           const tool = annotationTools.find(t => t.key === e.key);
           if (tool) handleToolActivate(e.key);
       }},
-  ]);
+  ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
   const performExport = async () => {
       if (annotations.length === 0) return;
@@ -1531,8 +1612,49 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   };
 
   const handleCreateTool = useCallback((text: string, color: string, key?: string | null) => {
-    setAnnotationTools(prev => [...prev, { key: key ?? null, text, color }]);
+    setAnnotationTools(prev => [...prev, { id: generateId(), key: key ?? null, text, color }]);
   }, []);
+
+  // "Import examples" in the tool settings modal: pick a directory of plain
+  // {label}/ folders of audio clips; the backend creates the appropriate tool
+  // dirs and copies the clips, then the folder scan is merged into the
+  // in-memory tools (keeping pending edits and hotkeys intact).
+  const handleImportExamples = useCallback(async () => {
+    const proj = projectRef.current;
+    if (!proj) return;
+    const dir = await openDirectoryDialog();
+    if (!dir) return;
+    try {
+      const summary = await importToolExamples(proj.projectDir, dir, HOTKEY_COLORS.slice(1));
+      const folderTools = await listAnnotationTools(proj.projectDir);
+      const { tools, added } = mergeImportedTools(annotationToolsRef.current, folderTools, () => generateId());
+      // The import already wrote the added tools' folders — extend the
+      // persisted snapshot so the reconcile diff doesn't re-create them.
+      prevPersistedToolsRef.current = [...prevPersistedToolsRef.current, ...toPersistedTools(added)];
+      setAnnotationTools(tools);
+      addLog(`Imported examples: ${summary.files_copied} copied, ${summary.files_skipped} skipped, ${summary.tools_created.length} new tool(s)`);
+    } catch (err) {
+      addLog(`Import examples error: ${err}`, 'error');
+    }
+  }, [addLog]);
+
+  // Per-tool example import: copy the selected files/folders into one tool's
+  // examples/ dir, then refresh that tool's exampleFiles from the folder scan.
+  // Skips Custom (key '0'), which is synthetic and has no folder.
+  const handleImportExamplesToTool = useCallback(async (toolIndex: number, paths: string[]) => {
+    const proj = projectRef.current;
+    if (!proj || paths.length === 0) return;
+    const tool = annotationToolsRef.current[toolIndex];
+    if (!tool || tool.key === '0') return;
+    try {
+      const summary = await importExamplesToTool(proj.projectDir, tool.text, paths);
+      const exampleFiles = await listToolExamples(proj.projectDir, tool.text);
+      setAnnotationTools(prev => prev.map(t => t.id === tool.id ? { ...t, exampleFiles } : t));
+      addLog(`Imported examples into "${tool.text}": ${summary.files_copied} copied, ${summary.files_skipped} skipped`);
+    } catch (err) {
+      addLog(`Import examples error: ${err}`, 'error');
+    }
+  }, [addLog]);
 
   // Atomically restore tools + annotations for the Annotation Tool Settings
   // modal's own undo/redo (e.g. undeleting a tool, which must also put back the
@@ -2063,6 +2185,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onOpenSettings={() => setShowToolSettings(true)}
                 onEditTool={setPanelEditingToolIndex}
                 onRequestDeleteTool={setPanelDeletingToolIndex}
+                playingExampleToolId={examplePlayer.playingToolId}
+                onPlayExample={examplePlayer.toggle}
+                onShowExamples={handleShowExamples}
               />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
@@ -2131,78 +2256,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
                     <div className="p-4 space-y-6">
                         {/* Level Range */}
-                        <div className="space-y-2">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Level Range (dBFS)</h4>
-                            {/* Dual-thumb slider — two range inputs share the same track.
-                                Layering (bottom→top): base track → active-range fill → the two
-                                inputs (both with transparent tracks so only their thumbs show on
-                                top of the fill). */}
-                            <div className="relative h-5 flex items-center">
-                                {/* Base track */}
-                                <div className="absolute w-full h-1 rounded bg-slate-600 pointer-events-none" />
-                                {/* Active range: the selected dBFS band between the two thumbs.
-                                    Range is [-160, 40] dBFS → span 200. */}
-                                <div
-                                    className="absolute h-1 rounded bg-[#e65161] pointer-events-none"
-                                    style={{
-                                        left: `${((settings.displayFloor + 160) / 200) * 100}%`,
-                                        width: `${((settings.displayCeil - settings.displayFloor) / 200) * 100}%`,
-                                    }}
-                                />
-                                <input
-                                    type="range"
-                                    min={-160} max={40}
-                                    value={settings.displayFloor}
-                                    onChange={(e) => {
-                                        const v = Math.min(parseInt(e.target.value), settings.displayCeil - 1);
-                                        setSettings(s => ({...s, displayFloor: v}));
-                                        setDisplayFloorDraft(String(v));
-                                    }}
-                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
-                                />
-                                <input
-                                    type="range"
-                                    min={-160} max={40}
-                                    value={settings.displayCeil}
-                                    onChange={(e) => {
-                                        const v = Math.max(parseInt(e.target.value), settings.displayFloor + 1);
-                                        setSettings(s => ({...s, displayCeil: v}));
-                                        setDisplayCeilDraft(String(v));
-                                    }}
-                                    className="absolute w-full appearance-none h-1 rounded bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#e65161] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:pointer-events-auto"
-                                />
-                            </div>
-                            <div className="flex justify-between">
-                                <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={displayFloorDraft}
-                                    onChange={(e) => setDisplayFloorDraft(e.target.value)}
-                                    onBlur={() => {
-                                        const v = parseInt(displayFloorDraft);
-                                        const clamped = isNaN(v) ? settings.displayFloor : Math.max(-160, Math.min(settings.displayCeil - 1, v));
-                                        setSettings(s => ({...s, displayFloor: clamped}));
-                                        setDisplayFloorDraft(String(clamped));
-                                    }}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
-                                />
-                                <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={displayCeilDraft}
-                                    onChange={(e) => setDisplayCeilDraft(e.target.value)}
-                                    onBlur={() => {
-                                        const v = parseInt(displayCeilDraft);
-                                        const clamped = isNaN(v) ? settings.displayCeil : Math.max(settings.displayFloor + 1, Math.min(40, v));
-                                        setSettings(s => ({...s, displayCeil: clamped}));
-                                        setDisplayCeilDraft(String(clamped));
-                                    }}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                    className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
-                                />
-                            </div>
-                        </div>
+                        <LevelRangeSlider
+                            floor={settings.displayFloor}
+                            ceil={settings.displayCeil}
+                            onChange={(r) => setSettings(s => ({ ...s, ...r }))}
+                        />
 
                         {/* Frequency */}
                         <div className="space-y-3">
@@ -2264,7 +2322,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
              <Toolbar
                isPlaying={isPlaying}
-               isBuffering={isBuffering}
+               isBuffering={isBuffering || exampleAudioActive}
                videoSrc={videoSrc}
                currentTimeStore={currentTimeStoreRef.current}
                duration={duration}
@@ -2338,6 +2396,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 videoMode={videoMode}
                 isAudioTrack={isAudioTrack}
              />
+             {/* Veil while a tool-chip example preview is sounding: the main
+                 track is parked, so dim the spectrogram and say why. Not shown
+                 for the "Show examples" modal, which has its own spectrogram. */}
+             {examplePlayer.playingToolId !== null && (
+               <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/55 pointer-events-none">
+                 <span className="text-xs font-medium text-slate-200 bg-slate-900/80 border border-slate-700 rounded-full px-3 py-1">
+                   Example audio is playing
+                 </span>
+               </div>
+             )}
              </div>
 
              {buzzdetectEnabled && (
@@ -2392,6 +2460,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onPreviewColor={handlePreviewToolColor}
           onCreateTool={handleCreateTool}
           onRestoreToolsState={handleRestoreToolsState}
+          onImportExamples={handleImportExamples}
+          onImportExamplesToTool={handleImportExamplesToTool}
+          playingExampleToolId={examplePlayer.playingToolId}
+          onPlayExample={examplePlayer.toggle}
+          onShowExamples={handleShowExamples}
         />
       )}
       {panelEditingToolIndex !== null && (
@@ -2401,10 +2474,21 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           annotations={annotations}
           onClose={() => setPanelEditingToolIndex(null)}
           onPreviewColor={handlePreviewToolColor}
+          onImportExamples={handleImportExamplesToTool}
+          onShowExamples={(idx) => { setPanelEditingToolIndex(null); handleShowExamples(idx); }}
           onSave={(idx, text, color, description) => {
             handleRenameTool(idx, text, color, description);
             setPanelEditingToolIndex(null);
           }}
+        />
+      )}
+      {libraryToolIndex !== null && annotationTools[libraryToolIndex] && (
+        <AnnotationToolLibrary
+          tool={annotationTools[libraryToolIndex]}
+          initialSettings={settings}
+          addLog={addLog}
+          onPlayingChange={setLibraryPlaying}
+          onClose={() => { setLibraryPlaying(false); setLibraryToolIndex(null); }}
         />
       )}
       {panelDeletingToolIndex !== null && (() => {

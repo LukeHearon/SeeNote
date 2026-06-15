@@ -1,34 +1,13 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { drawSpectrogramChunk, yToFreq, freqToY } from '../utils/audioProcessing';
+import { drawSpectrogramChunk, yToFreq, freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
+import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { timeToX, xToTime, computeLabelPlacement, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { X, Pencil } from 'lucide-react';
-
-// Format time for the spectrogram ruler.
-// viewSpan: the total visible time range in seconds (used to decide whether to show hours).
-function formatRulerTime(s: number, timeStep: number, viewSpan: number): string {
-  if (timeStep < 1) {
-    return `${s.toFixed(2)}s`;
-  }
-  const totalSec = Math.round(s);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const sec = totalSec % 60;
-
-  const showHours = viewSpan >= 3600;
-
-  if (showHours) {
-    return `${h}h${String(m).padStart(2, '0')}m${String(sec).padStart(2, '0')}s`;
-  } else if (totalSec >= 60 || timeStep >= 60) {
-    return `${m}m${String(sec).padStart(2, '0')}s`;
-  } else {
-    return `${sec}s`;
-  }
-}
 
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
@@ -715,16 +694,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // pixelsPerSecond is derived from (pixelsPerSecond = containerWidth/zoomSec),
     // so the span across the container is exactly zoomSec.
     const timeRange = zoomSec;
-    let timeStep = 1;
-    if (timeRange > 36000) timeStep = 3600;
-    else if (timeRange > 7200) timeStep = 600;
-    else if (timeRange > 1200) timeStep = 120;
-    else if (timeRange > 300) timeStep = 60;
-    else if (timeRange > 60) timeStep = 10;
-    else if (timeRange > 30) timeStep = 5;
-    else if (timeRange > 10) timeStep = 2;
-    else if (timeRange > 2) timeStep = 1;
-    else timeStep = 0.25;
+    const timeStep = chooseTimeStep(timeRange);
 
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
@@ -819,28 +789,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       ctx.fillText(label, width - 7, y);
     };
 
-    if (settings.frequencyScale === 'log') {
-      let mag = 10;
-      while (mag < settings.maxFreq) {
-        [1, 2, 5].forEach(mult => {
-          const freq = mag * mult;
-          if (freq >= settings.minFreq && freq <= settings.maxFreq) renderTick(freq);
-        });
-        mag *= 10;
-      }
-    } else {
-      const range = settings.maxFreq - settings.minFreq;
-      if (range > 0) {
-        const roughStep = range / 8;
-        const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
-        let step = magnitude;
-        if (roughStep / step > 5) step *= 5;
-        else if (roughStep / step > 2) step *= 2;
-        const firstTick = Math.ceil(settings.minFreq / step) * step;
-        for (let freq = firstTick; freq <= settings.maxFreq; freq += step) {
-          renderTick(freq);
-        }
-      }
+    for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {
+      renderTick(freq);
     }
     ctx.restore();
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);

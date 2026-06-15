@@ -180,7 +180,10 @@ export const HOTKEY_COLORS = [
   "#64748b", // 9 Slate
 ];
 
-// Default annotation tools for new projects.
+// Seed tools for new projects. CreateProjectModal creates a tool folder under
+// .seenote/annotation-tools/ for each non-Custom entry and builds the initial
+// settings.toolHotkeys from the keys, so a fresh project is usable out of the
+// box. Not used after project creation — the folders are the source of truth.
 //
 // IMPORTANT: Key "0" is ALWAYS reserved for the Custom Annotation Tool. When
 // this tool is active, new annotations get an empty text field so the user can
@@ -188,8 +191,10 @@ export const HOTKEY_COLORS = [
 // autoFocus on the annotation text input is triggered by `text === ""`, which
 // depends on key "0" staying as the Custom Annotation Tool. Do NOT replace
 // key "0" with a defined annotation tool — doing so silently breaks the
-// custom annotation UX.
-export const DEFAULT_ANNOTATION_TOOLS: AnnotationTool[] = [
+// custom annotation UX. The Custom entry below only seeds customToolColor;
+// it never becomes a folder.
+export type SeedTool = Omit<AnnotationTool, 'id'>;
+export const DEFAULT_TOOL_SEED: SeedTool[] = [
   { key: "0", text: "Custom",            color: HOTKEY_COLORS[0] },
   { key: "1", text: "ins_buzz_high",     color: HOTKEY_COLORS[1], description: "Flight buzz higher in pitch than honey bee; perhaps small solitary bees, mosquitoes, flies" },
   { key: "2", text: "ins_buzz_medium",   color: HOTKEY_COLORS[2], description: "Flight buzz similar to that of a honey bee" },

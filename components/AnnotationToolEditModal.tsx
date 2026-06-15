@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 import { AnnotationTool, Annotation } from '../types';
-import { HOTKEY_COLORS } from '../constants';
+import { HOTKEY_COLORS, SUPPORTED_AUDIO_EXTS } from '../constants';
+import { openFilesDialog, openDirectoryDialog } from '../utils/tauriCommands';
 
 // Rainbow gradient shared by the custom-color swatch fill and its active ring.
 const RAINBOW_GRADIENT = 'linear-gradient(to right, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7)';
@@ -15,9 +16,14 @@ interface Props {
   onSave: (toolIndex: number, newText: string, newColor: string, newDescription: string) => void;
   // Live (transient) color preview while the user is changing the color.
   onPreviewColor: (toolIndex: number, color: string) => void;
+  // Import example clips (files or folders) into this tool. Absent → no import
+  // UI (e.g. for the synthetic Custom tool, which has no folder).
+  onImportExamples?: (toolIndex: number, paths: string[]) => void | Promise<void>;
+  // Open the read-only example library for this tool. Absent → no button.
+  onShowExamples?: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave, onPreviewColor }: Props) {
+export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
   const [text, setText] = useState(tool.text);
   const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
@@ -49,6 +55,22 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   const handleCancel = () => {
     onPreviewColor(toolIndex, originalColorRef.current);
     onClose();
+  };
+
+  // The Custom tool (key '0') is synthetic and has no folder, so no import UI.
+  const canImport = onImportExamples != null && tool.key !== '0';
+  const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
+
+  const handleImportFiles = async () => {
+    const paths = await openFilesDialog(null, [
+      { name: 'Audio', extensions: [...SUPPORTED_AUDIO_EXTS] },
+    ]);
+    if (paths && paths.length > 0) await onImportExamples!(toolIndex, paths);
+  };
+
+  const handleImportFolder = async () => {
+    const dir = await openDirectoryDialog();
+    if (dir) await onImportExamples!(toolIndex, [dir]);
   };
 
   useEffect(() => {
@@ -137,6 +159,34 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             </div>
           </div>
         </div>
+
+        {canImport && (
+          <div>
+            <label className="text-xs text-slate-400 mb-2 block">Example clips</label>
+            <div className="flex gap-2">
+              <button
+                onClick={handleImportFiles}
+                className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+              >
+                Files…
+              </button>
+              <button
+                onClick={handleImportFolder}
+                className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+              >
+                Folder…
+              </button>
+              {hasExamples && onShowExamples && (
+                <button
+                  onClick={() => onShowExamples(toolIndex)}
+                  className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+                >
+                  View ({tool.exampleFiles!.length})
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-end gap-2">
           <button

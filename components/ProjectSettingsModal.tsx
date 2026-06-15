@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, ExternalLink } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { checkDirExists, listAnnotationFilesRecursive } from '../utils/tauriCommands';
+import { checkDirExists, listAnnotationFilesRecursive, importAnnotationTools } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, HOTKEY_COLORS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
@@ -24,6 +24,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
     project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
+  // One-shot import, not a persisted setting: the tool folders are copied into
+  // .seenote/annotation-tools/ on save, so there is nothing to remember.
+  const [toolsImportDir, setToolsImportDir] = useState('');
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
@@ -34,6 +37,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
+  const resolvedToolsImportDir = resolveInputPath(project.projectDir, toolsImportDir);
 
   useEffect(() => {
     if (nameRef.current) nameRef.current.textContent = project.settings.name;
@@ -46,6 +50,24 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
   const pendingRef = React.useRef<ProjectSettings | null>(null);
   const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
+
+  // Final commit for every save path (form and confirm steps): run the
+  // one-shot tools import if a directory was chosen, then hand the settings
+  // to the owner. Import errors keep the modal open.
+  const commitSave = async (settings: ProjectSettings) => {
+    if (toolsImportDir) {
+      setIsBusy(true);
+      try {
+        await importAnnotationTools(project.projectDir, resolvedToolsImportDir, HOTKEY_COLORS.slice(1));
+      } catch (err) {
+        setError(String(err));
+        setIsBusy(false);
+        return;
+      }
+      setIsBusy(false);
+    }
+    onSave(settings);
+  };
 
   const handleFormSubmit = async () => {
     if (!name.trim()) { setError('Project name is required.'); return; }
@@ -103,7 +125,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       }
     }
 
-    onSave(settings);
+    commitSave(settings);
   };
 
   const handleOrphanResolution = async (resolution: 'delete' | 'retain') => {
@@ -135,14 +157,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const pending = pendingRef.current;
     if (!pending) return;
-    onSave(pending);
+    commitSave(pending);
   };
 
   const handleCopyDecision = async (shouldCopy: boolean) => {
     if (!shouldCopy) {
       const pending = pendingRef.current;
       if (!pending) return;
-      onSave(pending);
+      commitSave(pending);
       return;
     }
 
@@ -190,23 +212,26 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setIsBusy(false);
     const pending = pendingRef.current;
     if (!pending) return;
-    onSave(pending);
+    commitSave(pending);
   };
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+      {/* The form step is fixed-height with a scrolling body so the footer
+          buttons stay in view however many settings sections are open; the
+          confirm steps are short dialogs and size to their content. */}
+      <div className={`bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl ${step === 'form' ? 'h-[640px] max-h-[85vh] flex flex-col overflow-hidden' : 'p-6'}`}>
 
         {step === 'form' && (
           <>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
               <h2 className="text-white text-lg font-semibold">Project Settings</h2>
               <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
                 <X size={20} />
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 px-6 py-4 overflow-y-auto flex-1 min-h-0">
               <div>
                 <label className="text-gray-400 text-sm block mb-1">Project Name</label>
                 <div className="border-b border-gray-600 focus-within:border-blue-500 pb-1">
@@ -307,6 +332,15 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   helperText="Activations plotted below the spectrogram, located per track by ident."
                   notExistMessage="Directory does not exist."
                 />
+                <DirectoryField
+                  label="Import tools"
+                  projectDir={project.projectDir}
+                  value={toolsImportDir}
+                  onChange={setToolsImportDir}
+                  placeholder="(optional) directory of {label}/ tool folders"
+                  helperText="One-time import on save: tool folders ({label}/tool.json, description.txt, examples/) are copied into the project; existing tools only gain example clips."
+                  notExistMessage="Directory does not exist."
+                />
               </CollapsibleSection>
 
               {error && (
@@ -314,7 +348,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               )}
             </div>
 
-            <div className="flex gap-3 mt-6 justify-end">
+            <div className="flex gap-3 px-6 py-4 justify-end border-t border-gray-700 flex-none">
               <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
                 Cancel
               </button>

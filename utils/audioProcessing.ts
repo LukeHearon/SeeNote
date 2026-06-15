@@ -83,6 +83,41 @@ export const freqToY = (
   return canvasHeight * (1 - normY);
 };
 
+/**
+ * Frequency values (Hz) at which to draw Y-axis ticks for the given display
+ * range and scale. Shared by the main Spectrogram and ExampleSpectrogram so
+ * both axes pick the same ticks. Drawing/label-spacing is left to the caller.
+ */
+export const freqAxisTicks = (
+  minFreq: number,
+  maxFreq: number,
+  scale: FrequencyScale,
+): number[] => {
+  const ticks: number[] = [];
+  if (scale === 'log') {
+    let mag = 10;
+    while (mag < maxFreq) {
+      for (const mult of [1, 2, 5]) {
+        const freq = mag * mult;
+        if (freq >= minFreq && freq <= maxFreq) ticks.push(freq);
+      }
+      mag *= 10;
+    }
+  } else {
+    const range = maxFreq - minFreq;
+    if (range > 0) {
+      const roughStep = range / 8;
+      const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+      let step = magnitude;
+      if (roughStep / step > 5) step *= 5;
+      else if (roughStep / step > 2) step *= 2;
+      const firstTick = Math.ceil(minFreq / step) * step;
+      for (let freq = firstTick; freq <= maxFreq; freq += step) ticks.push(freq);
+    }
+  }
+  return ticks;
+};
+
 // NOTE TO FUTURE READERS / CODE AUDITORS:
 // This function does NOT decide which STFT column lands on which pixel.
 // It is invoked by the offscreen-canvas builder in `Spectrogram.tsx`,

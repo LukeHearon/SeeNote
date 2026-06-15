@@ -325,7 +325,16 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
                 <p>
                   Open <HelpAnchor target="tool-palette">Annotation Tool Settings</HelpAnchor> (gear icon) to manage tools: drag tools between hotkey slots and the Unassigned bin, click a tool's gear to edit its label and color, or hover a tool and click the trash icon to delete it (deletes are undoable). Hover an empty hotkey slot to create a new tool directly on that key.
-                  Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project.
+                  Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project: each tool is a folder under the project's <span className="text-white">.seenote/annotation-tools/</span> directory, which can also hold example audio clips for that label.
+                </p>
+                <p>
+                  To bulk-import: the <span className="text-white">Import examples</span> button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels. <span className="text-white">Project Settings → Advanced → Import tools</span> instead takes fully fleshed-out tool folders (tool.json, description.txt, examples/) — the same structure as .seenote/annotation-tools/ itself.
+                </p>
+                <p>
+                  To add examples to a single tool, edit it (gear icon) and use the <span className="text-white">Files…</span> or <span className="text-white">Folder…</span> buttons under Example clips. Folders are searched recursively; clips are copied into that tool's examples/ and existing filenames are skipped.
+                </p>
+                <p>
+                  Once a tool has example clips, a <span className="text-white">play</span> button appears on its chip (in the palette and in Annotation Tool Settings) — press it to audition the clips, cycling to the next clip on each press. To browse all of a tool's clips with their spectrograms, right-click the tool and choose <span className="text-white">Show examples</span> (or use the <span className="text-white">View</span> button in the tool editor). The library is read-only and its spectrogram settings don't affect the project. Inside it, <Kbd>Space</Kbd> plays/pauses the selected clip, the spectrogram has full time/frequency axes, the frequency range defaults to the clip's full band, and right-clicking a clip reveals it in Finder / File Explorer. Example playback is loudness-normalized (with a volume slider) so quiet and loud clips audition at a comparable level. While any example is sounding, the main track's audio is paused so the two never overlap.
                 </p>
                 <p className="text-slate-400 text-xs">
                   Inside Annotation Tool Settings, <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd> undo and redo the last tool change.

@@ -181,6 +181,42 @@ pub async fn open_file_dialog(
     }))
 }
 
+/// Multi-select variant of `open_file_dialog`. Returns the chosen absolute
+/// paths, or `None` if the user cancelled.
+#[tauri::command]
+pub async fn open_files_dialog(
+    app: tauri::AppHandle,
+    start_path: Option<String>,
+    filters: Vec<DialogFilter>,
+) -> Result<Option<Vec<String>>, String> {
+    let mut dialog = app.dialog().file();
+    if let Some(sp) = start_path.as_deref() {
+        let p = std::path::Path::new(sp);
+        let dir = if p.is_dir() { Some(p) } else { p.parent() };
+        if let Some(d) = dir {
+            if d.is_dir() {
+                dialog = dialog.set_directory(d);
+            }
+        }
+    }
+    for f in &filters {
+        let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
+        dialog = dialog.add_filter(&f.name, &exts);
+    }
+
+    let result = dialog.blocking_pick_files();
+
+    Ok(result.map(|paths| {
+        paths
+            .into_iter()
+            .filter_map(|p| match p {
+                FilePath::Path(pb) => Some(pb.to_string_lossy().to_string()),
+                _ => None,
+            })
+            .collect()
+    }))
+}
+
 #[tauri::command]
 pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, String> {
     let root = std::path::Path::new(&path);

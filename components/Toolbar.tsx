@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Volume2, VolumeX, Loader2, Settings, Gauge, Filter, Activity, LocateFixed } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2, Settings, Gauge, Filter, Activity, LocateFixed } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
+import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
@@ -60,14 +61,6 @@ interface ToolbarProps {
   onRestartAudio?: () => void;
 }
 
-// Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
-// Lower half [0,0.5] covers gain 0→1 (finer resolution for quieting);
-// upper half [0.5,1] covers gain 1→4 (coarser resolution for boosting).
-const gainToSlider = (gain: number): number =>
-  gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 6;
-const sliderToGain = (s: number): number =>
-  s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 6;
-
 // Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 4.0;
@@ -124,13 +117,9 @@ function Toolbar({
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
-  const volumeRef = useRef(volume);
-  const mutedRef = useRef(muted);
   const speedRef = useRef(playbackSpeed);
   const filterStrengthRef = useRef(filterStrength);
   const bandPassFilterRef = useRef(bandPassFilter);
-  useEffect(() => { volumeRef.current = volume; }, [volume]);
-  useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { speedRef.current = playbackSpeed; }, [playbackSpeed]);
   useEffect(() => { filterStrengthRef.current = filterStrength; }, [filterStrength]);
   useEffect(() => { bandPassFilterRef.current = bandPassFilter; }, [bandPassFilter]);
@@ -145,21 +134,6 @@ function Toolbar({
     const clamped = clamp(playbackSpeed, effectiveSpeedMin, effectiveSpeedMax);
     if (clamped !== playbackSpeed) setPlaybackSpeed(clamped);
   }, [videoMode]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const [volumeControlEl, setVolumeControlEl] = useState<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!volumeControlEl) return;
-    const handler = (e: WheelEvent) => {
-      e.preventDefault();
-      const cur = gainToSlider(mutedRef.current ? 0 : volumeRef.current);
-      const delta = -Math.sign(e.deltaY) * 0.03;
-      const newSlider = clamp(cur + delta, 0, 1);
-      setVolume(sliderToGain(newSlider));
-      setMuted(false);
-    };
-    volumeControlEl.addEventListener('wheel', handler, { passive: false });
-    return () => volumeControlEl.removeEventListener('wheel', handler);
-  }, [volumeControlEl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [speedControlEl, setSpeedControlEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -227,19 +201,6 @@ function Toolbar({
     setFilterStrength(v);
     setBandPassFilter({ ...bandPassFilter, strength: v });
   };
-
-  // Handle volume slider change
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let sliderVal = parseFloat(e.target.value);
-    // Snap to center (gain=1.0) when close
-    if (Math.abs(sliderVal - 0.5) < 0.01) sliderVal = 0.5;
-    setVolume(sliderToGain(sliderVal));
-    setMuted(false);
-  };
-
-  // Calculate volume slider background
-  const sliderPct = gainToSlider(muted ? 0 : volume) * 100;
-  const isBoosted = !muted && volume > 1;
 
   // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45", "1:23:45"
   const parseTimestamp = (raw: string): number | null => {
@@ -364,34 +325,15 @@ function Toolbar({
       </div>
 
       {/* Volume Control */}
-      <div
-        ref={setVolumeControlEl}
-        className="relative flex items-center space-x-2 group bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600 ml-1"
-        data-help-target="volume-control"
-        onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
-      >
-        <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
-          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-        </button>
-        <div className="relative w-20 h-5 flex items-center">
-          <input
-            type="range" min="0" max="1" step="0.005"
-            value={gainToSlider(muted ? 0 : volume)}
-            onChange={handleVolumeChange}
-            onPointerUp={(e) => {
-              const sliderVal = parseFloat((e.target as HTMLInputElement).value);
-              if (Math.abs(sliderVal - 0.5) < 0.015) { setVolume(1.0); setMuted(false); }
-            }}
-            className={`w-full h-1 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${isBoosted ? '[&::-webkit-slider-thumb]:bg-red-500' : '[&::-webkit-slider-thumb]:bg-[#e65161]'}`}
-            style={{
-              background: isBoosted
-                ? `linear-gradient(to right, #e65161 0%, #e65161 50%, #ef4444 50%, #ef4444 ${sliderPct}%, #64748b ${sliderPct}%, #64748b 100%)`
-                : `linear-gradient(to right, #e65161 0%, #e65161 ${sliderPct}%, #64748b ${sliderPct}%, #64748b 100%)`
-            }}
-          />
-          {/* Hash mark at center = gain 1.0 (50% of slider range) */}
-          <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }}></div>
-        </div>
+      <div className="ml-1">
+        <VolumeControl
+          volume={volume}
+          muted={muted}
+          setVolume={setVolume}
+          setMuted={setMuted}
+          helpTarget="volume-control"
+          onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+        />
       </div>
 
       {volumeCtxMenu && onRestartAudio && (

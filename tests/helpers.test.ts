@@ -69,8 +69,8 @@ describe('formatTime', () => {
 });
 
 describe('makeAnnotationFromTool', () => {
-  const tool: AnnotationTool = { key: '1', text: 'Bee', color: '#ff8800' };
-  const customTool: AnnotationTool = { key: '0', text: 'IGNORED_FOR_CUSTOM', color: '#00ff00' };
+  const tool: AnnotationTool = { id: 't1', key: '1', text: 'Bee', color: '#ff8800' };
+  const customTool: AnnotationTool = { id: 'custom', key: '0', text: 'IGNORED_FOR_CUSTOM', color: '#00ff00' };
 
   it('produces a non-empty string id', () => {
     const a = makeAnnotationFromTool(tool, 1.0, 2.0);
@@ -99,7 +99,7 @@ describe('makeAnnotationFromTool', () => {
   });
 
   it('throws when the tool key is null (unassigned)', () => {
-    const unassigned: AnnotationTool = { key: null, text: 'x', color: '#000' };
+    const unassigned: AnnotationTool = { id: 'tx', key: null, text: 'x', color: '#000' };
     expect(() => makeAnnotationFromTool(unassigned, 0, 1)).toThrow();
   });
 });
@@ -298,8 +298,8 @@ describe('updateAnnotation', () => {
 
 describe('parseAudacityContent', () => {
   const tools: AnnotationTool[] = [
-    { key: '1', text: 'bird', color: '#ff0000' },
-    { key: '2', text: 'noise', color: '#00ff00' },
+    { id: 't1', key: '1', text: 'bird', color: '#ff0000' },
+    { id: 't2', key: '2', text: 'noise', color: '#00ff00' },
   ];
 
   it('parses tab-delimited rows and matches tools by text', () => {

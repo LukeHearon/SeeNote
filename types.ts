@@ -29,10 +29,19 @@ export interface SpectrogramSettings {
 
 
 export interface AnnotationTool {
+  /**
+   * Session-stable identity used ONLY to track which on-disk tool folder this
+   * tool maps to across edits (so a rename moves the folder instead of
+   * delete+recreate). Runtime-only — never written to annotation files or
+   * settings. The durable identity on disk is the folder name (= `text`).
+   */
+  id: string;
   key: string | null;  // null = unassigned, "0" = custom, "1"-"9" = hotkey
   text: string;
   color: string;
   description?: string; // internal memo shown as hover tooltip on annotations
+  /** Absolute paths of example audio clips from the folder scan. Runtime-only. */
+  exampleFiles?: string[];
 }
 
 /**
@@ -143,7 +152,14 @@ export interface ProjectSettings {
   buzzdetectDirectory?: ProjectPath;
   outputFormat: 'txt';
   outputRoundingDecimals?: number;
-  annotationTools: AnnotationTool[];
+  /**
+   * Label → hotkey ("1"–"9"). The tools themselves live as folders under
+   * {projectDir}/.seenote/annotation-tools/ (see utils/annotationTools.ts);
+   * only the hotkey bindings are project settings.
+   */
+  toolHotkeys?: Record<string, string>;
+  /** Color of the synthetic Custom tool (key "0"), which is not a folder. */
+  customToolColor?: string;
   spectrogramSettings?: SpectrogramSettings;
   nameGradientColors?: [string, string];
   fileFilter?: 'all' | 'annotated' | 'unannotated';

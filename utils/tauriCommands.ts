@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { BuzzdetectData } from '../types';
 
 // ── Types returned by Rust ────────────────────────────────────────────────────
@@ -36,6 +35,10 @@ export interface DialogFilter {
 
 export const getFileInfo = (path: string): Promise<FileInfo> =>
   invoke('get_file_info', { path });
+
+/** Peak absolute sample amplitude (mono mixdown), in [0, 1] for float PCM. */
+export const audioPeak = (path: string): Promise<number> =>
+  invoke('audio_peak', { path });
 
 // Header layout from Rust's build_spectrogram_response (28 bytes, all little-endian):
 //   u32 n_cols, u32 n_freq_bins, f64 start_sec, f64 actual_duration_sec, u32 sample_rate
@@ -130,9 +133,19 @@ export const openFileDialog = (
 ): Promise<string | null> =>
   invoke('open_file_dialog', { startPath, filters });
 
-/** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src. */
+/** Multi-select variant of `openFileDialog`. Resolves to the chosen absolute
+ * paths, or null if the user cancelled. */
+export const openFilesDialog = (
+  startPath: string | null,
+  filters: DialogFilter[],
+): Promise<string[] | null> =>
+  invoke('open_files_dialog', { startPath, filters });
+
+/** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src.
+ * Tauri's WKURLSchemeHandler uses the URL path as a literal filesystem path with no
+ * percent-decoding, so we must not encode the path at all. */
 export const toAssetUrl = (absolutePath: string): string =>
-  convertFileSrc(absolutePath);
+  `asset://localhost${absolutePath}`;
 
 // ── PCM streaming ─────────────────────────────────────────────────────────────
 
@@ -163,3 +176,103 @@ export const readPcmChunk = (streamId: number, maxFrames: number): Promise<PcmCh
 /** Close and discard the stream. */
 export const closePcmStream = (streamId: number): Promise<void> =>
   invoke('close_pcm_stream', { streamId });
+
+// ── Annotation tools (folder model) ───────────────────────────────────────────
+// Tools live as folders under {projectDir}/.seenote/annotation-tools/. The folder
+// NAME is the label — the exact text written into annotation .txt files — so it
+// is the durable identity (no UUID). color → tool.json, description →
+// description.txt, audio in examples/ → example clips. Hotkeys are project-level
+// and live in settings.json, not here. See commands/annotation_tools.rs.
+
+/** A tool as returned by the Rust folder scan. `name` is the label. */
+export interface FolderTool {
+  name: string;
+  color: string;
+  description: string;
+  /** Absolute paths to example audio clips, sorted. */
+  example_files: string[];
+}
+
+/** Scan the tools folder. Empty if no tools have been created yet. */
+export const listAnnotationTools = (projectDir: string): Promise<FolderTool[]> =>
+  invoke('list_annotation_tools', { projectDir });
+
+/** Example clip paths for one tool, sorted. */
+export const listToolExamples = (projectDir: string, name: string): Promise<string[]> =>
+  invoke('list_tool_examples', { projectDir, name });
+
+/** Create a tool folder + tool.json (+ description.txt). Rejects a duplicate label. */
+export const createAnnotationTool = (
+  projectDir: string,
+  name: string,
+  color: string,
+  description: string,
+): Promise<void> =>
+  invoke('create_annotation_tool', { projectDir, name, color, description });
+
+/** Rewrite a tool's color/description (not its label). */
+export const updateAnnotationTool = (
+  projectDir: string,
+  name: string,
+  color: string,
+  description: string,
+): Promise<void> =>
+  invoke('update_annotation_tool', { projectDir, name, color, description });
+
+/** Rename a tool's folder. Caller rewrites matching label text in annotations. */
+export const renameAnnotationTool = (
+  projectDir: string,
+  oldName: string,
+  newName: string,
+): Promise<void> =>
+  invoke('rename_annotation_tool', { projectDir, oldName, newName });
+
+/** Delete a tool folder and its example clips. Annotation files untouched. */
+export const deleteAnnotationTool = (projectDir: string, name: string): Promise<void> =>
+  invoke('delete_annotation_tool', { projectDir, name });
+
+export interface ImportExamplesSummary {
+  tools_created: string[];
+  files_copied: number;
+  files_skipped: number;
+}
+
+/**
+ * Import a directory of fully fleshed-out tool folders (same layout as
+ * .seenote/annotation-tools/: {label}/tool.json + description.txt + examples/).
+ * New labels are copied in (palette-colored when tool.json is absent);
+ * existing labels keep their color/description and only merge example clips.
+ * Idempotent: existing destination filenames are skipped.
+ */
+export const importAnnotationTools = (
+  projectDir: string,
+  toolsDir: string,
+  palette: string[],
+): Promise<ImportExamplesSummary> =>
+  invoke('import_annotation_tools', { projectDir, toolsDir, palette });
+
+/**
+ * Import a directory of plain example clips (one subfolder per label, each
+ * holding audio files directly). Files are copied into each tool's examples/;
+ * tools are created for unknown labels, colored by cycling `palette`.
+ * Idempotent: existing destination filenames are skipped.
+ */
+export const importToolExamples = (
+  projectDir: string,
+  examplesDir: string,
+  palette: string[],
+): Promise<ImportExamplesSummary> =>
+  invoke('import_tool_examples', { projectDir, examplesDir, palette });
+
+/**
+ * Import example clips into a single tool from an explicit selection. Each path
+ * may be an audio file or a directory (searched recursively); clips land flat
+ * in {tool}/examples/. Existing destination filenames are skipped. The tool
+ * folder is created bare if it doesn't exist yet.
+ */
+export const importExamplesToTool = (
+  projectDir: string,
+  name: string,
+  paths: string[],
+): Promise<ImportExamplesSummary> =>
+  invoke('import_examples_to_tool', { projectDir, name, paths });

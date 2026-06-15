@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { openDirectoryDialog, checkDirExists, createDirAll } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, importAnnotationTools } from '../utils/tauriCommands';
 import { readProjectSettings } from '../utils/projectCommands';
-import { DEFAULT_ANNOTATION_TOOLS, randomMagmaGradient } from '../constants';
+import { DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
+import { buildHotkeyMap } from '../utils/annotationTools';
 import { makeProjectPath, resolveInputPath } from '../utils/projectPaths';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
@@ -22,6 +23,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [mediaDir, setMediaDir] = useState('');
   const [annotationDir, setAnnotationDir] = useState('');
   const [buzzdetectDir, setBuzzdetectDir] = useState('');
+  const [toolsDir, setToolsDir] = useState('');
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -35,6 +37,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const resolvedMediaDir = resolveInputPath(projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(projectDir, buzzdetectDir);
+  const resolvedToolsDir = resolveInputPath(projectDir, toolsDir);
 
   useEffect(() => {
     if (!projectDir) return;
@@ -100,10 +103,22 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         annotationDirectory: makeProjectPath(projectDir, resolvedAnnotationDir),
         buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
         outputFormat: 'txt',
-        annotationTools: DEFAULT_ANNOTATION_TOOLS,
+        toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
+        customToolColor: DEFAULT_TOOL_SEED.find(t => t.key === '0')?.color ?? HOTKEY_COLORS[0],
         nameGradientColors: gradientColors,
       };
       const project = await createProject({ projectDir, settings });
+      // createProject made .seenote/; seed a tool folder per non-Custom default
+      // so a fresh project is usable out of the box.
+      for (const t of DEFAULT_TOOL_SEED) {
+        if (t.key === '0') continue;
+        await createAnnotationTool(projectDir, t.text, t.color, t.description ?? '');
+      }
+      // Migrate an external tools directory (full {label}/tool.json +
+      // examples/ structure) into the project, adding to the seeded tools.
+      if (toolsDir) {
+        await importAnnotationTools(projectDir, resolvedToolsDir, HOTKEY_COLORS.slice(1));
+      }
       onCreated(project);
     } catch (err) {
       setError(String(err));
@@ -211,6 +226,15 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               onChange={setBuzzdetectDir}
               placeholder="(optional) directory of {ident}_buzzdetect.csv"
               helperText="Activations plotted below the spectrogram, located per track by ident."
+              notExistMessage="Directory does not exist."
+            />
+            <DirectoryField
+              label="Tools"
+              projectDir={projectDir}
+              value={toolsDir}
+              onChange={setToolsDir}
+              placeholder="(optional) directory of {label}/ tool folders"
+              helperText="Annotation tool folders ({label}/tool.json, description.txt, examples/) copied into the project on creation."
               notExistMessage="Directory does not exist."
             />
           </CollapsibleSection>

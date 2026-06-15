@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, GripVertical, Settings, Plus, Trash2 } from 'lucide-react';
+import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
@@ -21,6 +21,17 @@ interface Props {
   // too. Wired in AnnotationWindow to commit through the shared annotation
   // history path so global undo stays consistent.
   onRestoreToolsState: (tools: AnnotationTool[], annotations: Annotation[]) => void;
+  // Pick a directory of {label}/ folders of audio clips and import them as
+  // example clips, creating tool dirs for unknown labels.
+  onImportExamples: () => Promise<void>;
+  // Per-tool example import (files or folders) for the tool-edit modal.
+  onImportExamplesToTool: (toolIndex: number, paths: string[]) => void | Promise<void>;
+  // Example-clip playback shared with the palette: id of the tool currently
+  // auditioning (null = none) and a toggle to play/stop a tool's next example.
+  playingExampleToolId: string | null;
+  onPlayExample: (tool: AnnotationTool) => void;
+  // Open the read-only example library for one tool (from the edit modal).
+  onShowExamples: (toolIndex: number) => void;
 }
 
 // Snapshot of the two arrays a tool mutation can touch. Deleting a tool also
@@ -56,7 +67,7 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
-function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim }: {
+function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
   toolIndex: number;
   onDragStart: (e: React.DragEvent) => void;
@@ -64,8 +75,11 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
   onGearClick: () => void;
   onDeleteClick: () => void;
   dim?: boolean;
+  isPlaying?: boolean;
+  onPlayExample?: () => void;
 }) {
   const canDelete = toolIndex !== 0 && tool.key !== '0';
+  const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
   return (
     <div className="flex items-center gap-1 flex-1 min-w-0" style={{ opacity: dim ? 0.35 : 1 }}>
       <div
@@ -78,6 +92,15 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         <GripVertical size={12} className="text-slate-500 flex-none" />
         <span className="text-xs text-white truncate flex-1">{tool.text}</span>
       </div>
+      {hasExamples && onPlayExample && (
+        <button
+          onClick={e => { e.stopPropagation(); onPlayExample(); }}
+          className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-700 flex-none transition-colors"
+          data-tooltip={isPlaying ? 'Stop example' : 'Play example clip'}
+        >
+          {isPlaying ? <Square size={12} /> : <Play size={12} />}
+        </button>
+      )}
       <button
         onClick={e => { e.stopPropagation(); onGearClick(); }}
         className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 flex-none transition-colors"
@@ -139,7 +162,13 @@ export default function AnnotationToolsSettingsModal({
   onPreviewColor,
   onCreateTool,
   onRestoreToolsState,
+  onImportExamples,
+  onImportExamplesToTool,
+  playingExampleToolId,
+  onPlayExample,
+  onShowExamples,
 }: Props) {
+  const [isImporting, setIsImporting] = useState(false);
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
   // Tool whose trash icon was clicked and that has linked annotations: drives
   // the delete-confirmation overlay. null = no dialog open.
@@ -263,9 +292,24 @@ export default function AnnotationToolsSettingsModal({
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-[640px] h-[600px] flex flex-col relative">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <span className="text-sm font-semibold text-white">Annotation Tool Settings</span>
-          <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => {
+                if (isImporting) return;
+                setIsImporting(true);
+                try { await onImportExamples(); } finally { setIsImporting(false); }
+              }}
+              disabled={isImporting}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 disabled:opacity-50 transition-colors text-xs"
+              data-tooltip="Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"
+            >
+              <FolderDown size={12} />
+              {isImporting ? 'Importing…' : 'Import examples'}
+            </button>
+            <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         <div
@@ -300,6 +344,8 @@ export default function AnnotationToolsSettingsModal({
                         onGearClick={() => setEditingToolIndex(toolIndex)}
                         onDeleteClick={() => requestDeleteTool(toolIndex)}
                         dim={drag?.sourceIndex === toolIndex}
+                        isPlaying={playingExampleToolId === tool.id}
+                        onPlayExample={() => onPlayExample(tool)}
                       />
                     </div>
                   ) : addingTo === k ? (
@@ -354,6 +400,8 @@ export default function AnnotationToolsSettingsModal({
                     onGearClick={() => setEditingToolIndex(toolIndex)}
                     onDeleteClick={() => requestDeleteTool(toolIndex)}
                     dim={drag?.sourceIndex === toolIndex}
+                    isPlaying={playingExampleToolId === tool.id}
+                    onPlayExample={() => onPlayExample(tool)}
                   />
                 </div>
               ))}
@@ -384,6 +432,8 @@ export default function AnnotationToolsSettingsModal({
           annotations={annotations}
           onClose={() => setEditingToolIndex(null)}
           onPreviewColor={onPreviewColor}
+          onImportExamples={onImportExamplesToTool}
+          onShowExamples={(idx) => { setEditingToolIndex(null); onShowExamples(idx); }}
           // Push the pre-edit snapshot (captured on open, before any live color
           // preview) so undo restores the original text AND color, then apply
           // the final values.
