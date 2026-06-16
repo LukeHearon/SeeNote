@@ -320,7 +320,7 @@ function Toolbar({
         <button
           onClick={onTogglePlayheadLock}
           disabled={!videoSrc}
-          className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? 'bg-blue-600 text-white hover:bg-blue-500' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
           data-tooltip="Lock playhead to center (C)"
           data-help-target="recenter-playhead"
         >
