@@ -75,8 +75,16 @@ fn read_description(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("description.txt")).unwrap_or_default()
 }
 
+fn is_sidecar(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("._"))
+        .unwrap_or(false)
+}
+
 fn is_audio_file(path: &Path) -> bool {
-    path.is_file()
+    !is_sidecar(path)
+        && path.is_file()
         && path
             .extension()
             .and_then(|e| e.to_str())
@@ -299,7 +307,7 @@ fn collect_audio_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            if path.is_dir() && !is_sidecar(&path) {
                 collect_audio_recursive(&path, out);
             } else if is_audio_file(&path) {
                 out.push(path);
@@ -434,7 +442,7 @@ pub async fn import_examples_to_tool(
     let mut files: Vec<PathBuf> = Vec::new();
     for p in &paths {
         let path = Path::new(p);
-        if path.is_dir() {
+        if path.is_dir() && !is_sidecar(path) {
             collect_audio_recursive(path, &mut files);
         } else if is_audio_file(path) {
             files.push(path.to_path_buf());

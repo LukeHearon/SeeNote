@@ -67,6 +67,7 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
     const idx = (nextIndexRef.current.get(tool.id) ?? 0) % files.length;
     nextIndexRef.current.set(tool.id, idx + 1);
     const path = files[idx];
+    onLogRef.current?.(`[example] loading clip ${idx + 1}/${files.length} for "${tool.text}": ${path}`);
     const engine = getEngine();
     engine.pause();
     engine.loadFile(path)
@@ -84,7 +85,7 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
         setPlayingToolId(tool.id);
       })
       .catch(err => {
-        onLogRef.current?.(`Couldn't load example: ${err}`, 'error');
+        onLogRef.current?.(`[example] failed to load "${path}": ${err}`, 'error');
         setPlayingToolId(null);
       });
   }, [getEngine, stop]);

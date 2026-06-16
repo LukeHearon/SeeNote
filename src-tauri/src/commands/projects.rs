@@ -252,14 +252,19 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
             .replace('/', "\\")
             .trim_start_matches(r"\\?\")
             .to_string();
+        // explorer.exe has non-standard argument parsing: Rust's Command wraps
+        // args containing spaces in quotes, turning `/select,C:\my path\f.mp3`
+        // into `"/select,C:\my path\f.mp3"` which explorer ignores (falls back
+        // to Documents). raw_arg lets us embed the quotes inside /select, ourselves.
+        use std::os::windows::process::CommandExt;
         if p.is_dir() {
             std::process::Command::new("explorer")
-                .arg(&win_path)
+                .raw_arg(format!("\"{}\"", win_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else {
             std::process::Command::new("explorer")
-                .arg(format!("/select,{}", win_path))
+                .raw_arg(format!("/select,\"{}\"", win_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }

@@ -309,8 +309,10 @@ function FileTree({
   const effectiveRoot = enteredPath ?? rootDirectory;
   const effectiveFiles = useMemo(() => {
     if (!enteredPath) return allFiles;
-    const prefix = enteredPath + '/';
-    return allFiles.filter(f => f.startsWith(prefix));
+    // Windows paths use `\`; accept either separator so the prefix check works
+    // regardless of which the OS returned.
+    const prefix = enteredPath.replace(/\\/g, '/') + '/';
+    return allFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
   }, [enteredPath, allFiles]);
 
   const tree = useMemo(() => {
