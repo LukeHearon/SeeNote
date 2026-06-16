@@ -38,9 +38,9 @@ export default function GitSyncSetupModal({ onClose }: Props) {
         <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0 text-sm text-gray-300 space-y-5">
           <p>
             SeeNote can sync your annotations to a private GitHub repository so collaborators
-            stay in step. Only the annotation data and your tool definitions are shared —
-            your media files, example clips, and local settings (including your access token)
-            stay on your machine. This is a one-time setup per project.
+            stay in step. Only your annotation files are shared — your media, your annotation
+            tools, and your local settings (including your access token) stay on your machine.
+            Each labeler keeps their own tools. This is a one-time setup per project.
           </p>
 
           <Step n={1} title="Create a GitHub account">

@@ -38,11 +38,13 @@ use git2::{
 };
 use serde::Serialize;
 
-use super::shared::{ANNOTATION_EXT, AUDIO_EXTS, VIDEO_EXTS};
+use super::shared::ANNOTATION_EXT;
 
 /// Branch SeeNote syncs on. Single shared branch keeps the model simple; the
 /// lab works off one line of history.
-const SYNC_BRANCH: &str = "main";
+/// Branch used only when SeeNote freshly inits a repo (unborn/detached HEAD).
+/// Otherwise the repo's current branch is used.
+const DEFAULT_BRANCH: &str = "main";
 const REMOTE_NAME: &str = "origin";
 
 /// Prefix on error messages caused by GitHub rejecting the access token (401).
@@ -126,22 +128,23 @@ fn sync_blocking(
 
     let sig = Signature::now(author, &author_email(author)).map_err(gerr)?;
 
-    // Make HEAD point at the sync branch before committing. A freshly init'd
-    // libgit2 repo defaults to `master`; without this the first commit lands
-    // there and pushing `main` fails with "src refspec does not match".
-    ensure_sync_branch(&repo)?;
+    // Sync on the repo's CURRENT branch, so dropping SeeNote into an existing
+    // repo never switches branches or forks a stray `main`. Only a freshly
+    // init'd repo (unborn/detached HEAD) falls back to `main`.
+    let branch = current_branch(&repo);
+    ensure_on_branch(&repo, &branch)?;
 
     // 1. Stage the curated set and commit any local changes.
     let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig)?;
 
     // 2. Fetch remote.
-    fetch(&repo, token)?;
+    fetch(&repo, &branch, token)?;
 
     // 3. Merge remote tracking branch into local (set-merge for annotations).
-    let mut summary = merge_remote(&repo, project_path, &sig)?;
+    let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig)?;
 
     // 4. Push.
-    let pushed = push(&repo, token)?;
+    let pushed = push(&repo, &branch, token)?;
     summary.pushed = pushed || pushed_local;
 
     if summary.message.is_empty() {
@@ -158,31 +161,34 @@ fn sync_blocking(
 // Repo setup
 // ---------------------------------------------------------------------------
 
-/// Ensure HEAD points at [`SYNC_BRANCH`], creating/repointing as needed so the
-/// first push has a `refs/heads/{SYNC_BRANCH}` to send. Handles three cases:
-/// - `main` already exists → point HEAD at it.
-/// - HEAD is born on another branch (e.g. libgit2's default `master`, possibly
-///   with commits from an earlier run) → create `main` at that commit and switch.
-/// - unborn HEAD (empty repo) → point HEAD at the not-yet-created `main`.
-fn ensure_sync_branch(repo: &Repository) -> Result<(), String> {
-    let branch_ref = format!("refs/heads/{SYNC_BRANCH}");
-
-    if repo.find_reference(&branch_ref).is_ok() {
-        repo.set_head(&branch_ref).map_err(gerr)?;
-        return Ok(());
-    }
-
-    match repo.head() {
-        Ok(head) => {
-            if let Some(oid) = head.target() {
-                let commit = repo.find_commit(oid).map_err(gerr)?;
-                repo.branch(SYNC_BRANCH, &commit, true).map_err(gerr)?;
+/// The branch SeeNote syncs on: the repo's current branch when HEAD is born on
+/// one, else [`DEFAULT_BRANCH`] (a freshly init'd repo with an unborn HEAD, or a
+/// detached HEAD). Using the current branch means dropping SeeNote into an
+/// existing repo never switches branches or forks a stray `main`.
+fn current_branch(repo: &Repository) -> String {
+    if let Ok(head) = repo.head() {
+        if head.is_branch() {
+            if let Some(name) = head.shorthand() {
+                return name.to_string();
             }
-            repo.set_head(&branch_ref).map_err(gerr)?;
         }
-        // Unborn HEAD: pointing it at the missing branch is the normal
-        // "empty repo on `main`" state; the first commit will create the ref.
-        Err(_) => repo.set_head(&branch_ref).map_err(gerr)?,
+    }
+    DEFAULT_BRANCH.to_string()
+}
+
+/// Point HEAD at `branch` if it isn't already. For an existing repo this is a
+/// no-op (`branch` is the current branch by construction); it only acts for a
+/// freshly init'd repo whose unborn HEAD defaults to `master`, repointing it so
+/// the first commit lands on `branch`. Never switches an existing born branch.
+fn ensure_on_branch(repo: &Repository, branch: &str) -> Result<(), String> {
+    let already = repo
+        .head()
+        .ok()
+        .filter(|h| h.is_branch())
+        .and_then(|h| h.shorthand().map(|s| s == branch))
+        .unwrap_or(false);
+    if !already {
+        repo.set_head(&format!("refs/heads/{branch}")).map_err(gerr)?;
     }
     Ok(())
 }
@@ -206,40 +212,48 @@ fn open_or_init(project_path: &Path, remote_url: &str) -> Result<Repository, Str
     Ok(repo)
 }
 
-/// Generate a `.gitignore` that keeps everything except the curated set out of
-/// the repo. Belt-and-suspenders: staging is also explicit (see
-/// [`stage_and_commit`]), but this protects external git clients and keeps
-/// `git status` clean. Regenerated each sync so it tracks the annotation dir.
+/// Write gitignores SCOPED to the directories SeeNote owns, so SeeNote can be
+/// dropped into an existing repo (full of source code etc.) without disturbing
+/// how that repo tracks everything else. We never write a repo-root `.gitignore`.
+///
+/// Two files:
+/// - `<annotationDir>/.gitignore` — within the annotation directory only, track
+///   just annotation files ([`ANNOTATION_EXT`]); ignore anything else dropped
+///   in there. This is also committed (shared).
+/// - `.seenote/.gitignore` — ignore the entire `.seenote/` directory, so the
+///   host repo's `git add .` never picks up SeeNote's local state (machine
+///   paths, UI, the token, tools). Not committed (it's inside the ignored dir).
 fn write_gitignore(project_path: &Path, ann_rel: &Path) -> Result<(), String> {
     let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
-    let mut lines = vec![
-        "# Generated by SeeNote git-sync. Only annotation data is shared;".to_string(),
-        "# everything else stays local.".to_string(),
-        "".to_string(),
-        "# All SeeNote project state: machine paths, UI state, the sync token,".to_string(),
-        "# and annotation tools (each labeler keeps their own tools — they are".to_string(),
-        "# not shared through git).".to_string(),
-        ".seenote/".to_string(),
-        "".to_string(),
-        "# Per-machine project registry (lives outside the project dir, but".to_string(),
-        "# ignore defensively in case it is ever nested).".to_string(),
-        ".projects/".to_string(),
-        "".to_string(),
-        "# Media files (annotations are tracked, the media they describe is not).".to_string(),
-    ];
-    for ext in AUDIO_EXTS.iter().chain(VIDEO_EXTS.iter()) {
-        lines.push(format!("*.{ext}"));
-        lines.push(format!("*.{}", ext.to_uppercase()));
+    // Guard the pathological case where the annotation dir IS the repo root —
+    // a `*` ignore there would smother the whole repo. Skip it; explicit staging
+    // still keeps the commit annotation-only.
+    if !ann_rel_posix.is_empty() && ann_rel_posix != "." {
+        let ann_dir = project_path.join(ann_rel);
+        std::fs::create_dir_all(&ann_dir)
+            .map_err(|e| format!("failed to create annotation dir: {e}"))?;
+        let content = format!(
+            "# Generated by SeeNote. Within this annotation directory, track only\n\
+             # annotation files (*.{ext}); ignore anything else.\n\
+             *\n\
+             !*/\n\
+             !*.{ext}\n\
+             !.gitignore\n",
+            ext = ANNOTATION_EXT,
+        );
+        std::fs::write(ann_dir.join(".gitignore"), content)
+            .map_err(|e| format!("failed to write annotation .gitignore: {e}"))?;
     }
-    lines.push("".to_string());
-    lines.push(format!(
-        "# Annotation directory ({ann_rel_posix}) is tracked via explicit staging."
-    ));
-    lines.push("".to_string());
 
-    let content = lines.join("\n");
-    let path = project_path.join(".gitignore");
-    std::fs::write(&path, content).map_err(|e| format!("failed to write .gitignore: {e}"))
+    let seenote_dir = project_path.join(".seenote");
+    if seenote_dir.is_dir() {
+        std::fs::write(
+            seenote_dir.join(".gitignore"),
+            "# SeeNote local state — never commit (machine paths, UI, token, tools).\n*\n",
+        )
+        .map_err(|e| format!("failed to write .seenote/.gitignore: {e}"))?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +276,9 @@ fn stage_and_commit(
     let mut staged_paths: Vec<PathBuf> = Vec::new();
     collect_annotation_files(&ann_abs, &mut staged_paths);
 
-    // (b) The generated .gitignore itself.
-    staged_paths.push(project_path.join(".gitignore"));
+    // (b) The annotation directory's own .gitignore (shared). The .seenote
+    //     gitignore is intentionally not staged — it lives in the ignored dir.
+    staged_paths.push(project_path.join(ann_rel).join(".gitignore"));
 
     for abs in &staged_paths {
         if let Ok(rel) = abs.strip_prefix(project_path) {
@@ -274,6 +289,19 @@ fn stage_and_commit(
     // Stage deletions of previously-tracked annotation files that no longer
     // exist on disk, so a deleted recording's labels propagate.
     stage_deletions(repo, &mut index, project_path, ann_rel)?;
+
+    // Untrack anything previously committed under .seenote/ — older versions of
+    // SeeNote synced tool definitions there; tools are no longer shared. The
+    // files stay on disk (now gitignored) but drop out of the next commit.
+    let seenote_tracked: Vec<PathBuf> = (0..index.len())
+        .filter_map(|i| index.get(i))
+        .map(|e| String::from_utf8_lossy(&e.path).into_owned())
+        .filter(|p| p.starts_with(".seenote/"))
+        .map(PathBuf::from)
+        .collect();
+    for p in seenote_tracked {
+        let _ = index.remove_path(&p);
+    }
 
     index.write().map_err(gerr)?;
     let tree_oid = index.write_tree().map_err(gerr)?;
@@ -405,13 +433,13 @@ fn remote_err(action: &str, e: &git2::Error) -> String {
     }
 }
 
-fn fetch(repo: &Repository, token: &str) -> Result<(), String> {
+fn fetch(repo: &Repository, branch: &str, token: &str) -> Result<(), String> {
     let mut remote = repo.find_remote(REMOTE_NAME).map_err(gerr)?;
     let mut fo = FetchOptions::new();
     fo.remote_callbacks(credentials_callbacks(token));
     // Fetch the sync branch; ignore "couldn't find remote ref" on an empty
     // remote (first ever push).
-    let refspec = format!("refs/heads/{SYNC_BRANCH}:refs/remotes/{REMOTE_NAME}/{SYNC_BRANCH}");
+    let refspec = format!("refs/heads/{branch}:refs/remotes/{REMOTE_NAME}/{branch}");
     match remote.fetch(&[&refspec], Some(&mut fo), None) {
         Ok(()) => Ok(()),
         Err(e) if e.code() == git2::ErrorCode::NotFound && !is_auth_error(&e) => Ok(()),
@@ -419,23 +447,38 @@ fn fetch(repo: &Repository, token: &str) -> Result<(), String> {
     }
 }
 
-fn remote_tracking_commit<'a>(repo: &'a Repository) -> Option<AnnotatedCommit<'a>> {
+fn remote_tracking_commit<'a>(repo: &'a Repository, branch: &str) -> Option<AnnotatedCommit<'a>> {
     let oid = repo
-        .refname_to_id(&format!("refs/remotes/{REMOTE_NAME}/{SYNC_BRANCH}"))
+        .refname_to_id(&format!("refs/remotes/{REMOTE_NAME}/{branch}"))
         .ok()?;
     repo.find_annotated_commit(oid).ok()
+}
+
+/// Update the working tree to HEAD, but ONLY under the annotation directory, so
+/// a pull never touches the host repo's source files (matching the "SeeNote only
+/// updates the annotations dir" contract). Falls back to a full checkout when the
+/// annotation dir is the repo root.
+fn checkout_annotations(repo: &Repository, ann_rel: &Path) -> Result<(), String> {
+    let rel = ann_rel.to_string_lossy().replace('\\', "/");
+    let mut cb = git2::build::CheckoutBuilder::new();
+    cb.force();
+    if !rel.is_empty() && rel != "." {
+        cb.path(&rel);
+    }
+    repo.checkout_head(Some(&mut cb)).map_err(gerr)
 }
 
 /// Merge the remote tracking branch into HEAD, resolving conflicts with the
 /// set-merge for annotation files and favor-incoming for everything else.
 fn merge_remote(
     repo: &Repository,
-    project_path: &Path,
+    branch: &str,
+    ann_rel: &Path,
     sig: &Signature,
 ) -> Result<SyncSummary, String> {
     let mut summary = SyncSummary::default();
 
-    let their = match remote_tracking_commit(repo) {
+    let their = match remote_tracking_commit(repo, branch) {
         Some(c) => c,
         None => return Ok(summary), // empty remote, nothing to merge
     };
@@ -447,8 +490,8 @@ fn merge_remote(
         Some(c) => c,
         None => {
             let their_commit = repo.find_commit(their.id()).map_err(gerr)?;
-            repo.branch(SYNC_BRANCH, &their_commit, true).map_err(gerr)?;
-            repo.set_head(&format!("refs/heads/{SYNC_BRANCH}")).map_err(gerr)?;
+            repo.branch(branch, &their_commit, true).map_err(gerr)?;
+            repo.set_head(&format!("refs/heads/{branch}")).map_err(gerr)?;
             repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
                 .map_err(gerr)?;
             summary.pulled = true;
@@ -469,15 +512,14 @@ fn merge_remote(
         // No local commits ahead: just move HEAD and check out, then summarize
         // the incoming annotation delta.
         summary_diff(repo, &our_tree, &their_tree, &mut summary)?;
-        let refname = format!("refs/heads/{SYNC_BRANCH}");
+        let refname = format!("refs/heads/{branch}");
         let mut reference = repo
             .find_reference(&refname)
             .or_else(|_| repo.reference(&refname, their.id(), true, "fast-forward"))
             .map_err(gerr)?;
         reference.set_target(their.id(), "fast-forward").map_err(gerr)?;
         repo.set_head(&refname).map_err(gerr)?;
-        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
-            .map_err(gerr)?;
+        checkout_annotations(repo, ann_rel)?;
         summary.pulled = true;
         return Ok(summary);
     }
@@ -525,11 +567,9 @@ fn merge_remote(
         &[&our_commit, &their_commit],
     )
     .map_err(gerr)?;
-    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
-        .map_err(gerr)?;
+    checkout_annotations(repo, ann_rel)?;
 
     summary.pulled = true;
-    let _ = project_path; // (kept for symmetry / future per-file reporting)
     Ok(summary)
 }
 
@@ -617,7 +657,7 @@ fn blob_text(repo: &Repository, entry: Option<&git2::IndexEntry>) -> String {
     }
 }
 
-fn push(repo: &Repository, token: &str) -> Result<bool, String> {
+fn push(repo: &Repository, branch: &str, token: &str) -> Result<bool, String> {
     // Nothing to push if HEAD is unborn.
     if repo.head().is_err() {
         return Ok(false);
@@ -625,7 +665,7 @@ fn push(repo: &Repository, token: &str) -> Result<bool, String> {
     let mut remote = repo.find_remote(REMOTE_NAME).map_err(gerr)?;
     let mut po = PushOptions::new();
     po.remote_callbacks(credentials_callbacks(token));
-    let refspec = format!("refs/heads/{SYNC_BRANCH}:refs/heads/{SYNC_BRANCH}");
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     remote
         .push(&[&refspec], Some(&mut po))
         .map_err(|e| remote_err("push to the remote", &e))?;

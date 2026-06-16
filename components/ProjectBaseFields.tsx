@@ -179,9 +179,10 @@ export default function ProjectBaseFields({
 
       <CollapsibleSection title="Sync (GitHub)" defaultOpen={syncDefaultOpen}>
         <p className="text-gray-500 text-xs mb-3">
-          Sync annotations to a shared private repo. Media, tool example clips, and
-          these settings (including the token) are never uploaded. Paste the
-          lab-shared token once; your name is recorded as the author of your edits.
+          Sync annotations to a shared private repo. Only your annotation files are
+          uploaded — media, annotation tools, and these settings (including the token)
+          stay on your machine. Paste a token once; your name is recorded as the author
+          of your edits.
         </p>
         <div>
           <label className="text-gray-400 text-sm block mb-1">Repository URL</label>

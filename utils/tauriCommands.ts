@@ -291,10 +291,10 @@ export interface SyncSummary {
 
 /**
  * Sync annotation data to/from the project's configured GitHub repo using
- * embedded libgit2: stage annotations + tool definitions, commit, fetch, merge
- * (semantic set-merge for annotation files), and push. Media, tool example
- * clips, and settings.json (incl. the token) are never tracked. See
- * src-tauri/src/commands/git_sync.rs. `annotationDir` must be inside
+ * embedded libgit2: stage the annotation files, commit, fetch, merge (semantic
+ * set-merge for annotation files), and push. Only annotation files are tracked —
+ * media, annotation tools, and the whole .seenote/ dir (incl. the token) stay
+ * local. See src-tauri/src/commands/git_sync.rs. `annotationDir` must be inside
  * `projectDir` (the repo root).
  */
 export const syncProject = (

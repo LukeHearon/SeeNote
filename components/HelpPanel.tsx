@@ -307,13 +307,14 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   appears in the toolbar; click it to sync.
                 </p>
                 <p>
-                  Each sync uploads your annotation edits and tool definitions and pulls in everyone else's. Annotations merge
+                  Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge
                   automatically — two people labeling the same recording keep <span className="text-white">both</span> sets; only a deliberate
                   deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits.
                 </p>
                 <p>
-                  Media files, tool example clips, and your local settings (including the token) are <span className="text-white">never</span>{' '}
-                  uploaded — only the annotation text and tool definitions are shared. The annotation directory must live inside the project folder.
+                  Only your annotation files are shared. Media, your annotation tools, and your local settings (including the
+                  token) are <span className="text-white">never</span> uploaded — each labeler keeps their own tools. The annotation
+                  directory must live inside the project folder.
                 </p>
               </Section>
 
