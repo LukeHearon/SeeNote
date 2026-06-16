@@ -347,7 +347,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project: each tool is a folder under the project's <span className="text-white">.seenote/annotation-tools/</span> directory, which can also hold example audio clips for that label.
                 </p>
                 <p>
-                  To bulk-import: the <span className="text-white">Import examples</span> button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels. <span className="text-white">Project Settings → Advanced → Import tools</span> instead takes fully fleshed-out tool folders (tool.json, description.txt, examples/) — the same structure as .seenote/annotation-tools/ itself.
+                  To bulk-import examples: the <span className="text-white">Import examples</span> button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels.
                 </p>
                 <p>
                   To add examples to a single tool, edit it (gear icon) and use the <span className="text-white">Files…</span> or <span className="text-white">Folder…</span> buttons under Example clips. Folders are searched recursively; clips are copied into that tool's examples/ and existing filenames are skipped.

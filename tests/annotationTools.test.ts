@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CUSTOM_TOOL_ID,
+  ANNOTATION_TOOLS_RELATIVE_DIR,
+  resolveAnnotationToolsDir,
   makeCustomTool,
   assembleTools,
   buildHotkeyMap,
@@ -16,6 +18,13 @@ const folder = (name: string, color = '#111111', description = '', example_files
 
 const pt = (id: string, text: string, color = '#111111', description = ''): PersistedTool =>
   ({ id, text, color, description });
+
+describe('annotation tools directory', () => {
+  it('is fixed under the project .seenote directory', () => {
+    expect(ANNOTATION_TOOLS_RELATIVE_DIR).toBe('./.seenote/annotation-tools');
+    expect(resolveAnnotationToolsDir('/tmp/project/')).toBe('/tmp/project/.seenote/annotation-tools');
+  });
+});
 
 describe('makeCustomTool', () => {
   it('is key "0" with the given color and the custom sentinel id', () => {

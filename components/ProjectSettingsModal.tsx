@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { checkDirExists, listAnnotationFilesRecursive, importAnnotationTools, getGitCredential, setGitCredential, deleteGitCredential } from '../utils/tauriCommands';
+import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, setGitCredential, deleteGitCredential } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, HOTKEY_COLORS } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
@@ -22,7 +22,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
     project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
-  const [toolsImportDir, setToolsImportDir] = useState('');
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
@@ -44,7 +43,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
-  const resolvedToolsImportDir = resolveInputPath(project.projectDir, toolsImportDir);
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -55,17 +53,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
 
   const commitSave = async (settings: ProjectSettings) => {
-    if (toolsImportDir) {
-      setIsBusy(true);
-      try {
-        await importAnnotationTools(project.projectDir, resolvedToolsImportDir, HOTKEY_COLORS.slice(1));
-      } catch (err) {
-        setError(String(err));
-        setIsBusy(false);
-        return;
-      }
-      setIsBusy(false);
-    }
     onSave(settings);
   };
 
@@ -289,10 +276,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
             buzzdetectDir={buzzdetectDir}
             onBuzzdetectDirChange={setBuzzdetectDir}
-            toolsDir={toolsImportDir}
-            onToolsDirChange={setToolsImportDir}
-            toolsLabel="Import tools"
-            toolsHelperText="One-time import on save: tool folders ({label}/tool.json, description.txt, examples/) are copied into the project; existing tools only gain example clips."
             advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
             syncRemoteUrl={syncRemoteUrl}
             onSyncRemoteUrlChange={setSyncRemoteUrl}

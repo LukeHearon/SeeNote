@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, importAnnotationTools, setGitCredential } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, setGitCredential } from '../utils/tauriCommands';
 import { readProjectSettings } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
@@ -22,7 +22,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [mediaDir, setMediaDir] = useState('');
   const [annotationDir, setAnnotationDir] = useState('');
   const [buzzdetectDir, setBuzzdetectDir] = useState('');
-  const [toolsDir, setToolsDir] = useState('');
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [syncRemoteUrl, setSyncRemoteUrl] = useState('');
@@ -39,7 +38,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const resolvedMediaDir = resolveInputPath(projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(projectDir, buzzdetectDir);
-  const resolvedToolsDir = resolveInputPath(projectDir, toolsDir);
 
   useEffect(() => {
     if (!projectDir) return;
@@ -120,9 +118,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
       for (const t of DEFAULT_TOOL_SEED) {
         if (t.key === '0') continue;
         await createAnnotationTool(projectDir, t.text, t.color, t.description ?? '');
-      }
-      if (toolsDir) {
-        await importAnnotationTools(projectDir, resolvedToolsDir, HOTKEY_COLORS.slice(1));
       }
       onCreated(project);
     } catch (err) {
@@ -205,9 +200,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
           onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
           buzzdetectDir={buzzdetectDir}
           onBuzzdetectDirChange={setBuzzdetectDir}
-          toolsDir={toolsDir}
-          onToolsDirChange={setToolsDir}
-          toolsHelperText="Annotation tool folders ({label}/tool.json, description.txt, examples/) copied into the project on creation."
           syncRemoteUrl={syncRemoteUrl}
           onSyncRemoteUrlChange={setSyncRemoteUrl}
           syncToken={syncToken}

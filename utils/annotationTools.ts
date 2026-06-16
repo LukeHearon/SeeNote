@@ -10,6 +10,11 @@
 import { AnnotationTool } from '../types';
 import type { FolderTool } from './tauriCommands';
 
+export const ANNOTATION_TOOLS_RELATIVE_DIR = './.seenote/annotation-tools';
+
+export const resolveAnnotationToolsDir = (projectDir: string): string =>
+  projectDir.replace(/[/\\]+$/, '') + '/' + ANNOTATION_TOOLS_RELATIVE_DIR.replace(/^\.\//, '');
+
 /** Sentinel `id` of the synthetic Custom tool (key "0") — never a folder. */
 export const CUSTOM_TOOL_ID = 'custom';
 

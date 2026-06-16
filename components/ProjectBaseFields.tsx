@@ -28,10 +28,6 @@ interface Props {
   // Advanced
   buzzdetectDir: string;
   onBuzzdetectDirChange: (v: string) => void;
-  toolsDir: string;
-  onToolsDirChange: (v: string) => void;
-  toolsLabel?: string;
-  toolsHelperText?: string;
   advancedDefaultOpen?: boolean;
   // Sync
   syncRemoteUrl: string;
@@ -61,10 +57,6 @@ export default function ProjectBaseFields({
   onOutputRoundingDecimalsChange,
   buzzdetectDir,
   onBuzzdetectDirChange,
-  toolsDir,
-  onToolsDirChange,
-  toolsLabel = 'Tools',
-  toolsHelperText = 'Annotation tool folders ({label}/tool.json, description.txt, examples/) copied into the project.',
   advancedDefaultOpen = false,
   syncRemoteUrl,
   onSyncRemoteUrlChange,
@@ -169,15 +161,6 @@ export default function ProjectBaseFields({
           helperText="Activations plotted below the spectrogram, located per track by ident."
           notExistMessage="Directory does not exist."
         />
-        <DirectoryField
-          label={toolsLabel}
-          projectDir={projectDir}
-          value={toolsDir}
-          onChange={onToolsDirChange}
-          placeholder="(optional) directory of {label}/ tool folders"
-          helperText={toolsHelperText}
-          notExistMessage="Directory does not exist."
-        />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -198,7 +181,7 @@ export default function ProjectBaseFields({
           Sync annotations to a shared private repo. Media, tool example clips, and
           these settings are never uploaded. Your token is stored only in your OS
           credential store — never in settings.json. Your name is recorded as the
-          author of your annotation edits.
+          author of your annotation edits. Your name is optional.
         </p>
         <div>
           <label className="text-gray-400 text-sm block mb-1">Repository URL</label>
@@ -232,7 +215,7 @@ export default function ProjectBaseFields({
           )}
         </div>
         <div className="mt-3">
-          <label className="text-gray-400 text-sm block mb-1">Your name</label>
+          <label className="text-gray-400 text-sm block mb-1">Your name <span className="text-gray-600">(optional)</span></label>
           <input
             type="text"
             value={syncAuthorName}
