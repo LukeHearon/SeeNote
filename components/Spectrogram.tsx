@@ -1826,8 +1826,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                         top: `${top}px`,
                         height: '30px',
                         border: `${isBound ? '2px' : '1px'} solid ${isBound ? 'white' : styleVars.borderColor}`,
+                        backgroundColor: styleVars.bgColor,
                         boxShadow: isBound ? '0 0 0 2px rgba(255,255,255,0.4)' : '0 2px 4px rgba(0,0,0,0.5)',
-                        zIndex: isSelected ? 20 : 10
+                        zIndex: isSelected ? 20 : 10,
+                        opacity: hideLabels ? 0.2 : 1,
+                        transition: 'opacity 80ms ease-out',
                     }}
                     onMouseEnter={() => handleAnnotationMouseEnter(annotation.id)}
                     onMouseLeave={handleAnnotationMouseLeave}
@@ -1849,15 +1852,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                         clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };
                     }}
                  >
-                    {/* Fill layer — fades with hideLabels; border on parent stays opaque */}
-                    <div
-                        className="absolute inset-0 rounded pointer-events-none"
-                        style={{
-                            backgroundColor: styleVars.bgColor,
-                            opacity: hideLabels ? 0 : 1,
-                            transition: 'opacity 80ms ease-out',
-                        }}
-                    />
                     {/* Left resize handle */}
                     <div
                         className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center"
@@ -1936,8 +1930,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                                 textShadow: '0 1px 2px black',
                                 // Only allow pointer interaction when editing via pencil or for new empty annotations
                                 pointerEvents: (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? 'auto' : 'none',
-                                opacity: hideLabels ? 0 : 1,
-                                transition: 'opacity 80ms ease-out',
                             }}
                             placeholder="Name..."
                             onMouseDown={(e) => {
