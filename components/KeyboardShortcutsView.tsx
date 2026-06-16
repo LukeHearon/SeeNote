@@ -37,7 +37,7 @@ const GROUPS: Group[] = [
       { codes: ['ArrowRight'], display: '→', label: 'Scrub forward' },
       { codes: ['Comma'], display: ',', label: 'Nudge video forward one frame' },
       { codes: ['Period'], display: '.', label: 'Nudge video backward one frame' },
-      { codes: ['KeyC'], display: 'C', label: 'Recenter view on playhead' },
+      { codes: ['KeyC'], display: 'C', label: 'Toggle lock playhead to center' },
       { codes: ['ArrowLeft'], display: 'Cmd+←', label: 'Jump to previous annotation' },
       { codes: ['ArrowRight'], display: 'Cmd+→', label: 'Jump to next annotation' },
       { codes: ['ArrowUp'], display: 'Cmd+↑', label: 'Previous track' },

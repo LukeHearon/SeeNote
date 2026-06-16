@@ -272,6 +272,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [splitRatio, setSplitRatio] = useState(project.settings.uiSettings?.splitRatio ?? DEFAULT_UI_SETTINGS.splitRatio);
   const [leftPanelRatio, setLeftPanelRatio] = useState(project.settings.uiSettings?.leftPanelRatio ?? DEFAULT_UI_SETTINGS.leftPanelRatio);
   const [leftPanelWidth, setLeftPanelWidth] = useState(project.settings.uiSettings?.leftPanelWidth ?? DEFAULT_UI_SETTINGS.leftPanelWidth);
+  const [playheadLocked, setPlayheadLocked] = useState(false);
+  const playheadLockedRef = useRef(false);
+  useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
+
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
@@ -1683,7 +1687,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'f', handler: () => { if (videoMode !== 'fast') handleToggleFilterState(); } },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
       // `C`: recenter the visible window on the playhead (no zoom change).
-      { key: 'c', handler: () => spectrogramRef.current?.recenterPlayhead() },
+      { key: 'c', handler: () => {
+          const willLock = !playheadLockedRef.current;
+          setPlayheadLocked(willLock);
+          if (willLock) spectrogramRef.current?.recenterPlayhead();
+      }},
       // Escape — universal undo of the most-recently-activated layer. Fires
       // even when a text input has focus (HelpPanel's `stop:true` Esc handler
       // still wins when help is open). Layer kinds & clear actions:
@@ -2533,6 +2541,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
                onRestartAudio={() => { engineRef.current?.restart(); }}
+               playheadLocked={playheadLocked}
+               onTogglePlayheadLock={() => {
+                 const willLock = !playheadLockedRef.current;
+                 setPlayheadLocked(willLock);
+                 if (willLock) spectrogramRef.current?.recenterPlayhead();
+               }}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -2571,6 +2585,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onScrollDiagnostic={showDebug ? handleScrollDiagnostic : undefined}
                 videoMode={videoMode}
                 isAudioTrack={isAudioTrack}
+                playheadLocked={playheadLocked}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown

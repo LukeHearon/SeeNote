@@ -55,6 +55,7 @@ interface SpectrogramProps {
   onScrollDiagnostic?: (info: { scrollLeft: number; delta: number; ts: number; source: string }) => void;
   videoMode?: VideoMode;
   isAudioTrack?: boolean;
+  playheadLocked?: boolean;
 }
 
 export interface SpectrogramHandle {
@@ -108,6 +109,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onScrollDiagnostic,
   videoMode,
   isAudioTrack = false,
+  playheadLocked = false,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -308,25 +310,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // live time from the store so the playhead and the scroll stay in lockstep.
   useEffect(() => {
       const autoScroll = () => {
-          if (!isPlaying || selection || !containerRef.current) return;
-          // Suppress auto-scroll for 500 ms after the user manually panned, so the two
-          // don't fight each other (trackpad inertia vs. auto-scroll → violent jitter).
-          if (Date.now() - lastManualScrollRef.current < 500) return;
+          if (!playheadLocked || !isPlaying || selection || !containerRef.current) return;
           const containerWidth = containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
           const t = currentTimeStore.get();
-          const visibleCenterTime = (scrollLeftRef.current + containerWidth / 2) / pps;
-          if (t >= visibleCenterTime) {
-              const targetScroll = t * pps - containerWidth / 2;
-              setScroll(Math.max(0, targetScroll), 'autoScroll');
-          }
+          const targetScroll = t * pps - containerWidth / 2;
+          setScroll(Math.max(0, targetScroll), 'autoScroll');
       };
-      // Run once immediately so a seek/zoom while playing recentres without waiting
-      // for the next tick, matching the old layout-effect behaviour.
       autoScroll();
       return currentTimeStore.subscribe(autoScroll);
-  }, [isPlaying, currentTimeStore, zoomSec, selection, duration]);
+  }, [playheadLocked, isPlaying, currentTimeStore, zoomSec, selection, duration]);
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {

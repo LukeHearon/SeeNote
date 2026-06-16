@@ -218,10 +218,10 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
                 <p>
                   The{' '}
-                  <HelpAnchor target="recenter-playhead">recenter button</HelpAnchor>{' '}
-                  (or <Kbd>C</Kbd>) pans the spectrogram so the playhead sits back in the
-                  center of the visible window, without changing the zoom level. Useful after
-                  scrolling away or jumping to a time off-screen.
+                  <HelpAnchor target="recenter-playhead">lock playhead button</HelpAnchor>{' '}
+                  (or <Kbd>C</Kbd>) toggles lock mode: when active, the view stays centered on
+                  the playhead during playback and you cannot scroll away. Press <Kbd>C</Kbd>{' '}
+                  again to unlock and scroll freely.
                 </p>
                 <p>
                   The{' '}

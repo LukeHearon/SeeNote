@@ -59,6 +59,8 @@ interface ToolbarProps {
   buzzdetectEnabled?: boolean;
   onToggleBuzzdetect?: () => void;
   onRestartAudio?: () => void;
+  playheadLocked?: boolean;
+  onTogglePlayheadLock?: () => void;
 }
 
 // Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
@@ -111,6 +113,8 @@ function Toolbar({
   buzzdetectEnabled,
   onToggleBuzzdetect,
   onRestartAudio,
+  playheadLocked = false,
+  onTogglePlayheadLock,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -314,10 +318,10 @@ function Toolbar({
           <SkipForward size={15} />
         </button>
         <button
-          onClick={() => spectrogramRef.current?.recenterPlayhead()}
+          onClick={onTogglePlayheadLock}
           disabled={!videoSrc}
-          className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-          data-tooltip="Recenter view on playhead (C)"
+          className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? 'bg-blue-600 text-white hover:bg-blue-500' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          data-tooltip="Lock playhead to center (C)"
           data-help-target="recenter-playhead"
         >
           <LocateFixed size={15} />
