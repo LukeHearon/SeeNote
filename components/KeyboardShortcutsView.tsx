@@ -58,6 +58,7 @@ const GROUPS: Group[] = [
       { codes: ['Equal'], display: '= / +', label: 'Zoom video in' },
       { codes: ['Minus'], display: '-', label: 'Zoom video out' },
       { codes: ['Escape'], display: 'Esc', label: 'Undo activated tool/selection' },
+      { codes: ['KeyH'], display: 'H (hold)', label: 'Hide annotation labels' },
     ],
   },
   {

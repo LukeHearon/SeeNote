@@ -54,6 +54,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [allTracks, setAllMediaFiles] = useState<string[]>([]);
   const [filePanelCollapsed, setFilePanelCollapsed] = useState(false);
   const [videoCollapsed, setVideoCollapsed] = useState(false);
+  const [hideLabels, setHideLabels] = useState(false);
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
@@ -1733,6 +1734,32 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }},
   ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
+  // H held → hide annotation fills/text (border stays). keyup restores them.
+  useEffect(() => {
+    const inInput = (t: EventTarget | null) => {
+      if (!(t instanceof HTMLElement)) return false;
+      if (t.isContentEditable) return true;
+      return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT';
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'h') return;
+      if (e.repeat) return;
+      if (inInput(e.target)) return;
+      e.preventDefault();
+      setHideLabels(true);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'h') return;
+      setHideLabels(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
   const performExport = async () => {
       if (annotations.length === 0) return;
       const decimals = project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
@@ -2586,6 +2613,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 videoMode={videoMode}
                 isAudioTrack={isAudioTrack}
                 playheadLocked={playheadLocked}
+                hideLabels={hideLabels}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown
