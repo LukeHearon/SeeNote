@@ -1,13 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { X, ExternalLink } from 'lucide-react';
+import React, { useState } from 'react';
+import { ExternalLink } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, importAnnotationTools } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, HOTKEY_COLORS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
-import GradientPicker from './GradientPicker';
-import DirectoryField from './DirectoryField';
-import CollapsibleSection from './CollapsibleSection';
+import SettingsModalShell from './SettingsModalShell';
+import ProjectBaseFields from './ProjectBaseFields';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
 
@@ -19,29 +18,25 @@ interface Props {
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
   const [name, setName] = useState(project.settings.name);
-  const nameRef = useRef<HTMLDivElement>(null);
   const [mediaDir, setMediaDir] = useState(() => trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs));
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
     project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
-  // One-shot import, not a persisted setting: the tool folders are copied into
-  // .seenote/annotation-tools/ on save, so there is nothing to remember.
   const [toolsImportDir, setToolsImportDir] = useState('');
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
-  const defaultColors = project.settings.nameGradientColors ?? ['#e65161', '#f9c387'] as [string, string];
-  const [gradientColors, setGradientColors] = useState<[string, string]>(defaultColors);
+  const [gradientColors, setGradientColors] = useState<[string, string]>(
+    project.settings.nameGradientColors ?? ['#e65161', '#f9c387'],
+  );
+  const [syncRemoteUrl, setSyncRemoteUrl] = useState(project.settings.gitSync?.remoteUrl ?? '');
+  const [syncToken, setSyncToken] = useState(project.settings.gitSync?.token ?? '');
+  const [syncAuthorName, setSyncAuthorName] = useState(project.settings.gitSync?.authorName ?? '');
 
-  // Resolved absolute paths — used for filesystem operations and settings serialisation.
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
   const resolvedToolsImportDir = resolveInputPath(project.projectDir, toolsImportDir);
-
-  useEffect(() => {
-    if (nameRef.current) nameRef.current.textContent = project.settings.name;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -51,9 +46,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const pendingRef = React.useRef<ProjectSettings | null>(null);
   const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
 
-  // Final commit for every save path (form and confirm steps): run the
-  // one-shot tools import if a directory was chosen, then hand the settings
-  // to the owner. Import errors keep the modal open.
   const commitSave = async (settings: ProjectSettings) => {
     if (toolsImportDir) {
       setIsBusy(true);
@@ -89,6 +81,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
+      gitSync: (syncRemoteUrl.trim() || syncToken.trim() || syncAuthorName.trim())
+        ? { remoteUrl: syncRemoteUrl.trim(), token: syncToken.trim(), authorName: syncAuthorName.trim() }
+        : undefined,
     };
     pendingRef.current = settings;
 
@@ -217,138 +212,12 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      {/* The form step is fixed-height with a scrolling body so the footer
-          buttons stay in view however many settings sections are open; the
-          confirm steps are short dialogs and size to their content. */}
-      <div className={`bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl ${step === 'form' ? 'h-[640px] max-h-[85vh] flex flex-col overflow-hidden' : 'p-6'}`}>
-
-        {step === 'form' && (
-          <>
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
-              <h2 className="text-white text-lg font-semibold">Project Settings</h2>
-              <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="space-y-4 px-6 py-4 overflow-y-auto flex-1 min-h-0">
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">Project Name</label>
-                <div className="border-b border-gray-600 focus-within:border-blue-500 pb-1">
-                  <div
-                    ref={nameRef}
-                    contentEditable
-                    suppressContentEditableWarning
-                    onInput={e => setName((e.target as HTMLDivElement).textContent || '')}
-                    onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
-                    onPaste={e => {
-                      e.preventDefault();
-                      const text = e.clipboardData.getData('text/plain');
-                      const sel = window.getSelection();
-                      if (!sel || !sel.rangeCount) return;
-                      const range = sel.getRangeAt(0);
-                      range.deleteContents();
-                      range.insertNode(document.createTextNode(text));
-                      range.collapse(false);
-                      sel.removeAllRanges();
-                      sel.addRange(range);
-                    }}
-                    className="text-xl font-bold bg-clip-text text-transparent outline-none cursor-text"
-                    style={{
-                      backgroundImage: `linear-gradient(to right, ${gradientColors[0]}, ${gradientColors[1]})`,
-                      display: 'inline-block',
-                      minWidth: '2ch',
-                    }}
-                  />
-                </div>
-                <div className="mt-3">
-                  <GradientPicker value={gradientColors} onChange={setGradientColors} />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={project.projectDir}
-                    disabled
-                    className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-gray-400 text-sm cursor-not-allowed"
-                  />
-                  <button
-                    onClick={() => revealInFileManager(project.projectDir)}
-                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-                    title="Show in Finder"
-                  >
-                    <ExternalLink size={16} />
-                  </button>
-                </div>
-              </div>
-
-              <DirectoryField
-                label="Media"
-                projectDir={project.projectDir}
-                value={mediaDir}
-                onChange={setMediaDir}
-                notExistMessage="Directory does not exist."
-              />
-
-              <DirectoryField
-                label="Annotations"
-                projectDir={project.projectDir}
-                value={annotationDir}
-                onChange={setAnnotationDir}
-                notExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
-              />
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-gray-400 text-sm block">Output Decimal Places</label>
-                    <p className="text-gray-600 text-xs">for start/end timestamps</p>
-                  </div>
-                  <input
-                    type="number"
-                    min="0"
-                    max="9"
-                    step="1"
-                    value={outputRoundingDecimals}
-                    onChange={e => {
-                      const v = parseInt(e.target.value);
-                      if (!isNaN(v)) setOutputRoundingDecimals(Math.min(9, Math.max(0, v)));
-                    }}
-                    className="w-16 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              <CollapsibleSection title="Advanced" defaultOpen={!!project.buzzdetectDirectoryAbs}>
-                <DirectoryField
-                  label="buzzdetect"
-                  projectDir={project.projectDir}
-                  value={buzzdetectDir}
-                  onChange={setBuzzdetectDir}
-                  placeholder="(optional) directory of {ident}_buzzdetect.csv"
-                  helperText="Activations plotted below the spectrogram, located per track by ident."
-                  notExistMessage="Directory does not exist."
-                />
-                <DirectoryField
-                  label="Import tools"
-                  projectDir={project.projectDir}
-                  value={toolsImportDir}
-                  onChange={setToolsImportDir}
-                  placeholder="(optional) directory of {label}/ tool folders"
-                  helperText="One-time import on save: tool folders ({label}/tool.json, description.txt, examples/) are copied into the project; existing tools only gain example clips."
-                  notExistMessage="Directory does not exist."
-                />
-              </CollapsibleSection>
-
-              {error && (
-                <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>
-              )}
-            </div>
-
-            <div className="flex gap-3 px-6 py-4 justify-end border-t border-gray-700 flex-none">
+      {step === 'form' && (
+        <SettingsModalShell
+          title="Project Settings"
+          onClose={onClose}
+          footer={
+            <>
               <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
                 Cancel
               </button>
@@ -359,93 +228,144 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               >
                 {isBusy ? 'Checking…' : 'Save'}
               </button>
+            </>
+          }
+        >
+          <div>
+            <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={project.projectDir}
+                disabled
+                className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-gray-400 text-sm cursor-not-allowed"
+              />
+              <button
+                onClick={() => revealInFileManager(project.projectDir)}
+                className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
+                title="Show in Finder"
+              >
+                <ExternalLink size={16} />
+              </button>
             </div>
-          </>
-        )}
+          </div>
 
-        {step === 'orphanConfirm' && (
-          <>
-            <h2 className="text-white text-lg font-semibold mb-4">Orphaned Annotations</h2>
-            <p className="text-gray-300 text-sm mb-2">
-              {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} no
-              corresponding media in the new media directory:
-            </p>
-            <ul className="bg-gray-800 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-1">
-              {orphanedPaths.map(p => (
-                <li key={p} className="text-gray-400 text-xs font-mono truncate">{p}</li>
-              ))}
-            </ul>
-            <p className="text-gray-300 text-sm mb-4">What would you like to do with these files?</p>
-            {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => handleOrphanResolution('retain')}
-                disabled={isBusy}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-              >
-                Retain
-              </button>
-              <button
-                onClick={() => handleOrphanResolution('delete')}
-                disabled={isBusy}
-                className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-              >
-                {isBusy ? 'Deleting…' : 'Delete Orphaned'}
-              </button>
-            </div>
-          </>
-        )}
+          <ProjectBaseFields
+            projectDir={project.projectDir}
+            name={name}
+            onNameInput={setName}
+            gradientColors={gradientColors}
+            onGradientChange={setGradientColors}
+            mediaDir={mediaDir}
+            onMediaDirChange={setMediaDir}
+            mediaDirNotExistMessage="Directory does not exist."
+            annotationDir={annotationDir}
+            onAnnotationDirChange={setAnnotationDir}
+            annotationDirNotExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
+            outputRoundingDecimals={outputRoundingDecimals}
+            onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
+            buzzdetectDir={buzzdetectDir}
+            onBuzzdetectDirChange={setBuzzdetectDir}
+            toolsDir={toolsImportDir}
+            onToolsDirChange={setToolsImportDir}
+            toolsLabel="Import tools"
+            toolsHelperText="One-time import on save: tool folders ({label}/tool.json, description.txt, examples/) are copied into the project; existing tools only gain example clips."
+            advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
+            syncRemoteUrl={syncRemoteUrl}
+            onSyncRemoteUrlChange={setSyncRemoteUrl}
+            syncToken={syncToken}
+            onSyncTokenChange={setSyncToken}
+            syncAuthorName={syncAuthorName}
+            onSyncAuthorNameChange={setSyncAuthorName}
+            syncDefaultOpen={!!project.settings.gitSync}
+          />
 
-        {step === 'annotationCopyConfirm' && (
-          <>
-            <h2 className="text-white text-lg font-semibold mb-4">Move Annotations</h2>
-            <p className="text-gray-300 text-sm mb-6">
-              The annotations directory has changed. Would you like to copy your existing
-              annotation files to the new directory?
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => handleCopyDecision(false)}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-colors"
-              >
-                Don't Copy
-              </button>
-              <button
-                onClick={() => handleCopyDecision(true)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors"
-              >
-                Copy Annotations
-              </button>
-            </div>
-          </>
-        )}
+          {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
+        </SettingsModalShell>
+      )}
 
-        {step === 'conflictConfirm' && (
-          <>
-            <h2 className="text-white text-lg font-semibold mb-4">Handle Conflicts</h2>
-            <p className="text-gray-300 text-sm mb-6">
-              If annotation files already exist in the new directory, how should conflicts be resolved?
-            </p>
-            {error && <p className="text-red-400 text-sm mb-3 whitespace-pre-wrap">{error}</p>}
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => handleConflictResolution('skip')}
-                disabled={isBusy}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-              >
-                {isBusy ? 'Copying…' : 'Skip Existing'}
-              </button>
-              <button
-                onClick={() => handleConflictResolution('overwrite')}
-                disabled={isBusy}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-              >
-                {isBusy ? 'Copying…' : 'Overwrite'}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      {step === 'orphanConfirm' && (
+        <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+          <h2 className="text-white text-lg font-semibold mb-4">Orphaned Annotations</h2>
+          <p className="text-gray-300 text-sm mb-2">
+            {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} no
+            corresponding media in the new media directory:
+          </p>
+          <ul className="bg-gray-800 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-1">
+            {orphanedPaths.map(p => (
+              <li key={p} className="text-gray-400 text-xs font-mono truncate">{p}</li>
+            ))}
+          </ul>
+          <p className="text-gray-300 text-sm mb-4">What would you like to do with these files?</p>
+          {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => handleOrphanResolution('retain')}
+              disabled={isBusy}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+            >
+              Retain
+            </button>
+            <button
+              onClick={() => handleOrphanResolution('delete')}
+              disabled={isBusy}
+              className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+            >
+              {isBusy ? 'Deleting…' : 'Delete Orphaned'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 'annotationCopyConfirm' && (
+        <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+          <h2 className="text-white text-lg font-semibold mb-4">Move Annotations</h2>
+          <p className="text-gray-300 text-sm mb-6">
+            The annotations directory has changed. Would you like to copy your existing
+            annotation files to the new directory?
+          </p>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => handleCopyDecision(false)}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-colors"
+            >
+              Don't Copy
+            </button>
+            <button
+              onClick={() => handleCopyDecision(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors"
+            >
+              Copy Annotations
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 'conflictConfirm' && (
+        <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+          <h2 className="text-white text-lg font-semibold mb-4">Handle Conflicts</h2>
+          <p className="text-gray-300 text-sm mb-6">
+            If annotation files already exist in the new directory, how should conflicts be resolved?
+          </p>
+          {error && <p className="text-red-400 text-sm mb-3 whitespace-pre-wrap">{error}</p>}
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => handleConflictResolution('skip')}
+              disabled={isBusy}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+            >
+              {isBusy ? 'Copying…' : 'Skip Existing'}
+            </button>
+            <button
+              onClick={() => handleConflictResolution('overwrite')}
+              disabled={isBusy}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+            >
+              {isBusy ? 'Copying…' : 'Overwrite'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -455,10 +375,8 @@ async function buildCopiesList(
   newDir: string,
 ): Promise<{ src: string; dst: string }[]> {
   const files = await listAnnotationFilesRecursive(oldDir, '.txt');
-
   return files.map(src => {
     const rel = src.startsWith(oldDir) ? src.slice(oldDir.length) : src;
-    const dst = newDir + rel;
-    return { src, dst };
+    return { src, dst: newDir + rel };
   });
 }
