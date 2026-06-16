@@ -164,6 +164,7 @@ export interface ProjectSettings {
   nameGradientColors?: [string, string];
   fileFilter?: 'all' | 'annotated' | 'unannotated';
   shuffleMode?: boolean;
+  enteredFolderPath?: string;
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;
 }

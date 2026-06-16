@@ -1197,6 +1197,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     updateProjectSettings(project.id, { ...project.settings, fileFilter: next });
   }, [project, updateProjectSettings]);
 
+  const handleEnteredFolderChange = useCallback((path: string | null) => {
+    updateProjectSettings(project.id, {
+      ...project.settings,
+      enteredFolderPath: path ?? undefined,
+    });
+  }, [project, updateProjectSettings]);
+
   const handleRevealInFinder = useCallback((path: string) => {
     revealInFileManager(path).catch(err => addLog(`reveal_in_file_manager error: ${err}`, 'error'));
   }, []);
@@ -2148,6 +2155,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               : undefined,
             onImportAnnotations: handleImportAnnotations,
             onRefresh: handleRefreshFiles,
+            initialEnteredFolderPath: project?.settings.enteredFolderPath ?? null,
+            onEnteredFolderChange: handleEnteredFolderChange,
           };
 
           if (filePanelCollapsed) {
