@@ -3,6 +3,8 @@ import { X, GitBranch, ShieldCheck } from 'lucide-react';
 
 interface Props {
   onClose: () => void;
+  /** When true, renders as a full window instead of an in-app modal overlay. */
+  standalone?: boolean;
 }
 
 /**
@@ -15,16 +17,14 @@ interface Props {
  * Tauri webview with no external-link opener, so a real <a href> would navigate
  * the app away. Users copy the paths into a browser.
  */
-export default function GitSyncSetupModal({ onClose }: Props) {
-  return (
+export default function GitSyncSetupModal({ onClose, standalone }: Props) {
+  const card = (
     <div
-      className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center p-4"
-      onMouseDown={onClose}
+      className={standalone
+        ? 'bg-gray-900 flex flex-col h-screen overflow-hidden'
+        : 'bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl h-[680px] max-h-[88vh] flex flex-col shadow-2xl overflow-hidden'}
+      onMouseDown={e => e.stopPropagation()}
     >
-      <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl h-[680px] max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
-        onMouseDown={e => e.stopPropagation()}
-      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <div className="flex items-center gap-2">
             <GitBranch size={18} className="text-blue-400" />
@@ -137,6 +137,16 @@ export default function GitSyncSetupModal({ onClose }: Props) {
           </button>
         </div>
       </div>
+  );
+
+  if (standalone) return card;
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center p-4"
+      onMouseDown={onClose}
+    >
+      {card}
     </div>
   );
 }

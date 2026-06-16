@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, PhysicalPosition, PhysicalSize};
+use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct WindowBounds {
@@ -31,5 +31,34 @@ pub fn set_window_bounds(app: tauri::AppHandle, bounds: WindowBounds) -> Result<
     window
         .set_size(PhysicalSize::new(bounds.width, bounds.height))
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("sync-guide") {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        "sync-guide",
+        WebviewUrl::App("index.html?window=sync-guide".into()),
+    )
+    .title("Set up syncing")
+    .inner_size(720.0, 780.0)
+    .min_inner_size(500.0, 400.0)
+    .center()
+    .resizable(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("sync-guide") {
+        win.close().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

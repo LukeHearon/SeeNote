@@ -300,7 +300,16 @@ export interface SyncSummary {
   annotationsAdded: number;
   annotationsRemoved: number;
   recordingsChanged: string[];
+  annotationsUploaded: number;
+  annotationsRemovedOnPush: number;
+  identsUploaded: number;
   message: string;
+}
+
+/** Local-only sync state (no network call). */
+export interface SyncStatus {
+  hasLocalChanges: boolean;
+  hasRemoteChanges: boolean;
 }
 
 /**
@@ -320,3 +329,28 @@ export const syncProject = (
   authorName: string,
 ): Promise<SyncSummary> =>
   invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName });
+
+/** Check local-only sync state (no network). */
+export const getLocalSyncStatus = (
+  projectDir: string,
+  annotationDir: string,
+): Promise<SyncStatus> =>
+  invoke('get_local_sync_status', { projectDir, annotationDir });
+
+/** Fetch the remote branch and return whether it's ahead of HEAD (network call). */
+export const fetchRemoteStatus = (
+  projectDir: string,
+  remoteUrl: string,
+  token: string,
+): Promise<boolean> =>
+  invoke('fetch_remote_status', { projectDir, remoteUrl, token });
+
+/** Open the sync setup guide in a separate native window. */
+export function openSyncGuideWindow(): void {
+  invoke('open_sync_guide_window').catch(console.error);
+}
+
+/** Close the sync guide window (called from inside the window itself). */
+export function closeSyncGuideWindow(): void {
+  invoke('close_sync_guide_window').catch(console.error);
+}

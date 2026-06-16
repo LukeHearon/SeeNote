@@ -2,12 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle, GitBranch } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
-import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
+import { openDirectoryDialog, openDirectoryDialogAt, openSyncGuideWindow } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
 import { findFirstValidAncestor } from '../utils/helpers';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
-import GitSyncSetupModal from './GitSyncSetupModal';
 import GradientProjectName from './GradientProjectName';
 
 interface Props {
@@ -49,7 +48,6 @@ export default function LaunchScreen({
   updateProjectSettings,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
-  const [showSyncGuide, setShowSyncGuide] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entryId: string } | null>(null);
@@ -245,7 +243,7 @@ export default function LaunchScreen({
           <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">Projects</h2>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowSyncGuide(true)}
+              onClick={openSyncGuideWindow}
               className="flex items-center gap-2 px-3 py-1.5 text-gray-400 hover:text-white hover:bg-gray-800 text-sm rounded-lg transition-colors"
               data-tooltip="How to set up a project that syncs to GitHub"
             >
@@ -462,8 +460,6 @@ export default function LaunchScreen({
           }}
         />
       )}
-
-      {showSyncGuide && <GitSyncSetupModal onClose={() => setShowSyncGuide(false)} />}
 
       {editingEntry && editingEntry.status === 'ok' && (
         <ProjectSettingsModal

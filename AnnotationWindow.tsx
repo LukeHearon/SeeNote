@@ -9,7 +9,7 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getGitCredential, type SyncSummary } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getGitCredential, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
 import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -64,6 +64,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [syncing, setSyncing] = useState(false);
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
+  const [hasRemoteChanges, setHasRemoteChanges] = useState(false);
   // Bumped after a pull so the auto-load effect re-reads the active track's
   // annotation file (which may have changed on disk during the merge).
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -1081,6 +1083,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
         const content = generateAudacityContent(annotations, decimals);
         await writeTextFile(savedAnnotPath, content);
+        if (projectRef.current?.settings.gitSync) setHasLocalChanges(true);
         setAnnotatedFiles(prev => {
             const next = new Set(prev);
             next.add(savedTrackPath);
@@ -1169,8 +1172,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         cfg.authorName,
       );
       setSyncSummary(summary);
-      addLog(`Sync: ${summary.message} (+${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s))`);
+      addLog(
+        `Sync: ${summary.message}` +
+        (summary.annotationsAdded > 0 || summary.annotationsRemoved > 0
+          ? ` pulled +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)` : '') +
+        (summary.identsUploaded > 0
+          ? ` pushed +${summary.annotationsUploaded} across ${summary.identsUploaded} file(s)` : '')
+      );
       if (summary.pulled) setReloadNonce(n => n + 1);
+      setHasLocalChanges(false);
+      setHasRemoteChanges(false);
     } catch (err) {
       setSyncError(String(err));
       addLog(`Sync failed: ${err}`, 'error');
@@ -1178,6 +1189,39 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setSyncing(false);
     }
   }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals, addLog]);
+
+  // On project load, check initial sync status (local only, no network).
+  useEffect(() => {
+    const cfg = project.settings.gitSync;
+    const annDir = project.annotationDirectoryAbs;
+    if (!cfg?.remoteUrl || !annDir) return;
+    getLocalSyncStatus(project.projectDir, annDir)
+      .then(status => {
+        setHasLocalChanges(status.hasLocalChanges);
+        setHasRemoteChanges(status.hasRemoteChanges);
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.projectDir]);
+
+  // Heartbeat: fetch remote and check if it's ahead (every 2 minutes).
+  useEffect(() => {
+    const cfg = project.settings.gitSync;
+    if (!cfg?.remoteUrl) return;
+    const dir = project.projectDir;
+    const url = cfg.remoteUrl;
+    const id = setInterval(async () => {
+      try {
+        const tok = await getGitCredential(url);
+        if (!tok) return;
+        const ahead = await fetchRemoteStatus(dir, url, tok);
+        setHasRemoteChanges(ahead);
+      } catch {
+        // silently ignore heartbeat failures
+      }
+    }, 2 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [project.projectDir, project.settings.gitSync?.remoteUrl]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -2189,10 +2233,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                <button
                   onClick={handleSync}
                   disabled={syncing}
-                  className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default"
-                  data-tooltip={syncing ? 'Syncing…' : 'Sync annotations'}
+                  className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
+                  data-tooltip={
+                    syncing ? 'Syncing…'
+                    : hasLocalChanges && hasRemoteChanges ? 'Your annotations aren\'t uploaded yet · Teammates have new annotations'
+                    : hasLocalChanges ? 'Your annotations aren\'t uploaded yet'
+                    : hasRemoteChanges ? 'Teammates have new annotations'
+                    : 'Sync annotations'
+                  }
               >
                   <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
+                  {hasLocalChanges && !syncing && (
+                    <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-green-400/80 pointer-events-none" />
+                  )}
+                  {hasRemoteChanges && !syncing && (
+                    <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400/80 pointer-events-none" />
+                  )}
               </button>
              )}
              <button
@@ -2242,6 +2298,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           ) : syncSummary && (
             <div className="text-xs text-slate-300 mt-2 space-y-1">
               <p>{syncSummary.message}</p>
+              {syncSummary.identsUploaded > 0 && (
+                <p>
+                  Uploaded <span className="text-green-400">+{syncSummary.annotationsUploaded}</span>,{' '}
+                  <span className="text-red-400">−{syncSummary.annotationsRemovedOnPush}</span> annotation{syncSummary.annotationsUploaded === 1 && syncSummary.annotationsRemovedOnPush === 0 ? '' : 's'}
+                  {' '}across {syncSummary.identsUploaded} recording{syncSummary.identsUploaded === 1 ? '' : 's'}.
+                </p>
+              )}
               {(syncSummary.annotationsAdded > 0 || syncSummary.annotationsRemoved > 0) && (
                 <p>
                   Pulled <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}

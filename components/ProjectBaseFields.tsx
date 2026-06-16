@@ -1,8 +1,10 @@
 import React, { useRef, useEffect } from 'react';
+import { HelpCircle } from 'lucide-react';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
+import { openSyncGuideWindow } from '../utils/tauriCommands';
 
 interface Props {
   projectDir: string;
@@ -109,6 +111,7 @@ export default function ProjectBaseFields({
               backgroundImage: `linear-gradient(to right, ${gradientColors[0]}, ${gradientColors[1]})`,
               display: 'inline-block',
               minWidth: '2ch',
+              caretColor: '#FFFFFF',
             }}
           />
         </div>
@@ -177,7 +180,20 @@ export default function ProjectBaseFields({
         />
       </CollapsibleSection>
 
-      <CollapsibleSection title="Sync (GitHub)" defaultOpen={syncDefaultOpen}>
+      <CollapsibleSection
+        title="Sync (GitHub)"
+        defaultOpen={syncDefaultOpen}
+        headerAction={
+          <button
+            type="button"
+            onClick={openSyncGuideWindow}
+            className="text-gray-600 hover:text-gray-400 transition-colors"
+            data-tooltip="How to set up a synced project"
+          >
+            <HelpCircle size={14} />
+          </button>
+        }
+      >
         <p className="text-gray-500 text-xs mb-3">
           Sync annotations to a shared private repo. Media, tool example clips, and
           these settings are never uploaded. Your token is stored only in your OS
@@ -190,6 +206,14 @@ export default function ProjectBaseFields({
             type="text"
             value={syncRemoteUrl}
             onChange={e => onSyncRemoteUrlChange(e.target.value)}
+            onBlur={() => {
+              const trimmed = syncRemoteUrl.trim().replace(/\/+$/, '');
+              if (trimmed && !trimmed.endsWith('.git')) {
+                onSyncRemoteUrlChange(trimmed + '.git');
+              } else if (trimmed !== syncRemoteUrl) {
+                onSyncRemoteUrlChange(trimmed);
+              }
+            }}
             placeholder="https://github.com/your-lab/annotations.git"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />
@@ -203,6 +227,9 @@ export default function ProjectBaseFields({
             placeholder="fine-grained PAT (saved to OS credential store)"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />
+          {syncToken && !syncToken.startsWith('github_pat_') && (
+            <p className="text-yellow-500 text-xs mt-1">Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)</p>
+          )}
         </div>
         <div className="mt-3">
           <label className="text-gray-400 text-sm block mb-1">Your name</label>

@@ -68,8 +68,26 @@ pub struct SyncSummary {
     pub annotations_removed: usize,
     /// Repo-relative paths of annotation files whose content changed by pulling.
     pub recordings_changed: Vec<String>,
+    /// Annotation records added in our push (in new HEAD but not in old remote).
+    pub annotations_uploaded: usize,
+    /// Annotation records removed in our push (in old remote but not in new HEAD).
+    pub annotations_removed_on_push: usize,
+    /// Number of recording files with annotation changes uploaded.
+    pub idents_uploaded: usize,
     /// Human-readable note for the UI (e.g. "Already up to date").
     pub message: String,
+}
+
+/// Local-only sync state (no network). Used to drive the status-dot indicators.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    /// True if annotation files on disk differ from HEAD, or HEAD is ahead of the
+    /// remote tracking branch (uncommitted or unpushed changes).
+    pub has_local_changes: bool,
+    /// True if the remote tracking branch is ahead of HEAD (based on the most
+    /// recently fetched remote state — no network call is made here).
+    pub has_remote_changes: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +108,35 @@ pub async fn sync_project(
     })
     .await
     .map_err(|e| format!("sync task panicked: {e}"))?
+}
+
+/// Return local-only sync status (no network). Checks uncommitted annotation
+/// changes and whether HEAD is ahead of the remote tracking branch.
+#[tauri::command]
+pub async fn get_local_sync_status(
+    project_dir: String,
+    annotation_dir: String,
+) -> Result<SyncStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        local_sync_status_blocking(&project_dir, &annotation_dir)
+    })
+    .await
+    .map_err(|e| format!("status check panicked: {e}"))?
+}
+
+/// Fetch the remote branch and return whether remote is ahead of HEAD.
+/// This makes a network call; call it on a slow heartbeat only.
+#[tauri::command]
+pub async fn fetch_remote_status(
+    project_dir: String,
+    remote_url: String,
+    token: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_remote_status_blocking(&project_dir, &remote_url, &token)
+    })
+    .await
+    .map_err(|e| format!("fetch status check panicked: {e}"))?
 }
 
 fn sync_blocking(
@@ -134,6 +181,14 @@ fn sync_blocking(
     let branch = current_branch(&repo);
     ensure_on_branch(&repo, &branch)?;
 
+    // Snapshot the remote tracking commit before we change anything, so we can
+    // compute the push delta (what we uploaded that wasn't on remote before).
+    let pre_sync_remote_tree = repo
+        .refname_to_id(&format!("refs/remotes/{REMOTE_NAME}/{branch}"))
+        .ok()
+        .and_then(|oid| repo.find_commit(oid).ok())
+        .and_then(|c| c.tree().ok());
+
     // 1. Stage the curated set and commit any local changes.
     let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig)?;
 
@@ -146,6 +201,18 @@ fn sync_blocking(
     // 4. Push.
     let pushed = push(&repo, &branch, token)?;
     summary.pushed = pushed || pushed_local;
+
+    // Compute push stats: what we uploaded that wasn't on remote before sync.
+    if summary.pushed {
+        let new_head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        if let Some(new_tree) = new_head_tree {
+            let (files, added, removed) =
+                tree_annotation_delta(&repo, pre_sync_remote_tree.as_ref(), &new_tree)?;
+            summary.idents_uploaded = files;
+            summary.annotations_uploaded = added;
+            summary.annotations_removed_on_push = removed;
+        }
+    }
 
     if summary.message.is_empty() {
         summary.message = if summary.pulled || summary.pushed {
@@ -816,6 +883,175 @@ fn author_email(author: &str) -> String {
 
 fn gerr(e: git2::Error) -> String {
     e.message().to_string()
+}
+
+/// Count annotation lines added/removed (and files changed) between two tree states.
+/// `before` is None when there was no prior remote state (first push).
+/// Returns `(files_changed, added, removed)`.
+fn tree_annotation_delta(
+    repo: &Repository,
+    before: Option<&git2::Tree>,
+    after: &git2::Tree,
+) -> Result<(usize, usize, usize), String> {
+    let before_blobs = match before {
+        Some(t) => annotation_blobs(repo, t)?,
+        None => std::collections::HashMap::new(),
+    };
+    let after_blobs = annotation_blobs(repo, after)?;
+
+    let mut all_paths: BTreeSet<String> = BTreeSet::new();
+    all_paths.extend(before_blobs.keys().cloned());
+    all_paths.extend(after_blobs.keys().cloned());
+
+    let mut files_changed = 0usize;
+    let mut annotations_added = 0usize;
+    let mut annotations_removed = 0usize;
+    for path in &all_paths {
+        let before_lines = before_blobs.get(path).map(|s| line_set(s)).unwrap_or_default();
+        let after_lines = after_blobs.get(path).map(|s| line_set(s)).unwrap_or_default();
+        let added = after_lines.difference(&before_lines).count();
+        let removed = before_lines.difference(&after_lines).count();
+        if added > 0 || removed > 0 {
+            files_changed += 1;
+            annotations_added += added;
+            annotations_removed += removed;
+        }
+    }
+    Ok((files_changed, annotations_added, annotations_removed))
+}
+
+/// True if the remote tracking branch has commits not present in HEAD.
+fn remote_is_ahead(repo: &Repository, branch: &str) -> Result<bool, String> {
+    let remote_ref = format!("refs/remotes/{REMOTE_NAME}/{branch}");
+    let remote_oid = match repo.refname_to_id(&remote_ref) {
+        Ok(oid) => oid,
+        Err(_) => return Ok(false),
+    };
+    let head_oid = match repo.head().ok().and_then(|h| h.target()) {
+        Some(oid) => oid,
+        None => return Ok(true), // remote has commits but we have none
+    };
+    if remote_oid == head_oid {
+        return Ok(false);
+    }
+    let (_, behind) = repo.graph_ahead_behind(head_oid, remote_oid).map_err(gerr)?;
+    Ok(behind > 0)
+}
+
+/// True if annotation files on disk differ from HEAD, or HEAD is ahead of the
+/// remote tracking branch (unpushed commits).
+fn has_local_annotation_changes(
+    repo: &Repository,
+    project_path: &Path,
+    ann_rel: &Path,
+) -> Result<bool, String> {
+    // Check if HEAD is ahead of remote tracking branch (unpushed commits).
+    let branch = current_branch(repo);
+    let remote_ref = format!("refs/remotes/{REMOTE_NAME}/{branch}");
+    if let Ok(remote_oid) = repo.refname_to_id(&remote_ref) {
+        if let Some(head_oid) = repo.head().ok().and_then(|h| h.target()) {
+            if head_oid != remote_oid {
+                if let Ok((ahead, _)) = repo.graph_ahead_behind(head_oid, remote_oid) {
+                    if ahead > 0 {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    // Compare annotation files on disk to HEAD blobs.
+    let ann_abs = project_path.join(ann_rel);
+    let head_blobs = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+        Some(tree) => annotation_blobs(repo, &tree)?,
+        None => {
+            // No commits yet — any annotation file counts as a local change.
+            let mut found = false;
+            super::shared::walk_files(&ann_abs, &mut |p| {
+                if p.extension().and_then(|e| e.to_str()) == Some(ANNOTATION_EXT) {
+                    found = true;
+                }
+            });
+            return Ok(found);
+        }
+    };
+
+    let mut disk: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    super::shared::walk_files(&ann_abs, &mut |p| {
+        if p.extension().and_then(|e| e.to_str()) != Some(ANNOTATION_EXT) {
+            return;
+        }
+        if let Ok(rel) = p.strip_prefix(project_path) {
+            let key = rel.to_string_lossy().replace('\\', "/");
+            if let Ok(content) = std::fs::read_to_string(p) {
+                disk.insert(key, content);
+            }
+        }
+    });
+
+    for (path, content) in &disk {
+        match head_blobs.get(path.as_str()) {
+            Some(head_content) if content == head_content => {}
+            _ => return Ok(true),
+        }
+    }
+
+    let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
+    for path in head_blobs.keys() {
+        if path.starts_with(&ann_rel_posix) && !disk.contains_key(path.as_str()) {
+            return Ok(true); // deleted on disk
+        }
+    }
+
+    Ok(false)
+}
+
+fn local_sync_status_blocking(project_dir: &str, annotation_dir: &str) -> Result<SyncStatus, String> {
+    let project_path = Path::new(project_dir);
+    let ann_path = Path::new(annotation_dir);
+
+    let repo = match Repository::open(project_path) {
+        Ok(r) => r,
+        Err(_) => return Ok(SyncStatus::default()),
+    };
+
+    let branch = current_branch(&repo);
+    let ann_rel = match ann_path.strip_prefix(project_path) {
+        Ok(r) => r.to_path_buf(),
+        Err(_) => return Ok(SyncStatus::default()),
+    };
+
+    let has_local_changes = has_local_annotation_changes(&repo, project_path, &ann_rel)?;
+    let has_remote_changes = remote_is_ahead(&repo, &branch)?;
+
+    Ok(SyncStatus { has_local_changes, has_remote_changes })
+}
+
+fn fetch_remote_status_blocking(
+    project_dir: &str,
+    remote_url: &str,
+    token: &str,
+) -> Result<bool, String> {
+    let project_path = Path::new(project_dir);
+    let repo = match Repository::open(project_path) {
+        Ok(r) => r,
+        Err(_) => return Ok(false),
+    };
+
+    match repo.find_remote(REMOTE_NAME) {
+        Ok(existing) => {
+            if existing.url() != Some(remote_url) {
+                repo.remote_set_url(REMOTE_NAME, remote_url).map_err(gerr)?;
+            }
+        }
+        Err(_) => {
+            repo.remote(REMOTE_NAME, remote_url).map_err(gerr)?;
+        }
+    }
+
+    let branch = current_branch(&repo);
+    fetch(&repo, &branch, token)?;
+    remote_is_ahead(&repo, &branch)
 }
 
 // ---------------------------------------------------------------------------
