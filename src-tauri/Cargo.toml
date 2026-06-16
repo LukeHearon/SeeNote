@@ -20,3 +20,10 @@ symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "aac", "ogg", "
 rustfft = "6"
 rayon = "1"
 anyhow = "1"
+# Embedded git (libgit2) for annotation sync. Vendored + bundled so no system
+# git is required on any platform (Windows users especially). Used by
+# commands/git_sync.rs.
+# `https` is required for TLS — without it libgit2 cannot talk to https:// remotes
+# ("there is no TLS stream available"). default-features is off to drop the `ssh`
+# feature (unused; avoids a libssh2 build dep), so https must be listed explicitly.
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl", "https"] }

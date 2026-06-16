@@ -50,6 +50,7 @@ pub fn run() {
             commands::annotation_tools::import_tool_examples,
             commands::annotation_tools::import_examples_to_tool,
             commands::annotation_tools::import_annotation_tools,
+            commands::git_sync::sync_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

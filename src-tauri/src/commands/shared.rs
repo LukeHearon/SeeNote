@@ -10,6 +10,14 @@ pub const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
 /// Video file extensions SeeNote recognizes (lowercase, no leading dot).
 pub const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
+/// Canonical on-disk extension for internal annotation files (lowercase, no
+/// leading dot). Annotations use one shared internal format (currently Audacity
+/// tab-delimited `.txt`); this is NOT user-configurable. May become `yaml` in a
+/// future format migration — change it here and in the TS mirror
+/// `ANNOTATION_FILE_EXT` (constants.ts). git_sync.rs uses this to decide which
+/// files get the semantic set-merge and which are staged for sync.
+pub const ANNOTATION_EXT: &str = "txt";
+
 /// Write `content` to `path` atomically: stage to a sibling `.tmp` file then
 /// rename over the target, so that a crash mid-write never leaves the file
 /// truncated or corrupt. On rename failure the temp file is removed

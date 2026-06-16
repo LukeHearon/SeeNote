@@ -26,6 +26,14 @@ export const MAGMA_STOPS = [
 export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a']);
 export const SUPPORTED_VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm']);
 
+// Canonical on-disk extension for internal annotation files (no leading dot).
+// Annotations use one shared internal format (currently Audacity tab-delimited
+// `.txt`) — NOT user-configurable. May become 'yaml' in a future format
+// migration. Mirror of Rust `ANNOTATION_EXT` in src-tauri/src/commands/shared.rs;
+// change both together. git-sync uses this to decide which files are tracked and
+// set-merged.
+export const ANNOTATION_FILE_EXT = 'txt';
+
 // Lowercased file extension (no dot), or '' if the path has no extension.
 export function getExt(path: string): string {
   return path.split('.').pop()?.toLowerCase() ?? '';

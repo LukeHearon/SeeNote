@@ -167,6 +167,24 @@ export interface ProjectSettings {
   enteredFolderPath?: string;
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;
+  /**
+   * GitHub sync config. Lives here because settings.json is NEVER tracked by
+   * git (see commands/git_sync.rs) — so the token never reaches the remote, and
+   * machine-specific config can't cause a sync conflict. Distributed
+   * out-of-band (e.g. handed-out project folder) rather than synced. The author
+   * name is the commit author for attribution (one shared token, per-person
+   * names).
+   */
+  gitSync?: GitSyncConfig;
+}
+
+export interface GitSyncConfig {
+  /** HTTPS clone URL of the private annotation repo. */
+  remoteUrl: string;
+  /** Fine-grained PAT scoped to the annotation repo (shared lab-bot token). */
+  token: string;
+  /** Commit author name for this machine's user. */
+  authorName: string;
 }
 
 /**

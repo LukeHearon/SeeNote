@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown } from 'lucide-react';
+import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
@@ -9,7 +9,7 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, type SyncSummary } from './utils/tauriCommands';
 import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -58,6 +58,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
+
+  // Git sync state.
+  const [syncing, setSyncing] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  // Bumped after a pull so the auto-load effect re-reads the active track's
+  // annotation file (which may have changed on disk during the merge).
+  const [reloadNonce, setReloadNonce] = useState(0);
   // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
   const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
   const [panelDeletingToolIndex, setPanelDeletingToolIndex] = useState<number | null>(null);
@@ -1063,7 +1071,52 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         addLog(`Error loading annotations: ${err}`, 'error');
       }
     })();
-  }, [trackPath, annotationDirectory, currentDirectory]);
+  }, [trackPath, annotationDirectory, currentDirectory, reloadNonce]);
+
+  // Sync annotations to/from the configured GitHub repo. Flushes any pending
+  // autosave first so local edits aren't lost, runs the embedded-git pipeline,
+  // then reloads the active track if the pull changed anything on disk.
+  const handleSync = useCallback(async () => {
+    const cfg = projectRef.current.settings.gitSync;
+    if (!cfg?.remoteUrl || !cfg.token || !cfg.authorName) {
+      setSyncError('Configure the repository URL, access token, and your name under Project Settings → Sync first.');
+      setSyncSummary(null);
+      return;
+    }
+    const annDir = projectRef.current.annotationDirectoryAbs;
+    if (!annDir) {
+      setSyncError('No annotation directory configured for this project.');
+      return;
+    }
+    setSyncing(true);
+    setSyncError(null);
+    setSyncSummary(null);
+    try {
+      // Flush a pending debounced autosave so in-flight edits are committed.
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+        const annotPath = trackPathRef.current ? getAnnotationPath(trackPathRef.current) : null;
+        if (annotPath) {
+          await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
+        }
+      }
+      const summary = await syncProject(
+        projectRef.current.projectDir,
+        annDir,
+        cfg.remoteUrl,
+        cfg.token,
+        cfg.authorName,
+      );
+      setSyncSummary(summary);
+      addLog(`Sync: ${summary.message} (+${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s))`);
+      if (summary.pulled) setReloadNonce(n => n + 1);
+    } catch (err) {
+      setSyncError(String(err));
+      addLog(`Sync failed: ${err}`, 'error');
+    } finally {
+      setSyncing(false);
+    }
+  }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals, addLog]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -2041,6 +2094,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         <div />
 
         <div className="flex items-center space-x-3">
+             {project.settings.gitSync && (
+               <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default"
+                  data-tooltip={syncing ? 'Syncing…' : 'Sync annotations'}
+              >
+                  <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
+              </button>
+             )}
              <button
                 onClick={() => setShowDebug(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
@@ -2064,6 +2127,48 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             </button>
         </div>
       </header>
+
+      {/* Post-sync summary / error toast (non-blocking). */}
+      {(syncSummary || syncError) && (
+        <div className="fixed top-20 right-4 z-[300] w-80 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-4">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="text-sm font-semibold text-slate-100">
+              {syncError
+                ? (syncError.includes('AUTH_FAILED:') ? 'Access token rejected' : 'Sync failed')
+                : 'Sync complete'}
+            </h3>
+            <button
+              onClick={() => { setSyncSummary(null); setSyncError(null); }}
+              className="text-slate-400 hover:text-white"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {syncError ? (
+            <p className="text-xs text-red-400 mt-2 whitespace-pre-wrap">
+              {syncError.replace('AUTH_FAILED:', '').trim()}
+            </p>
+          ) : syncSummary && (
+            <div className="text-xs text-slate-300 mt-2 space-y-1">
+              <p>{syncSummary.message}</p>
+              {(syncSummary.annotationsAdded > 0 || syncSummary.annotationsRemoved > 0) && (
+                <p>
+                  Pulled <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
+                  <span className="text-red-400">−{syncSummary.annotationsRemoved}</span> annotations
+                  across {syncSummary.recordingsChanged.length} recording{syncSummary.recordingsChanged.length === 1 ? '' : 's'}.
+                </p>
+              )}
+              {syncSummary.recordingsChanged.length > 0 && (
+                <ul className="max-h-32 overflow-y-auto mt-1 space-y-0.5">
+                  {syncSummary.recordingsChanged.map(p => (
+                    <li key={p} className="font-mono text-[10px] text-slate-400 truncate">{p}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
 

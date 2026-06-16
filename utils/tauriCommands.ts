@@ -276,3 +276,32 @@ export const importExamplesToTool = (
   paths: string[],
 ): Promise<ImportExamplesSummary> =>
   invoke('import_examples_to_tool', { projectDir, name, paths });
+
+// ── Git sync ────────────────────────────────────────────────────────────────
+
+/** Result of a sync, for the non-blocking post-sync summary. */
+export interface SyncSummary {
+  pulled: boolean;
+  pushed: boolean;
+  annotationsAdded: number;
+  annotationsRemoved: number;
+  recordingsChanged: string[];
+  message: string;
+}
+
+/**
+ * Sync annotation data to/from the project's configured GitHub repo using
+ * embedded libgit2: stage annotations + tool definitions, commit, fetch, merge
+ * (semantic set-merge for annotation files), and push. Media, tool example
+ * clips, and settings.json (incl. the token) are never tracked. See
+ * src-tauri/src/commands/git_sync.rs. `annotationDir` must be inside
+ * `projectDir` (the repo root).
+ */
+export const syncProject = (
+  projectDir: string,
+  annotationDir: string,
+  remoteUrl: string,
+  token: string,
+  authorName: string,
+): Promise<SyncSummary> =>
+  invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName });

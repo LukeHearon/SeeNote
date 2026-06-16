@@ -299,6 +299,24 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
+              <Section title="Sync (GitHub)">
+                <p>
+                  Add a <span className="text-white">repository URL</span>, <span className="text-white">access token</span>, and
+                  <span className="text-white"> your name</span> under <span className="text-white">Project Settings → Sync</span> to share
+                  annotations with collaborators through a private GitHub repo. A <span className="text-white">refresh icon</span> then
+                  appears in the toolbar; click it to sync.
+                </p>
+                <p>
+                  Each sync uploads your annotation edits and tool definitions and pulls in everyone else's. Annotations merge
+                  automatically — two people labeling the same recording keep <span className="text-white">both</span> sets; only a deliberate
+                  deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits.
+                </p>
+                <p>
+                  Media files, tool example clips, and your local settings (including the token) are <span className="text-white">never</span>{' '}
+                  uploaded — only the annotation text and tool definitions are shared. The annotation directory must live inside the project folder.
+                </p>
+              </Section>
+
               <Section title="buzzdetect panel" target="buzzdetect-toggle">
                 <p>
                   Set a <span className="text-white">buzzdetect directory</span> under <span className="text-white">Advanced</span> when
