@@ -50,6 +50,7 @@ const GROUPS: Group[] = [
     shortcuts: [
       { codes: ['Digit0','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'], display: '0–9', label: 'Ready annotation tool' },
       { codes: ['KeyS'], display: 'S', label: 'Selection mode (unready tools)' },
+      { codes: ['KeyE'], display: 'E', label: 'Play / stop example clip for active tool' },
       { codes: ['KeyF'], display: 'Shift+F', label: 'Ready audio filter tool' },
       { codes: ['KeyF'], display: 'F', label: 'Toggle audio filtering' },
       { codes: ['KeyZ'], display: 'Shift+Z', label: 'Ready video zoom tool' },

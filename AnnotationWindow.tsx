@@ -1558,6 +1558,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }},
       // `Shift+F`: ready the filter tool (click-drag to define band).
       // `F`: toggle filter state on/off (restore last band). Must come after shift binding.
+      { key: 'e', handler: () => {
+          if (activeToolKey === null) return;
+          const tool = annotationTools.find(t => t.key === activeToolKey);
+          if (tool) examplePlayer.toggle(tool);
+      }},
       { key: 'f', mods: ['shift'], handler: () => { if (videoMode !== 'fast') handleToggleFilterTool(); } },
       { key: 'f', handler: () => { if (videoMode !== 'fast') handleToggleFilterState(); } },
       { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
