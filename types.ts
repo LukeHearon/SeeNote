@@ -181,10 +181,10 @@ export interface ProjectSettings {
 export interface GitSyncConfig {
   /** HTTPS clone URL of the private annotation repo. */
   remoteUrl: string;
-  /** Fine-grained PAT scoped to the annotation repo (shared lab-bot token). */
-  token: string;
   /** Commit author name for this machine's user. */
   authorName: string;
+  // PAT is stored in the OS credential store (tauri-plugin-keyring), keyed by
+  // remoteUrl, so it never appears in this file.
 }
 
 /**

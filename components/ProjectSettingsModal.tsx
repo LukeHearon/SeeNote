@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { checkDirExists, listAnnotationFilesRecursive, importAnnotationTools } from '../utils/tauriCommands';
+import { checkDirExists, listAnnotationFilesRecursive, importAnnotationTools, getGitCredential, setGitCredential, deleteGitCredential } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, HOTKEY_COLORS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
@@ -30,8 +30,16 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     project.settings.nameGradientColors ?? ['#e65161', '#f9c387'],
   );
   const [syncRemoteUrl, setSyncRemoteUrl] = useState(project.settings.gitSync?.remoteUrl ?? '');
-  const [syncToken, setSyncToken] = useState(project.settings.gitSync?.token ?? '');
+  const [syncToken, setSyncToken] = useState('');
   const [syncAuthorName, setSyncAuthorName] = useState(project.settings.gitSync?.authorName ?? '');
+  // Track the original URL so we can delete the old keyring entry if the user changes it.
+  const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
+
+  React.useEffect(() => {
+    const url = project.settings.gitSync?.remoteUrl;
+    if (!url) return;
+    getGitCredential(url).then(t => { if (t) setSyncToken(t); }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
@@ -73,6 +81,21 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     if (!mediaDirOk) { setError('Media directory does not exist.'); return; }
 
     setError('');
+
+    // Update OS credential store before committing settings.
+    const oldUrl = initialRemoteUrlRef.current;
+    const newUrl = syncRemoteUrl.trim();
+    if (oldUrl && oldUrl !== newUrl) {
+      await deleteGitCredential(oldUrl).catch(() => {});
+    }
+    if (newUrl && syncToken.trim()) {
+      await setGitCredential(newUrl, syncToken.trim());
+    } else if (newUrl && !syncToken.trim()) {
+      await deleteGitCredential(newUrl).catch(() => {});
+    } else if (!newUrl && oldUrl) {
+      await deleteGitCredential(oldUrl).catch(() => {});
+    }
+
     const settings: ProjectSettings = {
       ...project.settings,
       name: name.trim(),
@@ -81,8 +104,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
-      gitSync: (syncRemoteUrl.trim() || syncToken.trim() || syncAuthorName.trim())
-        ? { remoteUrl: syncRemoteUrl.trim(), token: syncToken.trim(), authorName: syncAuthorName.trim() }
+      gitSync: (newUrl || syncAuthorName.trim())
+        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() }
         : undefined,
     };
     pendingRef.current = settings;
