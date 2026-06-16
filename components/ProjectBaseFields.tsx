@@ -180,8 +180,9 @@ export default function ProjectBaseFields({
       <CollapsibleSection title="Sync (GitHub)" defaultOpen={syncDefaultOpen}>
         <p className="text-gray-500 text-xs mb-3">
           Sync annotations to a shared private repo. Media, tool example clips, and
-          these settings (including the token) are never uploaded. Paste the
-          lab-shared token once; your name is recorded as the author of your edits.
+          these settings are never uploaded. Your token is stored only in your OS
+          credential store — never in settings.json. Your name is recorded as the
+          author of your annotation edits.
         </p>
         <div>
           <label className="text-gray-400 text-sm block mb-1">Repository URL</label>
@@ -199,7 +200,7 @@ export default function ProjectBaseFields({
             type="password"
             value={syncToken}
             onChange={e => onSyncTokenChange(e.target.value)}
-            placeholder="fine-grained PAT (stored locally, never uploaded)"
+            placeholder="fine-grained PAT (saved to OS credential store)"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />
         </div>

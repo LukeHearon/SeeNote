@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, importAnnotationTools } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, importAnnotationTools, setGitCredential } from '../utils/tauriCommands';
 import { readProjectSettings } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
@@ -109,11 +109,14 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
         customToolColor: DEFAULT_TOOL_SEED.find(t => t.key === '0')?.color ?? HOTKEY_COLORS[0],
         nameGradientColors: gradientColors,
-        gitSync: (syncRemoteUrl.trim() || syncToken.trim() || syncAuthorName.trim())
-          ? { remoteUrl: syncRemoteUrl.trim(), token: syncToken.trim(), authorName: syncAuthorName.trim() }
+        gitSync: (syncRemoteUrl.trim() || syncAuthorName.trim())
+          ? { remoteUrl: syncRemoteUrl.trim(), authorName: syncAuthorName.trim() }
           : undefined,
       };
       const project = await createProject({ projectDir, settings });
+      if (syncRemoteUrl.trim() && syncToken.trim()) {
+        await setGitCredential(syncRemoteUrl.trim(), syncToken.trim());
+      }
       for (const t of DEFAULT_TOOL_SEED) {
         if (t.key === '0') continue;
         await createAnnotationTool(projectDir, t.text, t.color, t.description ?? '');

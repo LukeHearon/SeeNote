@@ -277,6 +277,20 @@ export const importExamplesToTool = (
 ): Promise<ImportExamplesSummary> =>
   invoke('import_examples_to_tool', { projectDir, name, paths });
 
+// ── Git credential store ──────────────────────────────────────────────────────
+
+/** Store a PAT for the given repo URL in the OS credential store. */
+export const setGitCredential = (remoteUrl: string, token: string): Promise<void> =>
+  invoke('set_git_credential', { remoteUrl, token });
+
+/** Retrieve the stored PAT for the given repo URL, or null if absent. */
+export const getGitCredential = (remoteUrl: string): Promise<string | null> =>
+  invoke('get_git_credential', { remoteUrl });
+
+/** Remove the stored PAT for the given repo URL. */
+export const deleteGitCredential = (remoteUrl: string): Promise<void> =>
+  invoke('delete_git_credential', { remoteUrl });
+
 // ── Git sync ────────────────────────────────────────────────────────────────
 
 /** Result of a sync, for the non-blocking post-sync summary. */
@@ -291,9 +305,10 @@ export interface SyncSummary {
 
 /**
  * Sync annotation data to/from the project's configured GitHub repo using
- * embedded libgit2: stage annotations + tool definitions, commit, fetch, merge
- * (semantic set-merge for annotation files), and push. Media, tool example
- * clips, and settings.json (incl. the token) are never tracked. See
+ * embedded libgit2: stage annotations, commit, fetch, merge (semantic
+ * set-merge for annotation files), and push. Media, tool example clips, and
+ * settings.json are never tracked. `token` must be fetched from the OS
+ * credential store via `getGitCredential` before calling this. See
  * src-tauri/src/commands/git_sync.rs. `annotationDir` must be inside
  * `projectDir` (the repo root).
  */
