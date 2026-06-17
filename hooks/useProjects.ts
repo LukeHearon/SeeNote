@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Project,
   ProjectListEntry,
+  ProjectPreferences,
   ProjectRegistryEntry,
   ProjectSettings,
   RelinkDirStatus,
@@ -14,6 +15,8 @@ import {
   saveRegistry,
   readProjectSettings,
   writeProjectSettings,
+  readProjectPreferences,
+  writeProjectPreferences,
   projectDirExists,
 } from '../utils/projectCommands';
 import { buildProject, basename, makeProjectPath } from '../utils/projectPaths';
@@ -27,15 +30,18 @@ async function resolveEntry(registry: ProjectRegistryEntry): Promise<ProjectList
   const exists = await projectDirExists(registry.projectDir).catch(() => false);
   if (!exists) return { status: 'missing-dir', registry };
   try {
-    const settings = await readProjectSettings(registry.projectDir);
-    // Mirror name and gradient colors so they survive the project going missing.
+    const [settings, preferences] = await Promise.all([
+      readProjectSettings(registry.projectDir),
+      readProjectPreferences(registry.projectDir),
+    ]);
+    // Mirror projectName and gradient colors so they survive the project going missing.
     const colors = settings.nameGradientColors;
-    const nameChanged = settings.name && settings.name !== registry.name;
+    const nameChanged = settings.projectName && settings.projectName !== registry.name;
     const colorsChanged = JSON.stringify(colors ?? null) !== JSON.stringify(registry.nameGradientColors ?? null);
     const withMirror = (nameChanged || colorsChanged)
-      ? { ...registry, name: settings.name, nameGradientColors: colors }
+      ? { ...registry, name: settings.projectName, nameGradientColors: colors }
       : registry;
-    return { status: 'ok', registry: withMirror, project: buildProject(withMirror, settings) };
+    return { status: 'ok', registry: withMirror, project: buildProject(withMirror, settings, preferences) };
   } catch (err) {
     return {
       status: 'bad-settings',
@@ -115,7 +121,7 @@ export function useProjects() {
       id: crypto.randomUUID(),
       projectDir: args.projectDir,
       lastOpened: now,
-      name: args.settings.name,
+      name: args.settings.projectName,
       nameGradientColors: args.settings.nameGradientColors,
     };
     await writeProjectSettings(args.projectDir, args.settings);
@@ -134,12 +140,15 @@ export function useProjects() {
     const dup = entriesRef.current.find(e => e.registry.projectDir === projectDir);
     if (dup && dup.status === 'ok') return dup.project;
 
-    const settings = await readProjectSettings(projectDir); // throws if missing
+    const [settings, preferences] = await Promise.all([
+      readProjectSettings(projectDir),
+      readProjectPreferences(projectDir),
+    ]);
     const now = new Date().toISOString();
     const registry: ProjectRegistryEntry = dup
-      ? { ...dup.registry, lastOpened: now, name: settings.name, nameGradientColors: settings.nameGradientColors }
-      : { id: crypto.randomUUID(), projectDir, lastOpened: now, name: settings.name, nameGradientColors: settings.nameGradientColors };
-    const project = buildProject(registry, settings);
+      ? { ...dup.registry, lastOpened: now, name: settings.projectName, nameGradientColors: settings.nameGradientColors }
+      : { id: crypto.randomUUID(), projectDir, lastOpened: now, name: settings.projectName, nameGradientColors: settings.nameGradientColors };
+    const project = buildProject(registry, settings, preferences);
 
     const without = entriesRef.current.filter(e => e.registry.id !== registry.id);
     const next: ProjectListEntry[] = [
@@ -151,7 +160,7 @@ export function useProjects() {
     return project;
   }, [persistRegistry, setBoth]);
 
-  /** Persist new settings to a project's settings.json (registry untouched). */
+  /** Persist new settings to a project's settings.json and update in-memory state. */
   const updateProjectSettings = useCallback(async (
     id: string,
     settings: ProjectSettings,
@@ -160,10 +169,10 @@ export function useProjects() {
     if (!entry || entry.status !== 'ok') return undefined;
     await writeProjectSettings(entry.registry.projectDir, settings);
     const colorsMatch = JSON.stringify(settings.nameGradientColors ?? null) === JSON.stringify(entry.registry.nameGradientColors ?? null);
-    const registry = (entry.registry.name === settings.name && colorsMatch)
+    const registry = (entry.registry.name === settings.projectName && colorsMatch)
       ? entry.registry
-      : { ...entry.registry, name: settings.name, nameGradientColors: settings.nameGradientColors };
-    const project = buildProject(registry, settings);
+      : { ...entry.registry, name: settings.projectName, nameGradientColors: settings.nameGradientColors };
+    const project = buildProject(registry, settings, entry.project.preferences);
     const next = entriesRef.current.map(e =>
       e.registry.id === id ? { status: 'ok' as const, registry, project } : e
     );
@@ -174,6 +183,22 @@ export function useProjects() {
     }
     return project;
   }, [persistRegistry, setBoth]);
+
+  /** Persist new preferences to a project's preferences.json and update in-memory state. */
+  const updateProjectPreferences = useCallback(async (
+    id: string,
+    preferences: ProjectPreferences,
+  ): Promise<Project | undefined> => {
+    const entry = entriesRef.current.find(e => e.registry.id === id);
+    if (!entry || entry.status !== 'ok') return undefined;
+    await writeProjectPreferences(entry.registry.projectDir, preferences);
+    const project = buildProject(entry.registry, entry.project.settings, preferences);
+    const next = entriesRef.current.map(e =>
+      e.registry.id === id ? { status: 'ok' as const, registry: entry.registry, project } : e
+    );
+    setBoth(next);
+    return project;
+  }, [setBoth]);
 
   /** Remove a project from the registry only — leaves files on disk untouched. */
   const removeProject = useCallback(async (id: string): Promise<void> => {
@@ -247,8 +272,12 @@ export function useProjects() {
     if (!entry) throw new Error('Project is no longer in the list.');
 
     let settings: ProjectSettings;
+    let preferences: ProjectPreferences;
     try {
-      settings = await readProjectSettings(newProjectDir);
+      [settings, preferences] = await Promise.all([
+        readProjectSettings(newProjectDir),
+        readProjectPreferences(newProjectDir),
+      ]);
     } catch {
       throw new Error(
         'The selected folder is not a SeeNote project — it has no .seenote/settings.json inside it.',
@@ -258,10 +287,10 @@ export function useProjects() {
     const candidate: ProjectRegistryEntry = {
       ...entry.registry,
       projectDir: newProjectDir,
-      name: settings.name,
+      name: settings.projectName,
       nameGradientColors: settings.nameGradientColors,
     };
-    const project = buildProject(candidate, settings);
+    const project = buildProject(candidate, settings, preferences);
 
     // Report directory health so the caller can reassure the user the re-link
     // will land cleanly (or flag what's still missing). buzzdetect is only
@@ -281,14 +310,14 @@ export function useProjects() {
     const internalName = entry.registry.name ?? basename(entry.registry.projectDir);
     const info: RelinkInfo = {
       internalName,
-      settingsName: settings.name,
-      nameConflict: internalName !== settings.name,
+      settingsName: settings.projectName,
+      nameConflict: internalName !== settings.projectName,
       dirs,
     };
 
     const resolution: RelinkResolution = resolve
       ? await resolve(info)
-      : { action: 'relink', name: settings.name };
+      : { action: 'relink', name: settings.projectName };
     if (resolution.action === 'cancel') return undefined;
 
     // Apply any dir overrides the user browsed (missing dirs relocated via "Locate").
@@ -306,8 +335,8 @@ export function useProjects() {
     }
 
     // If the user kept SeeNote's name over the one on disk, apply that too.
-    if (resolution.name !== settings.name) {
-      finalSettings = { ...finalSettings, name: resolution.name };
+    if (resolution.name !== settings.projectName) {
+      finalSettings = { ...finalSettings, projectName: resolution.name };
     }
 
     // Write settings.json if anything changed.
@@ -315,7 +344,7 @@ export function useProjects() {
       await writeProjectSettings(newProjectDir, finalSettings);
     }
     const finalRegistry: ProjectRegistryEntry = { ...candidate, name: resolution.name };
-    const finalProject = buildProject(finalRegistry, finalSettings);
+    const finalProject = buildProject(finalRegistry, finalSettings, preferences);
 
     const next = entriesRef.current.map(e =>
       e.registry.id === id ? { status: 'ok' as const, registry: finalRegistry, project: finalProject } : e,
@@ -333,6 +362,7 @@ export function useProjects() {
     createProject,
     addExistingProject,
     updateProjectSettings,
+    updateProjectPreferences,
     removeProject,
     touchLastOpened,
     reconnectProject,
