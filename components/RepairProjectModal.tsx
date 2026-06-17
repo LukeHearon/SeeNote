@@ -29,7 +29,7 @@ function RepairProjectModal({
           <div>
             <h3 className="text-white font-semibold text-base">Media directory not found</h3>
             <p className="text-slate-400 text-sm mt-1">
-              The media directory for <span className="text-white">{repairProject.project.settings.name}</span> no longer exists. Please choose a new path.
+              The media directory for <span className="text-white">{repairProject.project.settings.projectName}</span> no longer exists. Please choose a new path.
             </p>
           </div>
         </div>

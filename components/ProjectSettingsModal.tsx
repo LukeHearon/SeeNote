@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import { Project, ProjectSettings, GitSyncConfig } from '../types';
+import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
@@ -8,17 +8,19 @@ import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/p
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
+import GitSyncUserFields from './GitSyncUserFields';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
+type SettingsTab = 'settings' | 'preferences';
 
 interface Props {
   project: Project;
-  onSave: (settings: ProjectSettings) => void;
+  onSave: (settings: ProjectSettings, preferences: ProjectPreferences) => void;
   onClose: () => void;
 }
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
-  const [name, setName] = useState(project.settings.name);
+  const [name, setName] = useState(project.settings.projectName);
   const [mediaDir, setMediaDir] = useState(() => trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs));
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
@@ -34,16 +36,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [syncTokenDirty, setSyncTokenDirty] = useState(false);
   const [syncTokenSavedLength, setSyncTokenSavedLength] = useState<number | null>(null);
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>(
-    project.settings.gitSync?.tokenStorage ?? 'keychain',
+    project.preferences.gitSyncUser?.tokenStorage ?? 'keychain',
   );
-  const [syncAuthorName, setSyncAuthorName] = useState(project.settings.gitSync?.authorName ?? '');
+  const [syncAuthorName, setSyncAuthorName] = useState(project.preferences.gitSyncUser?.authorName ?? '');
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
 
   React.useEffect(() => {
     const cfg = project.settings.gitSync;
+    const userCfg = project.preferences.gitSyncUser ?? {};
     if (!cfg?.remoteUrl) return;
-    readSyncToken(cfg).then(t => {
+    readSyncToken(cfg.remoteUrl, userCfg).then(t => {
       if (t) setSyncTokenSavedLength(t.length);
     }).catch(err => {
       setError(`Could not read saved access token: ${String(err)}`);
@@ -54,16 +57,18 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
   const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
 
+  const [activeTab, setActiveTab] = useState<SettingsTab>('settings');
+  const [focusToken, setFocusToken] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const pendingRef = React.useRef<ProjectSettings | null>(null);
+  const pendingRef = React.useRef<{ settings: ProjectSettings; preferences: ProjectPreferences } | null>(null);
   const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
 
-  const commitSave = async (settings: ProjectSettings) => {
-    onSave(settings);
+  const commitSave = async (settings: ProjectSettings, preferences: ProjectPreferences) => {
+    onSave(settings, preferences);
   };
 
   const handleFormSubmit = async () => {
@@ -81,11 +86,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const oldUrl = initialRemoteUrlRef.current;
     const newUrl = normalizeGitRemoteUrl(syncRemoteUrl);
-    const initialStorage: TokenStorage = project.settings.gitSync?.tokenStorage ?? 'keychain';
-    const existingPlaintext = project.settings.gitSync?.tokenPlaintext;
-    // Token-storage fields to persist in gitSync. Default to no token for the
+    const initialStorage: TokenStorage = project.preferences.gitSyncUser?.tokenStorage ?? 'keychain';
+    const existingPlaintext = project.preferences.gitSyncUser?.tokenPlaintext;
+    // Token-storage fields to persist in gitSyncUser preferences. Default to no token for the
     // current mode; the branches below fill in the real value.
-    let tokenFields: Pick<GitSyncConfig, 'tokenStorage' | 'tokenPlaintext'> = { tokenStorage: syncTokenStorage };
+    let tokenFields: Pick<GitSyncUserConfig, 'tokenStorage' | 'tokenPlaintext'> = { tokenStorage: syncTokenStorage };
     try {
       if (oldUrl && oldUrl !== newUrl) {
         await deleteGitCredential(oldUrl).catch(() => {});
@@ -123,17 +128,21 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const settings: ProjectSettings = {
       ...project.settings,
-      name: name.trim(),
+      projectName: name.trim(),
       mediaDirectory: makeProjectPath(project.projectDir, resolvedMediaDir),
       annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
-      gitSync: newUrl
-        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() || undefined, ...tokenFields }
+      gitSync: newUrl ? { remoteUrl: newUrl } : undefined,
+    };
+    const preferences: ProjectPreferences = {
+      ...project.preferences,
+      gitSyncUser: newUrl
+        ? { authorName: syncAuthorName.trim() || undefined, ...tokenFields }
         : undefined,
     };
-    pendingRef.current = settings;
+    pendingRef.current = { settings, preferences };
 
     const mediaDirChanged = resolvedMediaDir !== project.mediaDirectoryAbs;
     const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
@@ -168,7 +177,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       }
     }
 
-    commitSave(settings);
+    commitSave(settings, preferences);
   };
 
   const handleOrphanResolution = async (resolution: 'delete' | 'retain') => {
@@ -200,14 +209,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const pending = pendingRef.current;
     if (!pending) return;
-    commitSave(pending);
+    commitSave(pending.settings, pending.preferences);
   };
 
   const handleCopyDecision = async (shouldCopy: boolean) => {
     if (!shouldCopy) {
       const pending = pendingRef.current;
       if (!pending) return;
-      commitSave(pending);
+      commitSave(pending.settings, pending.preferences);
       return;
     }
 
@@ -255,7 +264,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     setIsBusy(false);
     const pending = pendingRef.current;
     if (!pending) return;
-    commitSave(pending);
+    commitSave(pending.settings, pending.preferences);
   };
 
   return (
@@ -264,6 +273,10 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
         <SettingsModalShell
           title="Project Settings"
           onClose={onClose}
+          tabs={[
+            { label: 'Settings', active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
+            { label: 'Preferences', active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
+          ]}
           footer={
             <>
               <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
@@ -279,59 +292,73 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             </>
           }
         >
-          <div>
-            <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={project.projectDir}
-                disabled
-                className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-gray-400 text-sm cursor-not-allowed"
+          {activeTab === 'settings' && (
+            <>
+              <div>
+                <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={project.projectDir}
+                    disabled
+                    className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-gray-400 text-sm cursor-not-allowed"
+                  />
+                  <button
+                    onClick={() => revealInFileManager(project.projectDir)}
+                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
+                    title="Show in Finder"
+                  >
+                    <ExternalLink size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <ProjectBaseFields
+                projectDir={project.projectDir}
+                name={name}
+                onNameInput={setName}
+                gradientColors={gradientColors}
+                onGradientChange={setGradientColors}
+                mediaDir={mediaDir}
+                onMediaDirChange={setMediaDir}
+                mediaDirNotExistMessage="Directory does not exist."
+                annotationDir={annotationDir}
+                onAnnotationDirChange={setAnnotationDir}
+                annotationDirNotExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
+                outputRoundingDecimals={outputRoundingDecimals}
+                onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
+                buzzdetectDir={buzzdetectDir}
+                onBuzzdetectDirChange={setBuzzdetectDir}
+                advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
+                syncRemoteUrl={syncRemoteUrl}
+                onSyncRemoteUrlChange={setSyncRemoteUrl}
+                syncDefaultOpen={!!project.settings.gitSync}
+                onAddAccessToken={() => { setActiveTab('preferences'); setFocusToken(true); }}
               />
-              <button
-                onClick={() => revealInFileManager(project.projectDir)}
-                className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-                title="Show in Finder"
-              >
-                <ExternalLink size={16} />
-              </button>
-            </div>
-          </div>
 
-          <ProjectBaseFields
-            projectDir={project.projectDir}
-            name={name}
-            onNameInput={setName}
-            gradientColors={gradientColors}
-            onGradientChange={setGradientColors}
-            mediaDir={mediaDir}
-            onMediaDirChange={setMediaDir}
-            mediaDirNotExistMessage="Directory does not exist."
-            annotationDir={annotationDir}
-            onAnnotationDirChange={setAnnotationDir}
-            annotationDirNotExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
-            outputRoundingDecimals={outputRoundingDecimals}
-            onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
-            buzzdetectDir={buzzdetectDir}
-            onBuzzdetectDirChange={setBuzzdetectDir}
-            advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
-            syncRemoteUrl={syncRemoteUrl}
-            onSyncRemoteUrlChange={setSyncRemoteUrl}
-            syncToken={syncToken}
-            onSyncTokenChange={(v) => {
-              setSyncTokenDirty(true);
-              setSyncToken(v.replaceAll('•', ''));
-            }}
-            syncTokenDirty={syncTokenDirty}
-            syncTokenSavedLength={syncTokenSavedLength}
-            syncTokenStorage={syncTokenStorage}
-            onSyncTokenStorageChange={setSyncTokenStorage}
-            syncAuthorName={syncAuthorName}
-            onSyncAuthorNameChange={setSyncAuthorName}
-            syncDefaultOpen={!!project.settings.gitSync}
-          />
+              {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
+            </>
+          )}
 
-          {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
+          {activeTab === 'preferences' && (
+            <>
+              <div>
+                <GitSyncUserFields
+                  syncToken={syncToken}
+                  onSyncTokenChange={v => { setSyncTokenDirty(true); setSyncToken(v.replaceAll('•', '')); }}
+                  syncTokenDirty={syncTokenDirty}
+                  syncTokenSavedLength={syncTokenSavedLength}
+                  syncTokenStorage={syncTokenStorage}
+                  onSyncTokenStorageChange={setSyncTokenStorage}
+                  syncAuthorName={syncAuthorName}
+                  onSyncAuthorNameChange={setSyncAuthorName}
+                  autoFocusToken={focusToken}
+                />
+              </div>
+
+              {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
+            </>
+          )}
         </SettingsModalShell>
       )}
 

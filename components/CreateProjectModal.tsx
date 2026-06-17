@@ -1,14 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
-import { Project, ProjectSettings } from '../types';
+import { Project, ProjectSettings, ProjectPreferences } from '../types';
 import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool } from '../utils/tauriCommands';
-import { readProjectSettings } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
+import { readProjectSettings, writeProjectPreferences } from '../utils/projectCommands';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
 import { makeProjectPath, resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
+import GitSyncUserFields from './GitSyncUserFields';
 
 interface Props {
   onCreated: (project: Project) => void;
@@ -29,6 +30,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>('keychain');
   const [syncAuthorName, setSyncAuthorName] = useState('');
+  const [activeTab, setActiveTab] = useState<'settings' | 'preferences'>('settings');
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [existingProjectName, setExistingProjectName] = useState<string | null>(null);
@@ -62,7 +64,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
     if (!dir) { setExistingProjectName(null); return; }
     try {
       const existing = await readProjectSettings(dir);
-      setExistingProjectName(existing.name);
+      setExistingProjectName(existing.projectName);
     } catch {
       setExistingProjectName(null);
     }
@@ -87,8 +89,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
 
     try {
       const existing = await readProjectSettings(projectDir);
-      setExistingProjectName(existing.name);
-      setError(`Project "${existing.name}" already exists in this location. Delete its .seenote directory first, or pick a different location.`);
+      setExistingProjectName(existing.projectName);
+      setError(`Project "${existing.projectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.`);
       setIsCreating(false);
       return;
     } catch {
@@ -105,20 +107,25 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         : {};
 
       const settings: ProjectSettings = {
-        name: name.trim(),
+        projectName: name.trim(),
         mediaDirectory: makeProjectPath(projectDir, resolvedMediaDir),
         annotationDirectory: makeProjectPath(projectDir, resolvedAnnotationDir),
         buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
         outputFormat: 'txt',
         outputRoundingDecimals,
-        toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
-        customToolColor: DEFAULT_TOOL_SEED.find(t => t.key === '0')?.color ?? HOTKEY_COLORS[0],
         nameGradientColors: gradientColors,
-        gitSync: normalizedSyncRemoteUrl
-          ? { remoteUrl: normalizedSyncRemoteUrl, authorName: syncAuthorName.trim() || undefined, ...tokenFields }
-          : undefined,
+        gitSync: normalizedSyncRemoteUrl ? { remoteUrl: normalizedSyncRemoteUrl } : undefined,
       };
       const project = await createProject({ projectDir, settings });
+
+      const prefs: ProjectPreferences = {
+        toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
+        ...(normalizedSyncRemoteUrl ? {
+          gitSyncUser: { authorName: syncAuthorName.trim() || undefined, ...tokenFields },
+        } : {}),
+      };
+      await writeProjectPreferences(projectDir, prefs);
+
       for (const t of DEFAULT_TOOL_SEED) {
         if (t.key === '0') continue;
         await createAnnotationTool(projectDir, t.text, t.color, t.description ?? '');
@@ -135,6 +142,10 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
       <SettingsModalShell
         title="Create New Project"
         onClose={onClose}
+        tabs={[
+          { label: 'Settings', active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
+          { label: 'Preferences', active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
+        ]}
         footer={
           <>
             <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
@@ -150,71 +161,94 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
           </>
         }
       >
-        <div>
-          <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={projectDir}
-              onChange={e => { setProjectDir(e.target.value); setExistingProjectName(null); }}
-              onBlur={e => checkExistingProject(e.target.value)}
-              placeholder="/path/to/project"
-              className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-              autoFocus
-            />
-            <button
-              onClick={handleBrowseProject}
-              className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-            >
-              <FolderOpen size={16} />
-            </button>
-          </div>
-          {existingProjectName && (
-            <div className="flex items-start gap-2 mt-1">
-              <p className="text-red-400 text-xs flex-1">
-                Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
-              </p>
-              {onOpenExisting && (
+        {activeTab === 'settings' && (
+          <>
+            <div>
+              <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={projectDir}
+                  onChange={e => { setProjectDir(e.target.value); setExistingProjectName(null); }}
+                  onBlur={e => checkExistingProject(e.target.value)}
+                  placeholder="/path/to/project"
+                  className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  autoFocus
+                />
                 <button
-                  onClick={() => onOpenExisting(projectDir)}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-md transition-colors shrink-0"
+                  onClick={handleBrowseProject}
+                  className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
                 >
-                  Open Existing Project
+                  <FolderOpen size={16} />
                 </button>
+              </div>
+              {existingProjectName && (
+                <div className="flex items-start gap-2 mt-1">
+                  <p className="text-red-400 text-xs flex-1">
+                    Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
+                  </p>
+                  {onOpenExisting && (
+                    <button
+                      onClick={() => onOpenExisting(projectDir)}
+                      className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-md transition-colors shrink-0"
+                    >
+                      Open Existing Project
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
 
-        <ProjectBaseFields
-          projectDir={projectDir}
-          name={name}
-          onNameInput={n => { nameTouchedRef.current = true; setName(n); }}
-          gradientColors={gradientColors}
-          onGradientChange={setGradientColors}
-          mediaDir={mediaDir}
-          onMediaDirChange={v => { mediaTouchedRef.current = true; setMediaDir(v); }}
-          mediaDirPlaceholder={projectDir ? 'media' : '/path/to/media'}
-          mediaDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
-          annotationDir={annotationDir}
-          onAnnotationDirChange={v => { annotationTouchedRef.current = true; setAnnotationDir(v); }}
-          annotationDirPlaceholder={projectDir ? 'annotations' : '/path/to/annotations'}
-          annotationDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
-          outputRoundingDecimals={outputRoundingDecimals}
-          onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
-          buzzdetectDir={buzzdetectDir}
-          onBuzzdetectDirChange={setBuzzdetectDir}
-          syncRemoteUrl={syncRemoteUrl}
-          onSyncRemoteUrlChange={setSyncRemoteUrl}
-          syncToken={syncToken}
-          onSyncTokenChange={setSyncToken}
-          syncTokenStorage={syncTokenStorage}
-          onSyncTokenStorageChange={setSyncTokenStorage}
-          syncAuthorName={syncAuthorName}
-          onSyncAuthorNameChange={setSyncAuthorName}
-        />
+            <ProjectBaseFields
+              projectDir={projectDir}
+              name={name}
+              onNameInput={n => { nameTouchedRef.current = true; setName(n); }}
+              gradientColors={gradientColors}
+              onGradientChange={setGradientColors}
+              mediaDir={mediaDir}
+              onMediaDirChange={v => { mediaTouchedRef.current = true; setMediaDir(v); }}
+              mediaDirPlaceholder={projectDir ? 'media' : '/path/to/media'}
+              mediaDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
+              annotationDir={annotationDir}
+              onAnnotationDirChange={v => { annotationTouchedRef.current = true; setAnnotationDir(v); }}
+              annotationDirPlaceholder={projectDir ? 'annotations' : '/path/to/annotations'}
+              annotationDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
+              outputRoundingDecimals={outputRoundingDecimals}
+              onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
+              buzzdetectDir={buzzdetectDir}
+              onBuzzdetectDirChange={setBuzzdetectDir}
+              syncRemoteUrl={syncRemoteUrl}
+              onSyncRemoteUrlChange={setSyncRemoteUrl}
+            />
 
-        {error && <p className="text-red-400 text-sm">{error}</p>}
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+          </>
+        )}
+
+        {activeTab === 'preferences' && (
+          <>
+            <div>
+              <p className="text-gray-400 text-sm font-medium mb-0.5">GitHub Sync</p>
+              {syncRemoteUrl ? (
+                <p className="text-gray-600 text-xs mb-4 font-mono truncate">{syncRemoteUrl}</p>
+              ) : (
+                <p className="text-gray-600 text-xs mb-4">
+                  No repository configured. Set a URL on the Settings tab to enable sync.
+                </p>
+              )}
+              <GitSyncUserFields
+                syncToken={syncToken}
+                onSyncTokenChange={setSyncToken}
+                syncTokenStorage={syncTokenStorage}
+                onSyncTokenStorageChange={setSyncTokenStorage}
+                syncAuthorName={syncAuthorName}
+                onSyncAuthorNameChange={setSyncAuthorName}
+              />
+            </div>
+
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+          </>
+        )}
       </SettingsModalShell>
     </div>
   );

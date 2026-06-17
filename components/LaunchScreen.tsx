@@ -312,7 +312,7 @@ export default function LaunchScreen({
               // assumed-good until the user clicks and we actually check.
               const grayed = !isOk && !isUnchecked;
               const name = isOk
-                ? entry.project.settings.name
+                ? entry.project.settings.projectName
                 : (entry.registry.name ?? basename(entry.registry.projectDir));
               const gradientColors = isOk
                 ? entry.project.settings.nameGradientColors
