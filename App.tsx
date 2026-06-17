@@ -3,25 +3,25 @@ import LaunchScreen from './components/LaunchScreen';
 import AnnotationWindow from './AnnotationWindow';
 import RepairProjectModal, { RepairProjectState } from './components/RepairProjectModal';
 import TooltipLayer from './components/TooltipLayer';
-import { Project, ProjectSettings } from './types';
+import { Project, ProjectPreferences, ProjectSettings } from './types';
 import { useProjects } from './hooks/useProjects';
 import { listDirectory } from './utils/tauriCommands';
 
 export default function App() {
   const {
     entries, isLoading, loadError, projectsFilePath,
-    createProject, addExistingProject, updateProjectSettings,
+    createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,
     removeProject, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
 
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
 
-  // Keep the in-memory active project in lockstep with persisted settings.
+  // Keep the in-memory active project in lockstep with persisted settings/preferences.
   // `activeProject` is held here, separate from the projects store, so without
   // this the AnnotationWindow header (name + gradient) and its own `projectRef`
-  // (used by the debounced persisters) would read stale settings after a save —
-  // a later persist could even write the old settings back over a fresh change.
+  // (used by the debounced persisters) would read stale data after a save —
+  // a later persist could even write the old data back over a fresh change.
   const updateActiveProjectSettings = useCallback(
     async (id: string, settings: ProjectSettings): Promise<Project | undefined> => {
       const updated = await updateProjectSettings(id, settings);
@@ -29,6 +29,15 @@ export default function App() {
       return updated;
     },
     [updateProjectSettings],
+  );
+
+  const updateActiveProjectPreferences = useCallback(
+    async (id: string, preferences: ProjectPreferences): Promise<Project | undefined> => {
+      const updated = await updateProjectPreferences(id, preferences);
+      if (updated) setActiveProject(prev => (prev && prev.id === updated.id ? updated : prev));
+      return updated;
+    },
+    [updateProjectPreferences],
   );
 
   const handleOpenProject = useCallback(async (project: Project) => {
@@ -55,6 +64,7 @@ export default function App() {
         project={activeProject}
         onClose={handleCloseProject}
         updateProjectSettings={updateActiveProjectSettings}
+        updateProjectPreferences={updateActiveProjectPreferences}
         touchLastOpened={touchLastOpened}
       />
     );
