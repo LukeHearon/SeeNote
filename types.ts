@@ -86,9 +86,6 @@ export interface PlaybackTransport {
 export type VideoMode = 'off' | 'fast' | 'mixed' | 'accurate';
 
 export interface ProjectUiSettings {
-  leftPanelWidth?: number;  // px
-  splitRatio?: number;      // 0–1, vertical split between video and spectrogram
-  leftPanelRatio?: number;  // 0–1, split within left panel (file tree vs tool palette)
   volume?: number;          // gain, 0–4
   playbackSpeed?: number;   // 0.25–4.0, 1.0 = normal
   lastDefinedSpeed?: number;        // last non-1.0 speed picked by user; restored on speed toggle
@@ -100,7 +97,6 @@ export interface ProjectUiSettings {
   buzzdetectEnabled?: boolean;             // panel shown/hidden
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
-  buzzdetectPanelHeight?: number;          // px height of the panel
 }
 
 /**
@@ -140,54 +136,64 @@ export type ProjectPath =
   | { kind: 'absolute'; path: string };
 
 /**
- * Contents of `{projectDir}/.seenote/settings.json`. The project directory
- * itself is implicit — it is the parent of `.seenote/`. The registry entry
- * provides `projectDir` to the in-memory `Project`.
+ * Contents of `{projectDir}/.seenote/settings.json`. Project-scoped config
+ * shared across all users of this project. The project directory itself is
+ * implicit — it is the parent of `.seenote/`. Per-user preferences live in
+ * `preferences.json` (see ProjectPreferences).
  */
 export interface ProjectSettings {
-  name: string;
+  projectName: string;
   mediaDirectory: ProjectPath;
   annotationDirectory: ProjectPath;
   /** Optional directory of buzzdetect `{ident}_buzzdetect.csv` files. */
   buzzdetectDirectory?: ProjectPath;
   outputFormat: 'txt';
   outputRoundingDecimals?: number;
+  nameGradientColors?: [string, string];
+  /** GitHub sync remote URL. Per-user token and author live in ProjectPreferences.gitSyncUser. */
+  gitSync?: GitSyncConfig;
+}
+
+/**
+ * Contents of `{projectDir}/.seenote/preferences.json`. Per-project,
+ * per-user settings that should not be shared across machines. Not tracked
+ * by git. Multiple users of the same synced project each have their own copy.
+ */
+export interface ProjectPreferences {
+  spectrogramSettings?: SpectrogramSettings;
   /**
    * Label → hotkey ("1"–"9"). The tools themselves live as folders under
    * {projectDir}/.seenote/annotation-tools/ (see utils/annotationTools.ts);
-   * only the hotkey bindings are project settings.
+   * only the hotkey bindings are stored here.
    */
   toolHotkeys?: Record<string, string>;
-  /** Color of the synthetic Custom tool (key "0"), which is not a folder. */
-  customToolColor?: string;
-  spectrogramSettings?: SpectrogramSettings;
-  nameGradientColors?: [string, string];
   fileFilter?: 'all' | 'annotated' | 'unannotated';
   shuffleMode?: boolean;
   enteredFolderPath?: string;
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;
-  /**
-   * GitHub sync config. Lives here because settings.json is NEVER tracked by
-   * git (see commands/git_sync.rs) — so the token never reaches the remote, and
-   * machine-specific config can't cause a sync conflict. Distributed
-   * out-of-band (e.g. handed-out project folder) rather than synced. The author
-   * name is the commit author for attribution (one shared token, per-person
-   * names).
-   */
-  gitSync?: GitSyncConfig;
+  /** Per-user git sync credentials and author identity. */
+  gitSyncUser?: GitSyncUserConfig;
 }
 
 export interface GitSyncConfig {
   /** HTTPS clone URL of the private annotation repo. */
   remoteUrl: string;
+}
+
+/**
+ * Per-user git sync settings stored in preferences.json (never pushed to the
+ * remote). Kept separate from GitSyncConfig so multiple users sharing the same
+ * project can each store their own token and author identity.
+ */
+export interface GitSyncUserConfig {
   /** Optional commit author name for this machine's user. */
   authorName?: string;
   /**
    * Where this machine keeps the PAT. Default 'keychain'. On unsigned/quarantined
    * builds (no Apple Developer signing), the macOS Keychain prompts for a password
    * on every access; 'plaintext' avoids that by storing the token in this file
-   * instead. Safe from remote leakage either way — settings.json lives in the
+   * instead. Safe from remote leakage either way — preferences.json lives in the
    * gitignored .seenote/ dir and is never pushed — but plaintext is readable by
    * anything that can read the file. See utils/gitSync.ts (readSyncToken/applySyncToken).
    */
@@ -231,6 +237,7 @@ export interface Project {
   projectDir: string;
   lastOpened: string;
   settings: ProjectSettings;
+  preferences: ProjectPreferences;
   mediaDirectoryAbs: string;
   annotationDirectoryAbs: string;
   /** Resolved absolute buzzdetect directory, or null when not configured. */

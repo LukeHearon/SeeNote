@@ -94,6 +94,33 @@ pub async fn write_project_settings(
     atomic_write(&settings_path, &content)
 }
 
+/// Read `{project_dir}/.seenote/preferences.json` and return its parsed JSON.
+/// Returns an empty object if the file does not yet exist (new projects start
+/// with no preferences file; defaults are applied on the TypeScript side).
+#[tauri::command]
+pub async fn read_project_preferences(project_dir: String) -> Result<JsonValue, String> {
+    let prefs_path = Path::new(&project_dir).join(".seenote").join("preferences.json");
+    if !prefs_path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(&prefs_path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+/// Write `preferences` to `{project_dir}/.seenote/preferences.json`, creating
+/// the `.seenote/` directory if missing.
+#[tauri::command]
+pub async fn write_project_preferences(
+    project_dir: String,
+    preferences: JsonValue,
+) -> Result<(), String> {
+    let seenote_dir = Path::new(&project_dir).join(".seenote");
+    std::fs::create_dir_all(&seenote_dir).map_err(|e| e.to_string())?;
+    let prefs_path = seenote_dir.join("preferences.json");
+    let content = serde_json::to_string_pretty(&preferences).map_err(|e| e.to_string())?;
+    atomic_write(&prefs_path, &content)
+}
+
 #[tauri::command]
 pub async fn project_dir_exists(project_dir: String) -> Result<bool, String> {
     Ok(Path::new(&project_dir).is_dir())

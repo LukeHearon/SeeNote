@@ -30,6 +30,8 @@ pub fn run() {
             commands::projects::save_projects,
             commands::projects::read_project_settings,
             commands::projects::write_project_settings,
+            commands::projects::read_project_preferences,
+            commands::projects::write_project_preferences,
             commands::projects::project_dir_exists,
             commands::projects::create_dir_all,
             commands::projects::get_orphaned_annotations,
