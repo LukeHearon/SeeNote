@@ -1314,7 +1314,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [project, refreshAnnotatedSet]);
 
-  const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings) => {
+  const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings, updatedPreferences: ProjectPreferences) => {
     const prev = project.settings.mediaDirectory;
     const next = updatedSettings.mediaDirectory;
     const mediaDirChanged = prev.kind !== next.kind || prev.path !== next.path;
@@ -1323,6 +1323,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setShowProjectSettings(false);
       return;
     }
+    await updateProjectPreferences(project.id, updatedPreferences);
     loadAnnotationTools(updated);
     setVideoMode(migrateVideoMode(updated.preferences.uiSettings?.videoMode));
     if (mediaDirChanged) {
@@ -1340,7 +1341,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProjectSettings, handleOpenTrack, loadAnnotationTools]);
+  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools]);
 
   const handleToggleFileFilter = useCallback(() => {
     const current = project.preferences.fileFilter ?? 'all';
