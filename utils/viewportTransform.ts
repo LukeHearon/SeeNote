@@ -54,23 +54,21 @@ export interface LabelPlacementInput {
   selEndX: number | null;
   // Inset from an edge, in pixels.
   inset: number;
-  // Estimated rendered text width in pixels (0 if unknown — then no
-  // right-justify fallback is applied).
+  // Estimated rendered text width in pixels. No longer used for right-justify
+  // fallback (labels are now left-aligned with ellipsis truncation), kept for
+  // API compatibility.
   textWidth: number;
 }
 
 export interface LabelPlacement {
   // Left edge of the label in container pixels.
   leftX: number;
-  // Whether the label is right-justified against the annotation's right edge
-  // (i.e. there wasn't room for the text before that edge).
-  rightJustified: boolean;
 }
 
 export const computeLabelPlacement = (
   input: LabelPlacementInput,
 ): LabelPlacement => {
-  const { annStartX, annEndX, selStartX, selEndX, inset, textWidth } = input;
+  const { annStartX, annEndX, selStartX, selEndX, inset } = input;
 
   // Natural position and screen-left pin: rightmost of "inset past annotation
   // start" and "inset past viewport left".
@@ -86,15 +84,7 @@ export const computeLabelPlacement = (
     leftX = Math.max(leftX, (selStartX as number) + 6);
   }
 
-  // Right-justify fallback: if the text wouldn't fit between leftX and the
-  // annotation's right edge, pin the text's right edge to that edge instead.
-  // Only meaningful when we have a text width to reason about.
-  const rightLimit = annEndX - inset;
-  if (textWidth > 0 && leftX + textWidth > rightLimit) {
-    return { leftX: rightLimit - textWidth, rightJustified: true };
-  }
-
-  return { leftX, rightJustified: false };
+  return { leftX };
 };
 
 // Maximum horizontal scroll (in pixels). Mirrors Spectrogram's `computeMaxScroll`:

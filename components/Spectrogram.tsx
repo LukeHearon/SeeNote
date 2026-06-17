@@ -1791,29 +1791,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
              const isHovered = hoveredAnnotationId === annotation.id;
 
-             // Horizontal placement of the name label. Composes the existing
-             // screen-left pinning (annotation start scrolled off the left) with
-             // the selection "pop": an overlapping selection pushes the label to
-             // the selection's start, right-justifying against the annotation's
-             // right edge when there's no room for the text. LABEL_INSET matches
-             // the 8px (0.5rem) inset used below. Text width is estimated from
-             // the character count (~6.2px/char at text-xs bold); 0 when empty so
-             // the right-justify fallback is skipped (placeholder is short).
+             // Horizontal placement of the name label. Handles screen-left pinning
+             // (annotation start scrolled off the left) and the selection "pop":
+             // an overlapping selection pushes the label right. The label is always
+             // left-aligned; long text is truncated with an ellipsis. LABEL_INSET
+             // matches the 8px inset used below.
              const LABEL_INSET = 8;
-             const labelTextWidth = annotation.text ? annotation.text.length * 6.2 : 0;
              const labelPlacement = computeLabelPlacement({
                  annStartX: left,
                  annEndX: left + width,
                  selStartX: selection ? timeToX(selection.start, scrollLeft, pixelsPerSecond) : null,
                  selEndX: selection ? timeToX(selection.end, scrollLeft, pixelsPerSecond) : null,
                  inset: LABEL_INSET,
-                 textWidth: labelTextWidth,
+                 textWidth: 0,
              });
              // Convert container-px placement to a style relative to the
              // annotation div (whose origin is at container x = left).
-             const labelStyle = labelPlacement.rightJustified
-                 ? { right: `${LABEL_INSET}px` }
-                 : { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
+             const labelStyle = { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
 
              return (
                  <div
@@ -1880,70 +1874,87 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                     </div>
 
                     {width > 30 ? (
-                        <input
-                            ref={(el) => { inputRefs.current[annotation.id] = el; }}
-                            type="text"
-                            value={annotation.text}
-                            onChange={(e) => {
-                                const newText = e.target.value;
-                                const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
-                                    const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
-                                    if (matchingTool) {
-                                         return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
-                                    }
-                                    if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
-                                        return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
-                                    }
-                                    return { ...a, text: newText };
-                                });
-                                pendingAnnotationsRef.current = newAnnotations;
-                                onAnnotationsChange(newAnnotations);
-                            }}
-                            onKeyDown={(e) => {
-                                e.stopPropagation();
-                                if (e.key === 'Enter') {
-                                    onSelectAnnotation(null);
-                                    (e.target as HTMLInputElement).blur();
-                                }
-                                if (e.key === 'Escape') {
-                                    (e.target as HTMLInputElement).blur();
-                                }
-                            }}
-                            onBlur={() => {
-                                setEditingInputId(null);
-                                if (annotation.text.trim() === "") {
-                                    const filtered = annotations.filter(a => a.id !== annotation.id);
-                                    onAnnotationsCommit(filtered);
-                                    onSelectAnnotation(null);
-                                } else {
-                                    onAnnotationsCommit(pendingAnnotationsRef.current);
-                                }
-                            }}
-                            className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
-                            style={{
-                                // Horizontal placement (screen-left pinning + selection pop +
-                                // right-justify fallback) is computed by computeLabelPlacement above.
-                                ...labelStyle,
-                                textAlign: labelPlacement.rightJustified ? 'right' : 'left',
-                                color: '#ffffff',
-                                fontWeight: 'bold',
-                                textShadow: '0 1px 2px black',
-                                // Only allow pointer interaction when editing via pencil or for new empty annotations
-                                pointerEvents: (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? 'auto' : 'none',
-                            }}
-                            placeholder="Name..."
-                            onMouseDown={(e) => {
-                                if (e.button === 1) {
-                                    e.preventDefault();
+                        // When editing (pencil or new empty annotation): show an input.
+                        // Otherwise: show a read-only span with ellipsis truncation.
+                        (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
+                            <input
+                                ref={(el) => { inputRefs.current[annotation.id] = el; }}
+                                type="text"
+                                value={annotation.text}
+                                onChange={(e) => {
+                                    const newText = e.target.value;
+                                    const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
+                                        const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
+                                        if (matchingTool) {
+                                             return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
+                                        }
+                                        if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
+                                            return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
+                                        }
+                                        return { ...a, text: newText };
+                                    });
+                                    pendingAnnotationsRef.current = newAnnotations;
+                                    onAnnotationsChange(newAnnotations);
+                                }}
+                                onKeyDown={(e) => {
                                     e.stopPropagation();
-                                    onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
-                                    if (isSelected) onSelectAnnotation(null);
-                                    return;
-                                }
-                                e.stopPropagation();
-                            }}
-                            autoFocus={isSelected && annotation.text === ""}
-                        />
+                                    if (e.key === 'Enter') {
+                                        onSelectAnnotation(null);
+                                        (e.target as HTMLInputElement).blur();
+                                    }
+                                    if (e.key === 'Escape') {
+                                        (e.target as HTMLInputElement).blur();
+                                    }
+                                }}
+                                onBlur={() => {
+                                    setEditingInputId(null);
+                                    if (annotation.text.trim() === "") {
+                                        const filtered = annotations.filter(a => a.id !== annotation.id);
+                                        onAnnotationsCommit(filtered);
+                                        onSelectAnnotation(null);
+                                    } else {
+                                        onAnnotationsCommit(pendingAnnotationsRef.current);
+                                    }
+                                }}
+                                className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
+                                style={{
+                                    ...labelStyle,
+                                    textAlign: 'left',
+                                    color: '#ffffff',
+                                    fontWeight: 'bold',
+                                    textShadow: '0 1px 2px black',
+                                }}
+                                placeholder="Name..."
+                                onMouseDown={(e) => {
+                                    if (e.button === 1) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
+                                        if (isSelected) onSelectAnnotation(null);
+                                        return;
+                                    }
+                                    e.stopPropagation();
+                                }}
+                                autoFocus={isSelected && annotation.text === ""}
+                            />
+                        ) : (
+                            <span
+                                className="absolute top-0 bottom-0 flex items-center text-xs font-bold pointer-events-none"
+                                style={{
+                                    // Horizontal placement: left-aligned, clipped to annotation right edge.
+                                    ...labelStyle,
+                                    color: '#ffffff',
+                                    textShadow: '0 1px 2px black',
+                                    overflow: 'hidden',
+                                    whiteSpace: 'nowrap',
+                                    textOverflow: 'ellipsis',
+                                    display: 'block',
+                                    lineHeight: '30px',
+                                }}
+                            >
+                                {annotation.text || <span className="opacity-30">Name...</span>}
+                            </span>
+                        )
                     ) : null}
 
                     {/* Pencil icon — appears on hover, click to focus text input */}
