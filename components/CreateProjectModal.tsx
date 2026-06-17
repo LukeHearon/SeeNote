@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { Project, ProjectSettings } from '../types';
-import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, setGitCredential } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool } from '../utils/tauriCommands';
 import { readProjectSettings } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
 import { makeProjectPath, resolveInputPath } from '../utils/projectPaths';
-import { normalizeGitRemoteUrl } from '../utils/gitSync';
+import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 
@@ -27,6 +27,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [syncRemoteUrl, setSyncRemoteUrl] = useState('');
   const [syncToken, setSyncToken] = useState('');
+  const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>('keychain');
   const [syncAuthorName, setSyncAuthorName] = useState('');
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -99,6 +100,10 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
       await createDirAll(resolvedAnnotationDir);
       const normalizedSyncRemoteUrl = normalizeGitRemoteUrl(syncRemoteUrl);
 
+      const tokenFields = normalizedSyncRemoteUrl
+        ? await applySyncToken(normalizedSyncRemoteUrl, syncTokenStorage, syncToken.trim() || null)
+        : {};
+
       const settings: ProjectSettings = {
         name: name.trim(),
         mediaDirectory: makeProjectPath(projectDir, resolvedMediaDir),
@@ -110,12 +115,9 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         customToolColor: DEFAULT_TOOL_SEED.find(t => t.key === '0')?.color ?? HOTKEY_COLORS[0],
         nameGradientColors: gradientColors,
         gitSync: normalizedSyncRemoteUrl
-          ? { remoteUrl: normalizedSyncRemoteUrl, authorName: syncAuthorName.trim() || undefined }
+          ? { remoteUrl: normalizedSyncRemoteUrl, authorName: syncAuthorName.trim() || undefined, ...tokenFields }
           : undefined,
       };
-      if (normalizedSyncRemoteUrl && syncToken.trim()) {
-        await setGitCredential(normalizedSyncRemoteUrl, syncToken.trim());
-      }
       const project = await createProject({ projectDir, settings });
       for (const t of DEFAULT_TOOL_SEED) {
         if (t.key === '0') continue;
@@ -206,6 +208,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
           onSyncRemoteUrlChange={setSyncRemoteUrl}
           syncToken={syncToken}
           onSyncTokenChange={setSyncToken}
+          syncTokenStorage={syncTokenStorage}
+          onSyncTokenStorageChange={setSyncTokenStorage}
           syncAuthorName={syncAuthorName}
           onSyncAuthorNameChange={setSyncAuthorName}
         />

@@ -316,6 +316,12 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   token) are <span className="text-white">never</span> uploaded — each labeler keeps their own tools. The annotation
                   directory must live inside the project folder.
                 </p>
+                <p>
+                  Your token is stored on this machine only. Under <span className="text-white">Token storage</span> you can keep it in
+                  the <span className="text-white">OS keychain</span> (recommended) or switch to <span className="text-white">plaintext</span>,
+                  saved unencrypted in the project's settings.json (still never pushed). Plaintext trades local secrecy for avoiding
+                  keychain password prompts on unsigned builds.
+                </p>
               </Section>
 
               <Section title="buzzdetect panel" target="buzzdetect-toggle">

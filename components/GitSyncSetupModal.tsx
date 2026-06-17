@@ -121,9 +121,11 @@ export default function GitSyncSetupModal({ onClose, standalone }: Props) {
           <div className="flex items-start gap-2 bg-blue-950/40 border border-blue-900 rounded-lg px-4 py-3">
             <ShieldCheck size={16} className="text-blue-400 flex-none mt-0.5" />
             <p className="text-blue-200 text-xs leading-relaxed">
-              Your token is stored only on this computer and is never uploaded to the repository.
-              Keep it private — anyone who has it can write to your annotations. If it ever leaks,
-              delete it on GitHub and generate a new one.
+              Your token is stored only on this computer and is never uploaded to the repository — by
+              default in your OS keychain. If an unsigned build keeps prompting for a password, switch
+              <B> Token storage</B> to <B>plaintext</B> in Project Settings (saved unencrypted on disk,
+              still never pushed). Keep the token private — anyone who has it can write to your
+              annotations. If it ever leaks, delete it on GitHub and generate a new one.
             </p>
           </div>
         </div>

@@ -9,7 +9,8 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getGitCredential, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
+import { readSyncToken } from './utils/gitSync';
 import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -1158,7 +1159,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
         }
       }
-      const token = await getGitCredential(cfg.remoteUrl);
+      const token = await readSyncToken(cfg);
       if (!token) {
         setSyncError('No access token found for this repository. Open Project Settings → Sync to enter your PAT.');
         setSyncing(false);
@@ -1212,7 +1213,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const url = cfg.remoteUrl;
     const id = setInterval(async () => {
       try {
-        const tok = await getGitCredential(url);
+        const tok = await readSyncToken(cfg);
         if (!tok) return;
         const ahead = await fetchRemoteStatus(dir, url, tok);
         setHasRemoteChanges(ahead);

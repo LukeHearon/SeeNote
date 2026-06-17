@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import { Project, ProjectSettings } from '../types';
-import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, setGitCredential, deleteGitCredential } from '../utils/tauriCommands';
+import { Project, ProjectSettings, GitSyncConfig } from '../types';
+import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
-import { normalizeGitRemoteUrl } from '../utils/gitSync';
+import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 
@@ -33,14 +33,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenDirty, setSyncTokenDirty] = useState(false);
   const [syncTokenSavedLength, setSyncTokenSavedLength] = useState<number | null>(null);
+  const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>(
+    project.settings.gitSync?.tokenStorage ?? 'keychain',
+  );
   const [syncAuthorName, setSyncAuthorName] = useState(project.settings.gitSync?.authorName ?? '');
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
 
   React.useEffect(() => {
-    const url = project.settings.gitSync?.remoteUrl;
-    if (!url) return;
-    getGitCredential(url).then(t => {
+    const cfg = project.settings.gitSync;
+    if (!cfg?.remoteUrl) return;
+    readSyncToken(cfg).then(t => {
       if (t) setSyncTokenSavedLength(t.length);
     }).catch(err => {
       setError(`Could not read saved access token: ${String(err)}`);
@@ -78,22 +81,39 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     const oldUrl = initialRemoteUrlRef.current;
     const newUrl = normalizeGitRemoteUrl(syncRemoteUrl);
+    const initialStorage: TokenStorage = project.settings.gitSync?.tokenStorage ?? 'keychain';
+    const existingPlaintext = project.settings.gitSync?.tokenPlaintext;
+    // Token-storage fields to persist in gitSync. Default to no token for the
+    // current mode; the branches below fill in the real value.
+    let tokenFields: Pick<GitSyncConfig, 'tokenStorage' | 'tokenPlaintext'> = { tokenStorage: syncTokenStorage };
     try {
       if (oldUrl && oldUrl !== newUrl) {
         await deleteGitCredential(oldUrl).catch(() => {});
       }
-      if (newUrl && syncTokenDirty) {
-        if (syncToken.trim()) {
-          await setGitCredential(newUrl, syncToken.trim());
-          setSyncTokenSavedLength(syncToken.trim().length);
+      if (newUrl) {
+        if (syncTokenDirty) {
+          // User typed (or cleared) the token: store it in the chosen mode.
+          const t = syncToken.trim() || null;
+          tokenFields = await applySyncToken(newUrl, syncTokenStorage, t);
+          setSyncTokenSavedLength(t ? t.length : null);
           setSyncToken('');
           setSyncTokenDirty(false);
+        } else if (syncTokenStorage !== initialStorage) {
+          // Storage mode switched without retyping: migrate the existing token
+          // across stores. Reading from the keychain prompts once (expected).
+          const current = initialStorage === 'plaintext'
+            ? (existingPlaintext ?? null)
+            : await getGitCredential(newUrl);
+          tokenFields = await applySyncToken(newUrl, syncTokenStorage, current);
+          setSyncTokenSavedLength(current ? current.length : null);
         } else {
-          await deleteGitCredential(newUrl);
-          setSyncTokenSavedLength(null);
+          // Mode and token unchanged: keep as-is, no IPC (no keychain prompt).
+          tokenFields = syncTokenStorage === 'plaintext'
+            ? { tokenStorage: 'plaintext', tokenPlaintext: existingPlaintext }
+            : { tokenStorage: 'keychain' };
         }
-      } else if (!newUrl && oldUrl) {
-        await deleteGitCredential(oldUrl);
+      } else if (oldUrl) {
+        await deleteGitCredential(oldUrl).catch(() => {});
         setSyncTokenSavedLength(null);
       }
     } catch (err) {
@@ -110,7 +130,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
       gitSync: newUrl
-        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() || undefined }
+        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() || undefined, ...tokenFields }
         : undefined,
     };
     pendingRef.current = settings;
@@ -304,6 +324,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             }}
             syncTokenDirty={syncTokenDirty}
             syncTokenSavedLength={syncTokenSavedLength}
+            syncTokenStorage={syncTokenStorage}
+            onSyncTokenStorageChange={setSyncTokenStorage}
             syncAuthorName={syncAuthorName}
             onSyncAuthorNameChange={setSyncAuthorName}
             syncDefaultOpen={!!project.settings.gitSync}

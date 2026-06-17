@@ -183,9 +183,21 @@ export interface GitSyncConfig {
   remoteUrl: string;
   /** Optional commit author name for this machine's user. */
   authorName?: string;
-  // PAT is stored in the OS credential store (keyring crate, via the
-  // get/set/delete_git_credential commands), keyed by remoteUrl, so it never
-  // appears in this file.
+  /**
+   * Where this machine keeps the PAT. Default 'keychain'. On unsigned/quarantined
+   * builds (no Apple Developer signing), the macOS Keychain prompts for a password
+   * on every access; 'plaintext' avoids that by storing the token in this file
+   * instead. Safe from remote leakage either way — settings.json lives in the
+   * gitignored .seenote/ dir and is never pushed — but plaintext is readable by
+   * anything that can read the file. See utils/gitSync.ts (readSyncToken/applySyncToken).
+   */
+  tokenStorage?: 'keychain' | 'plaintext';
+  /**
+   * The PAT, present only when tokenStorage === 'plaintext'. For 'keychain' the
+   * token lives in the OS credential store (keyring crate, keyed by remoteUrl)
+   * and this field is absent.
+   */
+  tokenPlaintext?: string;
 }
 
 /**
