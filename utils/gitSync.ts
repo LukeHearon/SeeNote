@@ -1,5 +1,5 @@
 import { getGitCredential, setGitCredential, deleteGitCredential } from './tauriCommands';
-import type { GitSyncConfig } from '../types';
+import type { GitSyncUserConfig } from '../types';
 
 export type TokenStorage = 'keychain' | 'plaintext';
 
@@ -11,18 +11,21 @@ export function normalizeGitRemoteUrl(remoteUrl: string): string {
 
 /**
  * Read the PAT for a sync config, honoring its storage mode. For 'plaintext' the
- * token is read straight from settings (no IPC, no Keychain password prompt);
+ * token is read straight from preferences (no IPC, no Keychain password prompt);
  * for 'keychain' (the default) it comes from the OS credential store.
  *
  * Single source of truth for every token read — ProjectSettingsModal load and
  * AnnotationWindow sync/heartbeat all go through here so the mode branch lives
  * in exactly one place.
+ *
+ * `remoteUrl` is from GitSyncConfig (settings); the rest is from GitSyncUserConfig (preferences).
  */
 export async function readSyncToken(
-  cfg: Pick<GitSyncConfig, 'remoteUrl' | 'tokenStorage' | 'tokenPlaintext'>,
+  remoteUrl: string,
+  userCfg: Pick<GitSyncUserConfig, 'tokenStorage' | 'tokenPlaintext'>,
 ): Promise<string | null> {
-  if (cfg.tokenStorage === 'plaintext') return cfg.tokenPlaintext ?? null;
-  return getGitCredential(cfg.remoteUrl);
+  if (userCfg.tokenStorage === 'plaintext') return userCfg.tokenPlaintext ?? null;
+  return getGitCredential(remoteUrl);
 }
 
 /**
@@ -41,7 +44,7 @@ export async function applySyncToken(
   remoteUrl: string,
   storage: TokenStorage,
   token: string | null,
-): Promise<Pick<GitSyncConfig, 'tokenStorage' | 'tokenPlaintext'>> {
+): Promise<Pick<GitSyncUserConfig, 'tokenStorage' | 'tokenPlaintext'>> {
   if (storage === 'plaintext') {
     await deleteGitCredential(remoteUrl).catch(() => {});
     return { tokenStorage: 'plaintext', tokenPlaintext: token ?? undefined };

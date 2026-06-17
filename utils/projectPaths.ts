@@ -1,4 +1,4 @@
-import { ProjectPath, ProjectSettings, Project, ProjectRegistryEntry } from '../types';
+import { ProjectPath, ProjectPreferences, ProjectSettings, Project, ProjectRegistryEntry } from '../types';
 
 function stripTrailingSep(p: string): string {
   return p.replace(/[/\\]+$/, '');
@@ -81,16 +81,18 @@ export function makeProjectPath(projectDir: string, absPath: string): ProjectPat
   return { kind: 'absolute', path: absPath };
 }
 
-/** Build the full in-memory `Project` from a registry entry + loaded settings. */
+/** Build the full in-memory `Project` from a registry entry + loaded settings + preferences. */
 export function buildProject(
   registry: ProjectRegistryEntry,
   settings: ProjectSettings,
+  preferences: ProjectPreferences = {},
 ): Project {
   return {
     id: registry.id,
     projectDir: registry.projectDir,
     lastOpened: registry.lastOpened,
     settings,
+    preferences,
     mediaDirectoryAbs: resolveProjectPath(registry.projectDir, settings.mediaDirectory),
     annotationDirectoryAbs: resolveProjectPath(registry.projectDir, settings.annotationDirectory),
     buzzdetectDirectoryAbs: settings.buzzdetectDirectory

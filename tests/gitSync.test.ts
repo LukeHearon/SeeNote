@@ -23,35 +23,26 @@ describe('normalizeGitRemoteUrl', () => {
 });
 
 describe('readSyncToken', () => {
+  const REMOTE = 'https://github.com/lab/annotations.git';
+
   it('reads a plaintext token from the config without touching the keychain', async () => {
     mockInvoke.mockClear();
-    const token = await readSyncToken({
-      remoteUrl: 'https://github.com/lab/annotations.git',
-      tokenStorage: 'plaintext',
-      tokenPlaintext: 'github_pat_abc',
-    });
+    const token = await readSyncToken(REMOTE, { tokenStorage: 'plaintext', tokenPlaintext: 'github_pat_abc' });
     expect(token).toBe('github_pat_abc');
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('returns null for plaintext mode with no stored token', async () => {
     mockInvoke.mockClear();
-    const token = await readSyncToken({
-      remoteUrl: 'https://github.com/lab/annotations.git',
-      tokenStorage: 'plaintext',
-    });
+    const token = await readSyncToken(REMOTE, { tokenStorage: 'plaintext' });
     expect(token).toBeNull();
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('falls back to the OS credential store when mode is keychain (or unset)', async () => {
     mockInvoke.mockResolvedValueOnce('github_pat_from_keychain');
-    const token = await readSyncToken({
-      remoteUrl: 'https://github.com/lab/annotations.git',
-    });
+    const token = await readSyncToken(REMOTE, {});
     expect(token).toBe('github_pat_from_keychain');
-    expect(mockInvoke).toHaveBeenCalledWith('get_git_credential', {
-      remoteUrl: 'https://github.com/lab/annotations.git',
-    });
+    expect(mockInvoke).toHaveBeenCalledWith('get_git_credential', { remoteUrl: REMOTE });
   });
 });

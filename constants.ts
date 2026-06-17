@@ -62,12 +62,14 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
   displayCeil: 0,
 };
 
+// Panel layout defaults (not persisted — layout is local, not shared).
+export const DEFAULT_LEFT_PANEL_WIDTH = 224; // px
+export const DEFAULT_SPLIT_RATIO = 0.5;      // vertical video/spectrogram split
+export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // file-tree vs tool-palette split
+
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
-  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectPanelHeight'>> = {
-  leftPanelWidth: 224,
-  splitRatio: 0.5,
-  leftPanelRatio: 0.6,
+  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons'>> = {
   volume: 1,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,

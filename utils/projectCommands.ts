@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ProjectRegistryEntry, ProjectSettings } from '../types';
+import { ProjectPreferences, ProjectRegistryEntry, ProjectSettings } from '../types';
 
 // ── Registry (slim per-machine pointer file) ──────────────────────────────────
 
@@ -47,9 +47,65 @@ export const saveRegistry = (
 
 // ── Per-project settings.json ────────────────────────────────────────────────
 
-/** Read `{projectDir}/.seenote/settings.json` and return its raw JSON. */
-export const readProjectSettings = (projectDir: string): Promise<ProjectSettings> =>
-  invoke('read_project_settings', { projectDir });
+/**
+ * Fields that lived in the old settings.json but belong in preferences.json.
+ * Detected by the presence of 'name' (old) instead of 'projectName' (new).
+ */
+const OLD_PREF_KEYS = new Set([
+  'spectrogramSettings', 'toolHotkeys',
+  'fileFilter', 'shuffleMode', 'enteredFolderPath', 'uiSettings', 'bandPassFilter',
+]);
+
+/**
+ * One-time migration: rewrite settings.json with 'projectName' instead of 'name',
+ * strip preference fields into preferences.json (seeded only when the file is
+ * absent), and split gitSync into settings (remoteUrl) + preferences (user credentials).
+ * No-op on current-format projects.
+ */
+async function migrateSettingsIfNeeded(
+  projectDir: string,
+  raw: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!('name' in raw) || 'projectName' in raw) return raw;
+
+  const newSettings: Record<string, unknown> = { projectName: raw['name'] };
+  const newPrefs: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'name' || key === 'customToolColor') continue;
+    if (OLD_PREF_KEYS.has(key)) {
+      newPrefs[key] = value;
+    } else if (key === 'gitSync' && value && typeof value === 'object') {
+      const gs = value as Record<string, unknown>;
+      if (gs['remoteUrl']) newSettings['gitSync'] = { remoteUrl: gs['remoteUrl'] };
+      const gitSyncUser: Record<string, unknown> = {};
+      for (const field of ['authorName', 'tokenStorage', 'tokenPlaintext']) {
+        if (gs[field] !== undefined) gitSyncUser[field] = gs[field];
+      }
+      if (Object.keys(gitSyncUser).length > 0) newPrefs['gitSyncUser'] = gitSyncUser;
+    } else {
+      newSettings[key] = value;
+    }
+  }
+
+  await invoke('write_project_settings', { projectDir, settings: newSettings });
+
+  if (Object.keys(newPrefs).length > 0) {
+    const existing = await invoke<Record<string, unknown>>('read_project_preferences', { projectDir });
+    if (Object.keys(existing).length === 0) {
+      await invoke('write_project_preferences', { projectDir, preferences: newPrefs });
+    }
+  }
+
+  return newSettings;
+}
+
+/** Read `{projectDir}/.seenote/settings.json`, migrating from the old format if needed. */
+export const readProjectSettings = async (projectDir: string): Promise<ProjectSettings> => {
+  const raw = await invoke<Record<string, unknown>>('read_project_settings', { projectDir });
+  const migrated = await migrateSettingsIfNeeded(projectDir, raw);
+  return migrated as unknown as ProjectSettings;
+};
 
 /** Write the settings object to `{projectDir}/.seenote/settings.json`. */
 export const writeProjectSettings = (
@@ -57,6 +113,17 @@ export const writeProjectSettings = (
   settings: ProjectSettings,
 ): Promise<void> =>
   invoke('write_project_settings', { projectDir, settings });
+
+/** Read `{projectDir}/.seenote/preferences.json`. Returns `{}` if the file doesn't exist. */
+export const readProjectPreferences = (projectDir: string): Promise<ProjectPreferences> =>
+  invoke('read_project_preferences', { projectDir });
+
+/** Write the preferences object to `{projectDir}/.seenote/preferences.json`. */
+export const writeProjectPreferences = (
+  projectDir: string,
+  preferences: ProjectPreferences,
+): Promise<void> =>
+  invoke('write_project_preferences', { projectDir, preferences });
 
 export const projectDirExists = (projectDir: string): Promise<boolean> =>
   invoke('project_dir_exists', { projectDir });
