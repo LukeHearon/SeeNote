@@ -38,7 +38,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 40,
     });
-    expect(p).toEqual({ leftX: 108, rightJustified: false });
+    expect(p.leftX).toBe(108);
   });
 
   it('pins the label to screen-left when the annotation start has scrolled off the left', () => {
@@ -52,7 +52,7 @@ describe('computeLabelPlacement', () => {
       textWidth: 40,
     });
     // Pinned to the viewport-left inset, not annStartX + inset.
-    expect(p).toEqual({ leftX: 8, rightJustified: false });
+    expect(p.leftX).toBe(8);
   });
 
   it('pops the label to the selection start when a selection overlaps the annotation', () => {
@@ -65,7 +65,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 60,
     });
-    expect(p).toEqual({ leftX: 306, rightJustified: false });
+    expect(p.leftX).toBe(306);
   });
 
   it('takes the rightmost of the screen-left pin and the selection start', () => {
@@ -79,7 +79,7 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 60,
     });
-    expect(p).toEqual({ leftX: 206, rightJustified: false });
+    expect(p.leftX).toBe(206);
   });
 
   it('ignores a selection that does not overlap the annotation', () => {
@@ -92,12 +92,13 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 40,
     });
-    expect(p).toEqual({ leftX: 108, rightJustified: false });
+    expect(p.leftX).toBe(108);
   });
 
-  it('right-justifies against the annotation end when the popped label has no room for the text', () => {
-    // Annotation [100, 400]; selection starts at 360, close to the end. Text is
-    // 100px wide and cannot fit between 360 and (400 - 8) = 392.
+  it('leaves the label at its natural position when text is long (ellipsis handles overflow)', () => {
+    // Annotation [100, 400]; selection starts at 360, close to the end. Even though
+    // the 100px-wide text won't fit, the label stays at its natural leftX and the
+    // display layer truncates with an ellipsis rather than right-justifying.
     const p = computeLabelPlacement({
       annStartX: 100,
       annEndX: 400,
@@ -106,20 +107,22 @@ describe('computeLabelPlacement', () => {
       inset: INSET,
       textWidth: 100,
     });
-    // Right edge pinned to annEndX - inset = 392; left = 392 - 100 = 292.
-    expect(p).toEqual({ leftX: 292, rightJustified: true });
+    expect(p.leftX).toBe(366);
   });
 
-  it('does not apply the right-justify fallback when text width is unknown (0)', () => {
-    const p = computeLabelPlacement({
+  it('textWidth is accepted but has no effect on placement', () => {
+    // With textWidth=0 vs textWidth=100, leftX should be the same.
+    const base = {
       annStartX: 100,
       annEndX: 400,
       selStartX: 360,
       selEndX: 380,
       inset: INSET,
-      textWidth: 0,
-    });
-    expect(p).toEqual({ leftX: 366, rightJustified: false });
+    };
+    const p0 = computeLabelPlacement({ ...base, textWidth: 0 });
+    const p100 = computeLabelPlacement({ ...base, textWidth: 100 });
+    expect(p0.leftX).toBe(p100.leftX);
+    expect(p0.leftX).toBe(366);
   });
 });
 
