@@ -90,7 +90,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab' }}
       >
         <GripVertical size={12} className="text-slate-500 flex-none" />
-        <span className="text-xs text-white truncate flex-1">{tool.text}</span>
+        <span className="text-xs text-white truncate flex-1" data-tooltip={tool.text} data-tooltip-delay="80">{tool.text}</span>
       </div>
       {hasExamples && onPlayExample && (
         <button
@@ -287,9 +287,11 @@ export default function AnnotationToolsSettingsModal({
     return () => window.removeEventListener('keydown', handler, { capture: true });
   }, []);
 
+  const hasUnassigned = annotationTools.some((t, i) => i !== 0 && t.key === null);
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-[640px] h-[600px] flex flex-col relative">
+      <div className={`bg-gray-900 border border-gray-700 rounded-xl h-[600px] flex flex-col relative ${hasUnassigned ? 'w-[800px]' : 'w-[640px]'}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <span className="text-sm font-semibold text-white">Annotation Tool Settings</span>
           <div className="flex items-center gap-3">
@@ -313,11 +315,11 @@ export default function AnnotationToolsSettingsModal({
         </div>
 
         <div
-          className="flex flex-row gap-6 p-6 overflow-y-auto flex-1 min-h-0"
+          className="flex flex-row gap-6 p-6 flex-1 min-h-0"
           onDragOver={e => e.preventDefault()}
           onDrop={commitDrag}
         >
-          <div className="flex-1">
+          <div className="flex-1 flex flex-col min-w-0">
             <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">Hotkeys</h3>
             {SLOTS.map(k => {
               const tool = annotationTools.find(t => t.key === k);
@@ -333,7 +335,7 @@ export default function AnnotationToolsSettingsModal({
                   </div>
                   {tool && toolIndex !== -1 ? (
                     <div
-                      className="flex-1 flex rounded"
+                      className="flex-1 flex rounded min-w-0"
                       style={isSlotHighlighted(k) ? { outline: '2px solid #3b82f6' } : undefined}
                     >
                       <ToolItem
@@ -382,31 +384,33 @@ export default function AnnotationToolsSettingsModal({
           </div>
 
           <div
-            className="w-52 rounded-lg border-2 border-dashed p-3 flex flex-col transition-colors"
+            className="flex-1 min-w-0 rounded-lg border-2 border-dashed p-3 flex flex-col min-h-0 transition-colors"
             style={{ borderColor: isUnassignedHighlighted ? '#3b82f6' : '#334155' }}
             onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) updateTarget({ type: 'unassigned' }); }}
           >
-            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">Unassigned</h3>
-            {annotationTools
-              .map((t, i) => ({ tool: t, toolIndex: i }))
-              .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.key === null)
-              .map(({ tool, toolIndex }) => (
-                <div key={toolIndex} className="mb-2 flex h-8">
-                  <ToolItem
-                    tool={tool}
-                    toolIndex={toolIndex}
-                    onDragStart={() => beginDrag(toolIndex)}
-                    onDragEnd={cancelDrag}
-                    onGearClick={() => setEditingToolIndex(toolIndex)}
-                    onDeleteClick={() => requestDeleteTool(toolIndex)}
-                    dim={drag?.sourceIndex === toolIndex}
-                    isPlaying={playingExampleToolId === tool.id}
-                    onPlayExample={() => onPlayExample(tool)}
-                  />
-                </div>
-              ))}
+            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3 flex-none">Unassigned</h3>
+            <div className="overflow-y-auto flex-1 min-h-0">
+              {annotationTools
+                .map((t, i) => ({ tool: t, toolIndex: i }))
+                .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.key === null)
+                .map(({ tool, toolIndex }) => (
+                  <div key={toolIndex} className="mb-2 flex h-8">
+                    <ToolItem
+                      tool={tool}
+                      toolIndex={toolIndex}
+                      onDragStart={() => beginDrag(toolIndex)}
+                      onDragEnd={cancelDrag}
+                      onGearClick={() => setEditingToolIndex(toolIndex)}
+                      onDeleteClick={() => requestDeleteTool(toolIndex)}
+                      dim={drag?.sourceIndex === toolIndex}
+                      isPlaying={playingExampleToolId === tool.id}
+                      onPlayExample={() => onPlayExample(tool)}
+                    />
+                  </div>
+                ))}
+            </div>
             {addingTo === 'unassigned' ? (
-              <div className="mt-2">
+              <div className="mt-2 flex-none">
                 <NewToolInput
                   onCommit={text => commitNewTool(text)}
                   onCancel={() => setAddingTo(null)}
@@ -415,7 +419,7 @@ export default function AnnotationToolsSettingsModal({
             ) : (
               <button
                 onClick={() => setAddingTo('unassigned')}
-                className="mt-2 w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
+                className="mt-2 flex-none w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
               >
                 <Plus size={10} />
                 New tool
