@@ -90,7 +90,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab' }}
       >
         <GripVertical size={12} className="text-slate-500 flex-none" />
-        <span className="text-xs text-white truncate flex-1" title={tool.text}>{tool.text}</span>
+        <span className="text-xs text-white truncate flex-1" data-tooltip={tool.text} data-tooltip-delay="80">{tool.text}</span>
       </div>
       {hasExamples && onPlayExample && (
         <button
@@ -319,7 +319,7 @@ export default function AnnotationToolsSettingsModal({
           onDragOver={e => e.preventDefault()}
           onDrop={commitDrag}
         >
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-w-0">
             <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">Hotkeys</h3>
             {SLOTS.map(k => {
               const tool = annotationTools.find(t => t.key === k);
@@ -335,7 +335,7 @@ export default function AnnotationToolsSettingsModal({
                   </div>
                   {tool && toolIndex !== -1 ? (
                     <div
-                      className="flex-1 flex rounded"
+                      className="flex-1 flex rounded min-w-0"
                       style={isSlotHighlighted(k) ? { outline: '2px solid #3b82f6' } : undefined}
                     >
                       <ToolItem
@@ -384,7 +384,7 @@ export default function AnnotationToolsSettingsModal({
           </div>
 
           <div
-            className="flex-1 rounded-lg border-2 border-dashed p-3 flex flex-col min-h-0 transition-colors"
+            className="flex-1 min-w-0 rounded-lg border-2 border-dashed p-3 flex flex-col min-h-0 transition-colors"
             style={{ borderColor: isUnassignedHighlighted ? '#3b82f6' : '#334155' }}
             onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) updateTarget({ type: 'unassigned' }); }}
           >
