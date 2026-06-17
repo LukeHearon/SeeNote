@@ -1175,9 +1175,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       addLog(
         `Sync: ${summary.message}` +
         (summary.annotationsAdded > 0 || summary.annotationsRemoved > 0
-          ? ` pulled +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)` : '') +
+          ? ` downloaded +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)` : '') +
         (summary.identsUploaded > 0
-          ? ` pushed +${summary.annotationsUploaded} across ${summary.identsUploaded} file(s)` : '')
+          ? ` uploaded +${summary.annotationsUploaded} across ${summary.identsUploaded} file(s)` : '')
       );
       if (summary.pulled) setReloadNonce(n => n + 1);
       setHasLocalChanges(false);
@@ -2307,7 +2307,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               )}
               {(syncSummary.annotationsAdded > 0 || syncSummary.annotationsRemoved > 0) && (
                 <p>
-                  Pulled <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
+                  Downloaded <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
                   <span className="text-red-400">−{syncSummary.annotationsRemoved}</span> annotations
                   across {syncSummary.recordingsChanged.length} recording{syncSummary.recordingsChanged.length === 1 ? '' : 's'}.
                 </p>

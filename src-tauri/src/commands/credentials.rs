@@ -18,9 +18,20 @@ pub fn set_git_credential(remote_url: String, token: String) -> Result<(), Strin
     let account = normalize_remote_url(&remote_url);
     let entry = Entry::new(SERVICE, &account)
         .map_err(|e| format!("Could not open OS credential store: {e}"))?;
-    entry
-        .set_password(&token)
-        .map_err(|e| format!("Could not save access token to OS credential store: {e}"))?;
+
+    match entry.set_password(&token) {
+        Ok(()) => {}
+        Err(e) if entry_already_exists(&e) => {
+            // macOS Keychain rejects SecItemAdd when the entry already exists.
+            // Delete the old entry and re-add, which also handles PAT updates.
+            // If delete fails, fall through — the read-back below will verify
+            // whether a usable token is already stored.
+            if entry.delete_credential().is_ok() {
+                let _ = entry.set_password(&token);
+            }
+        }
+        Err(e) => return Err(format!("Could not save access token to OS credential store: {e}")),
+    }
 
     let stored = entry
         .get_password()
@@ -33,6 +44,10 @@ pub fn set_git_credential(remote_url: String, token: String) -> Result<(), Strin
         let _ = delete_account_password(&remote_url);
     }
     Ok(())
+}
+
+fn entry_already_exists(e: &keyring::Error) -> bool {
+    e.to_string().to_lowercase().contains("already exists")
 }
 
 #[tauri::command]

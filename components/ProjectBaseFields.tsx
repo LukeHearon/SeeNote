@@ -215,6 +215,17 @@ export default function ProjectBaseFields({
             onFocus={e => {
               if (!syncTokenDirty && syncTokenSavedLength) e.currentTarget.select();
             }}
+            onMouseUp={e => {
+              // Prevent cursor positioning within the spoofed bullets — keep all selected.
+              if (!syncTokenDirty && syncTokenSavedLength) e.currentTarget.select();
+            }}
+            onKeyDown={e => {
+              // Block cursor-movement keys in spoofed mode so the field acts as an
+              // atomic placeholder rather than an editable string.
+              if (!syncTokenDirty && syncTokenSavedLength) {
+                if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) e.preventDefault();
+              }
+            }}
             placeholder="fine-grained PAT (saved to OS credential store)"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />

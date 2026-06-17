@@ -181,19 +181,23 @@ fn sync_blocking(
     let branch = current_branch(&repo);
     ensure_on_branch(&repo, &branch)?;
 
-    // Snapshot the remote tracking commit before we change anything, so we can
-    // compute the push delta (what we uploaded that wasn't on remote before).
-    let pre_sync_remote_tree = repo
-        .refname_to_id(&format!("refs/remotes/{REMOTE_NAME}/{branch}"))
-        .ok()
-        .and_then(|oid| repo.find_commit(oid).ok())
-        .and_then(|c| c.tree().ok());
-
     // 1. Stage the curated set and commit any local changes.
     let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig)?;
 
     // 2. Fetch remote.
     fetch(&repo, &branch, token)?;
+
+    // Snapshot the remote's actual state *after* fetch — this is what the remote
+    // had right before our push, so the push delta (new HEAD minus this) is
+    // exactly our net contribution. Capturing it pre-fetch would be wrong: on a
+    // first sync the local tracking ref doesn't exist yet (None baseline), which
+    // would count everything we just pulled as "uploaded"; and a stale pre-fetch
+    // ref would miscredit a teammate's pushes as ours.
+    let remote_tree_before_push = repo
+        .refname_to_id(&format!("refs/remotes/{REMOTE_NAME}/{branch}"))
+        .ok()
+        .and_then(|oid| repo.find_commit(oid).ok())
+        .and_then(|c| c.tree().ok());
 
     // 3. Merge remote tracking branch into local (set-merge for annotations).
     let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig)?;
@@ -207,7 +211,7 @@ fn sync_blocking(
         let new_head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
         if let Some(new_tree) = new_head_tree {
             let (files, added, removed) =
-                tree_annotation_delta(&repo, pre_sync_remote_tree.as_ref(), &new_tree)?;
+                tree_annotation_delta(&repo, remote_tree_before_push.as_ref(), &new_tree)?;
             summary.idents_uploaded = files;
             summary.annotations_uploaded = added;
             summary.annotations_removed_on_push = removed;
