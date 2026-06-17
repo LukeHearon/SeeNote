@@ -1136,8 +1136,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // then reloads the active track if the pull changed anything on disk.
   const handleSync = useCallback(async () => {
     const cfg = projectRef.current.settings.gitSync;
-    if (!cfg?.remoteUrl || !cfg.authorName) {
-      setSyncError('Configure the repository URL and your name under Project Settings → Sync first.');
+    if (!cfg?.remoteUrl) {
+      setSyncError('Configure the repository URL under Project Settings → Sync first.');
       setSyncSummary(null);
       return;
     }
@@ -1169,7 +1169,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         annDir,
         cfg.remoteUrl,
         token,
-        cfg.authorName,
+        cfg.authorName ?? '',
       );
       setSyncSummary(summary);
       addLog(

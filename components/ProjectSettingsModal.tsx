@@ -5,6 +5,7 @@ import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, setGitC
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
+import { normalizeGitRemoteUrl } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 
@@ -30,6 +31,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
   const [syncRemoteUrl, setSyncRemoteUrl] = useState(project.settings.gitSync?.remoteUrl ?? '');
   const [syncToken, setSyncToken] = useState('');
+  const [syncTokenDirty, setSyncTokenDirty] = useState(false);
+  const [syncTokenSavedLength, setSyncTokenSavedLength] = useState<number | null>(null);
   const [syncAuthorName, setSyncAuthorName] = useState(project.settings.gitSync?.authorName ?? '');
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
@@ -37,7 +40,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   React.useEffect(() => {
     const url = project.settings.gitSync?.remoteUrl;
     if (!url) return;
-    getGitCredential(url).then(t => { if (t) setSyncToken(t); }).catch(() => {});
+    getGitCredential(url).then(t => {
+      if (t) setSyncTokenSavedLength(t.length);
+    }).catch(err => {
+      setError(`Could not read saved access token: ${String(err)}`);
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
@@ -69,18 +76,29 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
     setError('');
 
-    // Update OS credential store before committing settings.
     const oldUrl = initialRemoteUrlRef.current;
-    const newUrl = syncRemoteUrl.trim();
-    if (oldUrl && oldUrl !== newUrl) {
-      await deleteGitCredential(oldUrl).catch(() => {});
-    }
-    if (newUrl && syncToken.trim()) {
-      await setGitCredential(newUrl, syncToken.trim());
-    } else if (newUrl && !syncToken.trim()) {
-      await deleteGitCredential(newUrl).catch(() => {});
-    } else if (!newUrl && oldUrl) {
-      await deleteGitCredential(oldUrl).catch(() => {});
+    const newUrl = normalizeGitRemoteUrl(syncRemoteUrl);
+    try {
+      if (oldUrl && oldUrl !== newUrl) {
+        await deleteGitCredential(oldUrl).catch(() => {});
+      }
+      if (newUrl && syncTokenDirty) {
+        if (syncToken.trim()) {
+          await setGitCredential(newUrl, syncToken.trim());
+          setSyncTokenSavedLength(syncToken.trim().length);
+          setSyncToken('');
+          setSyncTokenDirty(false);
+        } else {
+          await deleteGitCredential(newUrl);
+          setSyncTokenSavedLength(null);
+        }
+      } else if (!newUrl && oldUrl) {
+        await deleteGitCredential(oldUrl);
+        setSyncTokenSavedLength(null);
+      }
+    } catch (err) {
+      setError(String(err));
+      return;
     }
 
     const settings: ProjectSettings = {
@@ -91,8 +109,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
-      gitSync: (newUrl || syncAuthorName.trim())
-        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() }
+      gitSync: newUrl
+        ? { remoteUrl: newUrl, authorName: syncAuthorName.trim() || undefined }
         : undefined,
     };
     pendingRef.current = settings;
@@ -280,7 +298,12 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             syncRemoteUrl={syncRemoteUrl}
             onSyncRemoteUrlChange={setSyncRemoteUrl}
             syncToken={syncToken}
-            onSyncTokenChange={setSyncToken}
+            onSyncTokenChange={(v) => {
+              setSyncTokenDirty(true);
+              setSyncToken(v.replaceAll('•', ''));
+            }}
+            syncTokenDirty={syncTokenDirty}
+            syncTokenSavedLength={syncTokenSavedLength}
             syncAuthorName={syncAuthorName}
             onSyncAuthorNameChange={setSyncAuthorName}
             syncDefaultOpen={!!project.settings.gitSync}

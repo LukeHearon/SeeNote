@@ -6,6 +6,7 @@ import { readProjectSettings } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, HOTKEY_COLORS, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
 import { makeProjectPath, resolveInputPath } from '../utils/projectPaths';
+import { normalizeGitRemoteUrl } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 
@@ -96,6 +97,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
     try {
       await createDirAll(resolvedMediaDir);
       await createDirAll(resolvedAnnotationDir);
+      const normalizedSyncRemoteUrl = normalizeGitRemoteUrl(syncRemoteUrl);
 
       const settings: ProjectSettings = {
         name: name.trim(),
@@ -107,14 +109,14 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
         customToolColor: DEFAULT_TOOL_SEED.find(t => t.key === '0')?.color ?? HOTKEY_COLORS[0],
         nameGradientColors: gradientColors,
-        gitSync: (syncRemoteUrl.trim() || syncAuthorName.trim())
-          ? { remoteUrl: syncRemoteUrl.trim(), authorName: syncAuthorName.trim() }
+        gitSync: normalizedSyncRemoteUrl
+          ? { remoteUrl: normalizedSyncRemoteUrl, authorName: syncAuthorName.trim() || undefined }
           : undefined,
       };
-      const project = await createProject({ projectDir, settings });
-      if (syncRemoteUrl.trim() && syncToken.trim()) {
-        await setGitCredential(syncRemoteUrl.trim(), syncToken.trim());
+      if (normalizedSyncRemoteUrl && syncToken.trim()) {
+        await setGitCredential(normalizedSyncRemoteUrl, syncToken.trim());
       }
+      const project = await createProject({ projectDir, settings });
       for (const t of DEFAULT_TOOL_SEED) {
         if (t.key === '0') continue;
         await createAnnotationTool(projectDir, t.text, t.color, t.description ?? '');

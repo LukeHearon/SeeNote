@@ -5,6 +5,7 @@ import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
+import { normalizeGitRemoteUrl } from '../utils/gitSync';
 
 interface Props {
   projectDir: string;
@@ -34,6 +35,8 @@ interface Props {
   onSyncRemoteUrlChange: (v: string) => void;
   syncToken: string;
   onSyncTokenChange: (v: string) => void;
+  syncTokenDirty?: boolean;
+  syncTokenSavedLength?: number | null;
   syncAuthorName: string;
   onSyncAuthorNameChange: (v: string) => void;
   syncDefaultOpen?: boolean;
@@ -62,11 +65,17 @@ export default function ProjectBaseFields({
   onSyncRemoteUrlChange,
   syncToken,
   onSyncTokenChange,
+  syncTokenDirty = true,
+  syncTokenSavedLength = null,
   syncAuthorName,
   onSyncAuthorNameChange,
   syncDefaultOpen = false,
 }: Props) {
   const nameRef = useRef<HTMLDivElement>(null);
+  const displayedSyncToken =
+    !syncTokenDirty && syncTokenSavedLength
+      ? '•'.repeat(syncTokenSavedLength)
+      : syncToken;
 
   // Sync contentEditable when name changes externally (e.g. auto-fill from projectDir).
   // The guard prevents interfering with the user's cursor while they're typing.
@@ -190,12 +199,8 @@ export default function ProjectBaseFields({
             value={syncRemoteUrl}
             onChange={e => onSyncRemoteUrlChange(e.target.value)}
             onBlur={() => {
-              const trimmed = syncRemoteUrl.trim().replace(/\/+$/, '');
-              if (trimmed && !trimmed.endsWith('.git')) {
-                onSyncRemoteUrlChange(trimmed + '.git');
-              } else if (trimmed !== syncRemoteUrl) {
-                onSyncRemoteUrlChange(trimmed);
-              }
+              const normalized = normalizeGitRemoteUrl(syncRemoteUrl);
+              if (normalized !== syncRemoteUrl) onSyncRemoteUrlChange(normalized);
             }}
             placeholder="https://github.com/your-lab/annotations.git"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
@@ -205,12 +210,15 @@ export default function ProjectBaseFields({
           <label className="text-gray-400 text-sm block mb-1">Access token</label>
           <input
             type="password"
-            value={syncToken}
+            value={displayedSyncToken}
             onChange={e => onSyncTokenChange(e.target.value)}
+            onFocus={e => {
+              if (!syncTokenDirty && syncTokenSavedLength) e.currentTarget.select();
+            }}
             placeholder="fine-grained PAT (saved to OS credential store)"
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />
-          {syncToken && !syncToken.startsWith('github_pat_') && (
+          {syncTokenDirty && syncToken && !syncToken.startsWith('github_pat_') && (
             <p className="text-yellow-500 text-xs mt-1">Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)</p>
           )}
         </div>

@@ -181,10 +181,11 @@ export interface ProjectSettings {
 export interface GitSyncConfig {
   /** HTTPS clone URL of the private annotation repo. */
   remoteUrl: string;
-  /** Commit author name for this machine's user. */
-  authorName: string;
-  // PAT is stored in the OS credential store (tauri-plugin-keyring), keyed by
-  // remoteUrl, so it never appears in this file.
+  /** Optional commit author name for this machine's user. */
+  authorName?: string;
+  // PAT is stored in the OS credential store (keyring crate, via the
+  // get/set/delete_git_credential commands), keyed by remoteUrl, so it never
+  // appears in this file.
 }
 
 /**

@@ -162,10 +162,10 @@ fn sync_blocking(
         })?
         .to_path_buf();
 
-    let author = author_name.trim();
-    if author.is_empty() {
-        return Err("Set a sync author name in project settings before syncing.".into());
-    }
+    let author = match author_name.trim() {
+        "" => "SeeNote",
+        name => name,
+    };
     if remote_url.trim().is_empty() {
         return Err("Set a remote repository URL in project settings before syncing.".into());
     }
