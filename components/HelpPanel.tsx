@@ -129,8 +129,12 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p>
                   Lists every track in the project directory. Tracks with existing annotations are highlighted in the list.
                   Click any track to open it, or use <Kbd>Cmd+↑</Kbd> / <Kbd>Cmd+↓</Kbd> to step through tracks in order.
+                  Hover a folder and click the arrow to drill into it as the panel root; once inside, the header
+                  shows <span className="text-white">step up one folder</span> and <span className="text-white">back to root</span> buttons.
                   Right-click a track or folder to reveal its media location or annotation file in the system file manager.
-                  Right-click a track and choose <span className="text-white">Import annotations…</span> to load annotations
+                  Right-click a track or folder and choose <span className="text-white">Copy ident</span> to copy its ident to the clipboard
+                  (a folder's ident is its path relative to the audio root), or{' '}
+                  <span className="text-white">Import annotations…</span> to load annotations
                   from an external file; they are filed under that track's ident. If the track already has annotations, you
                   can <span className="text-white">Overwrite</span> them or <span className="text-white">Merge</span> (append the imported ones).
                 </p>

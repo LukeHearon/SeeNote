@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, ChevronLeft, ArrowRight, Music, Film, FolderOpen, PanelLeftClose, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
+import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
 
 interface TreeNode {
   name: string;
@@ -274,37 +274,42 @@ function FileTree({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [enteredPath, setEnteredPath] = useState<string | null>(initialEnteredFolderPath ?? null);
-  const [enterHistory, setEnterHistory] = useState<(string | null)[]>([]);
   const scrollToFolderRef = useRef<string | null>(null);
 
   // Reset enter state when the media root changes
   useEffect(() => {
     setEnteredPath(initialEnteredFolderPath ?? null);
-    setEnterHistory([]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootDirectory]);
 
   const enterFolder = useCallback((folderPath: string) => {
-    setEnterHistory(prev => [...prev, enteredPath]);
     setEnteredPath(folderPath);
     setExpandedDirs(new Set());
     onEnteredFolderChange?.(folderPath);
-  }, [enteredPath, onEnteredFolderChange]);
+  }, [onEnteredFolderChange]);
 
-  const exitFolder = useCallback(() => {
-    setEnterHistory(prev => {
-      const next = [...prev];
-      const previous = next.pop() ?? null;
-      const exiting = enteredPath;
-      setEnteredPath(previous);
-      onEnteredFolderChange?.(previous);
-      if (exiting) {
-        setExpandedDirs(new Set([exiting]));
-        scrollToFolderRef.current = exiting;
-      }
-      return next;
-    });
-  }, [enteredPath, onEnteredFolderChange]);
+  // Step up one folder. If the parent is the media root (or above), return to root.
+  const goUpOne = useCallback(() => {
+    if (!enteredPath || !rootDirectory) return;
+    const exiting = enteredPath;
+    const sep = enteredPath.includes('\\') ? '\\' : '/';
+    const idx = enteredPath.lastIndexOf(sep);
+    const parent = idx > 0 ? enteredPath.slice(0, idx) : '';
+    // Stay inside the media root; otherwise fall back to the full root view.
+    const next = parent.length > rootDirectory.length && parent.startsWith(rootDirectory) ? parent : null;
+    setEnteredPath(next);
+    onEnteredFolderChange?.(next);
+    // Reveal the folder we just stepped out of (now a child of the new view).
+    setExpandedDirs(new Set([exiting]));
+    scrollToFolderRef.current = exiting;
+  }, [enteredPath, rootDirectory, onEnteredFolderChange]);
+
+  // Jump straight back to the media root.
+  const goToRoot = useCallback(() => {
+    setEnteredPath(null);
+    setExpandedDirs(new Set());
+    onEnteredFolderChange?.(null);
+  }, [onEnteredFolderChange]);
 
   const effectiveRoot = enteredPath ?? rootDirectory;
   const effectiveFiles = useMemo(() => {
@@ -320,13 +325,18 @@ function FileTree({
     return buildTree(effectiveRoot, effectiveFiles);
   }, [effectiveRoot, effectiveFiles]);
 
-  // On tree build/rebuild, start with only the current file's ancestors expanded
-  useEffect(() => {
-    if (tree.length > 0) {
-      setExpandedDirs(getAncestorPaths(currentTrack, effectiveRoot));
-    }
+  // Preserve scroll position across tree rebuilds (refresh, file-list changes,
+  // opening a folder's contents) as long as we're still viewing the same folder.
+  // Only a genuine folder change (enter / step up / root change) resets to top.
+  const prevRootRef = useRef(effectiveRoot);
+  const lastScrollTopRef = useRef(0);
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    const sameRoot = prevRootRef.current === effectiveRoot;
+    prevRootRef.current = effectiveRoot;
+    if (el && sameRoot) el.scrollTop = lastScrollTopRef.current;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree]); // intentionally snapshot currentTrack/effectiveRoot at tree-build time; file nav is handled below
+  }, [tree]);
 
   // Also auto-expand ancestors of the current file
   useEffect(() => {
@@ -392,6 +402,7 @@ function FileTree({
   const syncScrollbar = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    lastScrollTopRef.current = el.scrollTop;
     setScrollState({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
     const activeEl = el.querySelector('[data-active-file]') as HTMLElement | null;
     if (activeEl && el.scrollHeight > 0) {
@@ -542,13 +553,22 @@ function FileTree({
       >
         <div className="flex items-center gap-1 min-w-0 flex-1">
           {enteredPath && (
-            <button
-              onClick={exitFolder}
-              className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
-              data-tooltip="Back"
-            >
-              <ChevronLeft size={13} />
-            </button>
+            <>
+              <button
+                onClick={goToRoot}
+                className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
+                data-tooltip="Back to root"
+              >
+                <ChevronsLeft size={13} />
+              </button>
+              <button
+                onClick={goUpOne}
+                className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
+                data-tooltip="Up one folder"
+              >
+                <ChevronLeft size={13} />
+              </button>
+            </>
           )}
           <FolderOpen size={13} className="flex-none text-slate-500" />
           <span className="text-xs text-slate-400 truncate" data-tooltip={effectiveRoot || ''}>
@@ -586,13 +606,6 @@ function FileTree({
             data-tooltip={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
           >
             {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
-          </button>
-          <button
-            onClick={onToggleCollapse}
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            data-tooltip="Collapse panel"
-          >
-            <PanelLeftClose size={14} />
           </button>
         </div>
       </div>
@@ -761,6 +774,22 @@ function FileTree({
           >
             {`Show media in ${finderLabel}`}
           </button>
+          {rootDirectory && contextMenu.path !== rootDirectory &&
+           ((!contextMenu.isDir && isSupportedMediaFile(contextMenu.path)) || (contextMenu.isDir && !contextMenu.isAudioRoot)) && (
+            <button
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
+              onClick={() => {
+                // Ident = path relative to the audio root, '/'-separated. Files
+                // drop their extension; folders keep their full relative path.
+                const rel = contextMenu.path.substring(rootDirectory.length + 1).replace(/\\/g, '/');
+                const ident = contextMenu.isDir ? rel : stripExt(rel);
+                navigator.clipboard.writeText(ident);
+                setContextMenu(null);
+              }}
+            >
+              Copy ident
+            </button>
+          )}
           {!contextMenu.isDir && isSupportedMediaFile(contextMenu.path) && (
             <button
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
