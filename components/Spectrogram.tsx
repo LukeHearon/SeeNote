@@ -1,11 +1,11 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { yToFreq, freqToY, freqAxisTicks } from '../utils/audioProcessing';
-import { formatTime, calculateAnnotationLayers, makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
+import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
-import { timeToX, xToTime, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, DRAG_INTENT_HOLD_MS } from '../constants';
+import { MIN_ZOOM_SEC } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import FilterHandles from './spectrogram/FilterHandles';
@@ -55,8 +55,6 @@ interface SpectrogramProps {
    * Optional so callers that don't need it pay nothing.
    */
   onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
-  onWheelDiagnostic?: (info: { deltaX: number; deltaY: number; deltaMode: number; panAmount: number; ts: number; ctrl: boolean }) => void;
-  onScrollDiagnostic?: (info: { scrollLeft: number; delta: number; ts: number; source: string }) => void;
   videoMode?: VideoMode;
   isAudioTrack?: boolean;
   playheadLocked?: boolean;
@@ -110,8 +108,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onBoundAnnotationChange,
   onZoomChange,
   onViewportChange,
-  onWheelDiagnostic,
-  onScrollDiagnostic,
   videoMode,
   isAudioTrack = false,
   playheadLocked = false,
@@ -139,12 +135,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // resize handler then re-derives scroll from the regressed ref and re-queues
   // the stale value, producing a self-sustaining two-position oscillation
   // (the "violent jitter" bug). Every scroll write must go through setScroll.
-  const setScroll = useCallback((v: number, source: string = '?') => {
-    const prev = scrollLeftRef.current;
+  const setScroll = useCallback((v: number, _source: string = '?') => {
     scrollLeftRef.current = v;
     setScrollLeft(v);
-    onScrollDiagnostic?.({ scrollLeft: v, delta: v - prev, ts: performance.now(), source });
-  }, [onScrollDiagnostic]);
+  }, []);
   // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
   // for a brief window after manual panning so the two don't fight each other.
   const lastManualScrollRef = useRef(0);
@@ -745,16 +739,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
-    if (onWheelDiagnostic) {
-      onWheelDiagnostic({
-        deltaX: e.deltaX,
-        deltaY: e.deltaY,
-        deltaMode: e.deltaMode,
-        panAmount: e.deltaY + e.deltaX,
-        ts: performance.now(),
-        ctrl: e.ctrlKey || e.metaKey,
-      });
-    }
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
   };
 
