@@ -6,11 +6,10 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, BandPassFilter, ProjectUiSettings, VideoMode, PlaybackTransport } from './types';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
-import { readSyncToken } from './utils/gitSync';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool } from './utils/tauriCommands';
 import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -21,6 +20,8 @@ import { useAnnotationHistory } from './hooks/useAnnotationHistory';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
+import { useProjectPersistence } from './hooks/useProjectPersistence';
+import { useSyncManagement } from './hooks/useSyncManagement';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -63,15 +64,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
 
-  // Git sync state.
-  const [syncing, setSyncing] = useState(false);
-  const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [hasLocalChanges, setHasLocalChanges] = useState(false);
-  const [hasRemoteChanges, setHasRemoteChanges] = useState(false);
-  // Bumped after a pull so the auto-load effect re-reads the active track's
-  // annotation file (which may have changed on disk during the merge).
-  const [reloadNonce, setReloadNonce] = useState(0);
+  // Git sync state, the manual sync handler, and the sync-status effects live in
+  // useSyncManagement (set up below, once its dependencies are declared).
   // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
   const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
   const [panelDeletingToolIndex, setPanelDeletingToolIndex] = useState<number | null>(null);
@@ -902,8 +896,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Persist annotation tools and spectrogram settings to project whenever they change
   const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProjectIdRef = useRef<string | null>(null);
   // Last tool snapshot known to match the on-disk folders. The reconcile
   // effect diffs against this to derive folder create/rename/update/delete ops.
@@ -993,50 +985,25 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     };
   }, [annotationTools]);
 
-  useEffect(() => {
-    if (prevProjectIdRef.current !== project.id) return;
-    if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
-    settingsPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, spectrogramSettings: settings });
-    }, 800);
-    return () => {
-      if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
-    };
-  }, [settings]);
-
-  // Consolidated UI persistence — every persisted UI field flows through this
-  // single debounced effect, so the project file only gets one write per
-  // settling burst regardless of which slider/handle moved.
-  useEffect(() => {
-    if (prevProjectIdRef.current !== project.id) return;
-    if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
-    uiPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      // Store the active track relative to the media directory so the saved
-      // value survives the user moving or renaming the project root.
-      const cur = trackPathRef.current;
-      const audioRoot = projectRef.current.mediaDirectoryAbs;
-      const activeTrackPath = cur && audioRoot && cur.startsWith(audioRoot + '/')
-        ? cur.substring(audioRoot.length + 1)
-        : null;
-      const uiSettings: ProjectUiSettings = {
-        volume,
-        playbackSpeed,
-        lastDefinedSpeed,
-        zoomSec,
-        activeTrackPath,
-        buzzdetectEnabled,
-        buzzdetectThresholds,
-        buzzdetectHiddenNeurons,
-        videoMode,
-      };
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, uiSettings });
-    }, 600);
-    return () => {
-      if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
-    };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode]);
+  // Debounced persistence of spectrogram settings + consolidated UI fields to
+  // the project file. See hooks/useProjectPersistence.ts.
+  useProjectPersistence({
+    project,
+    projectRef,
+    prevProjectIdRef,
+    trackPathRef,
+    updateProjectPreferences,
+    settings,
+    volume,
+    playbackSpeed,
+    lastDefinedSpeed,
+    zoomSec,
+    trackPath,
+    buzzdetectEnabled,
+    buzzdetectThresholds,
+    buzzdetectHiddenNeurons,
+    videoMode,
+  });
 
   // Compute annotation file path: mirrors audio dir structure into annotation dir
   const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
@@ -1049,6 +1016,31 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Auto-save annotations whenever they change
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutoSaveRef = useRef(false);
+
+  // Git sync — owns sync state, the manual handler, and status effects.
+  // `setHasLocalChanges` is consumed by the autosave effect below; `reloadNonce`
+  // by the annotation auto-load effect.
+  const {
+    syncing,
+    syncSummary,
+    setSyncSummary,
+    syncError,
+    setSyncError,
+    hasLocalChanges,
+    setHasLocalChanges,
+    hasRemoteChanges,
+    reloadNonce,
+    handleSync,
+  } = useSyncManagement({
+    project,
+    projectRef,
+    annotations,
+    getAnnotationPath,
+    autoSaveTimeoutRef,
+    trackPathRef,
+    addLog,
+  });
+
   useEffect(() => {
     if (!trackPath || !annotationDirectory) return;
     const annotPath = getAnnotationPath(trackPath);
@@ -1124,98 +1116,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     })();
   }, [trackPath, annotationDirectory, currentDirectory, reloadNonce]);
-
-  // Sync annotations to/from the configured GitHub repo. Flushes any pending
-  // autosave first so local edits aren't lost, runs the embedded-git pipeline,
-  // then reloads the active track if the pull changed anything on disk.
-  const handleSync = useCallback(async () => {
-    const cfg = projectRef.current.settings.gitSync;
-    if (!cfg?.remoteUrl) {
-      setSyncError('Configure the repository URL under Project Settings → Sync first.');
-      setSyncSummary(null);
-      return;
-    }
-    const annDir = projectRef.current.annotationDirectoryAbs;
-    if (!annDir) {
-      setSyncError('No annotation directory configured for this project.');
-      return;
-    }
-    setSyncing(true);
-    setSyncError(null);
-    setSyncSummary(null);
-    try {
-      // Flush a pending debounced autosave so in-flight edits are committed.
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current);
-        const annotPath = trackPathRef.current ? getAnnotationPath(trackPathRef.current) : null;
-        if (annotPath) {
-          await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
-        }
-      }
-      const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
-      if (!token) {
-        setSyncError('No access token found for this repository. Open Project Settings → Sync to enter your PAT.');
-        setSyncing(false);
-        return;
-      }
-      const summary = await syncProject(
-        projectRef.current.projectDir,
-        annDir,
-        cfg.remoteUrl,
-        token,
-        projectRef.current.preferences.gitSyncUser?.authorName ?? '',
-      );
-      setSyncSummary(summary);
-      addLog(
-        `Sync: ${summary.message}` +
-        (summary.annotationsAdded > 0 || summary.annotationsRemoved > 0
-          ? ` downloaded +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)` : '') +
-        (summary.identsUploaded > 0
-          ? ` uploaded +${summary.annotationsUploaded} across ${summary.identsUploaded} file(s)` : '')
-      );
-      if (summary.pulled) setReloadNonce(n => n + 1);
-      setHasLocalChanges(false);
-      setHasRemoteChanges(false);
-    } catch (err) {
-      setSyncError(String(err));
-      addLog(`Sync failed: ${err}`, 'error');
-    } finally {
-      setSyncing(false);
-    }
-  }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals, addLog]);
-
-  // On project load, check initial sync status (local only, no network).
-  useEffect(() => {
-    const cfg = project.settings.gitSync;
-    const annDir = project.annotationDirectoryAbs;
-    if (!cfg?.remoteUrl || !annDir) return;
-    getLocalSyncStatus(project.projectDir, annDir)
-      .then(status => {
-        setHasLocalChanges(status.hasLocalChanges);
-        setHasRemoteChanges(status.hasRemoteChanges);
-      })
-      .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.projectDir]);
-
-  // Heartbeat: fetch remote and check if it's ahead (every 2 minutes).
-  useEffect(() => {
-    const cfg = project.settings.gitSync;
-    if (!cfg?.remoteUrl) return;
-    const dir = project.projectDir;
-    const url = cfg.remoteUrl;
-    const id = setInterval(async () => {
-      try {
-        const tok = await readSyncToken(cfg.remoteUrl, project.preferences.gitSyncUser ?? {});
-        if (!tok) return;
-        const ahead = await fetchRemoteStatus(dir, url, tok);
-        setHasRemoteChanges(ahead);
-      } catch {
-        // silently ignore heartbeat failures
-      }
-    }, 2 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [project.projectDir, project.settings.gitSync?.remoteUrl]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
