@@ -58,12 +58,13 @@
  * whenever the cutoffs change.
  */
 
-import { SoundTouch } from 'soundtouchjs';
 import { getFileInfo, startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
-import { PhaseVocoder } from './PhaseVocoder';
 import { RafTicker } from './rafTicker';
 import { BandPassFilter, PlaybackTransport } from '../types';
 import { clamp } from './helpers';
+import { TimeStretchEngine } from './TimeStretchEngine';
+import { PcmCache, PcmCacheSlice } from './PcmCache';
+import { BandPassFilterGraph } from './BandPassFilterGraph';
 
 export interface AudioEngineCallbacks {
   /** Called on every animation frame during playback with the current media time. */
@@ -97,26 +98,6 @@ interface ScheduledNode {
   ctxEnd: number;
 }
 
-/** Cached decoded PCM for a range, keyed by (filePath, startSec, endSec). */
-interface PcmCacheEntry {
-  /** Deinterleaved channel data — index by channel, then frame. */
-  channels: Float32Array[];
-  totalFrames: number;
-  startSec: number;
-  endSec: number;
-}
-
-/** A subrange of a cache entry — what to actually play on a cache hit. */
-interface PcmCacheSlice {
-  entry: PcmCacheEntry;
-  /** First frame to play, as an offset into the entry's channels. */
-  startFrame: number;
-  frameCount: number;
-  /** Media time of the first frame (what we tell the playhead). */
-  startSec: number;
-  endSec: number;
-}
-
 /** How many frames to fetch per IPC call (~1 second of audio). */
 const CHUNK_DURATION_SEC = 1.0;
 /** How many seconds of audio to keep scheduled ahead of the play position. */
@@ -131,45 +112,9 @@ const SLEEP_MS = 250;
  *    so we never block on a fixed IPC budget — we start as soon as samples are
  *    ready, with just enough lead time to schedule precisely. */
 const START_MARGIN_SEC = 0.005;
-/** Maximum number of preloaded regions to keep in the PCM replay cache. */
-const MAX_PCM_CACHE_ENTRIES = 8;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
-
-/**
- * Q values for an 8th-order Butterworth response from four cascaded biquads.
- * Pole-pair angles π/16, 3π/16, 5π/16, 7π/16 → Q = 1/(2 cos θ).
- */
-const BUTTERWORTH_8_Q = [0.5097955, 0.6013372, 0.9000000, 2.5629154] as const;
-
-/**
- * Create the cascaded biquad nodes for an 8th-order Butterworth band-pass:
- * four highpass stages followed by four lowpass stages, each with its
- * Butterworth Q. Frequencies are left at their defaults — callers set them
- * (the live graph via setValueAtTime in _applyFilterToGraph; the offline
- * measurement via .frequency.value before rendering) — and callers also wire
- * the chain into their surrounding graph, since the endpoints differ. Used by
- * both the live filter graph and the offline group-delay measurement so the
- * two stay identical.
- */
-function buildButterworthCascade(
-  ctx: BaseAudioContext,
-): { hp: BiquadFilterNode[]; lp: BiquadFilterNode[] } {
-  const hp = BUTTERWORTH_8_Q.map(q => {
-    const f = ctx.createBiquadFilter();
-    f.type = 'highpass';
-    f.Q.value = q;
-    return f;
-  });
-  const lp = BUTTERWORTH_8_Q.map(q => {
-    const f = ctx.createBiquadFilter();
-    f.type = 'lowpass';
-    f.Q.value = q;
-    return f;
-  });
-  return { hp, lp };
-}
 
 export class AudioEngine implements PlaybackTransport {
   private ctx: AudioContext | null = null;
@@ -178,45 +123,22 @@ export class AudioEngine implements PlaybackTransport {
   private _currentGain = 1;
 
   // ── Filter graph (persistent across plays) ──────────────────────────────────
-  // Sources connect to _filterIn. Audio splits into a dry path (gain = 1-strength)
-  // and a wet path (8-pole HP → 8-pole LP → gain = strength). Both paths join
-  // at _filterOut, which feeds the master gainNode. When no filter is set,
-  // _filterDry is at gain=1 and _filterWet at gain=0 — transparent passthrough.
-  //
-  // The wet path uses four cascaded biquads on each side, set to Butterworth
-  // Q values for an 8th-order maximally flat response. -48 dB/oct rolloff is
-  // steep enough that out-of-band content at full wet is effectively silent
-  // (one octave outside the band lands around -51 dB, below most listening
-  // thresholds). A single 2-pole biquad is too gentle (-12 dB/oct) and even
-  // 4-pole leaves an audible halo, so we eat the extra biquads.
-  private _filterIn: GainNode | null = null;
-  private _filterDryDelay: DelayNode | null = null;
-  private _filterDry: GainNode | null = null;
-  private _filterHP: BiquadFilterNode[] = [];
-  private _filterLP: BiquadFilterNode[] = [];
-  private _filterWet: GainNode | null = null;
-  private _filterOut: GainNode | null = null;
+  // The band-pass filter graph sits between the chunk source nodes and the
+  // master gainNode. Sources connect to `_filterInput` (the graph's input node);
+  // the graph's output feeds gainNode. Owned and managed by BandPassFilterGraph.
+  private filterGraph = new BandPassFilterGraph();
+  /** Cached graph input node so source nodes can connect to the wet/dry split. */
+  private _filterInput: AudioNode | null = null;
   private bandPassFilter: BandPassFilter | null = null;
-  /** Measured group delay of the wet biquad chain (seconds, ctx-time domain).
-   *  Mirrored on the dry-path DelayNode and subtracted from playhead. 0 when
-   *  no filter is set. */
-  private _filterDelaySec = 0;
-  /** Monotonic token so a stale async measurement can't overwrite a fresher one. */
-  private _filterDelayMeasurementToken = 0;
 
   // ── Time-stretch ───────────────────────────────────────────────────────────
   // playbackSpeed > 1 → audio plays faster than real time; speed < 1 → slower.
   // Pitch is preserved by one of two engines, picked per play() based on speed:
   // phase vocoder for slowdowns, SoundTouch (WSOLA) for speedups. Both are
-  // allocated lazily and reset at the start of each play().
+  // allocated lazily and reset at the start of each play(). Owned by
+  // TimeStretchEngine.
   private playbackSpeed = 1.0;
-  private _phaseVocoder: PhaseVocoder | null = null;
-  /** Channel count the current _phaseVocoder was allocated for (PV's channel
-   *  count is fixed at construction). Set when allocated, checked on reuse. */
-  private _phaseVocoderChannels = 0;
-  private _soundTouch: SoundTouch | null = null;
-  /** Which engine the current play() is using; null when not stretching. */
-  private _activeStretchEngine: 'pv' | 'st' | null = null;
+  private timeStretch = new TimeStretchEngine();
 
   private filePath: string | null = null;
   private fileSampleRate = 44100;
@@ -253,12 +175,10 @@ export class AudioEngine implements PlaybackTransport {
 
   // ── PCM replay cache ────────────────────────────────────────────────────────
   // Decoded PCM for preloaded regions. On a cache hit, play() bypasses all
-  // Rust IPC and schedules directly from the stored Float32Arrays.
-  // Keyed by "filePath:startSec:endSec" (6 decimal places each).
-  private _pcmCache = new Map<string, PcmCacheEntry>();
-  private _pcmCacheOrder: string[] = [];  // front = LRU (oldest)
-  /** Incremented on every preloadRange()/loadFile()/dispose(); stale preload loops exit. */
-  private preloadId = 0;
+  // Rust IPC and schedules directly from the stored Float32Arrays. Owned by
+  // PcmCache, which holds its own `preloadId` generation token (distinct from
+  // this.playId).
+  private pcmCache = new PcmCache((msg, type) => this._log(msg, type));
 
   private _log(msg: string, type: 'info' | 'error' = 'info'): void {
     this.callbacks.onDebugLog?.(`[audio] ${msg}`, type);
@@ -289,9 +209,7 @@ export class AudioEngine implements PlaybackTransport {
       this._teardownFilterGraph();
     }
 
-    this._pcmCache.clear();
-    this._pcmCacheOrder = [];
-    this.preloadId++;  // cancel any ongoing preload from the previous file
+    this.pcmCache.clear();  // also cancels any ongoing preload from the previous file
 
     const info = await getFileInfo(path);
     this.filePath = path;
@@ -352,24 +270,8 @@ export class AudioEngine implements PlaybackTransport {
     // ── Initialise the appropriate stretch engine ─────────────────────────────
     // Phase vocoder for slowdowns, SoundTouch (WSOLA) for speedups. Each engine
     // is allocated lazily and reset on every play() so internal buffers start clean.
-    if (this.playbackSpeed < 1.0) {
-      const pvChannels = 2;  // _stretchChunk always produces stereo output
-      if (!this._phaseVocoder || this._phaseVocoderChannels !== pvChannels) {
-        this._phaseVocoder = new PhaseVocoder(pvChannels);
-        this._phaseVocoderChannels = pvChannels;
-      }
-      this._phaseVocoder.reset();
-      this._phaseVocoder.setSpeed(this.playbackSpeed);
-      this._activeStretchEngine = 'pv';
-    } else if (this.playbackSpeed > 1.0) {
-      if (!this._soundTouch) this._soundTouch = new SoundTouch();
-      this._soundTouch.clear();
-      this._soundTouch.tempo = this.playbackSpeed;
-      this._soundTouch.pitch = 1.0;
-      this._activeStretchEngine = 'st';
-    } else {
-      this._activeStretchEngine = null;
-    }
+    this.timeStretch.setSpeed(this.playbackSpeed);
+    this.timeStretch.reset();
 
     const myPlayId = ++this.playId;
     this.isPlayingState = false;
@@ -407,7 +309,7 @@ export class AudioEngine implements PlaybackTransport {
     // re-stretching it through SoundTouch on every replay would defeat the
     // "instant repeat" purpose. Stretched plays go through the prefetch path.
     if (this.endSec !== null && this.playbackSpeed === 1.0) {
-      const slice = this._pcmCacheFind(startSec, this.endSec);
+      const slice = this.pcmCache.find(this.fileSampleRate, startSec, this.endSec);
       if (slice) {
         // PCM is already in memory — anchor immediately with minimum scheduling margin.
         this.playStartCtx = this.ctx.currentTime + START_MARGIN_SEC;
@@ -455,7 +357,7 @@ export class AudioEngine implements PlaybackTransport {
     this.pausedAt = clamp(sec, 0, this.fileDurationSec);
     this._cancelPlayback();
     // Cancel any in-flight preload for the old position (finding 6).
-    this.preloadId++;
+    this.pcmCache.cancelPreload();
   }
 
   setGain(gain: number): void {
@@ -488,7 +390,7 @@ export class AudioEngine implements PlaybackTransport {
    */
   setBandPassFilter(filter: BandPassFilter | null): void {
     this.bandPassFilter = filter;
-    this._applyFilterToGraph();
+    this.filterGraph.apply(filter, this.fileSampleRate);
   }
 
   /**
@@ -519,17 +421,14 @@ export class AudioEngine implements PlaybackTransport {
   /** Fully tear down the engine. Call on component unmount. */
   dispose(): void {
     this._cancelPlayback();
-    this.preloadId++;
+    this.pcmCache.cancelPreload();
     if (this.ctx) {
       this.ctx.close().catch(() => {});
       this.ctx = null;
     }
     this.gainNode = null;
     this._teardownFilterGraph();
-    this._phaseVocoder = null;
-    this._phaseVocoderChannels = 0;
-    this._soundTouch = null;
-    this._activeStretchEngine = null;
+    this.timeStretch.dispose();
     this.filePath = null;
   }
 
@@ -569,7 +468,7 @@ export class AudioEngine implements PlaybackTransport {
     // Subtract the band-pass filter's group delay AND the audio output latency so
     // the playhead reflects what's emerging from the speakers, not what's been
     // scheduled. Both are 0 when inactive/unreported.
-    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this._filterDelaySec - this._outputLatencySec();
+    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this.filterGraph.getDelaySec() - this._outputLatencySec();
     if (elapsedCtx < 0) return this.playStartMedia;
     const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.fileDurationSec);
     // Clamp to endSec so the playhead never visually overshoots the selection
@@ -585,249 +484,16 @@ export class AudioEngine implements PlaybackTransport {
    */
   private _buildFilterGraph(): void {
     if (!this.ctx || !this.gainNode) return;
-    const ctx = this.ctx;
-    this._filterIn = ctx.createGain();
-    this._filterOut = ctx.createGain();
-    this._filterDry = ctx.createGain();
-    this._filterWet = ctx.createGain();
-    // Max delay 0.5s is way more than any realistic biquad group delay.
-    this._filterDryDelay = ctx.createDelay(0.5);
-
-    // Frequencies are set by _applyFilterToGraph() (called below) via
-    // setValueAtTime; the cascade is built here with just Q + type.
-    const { hp, lp } = buildButterworthCascade(ctx);
-    this._filterHP = hp;
-    this._filterLP = lp;
-
-    // Dry path: filterIn → filterDryDelay → filterDry → filterOut.
-    // The DelayNode matches the wet branch's group delay so the wet/dry mix
-    // is phase-coherent at any strength (no comb filtering).
-    this._filterIn.connect(this._filterDryDelay);
-    this._filterDryDelay.connect(this._filterDry);
-    this._filterDry.connect(this._filterOut);
-    // Wet path: filterIn → HP[0..3] → LP[0..3] → filterWet → filterOut
-    let prev: AudioNode = this._filterIn;
-    for (const hp of this._filterHP) { prev.connect(hp); prev = hp; }
-    for (const lp of this._filterLP) { prev.connect(lp); prev = lp; }
-    prev.connect(this._filterWet);
-    this._filterWet.connect(this._filterOut);
-
-    this._filterOut.connect(this.gainNode);
-
-    this._applyFilterToGraph();
+    const { input, output } = this.filterGraph.build(this.ctx);
+    this._filterInput = input;
+    output.connect(this.gainNode);
+    // Reapply the current filter to the freshly built graph.
+    this.filterGraph.apply(this.bandPassFilter, this.fileSampleRate);
   }
 
   private _teardownFilterGraph(): void {
-    const all: (AudioNode | null)[] = [
-      this._filterIn, this._filterDryDelay, this._filterDry,
-      this._filterWet, this._filterOut,
-      ...this._filterHP, ...this._filterLP,
-    ];
-    for (const node of all) {
-      try { node?.disconnect(); } catch { /* already disconnected */ }
-    }
-    this._filterIn = null;
-    this._filterDryDelay = null;
-    this._filterDry = null;
-    this._filterHP = [];
-    this._filterLP = [];
-    this._filterWet = null;
-    this._filterOut = null;
-    this._filterDelaySec = 0;
-    this._filterDelayMeasurementToken++; // invalidate any pending measurement
-  }
-
-  private _applyFilterToGraph(): void {
-    if (!this.ctx || !this._filterDry || !this._filterWet
-        || this._filterHP.length === 0 || this._filterLP.length === 0) return;
-    const t = this.ctx.currentTime;
-    if (this.bandPassFilter) {
-      const { low, high, strength } = this.bandPassFilter;
-      const safeLow = clamp(low, 20, this.fileSampleRate / 2 - 20);
-      const safeHigh = clamp(high, safeLow + 20, this.fileSampleRate / 2 - 1);
-      for (const hp of this._filterHP) hp.frequency.setValueAtTime(safeLow, t);
-      for (const lp of this._filterLP) lp.frequency.setValueAtTime(safeHigh, t);
-      const s = clamp(strength, 0, 1);
-      this._filterDry.gain.setValueAtTime(1 - s, t);
-      this._filterWet.gain.setValueAtTime(s, t);
-      void this._updateFilterDelay(safeLow, safeHigh);
-    } else {
-      this._filterDry.gain.setValueAtTime(1, t);
-      this._filterWet.gain.setValueAtTime(0, t);
-      this._filterDelaySec = 0;
-      this._filterDelayMeasurementToken++;
-      this._filterDryDelay?.delayTime.setValueAtTime(0, t);
-    }
-  }
-
-  /**
-   * Measure the wet chain's group delay for the given cutoffs and apply it to
-   * the dry-path DelayNode + _filterDelaySec. Async because measurement runs
-   * in an OfflineAudioContext; uses a token so out-of-order completion of a
-   * stale measurement can't clobber a fresher one.
-   */
-  private async _updateFilterDelay(low: number, high: number): Promise<void> {
-    const token = ++this._filterDelayMeasurementToken;
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const sampleRate = ctx.sampleRate;
-    let delaySec: number;
-    try {
-      delaySec = await this._measureWetGroupDelay(low, high, sampleRate);
-    } catch {
-      return;
-    }
-    if (token !== this._filterDelayMeasurementToken) return;
-    if (!this.ctx || !this._filterDryDelay) return;
-    const now = this.ctx.currentTime;
-    this._filterDelaySec = delaySec;
-    this._filterDryDelay.delayTime.setValueAtTime(delaySec, now);
-  }
-
-  /**
-   * Render an impulse through an offline copy of the wet chain and return the
-   * peak position of |response| in seconds — a close-enough proxy for group
-   * delay for our purposes (we only need to remove ~tens-of-ms of visual drift,
-   * not chase sub-sample accuracy). Cheap: a single offline render of <500ms
-   * of audio through 8 biquads.
-   */
-  private async _measureWetGroupDelay(low: number, high: number, sampleRate: number): Promise<number> {
-    const length = Math.ceil(0.5 * sampleRate);
-    const offline = new OfflineAudioContext(1, length, sampleRate);
-    const impulseBuf = offline.createBuffer(1, length, sampleRate);
-    impulseBuf.getChannelData(0)[0] = 1;
-    const source = offline.createBufferSource();
-    source.buffer = impulseBuf;
-
-    // Same cascade as the live wet path; set cutoffs before rendering.
-    const { hp, lp } = buildButterworthCascade(offline);
-    for (const f of hp) f.frequency.value = low;
-    for (const f of lp) f.frequency.value = high;
-
-    let prev: AudioNode = source;
-    for (const node of hp) { prev.connect(node); prev = node; }
-    for (const node of lp) { prev.connect(node); prev = node; }
-    prev.connect(offline.destination);
-    source.start(0);
-
-    const rendered = await offline.startRendering();
-    const data = rendered.getChannelData(0);
-    let peakIdx = 0;
-    let peakVal = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = Math.abs(data[i]);
-      if (v > peakVal) { peakVal = v; peakIdx = i; }
-    }
-    return peakIdx / sampleRate;
-  }
-
-  /**
-   * Push deinterleaved input PCM through the active stretch engine and pull
-   * whatever output frames are currently available. Both engines emit stereo,
-   * so mono input is duplicated L=R and >2-channel input is downmixed.
-   *
-   * `isFinal` is honored only by the phase vocoder (it has tail samples that
-   * would otherwise be lost on EOF). SoundTouch buffers minimally per chunk,
-   * so the flag is a no-op there.
-   */
-  private _stretchChunk(
-    inputChannels: Float32Array[],
-    inputFrames: number,
-    isFinal: boolean,
-  ): { left: Float32Array; right: Float32Array; outputFrames: number } {
-    if (this._activeStretchEngine === 'pv') {
-      return this._stretchChunkPV(inputChannels, inputFrames, isFinal);
-    }
-    return this._stretchChunkST(inputChannels, inputFrames);
-  }
-
-  private _stretchChunkPV(
-    inputChannels: Float32Array[],
-    inputFrames: number,
-    isFinal: boolean,
-  ): { left: Float32Array; right: Float32Array; outputFrames: number } {
-    const pv = this._phaseVocoder!;
-    const numCh = inputChannels.length;
-
-    if (inputFrames > 0) {
-      let stereoIn: Float32Array[];
-      if (numCh === 1) {
-        stereoIn = [inputChannels[0], inputChannels[0]];
-      } else if (numCh === 2) {
-        stereoIn = inputChannels;
-      } else {
-        const mono = new Float32Array(inputFrames);
-        for (let i = 0; i < inputFrames; i++) {
-          let sum = 0;
-          for (let c = 0; c < numCh; c++) sum += inputChannels[c][i];
-          mono[i] = sum / numCh;
-        }
-        stereoIn = [mono, mono];
-      }
-      pv.pushInput(stereoIn, inputFrames);
-    }
-
-    if (isFinal) pv.flush();
-
-    const outputFrames = pv.available();
-    if (outputFrames === 0) {
-      return { left: new Float32Array(0), right: new Float32Array(0), outputFrames: 0 };
-    }
-    const left = new Float32Array(outputFrames);
-    const right = new Float32Array(outputFrames);
-    pv.pullOutput([left, right], outputFrames);
-    return { left, right, outputFrames };
-  }
-
-  private _stretchChunkST(
-    inputChannels: Float32Array[],
-    inputFrames: number,
-  ): { left: Float32Array; right: Float32Array; outputFrames: number } {
-    if (inputFrames === 0) {
-      return { left: new Float32Array(0), right: new Float32Array(0), outputFrames: 0 };
-    }
-    const st = this._soundTouch!;
-    const stereoInput = new Float32Array(inputFrames * 2);
-    const numCh = inputChannels.length;
-    if (numCh === 1) {
-      const m = inputChannels[0];
-      for (let i = 0; i < inputFrames; i++) {
-        stereoInput[i * 2] = m[i];
-        stereoInput[i * 2 + 1] = m[i];
-      }
-    } else if (numCh === 2) {
-      const l = inputChannels[0];
-      const r = inputChannels[1];
-      for (let i = 0; i < inputFrames; i++) {
-        stereoInput[i * 2] = l[i];
-        stereoInput[i * 2 + 1] = r[i];
-      }
-    } else {
-      for (let i = 0; i < inputFrames; i++) {
-        let sum = 0;
-        for (let c = 0; c < numCh; c++) sum += inputChannels[c][i];
-        const avg = sum / numCh;
-        stereoInput[i * 2] = avg;
-        stereoInput[i * 2 + 1] = avg;
-      }
-    }
-
-    st.inputBuffer.putSamples(stereoInput, 0, inputFrames);
-    st.process();
-
-    const outputFrames = st.outputBuffer.frameCount;
-    if (outputFrames === 0) {
-      return { left: new Float32Array(0), right: new Float32Array(0), outputFrames: 0 };
-    }
-    const stereoOutput = new Float32Array(outputFrames * 2);
-    st.outputBuffer.receiveSamples(stereoOutput, outputFrames);
-    const left = new Float32Array(outputFrames);
-    const right = new Float32Array(outputFrames);
-    for (let i = 0; i < outputFrames; i++) {
-      left[i] = stereoOutput[i * 2];
-      right[i] = stereoOutput[i * 2 + 1];
-    }
-    return { left, right, outputFrames };
+    this.filterGraph.teardown();
+    this._filterInput = null;
   }
 
   /** Stop all sources and async loops. Does NOT call onPaused/onEnded. */
@@ -944,7 +610,7 @@ export class AudioEngine implements PlaybackTransport {
         // selection plays at slow speed lose noticeable audio at the end.
         reachedEnd = true;
         if (stretching) {
-          const tail = this._stretchChunk([], 0, true);
+          const tail = this.timeStretch.stretch([], 0, true);
           if (tail.outputFrames > 0) {
             const ctxStart = expectedNextCtxStart;
             const tailDurationSec = tail.outputFrames / sr;
@@ -954,7 +620,7 @@ export class AudioEngine implements PlaybackTransport {
             ab.getChannelData(1).set(tail.right);
             const source = ctx.createBufferSource();
             source.buffer = ab;
-            source.connect(this._filterIn ?? this.gainNode!);
+            source.connect(this._filterInput ?? this.gainNode!);
             source.start(ctxStart);
             this.queue.push({
               source,
@@ -1011,7 +677,7 @@ export class AudioEngine implements PlaybackTransport {
       let outputChannels: Float32Array[];
       let outputFrames: number;
       if (stretching) {
-        const out = this._stretchChunk(inputChannels, inputFrames, isFinalChunk);
+        const out = this.timeStretch.stretch(inputChannels, inputFrames, isFinalChunk);
         if (out.outputFrames === 0) {
           // Vocoder buffered the input but hasn't accumulated a full window
           // yet (only happens for the very first sub-window of input). Skip
@@ -1043,7 +709,7 @@ export class AudioEngine implements PlaybackTransport {
       // ── Schedule the source node ────────────────────────────────────────────
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this._filterIn ?? this.gainNode!);
+      source.connect(this._filterInput ?? this.gainNode!);
       source.start(ctxStart);
 
       // ── endSec stop: stop at the ctx time that maps to mediaTime = endSec ──
@@ -1099,136 +765,15 @@ export class AudioEngine implements PlaybackTransport {
     }
   }
 
-  // ── PCM cache helpers ────────────────────────────────────────────────────────
-
-  private _pcmCacheKey(start: number, end: number): string {
-    // Key on integer frame indices rather than fractional seconds: at 48 kHz,
-    // .toFixed(6) only has ~0.048-sample resolution, so adjacent sample-distinct
-    // seek targets can collide on the same key (finding 4).
-    const sr = this.fileSampleRate;
-    const startFrame = Math.round(start * sr);
-    const endFrame = Math.round(end * sr);
-    return `${this.filePath}:${startFrame}:${endFrame}`;
-  }
-
-  private _pcmCacheStore(start: number, end: number, channels: Float32Array[], totalFrames: number): void {
-    const key = this._pcmCacheKey(start, end);
-    if (this._pcmCache.has(key)) return;
-    while (this._pcmCacheOrder.length >= MAX_PCM_CACHE_ENTRIES) {
-      const oldest = this._pcmCacheOrder.shift()!;
-      this._pcmCache.delete(oldest);
-    }
-    this._pcmCache.set(key, { channels, totalFrames, startSec: start, endSec: end });
-    this._pcmCacheOrder.push(key);
-  }
-
-  /**
-   * Find a cached entry whose range *contains* [reqStart, reqEnd] and return the
-   * subrange to play. Searches MRU-first so the freshest entry wins when multiple
-   * contain the request. Returns null on miss.
-   */
-  private _pcmCacheFind(reqStart: number, reqEnd: number): PcmCacheSlice | null {
-    if (reqEnd <= reqStart) return null;
-    const EPS = 1e-6;
-    const sr = this.fileSampleRate;
-    for (let i = this._pcmCacheOrder.length - 1; i >= 0; i--) {
-      const key = this._pcmCacheOrder[i];
-      const entry = this._pcmCache.get(key);
-      if (!entry) continue;
-      if (entry.startSec - EPS <= reqStart && entry.endSec + EPS >= reqEnd) {
-        const startFrame = Math.max(0, Math.round((reqStart - entry.startSec) * sr));
-        const endFrame = Math.min(entry.totalFrames, Math.round((reqEnd - entry.startSec) * sr));
-        const frameCount = endFrame - startFrame;
-        if (frameCount <= 0) continue;
-        // Promote to MRU
-        this._pcmCacheOrder.splice(i, 1);
-        this._pcmCacheOrder.push(key);
-        return { entry, startFrame, frameCount, startSec: reqStart, endSec: reqEnd };
-      }
-    }
-    return null;
-  }
+  // ── PCM cache ────────────────────────────────────────────────────────────────
 
   /**
    * Pre-decode and cache the PCM for [startSec, endSec] so subsequent plays in
-   * that range start instantaneously. Safe to call repeatedly — if the range is
-   * already covered by a cached entry, returns without decoding. Rapid calls
-   * supersede each other via `preloadId`, so only the latest request completes.
+   * that range start instantaneously. Delegates to PcmCache; see preloadRange there.
    */
   async preloadRange(startSec: number, endSec: number): Promise<void> {
-    if (!this.filePath || endSec <= startSec) return;
-    if (this._pcmCacheFind(startSec, endSec)) return;
-
-    const myPreloadId = ++this.preloadId;
-    const path = this.filePath;
-    const ch = this.fileChannels;
-    const sr = this.fileSampleRate;
-    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
-
-    let handle;
-    try {
-      handle = await startPcmStream(path, startSec);
-    } catch (err) {
-      this._log(`preload startPcmStream failed: ${String(err)}`, 'error');
-      return;
-    }
-    if (this.preloadId !== myPreloadId) {
-      closePcmStream(handle.stream_id).catch(() => {});
-      return;
-    }
-
-    const cacheChunks: Array<{ samples: number[]; frames: number }> = [];
-    let cacheTotalFrames = 0;
-    let reachedEnd = false;
-
-    while (this.preloadId === myPreloadId) {
-      let chunk;
-      try {
-        chunk = await readPcmChunk(handle.stream_id, chunkFrames);
-      } catch (err) {
-        this._log(`preload readPcmChunk failed: ${String(err)}`, 'error');
-        closePcmStream(handle.stream_id).catch(() => {});
-        return;
-      }
-      if (this.preloadId !== myPreloadId) break;
-      if (chunk.frames_read === 0) { reachedEnd = true; break; }
-
-      const chunkMediaStart = chunk.start_frame / sr;
-      const chunkDurationSec = chunk.frames_read / sr;
-      const chunkMediaEnd = chunkMediaStart + chunkDurationSec;
-
-      let framesToCache = chunk.frames_read;
-      if (chunkMediaEnd >= endSec) {
-        framesToCache = clamp(Math.round((endSec - chunkMediaStart) * sr), 0, chunk.frames_read);
-        reachedEnd = true;
-      }
-
-      if (framesToCache > 0) {
-        cacheChunks.push({ samples: chunk.samples.slice(0, framesToCache * ch), frames: framesToCache });
-        cacheTotalFrames += framesToCache;
-      }
-
-      if (reachedEnd) break;
-    }
-
-    closePcmStream(handle.stream_id).catch(() => {});
-    if (this.preloadId !== myPreloadId) return;
-
-    if (reachedEnd && cacheChunks.length > 0) {
-      const channels: Float32Array[] = Array.from({ length: ch }, () => new Float32Array(cacheTotalFrames));
-      let frameOffset = 0;
-      for (const { samples, frames } of cacheChunks) {
-        for (let c = 0; c < ch; c++) {
-          const dest = channels[c];
-          for (let i = 0; i < frames; i++) {
-            dest[frameOffset + i] = samples[i * ch + c];
-          }
-        }
-        frameOffset += frames;
-      }
-      this._pcmCacheStore(startSec, endSec, channels, cacheTotalFrames);
-      this._log(`preloaded ${startSec.toFixed(3)}s–${endSec.toFixed(3)}s (${cacheTotalFrames} frames)`);
-    }
+    if (!this.filePath) return;
+    await this.pcmCache.preloadRange(this.filePath, this.fileChannels, this.fileSampleRate, startSec, endSec);
   }
 
   /**
@@ -1249,7 +794,7 @@ export class AudioEngine implements PlaybackTransport {
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(this._filterIn ?? this.gainNode!);
+    source.connect(this._filterInput ?? this.gainNode!);
     source.start(this.playStartCtx);
 
     const ctxEnd = this.playStartCtx + frameCount / sr;
