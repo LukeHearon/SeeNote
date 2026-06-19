@@ -24,6 +24,10 @@ import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
 import { useImportAnnotations } from './hooks/useImportAnnotations';
+import { useFileNavigation } from './hooks/useFileNavigation';
+import { useVideoFrameSource } from './hooks/useVideoFrameSource';
+import { usePlaybackTransport } from './hooks/usePlaybackTransport';
+import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -49,18 +53,32 @@ export interface AnnotationWindowProps {
 }
 
 export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences, touchLastOpened }: AnnotationWindowProps) {
-  // Track State
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [trackName, setTrackName] = useState<string>("video");
-  const [trackPath, setTrackPath] = useState<string | null>(null);
-  const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
-  const [isAudioTrack, setIsAudioTrack] = useState(false);
-  const [sampleRate, setSampleRate] = useState(44100);
-  const [duration, setDuration] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isBuffering, setIsBuffering] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [allTracks, setAllMediaFiles] = useState<string[]>([]);
+  // Ref that stays in sync with project prop — avoids stale-closure bugs in
+  // persist effects and the navigation/shuffle handlers below.
+  const projectRef = useRef<Project>(project);
+  useEffect(() => { projectRef.current = project; }, [project]);
+
+  // Track / loaded-file model (path, name, src, directory, audio-vs-video,
+  // sample rate, duration, the media list, shuffle, processing flag) plus its
+  // stale-closure mirror refs live in useFileNavigation. Instantiated below.
+  const {
+    videoSrc, setVideoSrc,
+    trackName, setTrackName,
+    trackPath, setTrackPath,
+    currentDirectory, setCurrentDirectory,
+    isAudioTrack, setIsAudioTrack,
+    sampleRate, setSampleRate,
+    duration, setDuration,
+    isProcessing, setIsProcessing,
+    allTracks, setAllMediaFiles,
+    shuffleMode, setShuffleMode,
+    shuffledFiles, setShuffledFiles,
+    durationRef,
+    videoSrcRef,
+    isAudioTrackRef,
+    trackPathRef,
+    toggleShuffle,
+  } = useFileNavigation({ projectRef, updateProjectPreferences });
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
@@ -73,27 +91,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Derived from project prop
   const annotationDirectory = project.annotationDirectoryAbs ?? null;
-  // Queue / shuffle
-  const [shuffleMode, setShuffleMode] = useState(false);
-  const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
 
-  // Volume: 0 to 4 (400% or +12dB approx)
-  const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
-  const [muted, setMuted] = useState(false);
-
-  // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
-  const [playbackSpeed, setPlaybackSpeed] = useState(project.preferences.uiSettings?.playbackSpeed ?? DEFAULT_UI_SETTINGS.playbackSpeed);
-  // Last non-1.0 speed picked by the user; restored by the gauge-icon toggle.
-  const [lastDefinedSpeed, setLastDefinedSpeed] = useState(
-    project.preferences.uiSettings?.lastDefinedSpeed
-      ?? (project.preferences.uiSettings?.playbackSpeed && project.preferences.uiSettings.playbackSpeed !== 1
-            ? project.preferences.uiSettings.playbackSpeed
-            : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
-  );
+  // Playback transport state (isPlaying/isBuffering/speed/volume/mute), the
+  // playback-clock refs, engine refs, and the play/seek surface live in
+  // usePlaybackTransport. Instantiated below, after the frame source + track
+  // mirrors it reads exist.
 
   // Band-pass filter state machine — filter tool readiness, the band itself
   // (persisted), and strength. See hooks/useBandPassFilter.ts. The hook is
@@ -130,131 +136,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Cleared when the bound annotation is deselected.
   const reassignBufferRef = useRef<Record<string, string>>({});
 
-  // Ref that stays in sync with project prop — avoids stale-closure bugs in persist effects
-  const projectRef = useRef<Project>(project);
-  useEffect(() => { projectRef.current = project; }, [project]);
-
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
-  const engineRef = useRef<AudioEngine | null>(null);
-  // Alternate transport for Fast / Mixed-without-selection: the <video> element
-  // plays its own audio. Exactly one of these two engines is "active" at a time
-  // (see activeTransport); the orchestrator drives them through one interface.
-  const videoEngineRef = useRef<VideoElementEngine | null>(null);
-  // Ref so the onEnded closure (created once on mount) can read current isAudioTrack
-  const isAudioTrackRef = useRef(false);
-  // Ref so the onEnded closure (created once on mount) can read the latest seek function
-  const seekRef = useRef<typeof seek | null>(null);
-
-  // Create engine on mount, destroy on unmount
-  useEffect(() => {
-    // Kick a video prefetch chunk starting at prevBufferedTo. Chains immediately
-    // when the chunk finishes so decode pipelines ahead of the playhead even when
-    // VideoToolbox takes longer than the chunk's playback duration (dense GOPs).
-    const kickVideoPrefetch = (prevBufferedTo: number) => {
-      const src = frameSourceRef.current;
-      if (!src || videoPrefetchBusyRef.current) return;
-      const t = currentTimeRef.current;
-      // Always start from the buffer edge, not max(edge, t). Starting from t
-      // when t > prevBufferedTo causes ensureRange to overlap the just-completed
-      // chunk, forcing a re-decode of already-cached frames through VideoToolbox.
-      // The allCached fast-path in ensureRange handles the case where frames
-      // at prevBufferedTo are already in cache.
-      const chunkStart = prevBufferedTo;
-      const dur = durationRef.current || chunkStart + 5;
-      const chunkEnd = Math.min(chunkStart + 5, dur);
-      if (chunkStart >= chunkEnd) return;
-      videoPrefetchBusyRef.current = true;
-      videoPrefetchEndRef.current = chunkEnd;
-      src.ensureRange(chunkStart, chunkEnd, 'rollingPrefetch')
-        .catch(() => { videoPrefetchEndRef.current = prevBufferedTo; })
-        .finally(() => {
-          videoPrefetchBusyRef.current = false;
-          // Chain immediately: don't wait for the next onTimeUpdate tick.
-          // If the decode took longer than playback, the playhead may already
-          // be close to the new buffer edge — kick the next chunk now.
-          const buf = videoPrefetchEndRef.current;
-          if (currentTimeRef.current + 6 >= buf) kickVideoPrefetch(buf);
-        });
-    };
-
-    // Shared playback callbacks — both transports (AudioEngine and
-    // VideoElementEngine) report through these so play/pause/EOF behave
-    // identically regardless of which one is active.
-    const setPlayhead = (t: number) => {
-      currentTimeRef.current = t;
-      currentTimeStoreRef.current.set(t);
-    };
-    const onPlaying = () => { setIsPlaying(true); setIsBuffering(false); };
-    const onPaused = () => setIsPlaying(false);
-    const onEnded = () => {
-      // Return playhead to selection start. Do NOT auto-scroll — when playing
-      // within a selection the user positioned the canvas intentionally; jumping
-      // it on every loop is disorienting.
-      const sel = selectionRef.current;
-      if (sel) seekRef.current?.(sel.start, false);
-      setIsPlaying(false);
-    };
-
-    engineRef.current = new AudioEngine({
-      onTimeUpdate: (t) => {
-        setPlayhead(t);
-        // Rolling video prefetch: keep frames decoded 5 s ahead of the playhead.
-        // Only run when the canvas path is the live renderer; in `mixed` without
-        // a selection (showing the <video> fallback) and in `fast`/`off`, this
-        // would just waste decode CPU on hardware that already can't keep up.
-        // Refs read current values inside this once-mounted closure.
-        const mode = videoModeRef.current;
-        const canvasLive =
-          mode === 'accurate' || (mode === 'mixed' && selectionRef.current !== null);
-        if (canvasLive && !videoPrefetchBusyRef.current) {
-          const bufferedTo = videoPrefetchEndRef.current;
-          if (t + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
-        }
-      },
-      onPlaying,
-      onPaused,
-      onEnded,
-      onBufferUnderrun: () => setIsBuffering(true),
-      onDebugLog: (msg, type = 'info') => addLog(msg, type),
-    });
-
-    // The <video>-element transport. No prefetch (the element decodes itself);
-    // no buffer-underrun signal (the browser handles its own buffering).
-    videoEngineRef.current = new VideoElementEngine({
-      onTimeUpdate: setPlayhead,
-      onPlaying,
-      onPaused,
-      onEnded,
-    });
-
-    return () => {
-      engineRef.current?.dispose();
-      engineRef.current = null;
-      videoEngineRef.current?.dispose();
-      videoEngineRef.current = null;
-    };
-  }, []);
-
-  // UI State
-  // VideoFrameSource for frame-perfect playback on MP4/MOV video tracks.
-  // When non-null, CanvasVideoPlayer drives the display; the <video> element
-  // is not used. For audio tracks or non-ISOBMFF containers, this stays null
-  // and we fall back to the legacy <video>-based path.
-  const frameSourceRef = useRef<VideoFrameSource | null>(null);
-  // Rolling prefetch state for the frame-source path. Tracks how far ahead
-  // frames have been decoded so onTimeUpdate knows when to fetch the next chunk.
-  const videoPrefetchEndRef = useRef(0);
-  const videoPrefetchBusyRef = useRef(false);
-  // Trigger re-render of the video pane when frameSource is created/torn down.
-  // We don't put the VideoFrameSource itself in state because it owns mutable
-  // GPU resources; a simple version counter is enough to switch components.
-  const [frameSourceVersion, setFrameSourceVersion] = useState(0);
-  // Monotonic token invalidated whenever user interrupts playback. Async
-  // preroll awaits check this so stale resolutions don't start the engine
-  // after the user has pressed pause or triggered a new play.
-  const playTokenRef = useRef(0);
   // Panel sizing + drag handling (video/spectrogram split, left-panel height &
   // width) plus the H-held hide-labels toggle. See hooks/usePanelLayout.ts.
   const {
@@ -295,10 +179,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const videoModeRef = useRef(videoMode);
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
 
-  // Mirror of videoSrc for the synchronous transport predicate below.
-  const videoSrcRef = useRef<string | null>(null);
-  useEffect(() => { videoSrcRef.current = videoSrc; }, [videoSrc]);
-
   // buzzdetect activations panel — UI state + load effect live in the hook.
   // Instantiated below, after `ident` and `addLog` exist.
   // The spectrogram's live time→pixel transform, the single source the panel
@@ -332,6 +212,69 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Annotation-tool palette + import-annotations hooks are instantiated below,
   // after trackPathRef exists; `libraryPlaying` / `exampleAudioActive` come from
   // there.
+
+  // VideoFrameSource lifecycle (frame-perfect MP4/MOV): the source handle ref,
+  // its rolling-prefetch bookkeeping, the version counter, prerollVideo, and the
+  // unmount + videoMode-change effects. Also owns preZoomExtentRef.
+  const {
+    frameSourceRef,
+    videoPrefetchEndRef,
+    videoPrefetchBusyRef,
+    preZoomExtentRef,
+    frameSourceVersion,
+    setFrameSourceVersion,
+    prerollVideo,
+  } = useVideoFrameSource({
+    trackPath,
+    trackPathRef,
+    isAudioTrack,
+    videoMode,
+    durationRef,
+    selectionRef,
+    addLog,
+  });
+
+  // Dual-transport (AudioEngine / VideoElementEngine) abstraction: playback
+  // state, the playback-clock refs, the play-token guard, engine refs, and the
+  // togglePlay/seek/getMediaTime surface. Reads the frame source + track mirrors.
+  const {
+    isPlaying, setIsPlaying,
+    isBuffering, setIsBuffering,
+    playbackSpeed, setPlaybackSpeed,
+    lastDefinedSpeed, setLastDefinedSpeed,
+    volume, setVolume,
+    muted, setMuted,
+    engineRef,
+    videoEngineRef,
+    playTokenRef,
+    currentTimeRef,
+    currentTimeStoreRef,
+    togglePlay,
+    seek,
+    usesVideoTransport,
+    activeTransport,
+    getMediaTime,
+    attachVideoElement,
+  } = usePlaybackTransport({
+    project,
+    isAudioTrack,
+    isAudioTrackRef,
+    videoMode,
+    videoModeRef,
+    videoSrc,
+    videoSrcRef,
+    duration,
+    durationRef,
+    selection,
+    selectionRef,
+    frameSourceRef,
+    videoPrefetchEndRef,
+    videoPrefetchBusyRef,
+    prerollVideo,
+    spectrogramRef,
+    examplePlayer,
+    addLog,
+  });
 
   // Wheel-event diagnostics: batch events over 100ms and emit a single summary
   // line so the debug console doesn't flood. Logs: count, deltaMode, deltaX
@@ -476,20 +419,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [annotations, boundAnnotationId, activationStack]);
 
-  const durationRef = useRef(0);
-  useEffect(() => { durationRef.current = duration; }, [duration]);
-
   const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
   useEffect(() => { zoomSecRef.current = zoomSec; }, [zoomSec]);
 
-  const preZoomExtentRef = useRef<{ startTime: number; endTime: number } | null>(null);
-
-  // Keep trackPathRef in sync so async callbacks can guard against stale closures
-  const trackPathRef = useRef<string | null>(null);
-  useEffect(() => {
-    trackPathRef.current = trackPath;
-    preZoomExtentRef.current = null;
-  }, [trackPath]);
+  // Clear the saved pre-zoom extent on every track change. trackPathRef mirroring
+  // lives in useFileNavigation; preZoomExtentRef is owned by useVideoFrameSource,
+  // so the reset stays here in the orchestrator where both are in scope.
+  useEffect(() => { preZoomExtentRef.current = null; }, [trackPath]);
 
   // Shared project-switch guard for the debounced persistence effects
   // (tool reconcile, band-pass, project settings). Owned here, not in any one hook.
@@ -569,32 +505,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setAnnotatedFiles,
     addLog,
   });
-
-  const currentTimeRef = useRef(0);
-  // Ref-based pub/sub for playback time. Updated ~50/sec by the engine's
-  // onTimeUpdate; canvas consumers (spectrogram playhead, buzzdetect line,
-  // toolbar readout) subscribe and redraw imperatively instead of re-rendering
-  // the whole window tree. Set ONLY from the media clock — same place the old
-  // currentTime state was set — so the playhead stays sample-locked to playback.
-  const currentTimeStoreRef = useRef(createCurrentTimeStore());
-
-  // Keep isAudioTrackRef in sync so the onEnded closure (created once on mount) reads the current value
-  useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
-
-  // Pre-roll the frame-source cache so the first frame at startSec is decoded
-  // before the audio engine begins emitting samples. Critical for short-selection
-  // replays: without this the engine starts audio ~200ms ahead of the first
-  // rendered frame, so a ~1s selection ends before most frames appear.
-  const prerollVideo = useCallback(async (startSec: number, endSec?: number): Promise<void> => {
-    const source = frameSourceRef.current;
-    if (!source) return;
-    const end = endSec ?? Math.min(startSec + 5, durationRef.current || startSec + 5);
-    const t0 = performance.now();
-    addLog(`[preroll] start ${startSec.toFixed(3)}-${end.toFixed(3)}s`);
-    try { await source.ensureRange(startSec, end, 'prerollVideo'); } catch { /* canvas shows stale frame on error */ }
-    addLog(`[preroll] done in ${(performance.now() - t0).toFixed(0)}ms`);
-    videoPrefetchEndRef.current = end;
-  }, [addLog]);
 
   // Open a track by absolute path (called from button or file panel)
   const handleOpenTrack = useCallback(async (absolutePath: string) => {
@@ -742,94 +652,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [settings.fftSize]);
 
-  // Tear down frame source on unmount — VideoFrame handles hold GPU memory.
-  useEffect(() => () => {
-    if (frameSourceRef.current) {
-      frameSourceRef.current.close();
-      frameSourceRef.current = null;
-    }
-  }, []);
-
-  // React to videoMode changes for the currently-loaded track. Toggling
-  // off/fast ↔ mixed/accurate without this would leave a stale frame source open
-  // (memory + decoder) or, conversely, leave the canvas dark with no decoder.
-  // The track itself doesn't need to be reloaded — only the frame source.
-  useEffect(() => {
-    if (!trackPath || isAudioTrack) return;
-    const wantsFrameSource =
-      (videoMode === 'accurate' || videoMode === 'mixed') && canUseFrameSource(trackPath);
-    const has = !!frameSourceRef.current;
-
-    if (wantsFrameSource && !has) {
-      const url = toAssetUrl(trackPath);
-      const expectedTrack = trackPath;
-      (async () => {
-        try {
-          const source = new VideoFrameSource({ onDebugLog: addLog });
-          await source.open(url);
-          if (trackPathRef.current !== expectedTrack) { source.close(); return; }
-          frameSourceRef.current = source;
-          setFrameSourceVersion(v => v + 1);
-          if (videoMode === 'accurate') {
-            const dur = durationRef.current;
-            source.ensureRange(0, Math.min(5, dur || 5), 'modeChangeWarm').catch(() => {});
-          } else if (videoMode === 'mixed' && selectionRef.current) {
-            // Mode switched on with an existing selection — warm it now.
-            const sel = selectionRef.current;
-            source.ensureRange(sel.start, sel.end, 'modeChangeWarmSel').catch(() => {});
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          addLog(`[video] frame source unavailable: ${msg}`, 'error');
-        }
-      })();
-    } else if (!wantsFrameSource && has) {
-      frameSourceRef.current?.close();
-      frameSourceRef.current = null;
-      setFrameSourceVersion(v => v + 1);
-      videoPrefetchEndRef.current = 0;
-      videoPrefetchBusyRef.current = false;
-    }
-  }, [videoMode, trackPath, isAudioTrack, addLog]);
-
-  // Whether the <video> element — not the AudioEngine — is the active transport:
-  // a video file shown through the element (Fast, or Mixed before a selection).
-  // Audio-only files and the canvas-backed modes always use the AudioEngine.
-  const usesVideoTransport = useCallback((): boolean => {
-    if (isAudioTrackRef.current || !videoSrcRef.current) return false;
-    const mode = videoModeRef.current;
-    return mode === 'fast' || (mode === 'mixed' && selectionRef.current === null);
-  }, []);
-
-  // The active transport. AudioEngine and VideoElementEngine expose the same
-  // play/pause/seek/getMediaTime/setGain/setPlaybackSpeed/isPlaying surface, so
-  // callers never branch on which one is live.
-  const activeTransport = useCallback(
-    (): PlaybackTransport | null => (usesVideoTransport() ? videoEngineRef.current : engineRef.current),
-    [usesVideoTransport],
-  );
-
   // Mutual exclusion: whenever an example clip starts sounding, park the main
   // transport so the two files never play at once. The main play button shows
-  // the existing buffering spinner (a "waiting" state) for the duration.
+  // the existing buffering spinner (a "waiting" state) for the duration. This
+  // is a coordination edge between the example player and the transport, so it
+  // stays in the orchestrator.
   useEffect(() => {
     if (!exampleAudioActive) return;
     activeTransport()?.pause();
     setIsPlaying(false);
   }, [exampleAudioActive, activeTransport]);
-
-  // Stable callback passed to CanvasVideoPlayer's rAF loop. Reading from the
-  // engine directly (rather than the currentTime state) avoids a frame of
-  // lag: React commits on rAF, so currentTime is always one tick behind.
-  const getMediaTime = useCallback((): number => {
-    return activeTransport()?.getMediaTime() ?? 0;
-  }, [activeTransport]);
-
-  // Stable: bind the <video> element to its transport. Must not change identity
-  // per-render, or VideoPlayer's exposure effect churns and detaches mid-play.
-  const attachVideoElement = useCallback((el: HTMLVideoElement | null) => {
-    videoEngineRef.current?.attach(el);
-  }, []);
 
   // Rebuild cache when FFT size changes while a track is open
   useEffect(() => {
@@ -914,26 +746,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => { recomputeCanGo(); }, [sortedAnnotations, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
-  const toggleShuffle = useCallback(() => {
-    setShuffleMode(prev => {
-      const next = !prev;
-      if (next) {
-        const shuffled = shuffleArray(allTracks);
-        // Pin the currently open file at the front of the queue
-        const cur = trackPathRef.current;
-        if (cur) {
-          const idx = shuffled.indexOf(cur);
-          if (idx > 0) { shuffled.splice(idx, 1); shuffled.unshift(cur); }
-        }
-        setShuffledFiles(shuffled);
-      }
-      if (projectRef.current) {
-        updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, shuffleMode: next });
-      }
-      return next;
-    });
-  }, [allTracks, updateProjectPreferences]);
-
   // Ident: relative path from audio root to track, without extension
   const ident = useMemo(() => {
     if (!trackPath || !currentDirectory) return null;
@@ -993,9 +805,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoMode,
   });
 
-  // Auto-save annotations whenever they change
+  // Pending-save timer for the annotation autosave. Created here because both
+  // useSyncManagement (flushes it before sync) and useAnnotationLoad (sets it)
+  // need it — shared boundary, owned by neither hook.
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const skipAutoSaveRef = useRef(false);
 
   // Git sync — owns sync state, the manual handler, and status effects.
   // `setHasLocalChanges` is consumed by the autosave effect below; `reloadNonce`
@@ -1021,81 +834,28 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     addLog,
   });
 
-  useEffect(() => {
-    if (!trackPath || !annotationDirectory) return;
-    const annotPath = getAnnotationPath(trackPath);
-    if (!annotPath) return;
-    // Snapshot the identity at effect time so the async callback can verify
-    // it's still relevant after the debounce delay.
-    const savedTrackPath = trackPath;
-    const savedAnnotPath = annotPath;
-
-    // Debounce saves by 300ms
-    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-    autoSaveTimeoutRef.current = setTimeout(async () => {
-      if (skipAutoSaveRef.current) return;
-      // Guard: bail if the track changed while we were waiting.
-      if (savedTrackPath !== trackPathRef.current) return;
-      try {
-        if (annotations.length === 0) {
-          await removeFile(savedAnnotPath);
-          setAnnotatedFiles(prev => {
-            const next = new Set(prev);
-            next.delete(savedTrackPath);
-            return next;
-          });
-          return;
-        }
-        const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
-        const content = generateAudacityContent(annotations, decimals);
-        await writeTextFile(savedAnnotPath, content);
-        if (projectRef.current?.settings.gitSync) setHasLocalChanges(true);
-        setAnnotatedFiles(prev => {
-            const next = new Set(prev);
-            next.add(savedTrackPath);
-            return next;
-          });
-      } catch (err) {
-        addLog(`Auto-save error: ${err}`, 'error');
-      }
-    }, 300);
-
-    return () => {
-      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-    };
-  }, [annotations, trackPath, annotationDirectory, getAnnotationPath]);
-
-  // Auto-load annotations when the current track or annotation directory changes
-  useEffect(() => {
-    if (!trackPath || !annotationDirectory || !currentDirectory) return;
-    const annotPath = getAnnotationPath(trackPath);
-    if (!annotPath) return;
-    // Snapshot identity at effect-schedule time so async resolution can verify
-    // the track hasn't changed while we were awaiting I/O.
-    const expectedTrackPath = trackPath;
-
-    (async () => {
-      try {
-        const content = await readTextFile(annotPath);
-        // Drop result if the user switched tracks while we were reading.
-        if (trackPathRef.current !== expectedTrackPath) return;
-        if (!content) return;
-
-        const loaded = parseAudacityContent(content, annotationToolsRef.current);
-
-        if (loaded.length > 0) {
-          skipAutoSaveRef.current = true;
-          setAnnotations(loaded);
-          annotationsHistoryRef.current = [loaded];
-          historyIndexRef.current = 0;
-          addLog(`Loaded ${loaded.length} annotations`);
-          setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
-        }
-      } catch (err) {
-        addLog(`Error loading annotations: ${err}`, 'error');
-      }
-    })();
-  }, [trackPath, annotationDirectory, currentDirectory, reloadNonce]);
+  // Annotation disk I/O for the active track: the debounced auto-save effect and
+  // the auto-load effect. getAnnotationPath stays in the orchestrator (shared
+  // with tools/import/sync); the hook drives both effects off it. Placed here so
+  // its effects keep running after useSyncManagement's, exactly as before.
+  useAnnotationLoad({
+    projectRef,
+    getAnnotationPath,
+    annotationDirectory,
+    currentDirectory,
+    trackPath,
+    trackPathRef,
+    annotations,
+    setAnnotations,
+    annotationToolsRef,
+    annotationsHistoryRef,
+    historyIndexRef,
+    setAnnotatedFiles,
+    setHasLocalChanges,
+    autoSaveTimeoutRef,
+    reloadNonce,
+    addLog,
+  });
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -1259,110 +1019,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       revealInFileManager(annotationDirectory).catch(() => {});
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
-
-  const togglePlay = useCallback(async () => {
-      const transport = activeTransport();
-      if (isPlaying || isBuffering) {
-          // Invalidate any in-flight preroll so its resolution can't start playback
-          playTokenRef.current += 1;
-          transport?.pause();
-          setIsPlaying(false);
-          setIsBuffering(false);
-          return;
-      }
-      // Starting main playback stops any example clip — they can't both sound.
-      examplePlayer.stop();
-      const sel = selectionRef.current;
-      const curTime = currentTimeRef.current;
-      let startSec = curTime;
-      // If there's a selection and the playhead is outside it, restart from selection start
-      if (sel && (curTime >= sel.end - 0.05 || curTime < sel.start)) {
-          startSec = sel.start;
-          seek(sel.start, true);
-      } else if (!sel && duration > 0 && curTime >= duration - 0.05) {
-          // At end of track with no selection — return to beginning
-          startSec = 0;
-          seek(0, true);
-      }
-      setIsBuffering(true);
-      const token = ++playTokenRef.current;
-      addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`);
-      // Canvas path only: pre-roll so the first frame at startSec is decoded
-      // BEFORE the engine schedules audio (short selections could otherwise end
-      // before any frame renders). The <video>-element transport decodes itself,
-      // and audio-only tracks have no frames, so both skip the wait.
-      if (frameSourceRef.current && !usesVideoTransport()) {
-          await prerollVideo(startSec, sel?.end);
-          if (token !== playTokenRef.current) return; // user interrupted
-      }
-      // isPlaying is set to true only when onPlaying fires. endSec enables the
-      // bounded selection stop on whichever transport is active.
-      transport?.play(startSec, sel ? sel.end : undefined);
-  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport, examplePlayer]);
-
-  const seek = useCallback(async (time: number, scrollView = false) => {
-      const transport = activeTransport();
-      const wasPlaying = transport?.isPlaying ?? false;
-      // AudioEngine.seek() cancels its scheduled audio (we restart below if it
-      // was playing); VideoElementEngine.seek() just moves currentTime and keeps
-      // the element playing — so the element needs no restart.
-      const prevTime = currentTimeRef.current;
-      transport?.seek(time);
-      currentTimeRef.current = time;
-      currentTimeStoreRef.current.set(time);
-      // Notify the frame source so its eviction window follows the scrub position.
-      // Kick a small ensureRange while paused so a scrub shows the correct frame
-      // (rather than a stale one from the prior window). On the canvas path,
-      // freeze the canvas at the pre-seek frame synchronously — this prevents
-      // the GOP decode animation from being visible before the React overlay
-      // renders (which is async and can lag several rAF ticks behind).
-      if (!isAudioTrack && frameSourceRef.current) {
-          frameSourceRef.current.notifyPlayhead(time);
-          if (!wasPlaying && !usesVideoTransport()) {
-              frameSourceRef.current.freezeDisplayAt(prevTime);
-              setIsBuffering(true);
-              const token = ++playTokenRef.current;
-              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
-                .then(() => {
-                    if (token === playTokenRef.current) {
-                        frameSourceRef.current?.clearDisplayFreeze();
-                        setIsBuffering(false);
-                    }
-                })
-                .catch(() => {
-                    if (token === playTokenRef.current) {
-                        frameSourceRef.current?.clearDisplayFreeze();
-                        setIsBuffering(false);
-                    }
-                });
-          } else if (!wasPlaying) {
-              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
-                .catch(() => {});
-          }
-      }
-      if (scrollView) spectrogramRef.current?.scrollToTime(time);
-      // Restart the AudioEngine from the new position if it was playing. The
-      // <video>-element transport plays straight through a currentTime write, so
-      // it's excluded here.
-      if (wasPlaying && !usesVideoTransport()) {
-          if (time < durationRef.current) {
-              const sel = selectionRef.current;
-              setIsBuffering(true);
-              const token = ++playTokenRef.current;
-              if (frameSourceRef.current) {
-                  await prerollVideo(time, sel?.end);
-                  if (token !== playTokenRef.current) return;
-              }
-              engineRef.current?.play(time, sel ? sel.end : undefined);
-          } else {
-              // Seeked to/past end — stop cleanly rather than hanging
-              setIsPlaying(false);
-          }
-      }
-  }, [isAudioTrack, prerollVideo, activeTransport, usesVideoTransport]);
-
-  // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
-  useEffect(() => { seekRef.current = seek; }, [seek]);
 
   // Shared handler for activating an annotation tool by key — used by both
   // number hotkeys and palette clicks. Also manages the `annotationTool` entry
@@ -1565,36 +1221,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       await exportToAudacity(annotations, trackName, trackPath, decimals);
       addLog('Exported annotations as TXT');
   };
-
-  // Keep both transports' gain in sync with the volume slider and mute button.
-  // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
-  useEffect(() => {
-    const gain = muted ? 0 : volume;
-    engineRef.current?.setGain(gain);
-    videoEngineRef.current?.setGain(gain);
-  }, [volume, muted]);
-
-  // Sync playback speed to both transports. AudioEngine preserves pitch; the
-  // <video> element does not (an accepted limitation of Fast mode).
-  useEffect(() => {
-    engineRef.current?.setPlaybackSpeed(playbackSpeed);
-    videoEngineRef.current?.setPlaybackSpeed(playbackSpeed);
-  }, [playbackSpeed]);
-
-  // Switching the active transport mid-play (mode change, or committing/clearing
-  // a selection in Mixed) would otherwise leave the previous one running. Stop
-  // both cleanly whenever the active transport flips.
-  const prevUsesVideoRef = useRef(false);
-  useEffect(() => {
-    const now = usesVideoTransport();
-    if (now === prevUsesVideoRef.current) return;
-    prevUsesVideoRef.current = now;
-    playTokenRef.current += 1;
-    engineRef.current?.pause();
-    videoEngineRef.current?.pause();
-    setIsPlaying(false);
-    setIsBuffering(false);
-  }, [videoMode, isAudioTrack, videoSrc, selection, usesVideoTransport]);
 
   // Wrap setSelection at the prop boundary so any path that sets/clears the
   // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
