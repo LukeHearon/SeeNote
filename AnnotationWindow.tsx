@@ -6,10 +6,10 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
-import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, BandPassFilter, ProjectUiSettings, BuzzdetectData, VideoMode, PlaybackTransport } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_BAND_PASS_FILTER, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
+import { Annotation, SpectrogramSettings, AnnotationTool, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, BandPassFilter, ProjectUiSettings, VideoMode, PlaybackTransport } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, HOTKEY_COLORS, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, generateAudacityContent, generateId, makeAnnotationFromTool, parseAudacityContent, mergeAnnotations, stripExt, shuffleArray } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, readBuzzdetect, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, readTextFile, writeTextFile, removeFile, toAssetUrl, openFileDialog, openDirectoryDialog, listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool, renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool, syncProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from './utils/tauriCommands';
 import { readSyncToken } from './utils/gitSync';
 import { CUSTOM_TOOL_ID, PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool, mergeImportedTools, toPersistedTools } from './utils/annotationTools';
 import { createViewportStore } from './utils/viewportStore';
@@ -17,6 +17,10 @@ import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useExamplePlayer } from './hooks/useExamplePlayer';
 import { useActivationStack } from './hooks/useActivationStack';
+import { useAnnotationHistory } from './hooks/useAnnotationHistory';
+import { usePanelLayout } from './hooks/usePanelLayout';
+import { useBandPassFilter } from './hooks/useBandPassFilter';
+import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -54,9 +58,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [isBuffering, setIsBuffering] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allTracks, setAllMediaFiles] = useState<string[]>([]);
-  const [filePanelCollapsed, setFilePanelCollapsed] = useState(false);
-  const [videoCollapsed, setVideoCollapsed] = useState(false);
-  const [hideLabels, setHideLabels] = useState(false);
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
@@ -83,10 +84,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [shuffleMode, setShuffleMode] = useState(false);
   const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
 
-  // Undo/redo history for annotations
-  const annotationsHistoryRef = useRef<Annotation[][]>([[]]);
-  const historyIndexRef = useRef<number>(0);
-
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const [cacheVersion, setCacheVersion] = useState(0);
@@ -105,21 +102,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             : DEFAULT_UI_SETTINGS.lastDefinedSpeed)
   );
 
-  // Band-pass filter — two independent pieces of state, coordinated via the
-  // activation stack (see useActivationStack).
-  //   - `filterToolActive`: filter tool is readied for vertical drag. Pure
-  //     drawing state; does NOT gate audio.
-  //   - `bandPassFilter`:  the band itself, persisted on the project so cutoffs
-  //     survive restart. Non-null = filter active; null = filter disabled.
-  //     Slider dragged to 0 clears the band (disables); drawing a new band
-  //     sets it (enables).
-  //   - `filterStrength`: lets the strength slider work even before a band is
-  //     drawn; mirrored into `bandPassFilter.strength` when a band exists.
-  const [filterToolActive, setFilterToolActive] = useState(false);
-  const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.preferences.bandPassFilter ?? null);
-  const [filterStrength, setFilterStrength] = useState(project.preferences.bandPassFilter?.strength ?? 0.5);
-  // Last active band saved so F can restore it after toggling off.
-  const lastBandPassFilterRef = useRef<BandPassFilter | null>(null);
+  // Band-pass filter state machine — filter tool readiness, the band itself
+  // (persisted), and strength. See hooks/useBandPassFilter.ts. The hook is
+  // instantiated below, after engineRef / projectRef / prevProjectIdRef exist.
 
   // Layer activation stack — single source of truth for Esc unwinding order
   // and cursor-mode selection. See hooks/useActivationStack.ts.
@@ -127,6 +112,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  // Undo/redo history for annotations. The two refs are reset directly by the
+  // track-open / annotation-load / project-change paths below.
+  const {
+    annotationsHistoryRef,
+    historyIndexRef,
+    handleAnnotationsCommit,
+    undoAnnotations,
+    redoAnnotations,
+  } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(() => [makeCustomTool(HOTKEY_COLORS[0])]);
   // Mirror of annotationTools for use inside the annotation-load effect without
@@ -274,9 +268,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // preroll awaits check this so stale resolutions don't start the engine
   // after the user has pressed pause or triggered a new play.
   const playTokenRef = useRef(0);
-  const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO);
-  const [leftPanelRatio, setLeftPanelRatio] = useState(DEFAULT_LEFT_PANEL_RATIO);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(DEFAULT_LEFT_PANEL_WIDTH);
+  // Panel sizing + drag handling (video/spectrogram split, left-panel height &
+  // width) plus the H-held hide-labels toggle. See hooks/usePanelLayout.ts.
+  const {
+    splitRatio, setSplitRatio,
+    leftPanelRatio, setLeftPanelRatio,
+    leftPanelWidth, setLeftPanelWidth,
+    filePanelCollapsed, setFilePanelCollapsed,
+    videoCollapsed, setVideoCollapsed,
+    hideLabels,
+    VIDEO_COLLAPSED_BAR_PX,
+    handleSplitDrag,
+    handleLeftPanelDrag,
+    handleLeftPanelWidthDrag,
+  } = usePanelLayout({
+    splitRatio: DEFAULT_SPLIT_RATIO,
+    leftPanelRatio: DEFAULT_LEFT_PANEL_RATIO,
+    leftPanelWidth: DEFAULT_LEFT_PANEL_WIDTH,
+  });
   const [playheadLocked, setPlayheadLocked] = useState(false);
   const playheadLockedRef = useRef(false);
   useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
@@ -303,12 +312,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const videoSrcRef = useRef<string | null>(null);
   useEffect(() => { videoSrcRef.current = videoSrc; }, [videoSrc]);
 
-  // buzzdetect activations panel — all UI fields persisted in uiSettings.
-  const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
-  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
-  const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
-  const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
-  const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
+  // buzzdetect activations panel — UI state + load effect live in the hook.
+  // Instantiated below, after `ident` and `addLog` exist.
   // The spectrogram's live time→pixel transform, the single source the panel
   // consumes for pixel-exact x-alignment. Held in a ref-based store, NOT React
   // state: panning updates it every frame, and going through state would
@@ -884,44 +889,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return stripExt(rel);
   }, [trackPath, currentDirectory]);
 
-  // Load buzzdetect activations for the current track, located by ident under
-  // the configured buzzdetect directory. `cancelled` guards against the track
-  // changing while the read is in flight.
-  useEffect(() => {
-    const dir = project.buzzdetectDirectoryAbs;
-    if (!dir || !ident) { setBuzzdetectData(null); return; }
-    let cancelled = false;
-    setBuzzdetectData(null);
-    readBuzzdetect(dir, ident)
-      .then(d => { if (!cancelled) setBuzzdetectData(d); })
-      .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
-    return () => { cancelled = true; };
-  }, [ident, project.buzzdetectDirectoryAbs]);
-
-  // Annotation history helpers
-  const pushAnnotationsToHistory = useCallback((newAnnotations: Annotation[]) => {
-    annotationsHistoryRef.current = annotationsHistoryRef.current.slice(0, historyIndexRef.current + 1);
-    annotationsHistoryRef.current.push(newAnnotations);
-    historyIndexRef.current = annotationsHistoryRef.current.length - 1;
-  }, []);
-
-  // Final update — pushes to history (called on mouse release, delete, etc.)
-  const handleAnnotationsCommit = useCallback((newAnnotations: Annotation[]) => {
-    setAnnotations(newAnnotations);
-    pushAnnotationsToHistory(newAnnotations);
-  }, [pushAnnotationsToHistory]);
-
-  const undoAnnotations = useCallback(() => {
-    if (historyIndexRef.current <= 0) return;
-    historyIndexRef.current--;
-    setAnnotations(annotationsHistoryRef.current[historyIndexRef.current]);
-  }, []);
-
-  const redoAnnotations = useCallback(() => {
-    if (historyIndexRef.current >= annotationsHistoryRef.current.length - 1) return;
-    historyIndexRef.current++;
-    setAnnotations(annotationsHistoryRef.current[historyIndexRef.current]);
-  }, []);
+  // buzzdetect activations panel UI state + load-by-ident effect.
+  const {
+    buzzdetectEnabled, setBuzzdetectEnabled,
+    buzzdetectThresholds, setBuzzdetectThresholds,
+    buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
+    buzzdetectPanelHeight, setBuzzdetectPanelHeight,
+    buzzdetectData, setBuzzdetectData,
+    handleBuzzdetectThresholdChange,
+    handleBuzzdetectToggleNeuron,
+  } = useBuzzdetect({ project, ident, addLog });
 
   // Persist annotation tools and spectrogram settings to project whenever they change
   const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -934,6 +911,27 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Set by the load path so the reconcile effect skips the setAnnotationTools
   // it triggers (the loaded array already matches the folders).
   const skipToolPersistRef = useRef(false);
+
+  // Band-pass filter state machine (filter tool / band / strength + engine-push
+  // and persistence effects). Needs engineRef, the activation stack, and the
+  // project plumbing for debounced persistence. See hooks/useBandPassFilter.ts.
+  const {
+    filterToolActive, setFilterToolActive,
+    bandPassFilter, setBandPassFilter,
+    filterStrength, setFilterStrength,
+    handleToggleFilterTool,
+    handleToggleFilterState,
+    handleDisableBandPassFilter,
+    handleEnableBandPassFilter,
+    handleBandPassFilterDrawn,
+  } = useBandPassFilter({
+    project,
+    engineRef,
+    activationStack,
+    projectRef,
+    prevProjectIdRef,
+    updateProjectPreferences,
+  });
 
   // Assemble the in-memory tool array from the project's tool folders +
   // hotkey map. Used on mount and after the project settings modal saves.
@@ -1772,32 +1770,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }},
   ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
-  // H held → hide annotation fills/text (border stays). keyup restores them.
-  useEffect(() => {
-    const inInput = (t: EventTarget | null) => {
-      if (!(t instanceof HTMLElement)) return false;
-      if (t.isContentEditable) return true;
-      return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT';
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'h') return;
-      if (e.repeat) return;
-      if (inInput(e.target)) return;
-      e.preventDefault();
-      setHideLabels(true);
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'h') return;
-      setHideLabels(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, []);
-
   const performExport = async () => {
       if (annotations.length === 0) return;
       const decimals = project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
@@ -1957,73 +1929,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [annotationTools, activeToolKey]);
 
-  // Shared window-drag scaffold: wires a mousemove listener and a one-shot
-  // mouseup that tears both down. Each handler supplies only its delta math.
-  const startDragSession = (onMove: (e: MouseEvent) => void) => {
-      const move = (e: MouseEvent) => onMove(e);
-      const up = () => {
-          window.removeEventListener('mousemove', move);
-          window.removeEventListener('mouseup', up);
-      };
-      window.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', up);
-  };
-
-  // Dragging the video/spectrogram divider above this ratio collapses the
-  // video pane to a bar (mirrors the file-panel drag-to-collapse, where the
-  // collapse threshold equals the expanded minimum). Kept in sync with the
-  // collapsed bar's pixel height so a drag back down resumes from the bar.
-  const VIDEO_COLLAPSE_MIN_RATIO = 0.2;
-  const VIDEO_COLLAPSED_BAR_PX = 32;
-  const handleSplitDrag = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startY = e.clientY;
-      const totalHeight = window.innerHeight - 64;
-      const startRatio = videoCollapsed ? VIDEO_COLLAPSED_BAR_PX / totalHeight : splitRatio;
-      startDragSession((moveEvent) => {
-          const delta = moveEvent.clientY - startY;
-          const newRatio = startRatio + (delta / totalHeight);
-          if (newRatio < VIDEO_COLLAPSE_MIN_RATIO) {
-              setVideoCollapsed(true);
-          } else {
-              setVideoCollapsed(false);
-              setSplitRatio(Math.min(0.8, newRatio));
-          }
-      });
-  };
-
-  const handleLeftPanelDrag = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startY = e.clientY;
-      const startRatio = leftPanelRatio;
-      startDragSession((moveEvent) => {
-          const delta = moveEvent.clientY - startY;
-          const totalHeight = window.innerHeight - 64;
-          let newRatio = Math.max(0.15, Math.min(0.85, startRatio + (delta / totalHeight)));
-          // Soft snap: shift up by one divider height (h-2 = 8px) so tops align visually
-          const dividerOffset = 8 / totalHeight;
-          if (Math.abs(newRatio - (splitRatio - dividerOffset)) < 0.025) newRatio = splitRatio - dividerOffset;
-          setLeftPanelRatio(newRatio);
-      });
-  };
-
-  const LEFT_PANEL_COLLAPSE_THRESHOLD = 120;
-  const handleLeftPanelWidthDrag = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = filePanelCollapsed ? 40 : leftPanelWidth;
-      startDragSession((moveEvent) => {
-          const delta = moveEvent.clientX - startX;
-          const newWidth = startWidth + delta;
-          if (newWidth < LEFT_PANEL_COLLAPSE_THRESHOLD) {
-              setFilePanelCollapsed(true);
-          } else {
-              setFilePanelCollapsed(false);
-              setLeftPanelWidth(Math.max(LEFT_PANEL_COLLAPSE_THRESHOLD, Math.min(480, newWidth)));
-          }
-      });
-  };
-
   // Keep both transports' gain in sync with the volume slider and mute button.
   // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
   useEffect(() => {
@@ -2053,104 +1958,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setIsPlaying(false);
     setIsBuffering(false);
   }, [videoMode, isAudioTrack, videoSrc, selection, usesVideoTransport]);
-
-  // Keep filterStrength and bandPassFilter.strength in lockstep so the strength
-  // slider reflects (and can edit) whichever is current. The slider is the
-  // single source of truth — if a band exists, copy its strength back into the
-  // shared state on creation/edit; the engine sync below picks up the result.
-  useEffect(() => {
-    if (bandPassFilter && bandPassFilter.strength !== filterStrength) {
-      setBandPassFilter({ ...bandPassFilter, strength: filterStrength });
-    }
-  }, [filterStrength]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Push the active band-pass filter into the engine. Non-null = apply;
-  // null = bypass. Drawing a band sets it; slider to 0 or Esc clears it.
-  useEffect(() => {
-    engineRef.current?.setBandPassFilter(bandPassFilter);
-  }, [bandPassFilter]);
-
-  // Persist bandPassFilter changes to the project file (debounced).
-  const filterPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (prevProjectIdRef.current !== project.id) return;
-    if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
-    filterPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, bandPassFilter: bandPassFilter ?? null });
-    }, 600);
-    return () => {
-      if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
-    };
-  }, [bandPassFilter]);
-
-  // `Shift+F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
-  // filtering is governed by bandPassFilter being non-null.
-  const handleToggleFilterTool = useCallback(() => {
-    setFilterToolActive(prev => {
-      const next = !prev;
-      if (next) activationStack.pushIfAbsent('filterTool');
-      else activationStack.remove('filterTool');
-      return next;
-    });
-  }, [activationStack]);
-
-  // Canonical "engage filter" path. Every code path that turns the filter on
-  // — F key, slider drag-up-from-0, spectrogram drag-draw — funnels through
-  // here so the band state, slider value, activation stack, and visualization
-  // gate stay in lockstep. Geometry: caller's band if given, else the last
-  // band we remember, else the project default. Strength: caller's override
-  // if given, else the band's own strength.
-  const engageBandPassFilter = useCallback(
-    (band?: BandPassFilter | null, strengthOverride?: number) => {
-      const base = band ?? lastBandPassFilterRef.current ?? DEFAULT_BAND_PASS_FILTER;
-      const next = { ...base, strength: strengthOverride ?? base.strength };
-      lastBandPassFilterRef.current = next;
-      setBandPassFilter(next);
-      setFilterStrength(next.strength);
-      activationStack.pushIfAbsent('filterBand');
-    },
-    [activationStack]
-  );
-
-  // `Shift+F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
-  // filtering is governed by bandPassFilter being non-null.
-  // (Defined above; this comment kept for orientation — see handleToggleFilterTool.)
-
-  // `F`: toggle filter state on/off. On-turn engages via the canonical path
-  // (restores last band, or falls back to the default); off-turn snapshots
-  // and clears. Mirrors the Z key pattern for video zoom.
-  const handleToggleFilterState = useCallback(() => {
-    if (bandPassFilter !== null) {
-      lastBandPassFilterRef.current = bandPassFilter;
-      setBandPassFilter(null);
-      activationStack.remove('filterBand');
-    } else {
-      engageBandPassFilter();
-    }
-  }, [bandPassFilter, engageBandPassFilter, activationStack]);
-
-  // Filter "off" path — snapshots the band to `lastBandPassFilterRef` so it can
-  // be restored, clears the band (disabling filtering), and pulls `filterBand`
-  // out of the stack. Called by slider-to-0, Esc-on-band, and explicit disable.
-  const handleDisableBandPassFilter = useCallback(() => {
-    setBandPassFilter(prev => {
-      if (prev) lastBandPassFilterRef.current = prev;
-      return null;
-    });
-    activationStack.remove('filterBand');
-  }, [activationStack]);
-
-  // Drag-up-from-0 path: slider/wheel re-enabled filtering while the band was
-  // off. Engages at the user's chosen strength via the canonical path.
-  const handleEnableBandPassFilter = useCallback((strength: number) => {
-    engageBandPassFilter(undefined, strength);
-  }, [engageBandPassFilter]);
-
-  // Called by Spectrogram when a band-drag completes (new band drawn).
-  const handleBandPassFilterDrawn = useCallback((f: BandPassFilter) => {
-    engageBandPassFilter(f);
-  }, [engageBandPassFilter]);
 
   // Wrap setSelection at the prop boundary so any path that sets/clears the
   // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
@@ -2184,13 +1991,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     ));
   }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek]);
 
-  // buzzdetect panel callbacks.
-  const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
-    setBuzzdetectThresholds(prev => ({ ...prev, [neuron]: value }));
-  }, []);
-  const handleBuzzdetectToggleNeuron = useCallback((neuron: string, wasEnabled: boolean) => {
-    setBuzzdetectHiddenNeurons(prev => wasEnabled ? [...prev, neuron] : prev.filter(n => n !== neuron));
-  }, []);
 
   return (
     <div
