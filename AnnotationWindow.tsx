@@ -22,6 +22,8 @@ import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement } from './hooks/useSyncManagement';
+import { useAnnotationTools } from './hooks/useAnnotationTools';
+import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
@@ -66,11 +68,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Git sync state, the manual sync handler, and the sync-status effects live in
   // useSyncManagement (set up below, once its dependencies are declared).
-  // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
-  const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
-  const [panelDeletingToolIndex, setPanelDeletingToolIndex] = useState<number | null>(null);
-  // Index of the tool whose example-clip library is open (null = closed).
-  const [libraryToolIndex, setLibraryToolIndex] = useState<number | null>(null);
+  // Annotation-tool palette state, refs, and CRUD handlers live in
+  // useAnnotationTools (instantiated below, after its dependencies exist).
 
   // Derived from project prop
   const annotationDirectory = project.annotationDirectoryAbs ?? null;
@@ -116,12 +115,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     redoAnnotations,
   } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-  const [annotationTools, setAnnotationTools] = useState<AnnotationTool[]>(() => [makeCustomTool(HOTKEY_COLORS[0])]);
-  // Mirror of annotationTools for use inside the annotation-load effect without
-  // making it depend on (and re-run on) tool changes — re-running it would
-  // re-read the on-disk file before the debounced autosave has written renames,
-  // clobbering them. See the sync effect below.
-  const annotationToolsRef = useRef(annotationTools);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -336,19 +329,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Shared example-clip player for the tool-chip play buttons (palette + tool
   // settings). Independent of the main track's AudioEngine.
   const examplePlayer = useExamplePlayer(addLog);
-  // True while the example-library modal is actively playing a clip.
-  const [libraryPlaying, setLibraryPlaying] = useState(false);
-  // An example clip is sounding via either path (chip preview or the modal).
-  // While true the main track's audio is parked so the two never overlap, and
-  // the spectrogram shows a dimmed "example audio is playing" veil.
-  const exampleAudioActive = examplePlayer.playingToolId !== null || libraryPlaying;
-
-  // Open the read-only example library for a tool; stop any chip-button preview
-  // first so the two don't play over each other.
-  const handleShowExamples = useCallback((toolIndex: number) => {
-    examplePlayer.stop();
-    setLibraryToolIndex(toolIndex);
-  }, [examplePlayer]);
+  // Annotation-tool palette + import-annotations hooks are instantiated below,
+  // after trackPathRef exists; `libraryPlaying` / `exampleAudioActive` come from
+  // there.
 
   // Wheel-event diagnostics: batch events over 100ms and emit a single summary
   // line so the debug console doesn't flood. Logs: count, deltaMode, deltaX
@@ -453,10 +436,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
   useEffect(() => { selectionRef.current = selection; }, [selection]);
 
-  // Keep annotationToolsRef in sync so the load effect can look up current tools
-  // for color/toolKey matching without depending on annotationTools.
-  useEffect(() => { annotationToolsRef.current = annotationTools; }, [annotationTools]);
-
   // Pre-decode PCM for the selection so repeat plays are instant. AudioEngine
   // skips the call if the range is already covered by its cache.
   useEffect(() => {
@@ -511,6 +490,85 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPathRef.current = trackPath;
     preZoomExtentRef.current = null;
   }, [trackPath]);
+
+  // Shared project-switch guard for the debounced persistence effects
+  // (tool reconcile, band-pass, project settings). Owned here, not in any one hook.
+  const prevProjectIdRef = useRef<string | null>(null);
+
+  // Compute annotation file path: mirrors audio dir structure into annotation dir
+  const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
+    if (!annotationDirectory || !currentDirectory) return null;
+    const rel = trackFilePath.substring(currentDirectory.length);
+    const withoutExt = stripExt(rel);
+    return annotationDirectory + withoutExt + '.txt';
+  }, [annotationDirectory, currentDirectory]);
+
+  // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
+  // persistence effect, and every tool CRUD/import handler. See
+  // hooks/useAnnotationTools.ts.
+  const {
+    annotationTools,
+    setAnnotationTools,
+    annotationToolsRef,
+    panelEditingToolIndex,
+    setPanelEditingToolIndex,
+    panelDeletingToolIndex,
+    setPanelDeletingToolIndex,
+    libraryToolIndex,
+    setLibraryToolIndex,
+    libraryPlaying,
+    setLibraryPlaying,
+    handleShowExamples,
+    loadAnnotationTools,
+    handleCreateTool,
+    handleRenameTool,
+    handleDeleteTool,
+    handlePreviewToolColor,
+    handleReorderTools,
+    handleImportExamples,
+    handleImportExamplesToTool,
+    handleRestoreToolsState,
+  } = useAnnotationTools({
+    project,
+    projectRef,
+    prevProjectIdRef,
+    updateProjectPreferences,
+    addLog,
+    examplePlayer,
+    setAnnotations,
+    handleAnnotationsCommit,
+    activeToolKey,
+    setActiveToolKey,
+    allTracks,
+    trackPath,
+    getAnnotationPath,
+  });
+
+  // An example clip is sounding via either path (chip preview or the modal).
+  // While true the main track's audio is parked so the two never overlap, and
+  // the spectrogram shows a dimmed "example audio is playing" veil.
+  const exampleAudioActive = examplePlayer.playingToolId !== null || libraryPlaying;
+
+  // Import-annotations flow: parse-error toast, overwrite/merge confirmation,
+  // and the disk/live write path. See hooks/useImportAnnotations.ts.
+  const {
+    importError,
+    setImportError,
+    pendingImport,
+    setPendingImport,
+    handleImportAnnotations,
+    resolveImport,
+  } = useImportAnnotations({
+    annotationDirectory,
+    currentDirectory,
+    projectRef,
+    trackPathRef,
+    annotationToolsRef,
+    getAnnotationPath,
+    handleAnnotationsCommit,
+    setAnnotatedFiles,
+    addLog,
+  });
 
   const currentTimeRef = useRef(0);
   // Ref-based pub/sub for playback time. Updated ~50/sec by the engine's
@@ -894,16 +952,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectToggleNeuron,
   } = useBuzzdetect({ project, ident, addLog });
 
-  // Persist annotation tools and spectrogram settings to project whenever they change
-  const toolPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevProjectIdRef = useRef<string | null>(null);
-  // Last tool snapshot known to match the on-disk folders. The reconcile
-  // effect diffs against this to derive folder create/rename/update/delete ops.
-  const prevPersistedToolsRef = useRef<PersistedTool[]>([]);
-  // Set by the load path so the reconcile effect skips the setAnnotationTools
-  // it triggers (the loaded array already matches the folders).
-  const skipToolPersistRef = useRef(false);
-
   // Band-pass filter state machine (filter tool / band / strength + engine-push
   // and persistence effects). Needs engineRef, the activation stack, and the
   // project plumbing for debounced persistence. See hooks/useBandPassFilter.ts.
@@ -925,66 +973,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     updateProjectPreferences,
   });
 
-  // Assemble the in-memory tool array from the project's tool folders +
-  // hotkey map. Used on mount and after the project settings modal saves.
-  const loadAnnotationTools = useCallback(async (proj: Project) => {
-    try {
-      const folderTools = await listAnnotationTools(proj.projectDir);
-      const tools = assembleTools(
-        folderTools,
-        proj.preferences.toolHotkeys ?? {},
-        HOTKEY_COLORS[0],
-        () => generateId(),
-      );
-      prevPersistedToolsRef.current = toPersistedTools(tools);
-      skipToolPersistRef.current = true;
-      setAnnotationTools(tools);
-    } catch (err) {
-      addLog(`Error loading annotation tools: ${err}`, 'error');
-    }
-  }, []);
-
-  // Reconcile in-memory tools to disk: folder ops from the snapshot diff, then
-  // the hotkey map + Custom color into settings.json. Debounced so rapid
-  // changes (e.g. live color preview drags) collapse into one write.
-  useEffect(() => {
-    // Skip persistence when switching projects (avoids overwriting with stale tools)
-    if (prevProjectIdRef.current !== project.id) {
-      prevProjectIdRef.current = project.id;
-      return;
-    }
-    if (skipToolPersistRef.current) {
-      skipToolPersistRef.current = false;
-      return;
-    }
-    if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
-    toolPersistRef.current = setTimeout(async () => {
-      const proj = projectRef.current;
-      if (!proj) return;
-      const next = toPersistedTools(annotationTools);
-      const ops = diffToolFolders(prevPersistedToolsRef.current, next);
-      try {
-        // Deletes first so a freed label can be reused by a rename or create
-        // in the same batch (e.g. undo of a delete recreates the same label
-        // under a new id).
-        for (const d of ops.deletes) await deleteAnnotationTool(proj.projectDir, d);
-        for (const r of ops.renames) await renameAnnotationTool(proj.projectDir, r.from, r.to);
-        for (const c of ops.creates) await createAnnotationTool(proj.projectDir, c.text, c.color, c.description);
-        for (const u of ops.updates) await updateAnnotationTool(proj.projectDir, u.text, u.color, u.description);
-        prevPersistedToolsRef.current = next;
-      } catch (err) {
-        addLog(`Error saving annotation tools: ${err}`, 'error');
-      }
-      updateProjectPreferences(proj.id, {
-        ...proj.preferences,
-        toolHotkeys: buildHotkeyMap(annotationTools),
-      });
-    }, 500);
-    return () => {
-      if (toolPersistRef.current) clearTimeout(toolPersistRef.current);
-    };
-  }, [annotationTools]);
-
   // Debounced persistence of spectrogram settings + consolidated UI fields to
   // the project file. See hooks/useProjectPersistence.ts.
   useProjectPersistence({
@@ -1004,14 +992,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectHiddenNeurons,
     videoMode,
   });
-
-  // Compute annotation file path: mirrors audio dir structure into annotation dir
-  const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
-    if (!annotationDirectory || !currentDirectory) return null;
-    const rel = trackFilePath.substring(currentDirectory.length);
-    const withoutExt = stripExt(rel);
-    return annotationDirectory + withoutExt + '.txt';
-  }, [annotationDirectory, currentDirectory]);
 
   // Auto-save annotations whenever they change
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1279,97 +1259,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       revealInFileManager(annotationDirectory).catch(() => {});
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
-
-  // ── Import annotations ──────────────────────────────────────────────────────
-  const [importError, setImportError] = useState<string | null>(null);
-
-  // Pending state for the overwrite/merge confirmation when the target track
-  // already has annotations on disk.
-  const [pendingImport, setPendingImport] = useState<{
-    trackPath: string;
-    incoming: Annotation[];
-    existing: Annotation[];
-    sourceName: string;
-  } | null>(null);
-
-  // Write `next` as the annotation file for `targetTrack`, mirroring auto-save.
-  // If `targetTrack` is the currently-open track, also drive in-memory state so
-  // the spectrogram updates live; otherwise just persist to disk.
-  const writeAnnotationsForTrack = useCallback(async (targetTrack: string, next: Annotation[]) => {
-    const annotPath = getAnnotationPath(targetTrack);
-    if (!annotPath) return;
-    const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
-    if (targetTrack === trackPathRef.current) {
-      // Live track: route through commit so undo history + auto-save apply.
-      handleAnnotationsCommit(next);
-    } else {
-      await writeTextFile(annotPath, generateAudacityContent(next, decimals));
-    }
-    setAnnotatedFiles(prev => {
-      const updated = new Set(prev);
-      if (next.length > 0) updated.add(targetTrack);
-      else updated.delete(targetTrack);
-      return updated;
-    });
-  }, [getAnnotationPath, handleAnnotationsCommit]);
-
-  const handleImportAnnotations = useCallback(async (targetTrack: string) => {
-    addLog(`[import] triggered — annotationDirectory=${annotationDirectory ?? 'null'} currentDirectory=${currentDirectory ?? 'null'}`);
-    if (!annotationDirectory || !currentDirectory) {
-      addLog('[import] aborted: no annotation directory or project directory', 'error');
-      return;
-    }
-    try {
-      const sourcePath = await openFileDialog(targetTrack, [
-        { name: 'Annotation File', extensions: ['txt'] },
-      ]);
-      addLog(`[import] file dialog returned: ${sourcePath ?? 'cancelled'}`);
-      if (!sourcePath) return;
-      const content = await readTextFile(sourcePath);
-      addLog(`[import] read ${content?.length ?? 0} chars`);
-      if (!content) {
-        addLog('Import: selected file was empty', 'error');
-        return;
-      }
-      const sourceName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
-      const incoming = parseAudacityContent(content, annotationToolsRef.current);
-      addLog(`[import] parsed ${incoming.length} annotations`);
-      if (incoming.length === 0) {
-        addLog(`Import: "${sourceName}" could not be parsed as an annotation file`, 'error');
-        setImportError(`"${sourceName}" could not be parsed as an annotation file.`);
-        return;
-      }
-
-      // Read whatever is on disk for this track to decide whether to confirm.
-      const annotPath = getAnnotationPath(targetTrack);
-      const existingContent = annotPath ? await readTextFile(annotPath).catch(() => null) : null;
-      const existing = existingContent
-        ? parseAudacityContent(existingContent, annotationToolsRef.current)
-        : [];
-
-      if (existing.length > 0) {
-        setPendingImport({ trackPath: targetTrack, incoming, existing, sourceName });
-        return;
-      }
-      await writeAnnotationsForTrack(targetTrack, incoming);
-      addLog(`Imported ${incoming.length} annotations from ${sourceName}`);
-    } catch (err) {
-      addLog(`Import error: ${err}`, 'error');
-    }
-  }, [annotationDirectory, currentDirectory, getAnnotationPath, writeAnnotationsForTrack]);
-
-  const resolveImport = useCallback(async (mode: 'overwrite' | 'merge') => {
-    if (!pendingImport) return;
-    const { trackPath: targetTrack, incoming, existing, sourceName } = pendingImport;
-    setPendingImport(null);
-    try {
-      const next = mode === 'merge' ? mergeAnnotations(existing, incoming) : incoming;
-      await writeAnnotationsForTrack(targetTrack, next);
-      addLog(`${mode === 'merge' ? 'Merged' : 'Imported'} ${incoming.length} annotations from ${sourceName}`);
-    } catch (err) {
-      addLog(`Import error: ${err}`, 'error');
-    }
-  }, [pendingImport, writeAnnotationsForTrack]);
 
   const togglePlay = useCallback(async () => {
       const transport = activeTransport();
@@ -1676,158 +1565,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       await exportToAudacity(annotations, trackName, trackPath, decimals);
       addLog('Exported annotations as TXT');
   };
-
-  const handleCreateTool = useCallback((text: string, color: string, key?: string | null) => {
-    setAnnotationTools(prev => [...prev, { id: generateId(), key: key ?? null, text, color }]);
-  }, []);
-
-  // "Import examples" in the tool settings modal: pick a directory of plain
-  // {label}/ folders of audio clips; the backend creates the appropriate tool
-  // dirs and copies the clips, then the folder scan is merged into the
-  // in-memory tools (keeping pending edits and hotkeys intact).
-  const handleImportExamples = useCallback(async () => {
-    const proj = projectRef.current;
-    if (!proj) return;
-    const dir = await openDirectoryDialog();
-    if (!dir) return;
-    try {
-      const summary = await importToolExamples(proj.projectDir, dir, HOTKEY_COLORS.slice(1));
-      const folderTools = await listAnnotationTools(proj.projectDir);
-      const { tools, added } = mergeImportedTools(annotationToolsRef.current, folderTools, () => generateId());
-      // The import already wrote the added tools' folders — extend the
-      // persisted snapshot so the reconcile diff doesn't re-create them.
-      prevPersistedToolsRef.current = [...prevPersistedToolsRef.current, ...toPersistedTools(added)];
-      setAnnotationTools(tools);
-      addLog(`Imported examples: ${summary.files_copied} copied, ${summary.files_skipped} skipped, ${summary.tools_created.length} new tool(s)`);
-    } catch (err) {
-      addLog(`Import examples error: ${err}`, 'error');
-    }
-  }, [addLog]);
-
-  // Per-tool example import: copy the selected files/folders into one tool's
-  // examples/ dir, then refresh that tool's exampleFiles from the folder scan.
-  // Skips Custom (key '0'), which is synthetic and has no folder.
-  const handleImportExamplesToTool = useCallback(async (toolIndex: number, paths: string[]) => {
-    const proj = projectRef.current;
-    if (!proj || paths.length === 0) return;
-    const tool = annotationToolsRef.current[toolIndex];
-    if (!tool || tool.key === '0') return;
-    try {
-      const summary = await importExamplesToTool(proj.projectDir, tool.text, paths);
-      const exampleFiles = await listToolExamples(proj.projectDir, tool.text);
-      setAnnotationTools(prev => prev.map(t => t.id === tool.id ? { ...t, exampleFiles } : t));
-      addLog(`Imported examples into "${tool.text}": ${summary.files_copied} copied, ${summary.files_skipped} skipped`);
-    } catch (err) {
-      addLog(`Import examples error: ${err}`, 'error');
-    }
-  }, [addLog]);
-
-  // Atomically restore tools + annotations for the Annotation Tool Settings
-  // modal's own undo/redo (e.g. undeleting a tool, which must also put back the
-  // annotations that delete reassigned to Custom). Annotations go through the
-  // shared commit path so the global annotation history stays consistent.
-  const handleRestoreToolsState = useCallback((tools: AnnotationTool[], restoredAnnotations: Annotation[]) => {
-    setAnnotationTools(tools);
-    handleAnnotationsCommit(restoredAnnotations);
-  }, [handleAnnotationsCommit]);
-
-  const handleRenameTool = useCallback((toolIndex: number, newText: string, newColor: string, newDescription?: string) => {
-    const tool = annotationTools[toolIndex];
-    if (!tool) return;
-    const oldText = tool.text;
-
-    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor, description: newDescription } : t));
-    setAnnotations(prev => prev.map(a => {
-      if (a.toolKey === tool.key && a.toolKey !== '0') {
-        return { ...a, text: newText, color: newColor };
-      }
-      if (a.toolKey === '0' && a.text === newText && tool.key !== null) {
-        return { ...a, toolKey: tool.key!, color: newColor };
-      }
-      return a;
-    }));
-
-    // If only the color changed, no file text updates are needed.
-    if (oldText === newText) return;
-
-    // Rename matching annotations in every other track's annotation file on disk.
-    // The current track's file will be updated by the auto-save triggered above.
-    for (const t of allTracks) {
-      if (t === trackPath) continue;
-      const annotPath = getAnnotationPath(t);
-      if (!annotPath) continue;
-      (async () => {
-        try {
-          const content = await readTextFile(annotPath);
-          if (!content) return;
-          let changed = false;
-          const updated = content.split('\n').map(line => {
-            const parts = line.split('\t');
-            if (parts.length >= 3 && parts.slice(2).join('\t') === oldText) {
-              changed = true;
-              return `${parts[0]}\t${parts[1]}\t${newText}`;
-            }
-            return line;
-          });
-          if (changed) await writeTextFile(annotPath, updated.join('\n'));
-        } catch {
-          // No annotation file for this track — nothing to update.
-        }
-      })();
-    }
-  }, [annotationTools, allTracks, trackPath, getAnnotationPath]);
-
-  const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
-    const tool = annotationTools[toolIndex];
-    if (!tool) return;
-    setAnnotations(prev => mode === 'delete'
-      // Remove the tool's linked annotations entirely.
-      ? prev.filter(a => a.toolKey !== tool.key)
-      // Reassign the tool's linked annotations to Custom.
-      : prev.map(a => a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a)
-    );
-    setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
-    if (activeToolKey === tool.key) setActiveToolKey(null);
-  }, [annotationTools, activeToolKey]);
-
-  // Transient live preview while the user drags a color in the edit modal.
-  // Updates ONLY the tool's color and its linked (non-Custom) annotations'
-  // colors via the raw setters — no history push, no Custom reassociation. The
-  // settings list and spectrogram both read these from state, so they update
-  // live; the real commit (with history) happens on Save via handleRenameTool.
-  const handlePreviewToolColor = useCallback((toolIndex: number, color: string) => {
-    const tool = annotationToolsRef.current[toolIndex];
-    if (!tool) return;
-    setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, color } : t));
-    setAnnotations(prev => prev.map(a =>
-      a.toolKey === tool.key && a.toolKey !== '0' ? { ...a, color } : a
-    ));
-  }, []);
-
-  const handleReorderTools = useCallback((newTools: AnnotationTool[]) => {
-    const snapshot = annotationTools;
-    if (newTools.length !== snapshot.length) return;
-
-    // Build old→new key remap (by stable index — newTools must preserve indices).
-    const keyRemap = new Map<string, string>();
-    const unassignedKeys = new Set<string>();
-    for (let i = 0; i < snapshot.length; i++) {
-      const oldKey = snapshot[i].key;
-      const newKey = newTools[i].key;
-      if (oldKey && newKey && oldKey !== newKey) keyRemap.set(oldKey, newKey);
-      if (oldKey && !newKey) unassignedKeys.add(oldKey);
-    }
-
-    setAnnotationTools(newTools);
-    setAnnotations(prev => prev.map(a => {
-      if (unassignedKeys.has(a.toolKey)) return { ...a, toolKey: '0', color: '#ffffff' };
-      const remapped = keyRemap.get(a.toolKey);
-      return remapped ? { ...a, toolKey: remapped } : a;
-    }));
-    if (activeToolKey && (unassignedKeys.has(activeToolKey) || keyRemap.has(activeToolKey))) {
-      setActiveToolKey(unassignedKeys.has(activeToolKey) ? null : keyRemap.get(activeToolKey)!);
-    }
-  }, [annotationTools, activeToolKey]);
 
   // Keep both transports' gain in sync with the volume slider and mute button.
   // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
