@@ -216,6 +216,14 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                    (e.target as HTMLInputElement).blur();
                                }
                            }}
+                           onFocus={() => {
+                               // Promote to explicit edit mode so the input stays mounted
+                               // once the user types. Without this, an auto-focused new
+                               // annotation (rendered only via `isSelected && text === ''`)
+                               // unmounts the moment the first character makes text non-empty,
+                               // dropping focus. Setting editingInputId keeps it rendered.
+                               setEditingInputId(annotation.id);
+                           }}
                            onBlur={() => {
                                setEditingInputId(null);
                                if (annotation.text.trim() === "") {
