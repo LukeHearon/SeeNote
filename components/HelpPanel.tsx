@@ -315,6 +315,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge
                   automatically — two people labeling the same recording keep <span className="text-white">both</span> sets; only a deliberate
                   deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits.
+                  The file tree refreshes automatically after a sync pulls changes, so newly-annotated recordings light up.
                 </p>
                 <p>
                   Only your annotation files are shared. Media, your annotation tools, and your local settings (including the

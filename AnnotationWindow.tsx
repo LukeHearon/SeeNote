@@ -852,6 +852,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [project, refreshAnnotatedSet]);
 
+  // After a git sync pulls new data, refresh the file tree so freshly-arrived
+  // annotation files show as annotated (and any new media files appear).
+  // reloadNonce only bumps on a successful pull; skip the initial 0.
+  useEffect(() => {
+    if (reloadNonce === 0) return;
+    handleRefreshFiles();
+  }, [reloadNonce, handleRefreshFiles]);
+
   const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings, updatedPreferences: ProjectPreferences) => {
     const prev = project.settings.mediaDirectory;
     const next = updatedSettings.mediaDirectory;
