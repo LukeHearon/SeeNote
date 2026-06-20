@@ -308,7 +308,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   Add a <span className="text-white">repository URL</span>, <span className="text-white">access token</span>, and
                   <span className="text-white"> your name</span> under <span className="text-white">Project Settings → Sync</span> to share
                   annotations with collaborators through a private GitHub repo. A <span className="text-white">refresh icon</span> then
-                  appears in the toolbar; click it to sync.
+                  appears in the toolbar; click it to sync. The <span className="text-white">chevron</span> beside it opens a box
+                  for a custom <span className="text-white">commit message</span> (otherwise the commit is labeled "Update annotations").
                 </p>
                 <p>
                   Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge

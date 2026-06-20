@@ -120,6 +120,7 @@ pub(crate) fn stage_and_commit(
     project_path: &Path,
     ann_rel: &Path,
     sig: &Signature,
+    message: &str,
 ) -> Result<bool, String> {
     let mut index = repo.index().map_err(gerr)?;
 
@@ -176,7 +177,7 @@ pub(crate) fn stage_and_commit(
         Some("HEAD"),
         sig,
         sig,
-        "Update annotations",
+        message,
         &tree,
         &parents,
     )

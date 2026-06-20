@@ -44,7 +44,7 @@ export function useSyncManagement({
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
   // autosave first so local edits aren't lost, runs the embedded-git pipeline,
   // then reloads the active track if the pull changed anything on disk.
-  const handleSync = useCallback(async () => {
+  const handleSync = useCallback(async (commitMessage = '') => {
     const cfg = projectRef.current.settings.gitSync;
     if (!cfg?.remoteUrl) {
       setSyncError('Configure the repository URL under Project Settings → Sync first.');
@@ -80,6 +80,7 @@ export function useSyncManagement({
         cfg.remoteUrl,
         token,
         projectRef.current.preferences.gitSyncUser?.authorName ?? '',
+        commitMessage,
       );
       setSyncSummary(summary);
       addLog(

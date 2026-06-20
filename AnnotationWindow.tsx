@@ -730,6 +730,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     addLog,
   });
 
+  // Custom-commit-message popover: open state + the typed message.
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+
   // Annotation disk I/O for the active track: the debounced auto-save effect and
   // the auto-load effect. getAnnotationPath stays in the orchestrator (shared
   // with tools/import/sync); the hook drives both effects off it. Placed here so
@@ -1183,26 +1187,73 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
         <div className="flex items-center space-x-3">
              {project.settings.gitSync && (
-               <button
-                  onClick={handleSync}
-                  disabled={syncing}
-                  className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
-                  data-tooltip={
-                    syncing ? 'Syncing…'
-                    : hasLocalChanges && hasRemoteChanges ? 'Your annotations aren\'t uploaded yet · Teammates have new annotations'
-                    : hasLocalChanges ? 'Your annotations aren\'t uploaded yet'
-                    : hasRemoteChanges ? 'Teammates have new annotations'
-                    : 'Sync annotations'
-                  }
-              >
-                  <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
-                  {hasLocalChanges && !syncing && (
-                    <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-green-400/80 pointer-events-none" />
-                  )}
-                  {hasRemoteChanges && !syncing && (
-                    <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400/80 pointer-events-none" />
-                  )}
-              </button>
+               <div className="relative flex items-center">
+                 <button
+                    onClick={() => handleSync()}
+                    disabled={syncing}
+                    className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
+                    data-tooltip={
+                      syncing ? 'Syncing…'
+                      : hasLocalChanges && hasRemoteChanges ? 'Your annotations aren\'t uploaded yet · Teammates have new annotations'
+                      : hasLocalChanges ? 'Your annotations aren\'t uploaded yet'
+                      : hasRemoteChanges ? 'Teammates have new annotations'
+                      : 'Sync annotations'
+                    }
+                >
+                    <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
+                    {hasLocalChanges && !syncing && (
+                      <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-green-400/80 pointer-events-none" />
+                    )}
+                    {hasRemoteChanges && !syncing && (
+                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400/80 pointer-events-none" />
+                    )}
+                </button>
+                <button
+                    onClick={() => setSyncMenuOpen(o => !o)}
+                    disabled={syncing}
+                    className={`p-1 rounded hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-default ${syncMenuOpen ? 'text-white bg-slate-700' : 'text-slate-400'}`}
+                    data-tooltip="Sync with a commit message…"
+                >
+                    <ChevronDown size={14} />
+                </button>
+                {syncMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 z-[300] w-72 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-3">
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">Commit message (optional)</label>
+                    <textarea
+                      autoFocus
+                      value={commitMessage}
+                      onChange={e => setCommitMessage(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                          e.preventDefault();
+                          setSyncMenuOpen(false);
+                          handleSync(commitMessage);
+                          setCommitMessage('');
+                        } else if (e.key === 'Escape') {
+                          setSyncMenuOpen(false);
+                        }
+                      }}
+                      rows={2}
+                      placeholder="Update annotations"
+                      className="w-full text-xs bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-[#e65161]"
+                    />
+                    <div className="flex justify-end gap-2 mt-2">
+                      <button
+                        onClick={() => setSyncMenuOpen(false)}
+                        className="text-xs px-2.5 py-1 rounded text-slate-300 hover:bg-slate-700"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => { setSyncMenuOpen(false); handleSync(commitMessage); setCommitMessage(''); }}
+                        className="text-xs px-2.5 py-1 rounded bg-[#e65161] text-white hover:bg-[#d63d4e]"
+                      >
+                        Sync
+                      </button>
+                    </div>
+                  </div>
+                )}
+               </div>
              )}
              <button
                 onClick={() => setShowDebug(true)}

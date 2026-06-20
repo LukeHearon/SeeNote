@@ -327,8 +327,10 @@ export const syncProject = (
   remoteUrl: string,
   token: string,
   authorName: string,
+  // Optional custom commit message; empty string uses the default ("Update annotations").
+  commitMessage = '',
 ): Promise<SyncSummary> =>
-  invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName });
+  invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName, commitMessage });
 
 /** Check local-only sync state (no network). */
 export const getLocalSyncStatus = (

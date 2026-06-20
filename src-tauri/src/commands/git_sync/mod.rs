@@ -109,10 +109,13 @@ pub async fn sync_project(
     remote_url: String,
     token: String,
     author_name: String,
+    // Optional custom commit message for the local commit. Empty falls back to
+    // the default ("Update annotations").
+    commit_message: String,
 ) -> Result<SyncSummary, String> {
     // Heavy/blocking libgit2 work off the async runtime's cooperative threads.
     tauri::async_runtime::spawn_blocking(move || {
-        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name)
+        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, &commit_message)
     })
     .await
     .map_err(|e| format!("sync task panicked: {e}"))?
@@ -153,6 +156,7 @@ fn sync_blocking(
     remote_url: &str,
     token: &str,
     author_name: &str,
+    commit_message: &str,
 ) -> Result<SyncSummary, String> {
     let project_path = Path::new(project_dir);
     let ann_path = Path::new(annotation_dir);
@@ -190,7 +194,11 @@ fn sync_blocking(
     ensure_on_branch(&repo, &branch)?;
 
     // 1. Stage the curated set and commit any local changes.
-    let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig)?;
+    let message = match commit_message.trim() {
+        "" => "Update annotations",
+        m => m,
+    };
+    let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig, message)?;
 
     // 2. Fetch remote.
     fetch(&repo, &branch, token)?;
