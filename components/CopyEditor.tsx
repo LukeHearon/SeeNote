@@ -1,26 +1,23 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { RotateCcw, Save, Crosshair } from 'lucide-react';
 import { buildRegistry } from '../copy/registry';
 import {
-  setOverride, clearOverrides, getAllOverrides, getAccessedKeys,
+  setOverride, resetOverride, clearOverrides, getAllOverrides, getAccessedKeys,
   useCopyRerenderOnChange, copyChannel,
 } from '../copy/overrideStore';
 import { applyCopyOverrides } from '../utils/tauriCommands';
+
+type ViewMode = 'current' | 'modified' | 'all';
 
 export function CopyEditor() {
   useCopyRerenderOnChange();
   const base = useMemo(() => buildRegistry(), []);
 
-  const viewKeys = useMemo(() => {
-    try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('copy:accessedKeys') : null;
-      if (raw) return new Set<string>(JSON.parse(raw) as string[]);
-    } catch { /* */ }
-    return new Set<string>(getAccessedKeys());
-  }, []);
+  const viewKeysRef = useRef<Set<string>>(new Set(getAccessedKeys()));
+  const [viewKeys, setViewKeys] = useState<Set<string>>(viewKeysRef.current);
 
   const [search, setSearch] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [view, setView] = useState<ViewMode>('current');
   const [pickActive, setPickActive] = useState(false);
   const [commitOutput, setCommitOutput] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
@@ -30,26 +27,38 @@ export function CopyEditor() {
     if (!copyChannel) return;
     const handler = (e: MessageEvent) => {
       const { type, key, active } = (e.data ?? {}) as Record<string, unknown>;
-      if (type === 'pick' && typeof key === 'string') {
+      if (type === 'keyAccessed' && typeof key === 'string') {
+        if (!viewKeysRef.current.has(key)) {
+          const next = new Set([...viewKeysRef.current, key]);
+          viewKeysRef.current = next;
+          setViewKeys(next);
+        }
+      } else if (type === 'pick' && typeof key === 'string') {
         setSearch(key);
-        if (!viewKeys.has(key)) setShowAll(true);
+        if (!viewKeysRef.current.has(key)) setView('all');
       } else if (type === 'toggleShowAll') {
-        setShowAll(p => !p);
+        setView(v => v === 'all' ? 'current' : 'all');
       } else if (type === 'pickModeChanged') {
         setPickActive(!!active);
       }
     };
     copyChannel.addEventListener('message', handler);
     return () => copyChannel.removeEventListener('message', handler);
-  }, [viewKeys]);
+  }, []);
+
+  const overrides = getAllOverrides();
+  const dirty = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => v !== base[k]));
+  const dirtyCount = Object.keys(dirty).length;
 
   const entries = useMemo(() => {
+    const ov = getAllOverrides();
     const q = search.toLowerCase();
     return Object.entries(base).filter(([k, v]) => {
-      if (!showAll && !viewKeys.has(k)) return false;
+      if (view === 'current' && !viewKeys.has(k)) return false;
+      if (view === 'modified' && !(ov[k] !== undefined && ov[k] !== v)) return false;
       return !q || k.toLowerCase().includes(q) || v.toLowerCase().includes(q);
     });
-  }, [base, search, showAll, viewKeys]);
+  }, [base, search, view, viewKeys, dirtyCount]);
 
   const handleChange = useCallback((key: string, value: string) => {
     setOverride(key, value);
@@ -57,9 +66,11 @@ export function CopyEditor() {
     setCommitOutput(null);
   }, []);
 
-  const overrides = getAllOverrides();
-  const dirty = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => v !== base[k]));
-  const dirtyCount = Object.keys(dirty).length;
+  const handleResetKey = useCallback((key: string) => {
+    resetOverride(key);
+    setTick(t => t + 1);
+    setCommitOutput(null);
+  }, []);
 
   const handleReset = () => {
     clearOverrides();
@@ -86,12 +97,15 @@ export function CopyEditor() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-none">
         <div className="flex items-center gap-2">
           <span className="text-white font-semibold text-sm">Copy Editor</span>
-          <button
-            onClick={() => setShowAll(s => !s)}
-            className={`text-xs px-2 py-0.5 rounded transition-colors ${showAll ? 'bg-slate-600 text-slate-200' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}
-          >
-            {showAll ? 'All strings' : 'Current view'}
-          </button>
+          {(['current', 'modified', 'all'] as ViewMode[]).map(m => (
+            <button
+              key={m}
+              onClick={() => setView(m)}
+              className={`text-xs px-2 py-0.5 rounded transition-colors ${view === m ? 'bg-slate-600 text-slate-200' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}
+            >
+              {m === 'current' ? 'Current view' : m === 'modified' ? `Modified${dirtyCount ? ` (${dirtyCount})` : ''}` : 'All'}
+            </button>
+          ))}
           <button
             onClick={() => copyChannel?.postMessage({ type: 'togglePick' })}
             title="Toggle pick mode in the main window (⌘⇧E)"
@@ -143,8 +157,9 @@ export function CopyEditor() {
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-slate-900 border-b border-slate-700">
             <tr>
-              <th className="text-left px-4 py-2 text-slate-500 font-medium w-[40%]">Key</th>
+              <th className="text-left px-4 py-2 text-slate-500 font-medium w-[38%]">Key</th>
               <th className="text-left px-4 py-2 text-slate-500 font-medium">Value</th>
+              <th className="w-6" />
             </tr>
           </thead>
           <tbody>
@@ -162,6 +177,20 @@ export function CopyEditor() {
                       className="w-full bg-transparent border border-transparent hover:border-slate-600 focus:border-slate-500 rounded px-2 py-1 text-slate-200 resize-none focus:outline-none focus:bg-slate-800 transition-colors"
                       style={{ minHeight: '2rem', fieldSizing: 'content' } as React.CSSProperties}
                     />
+                    {isDirty && (
+                      <div className="px-2 mt-0.5 text-slate-500 italic whitespace-pre-wrap">{baseVal}</div>
+                    )}
+                  </td>
+                  <td className="pr-3 align-top pt-2">
+                    {isDirty && (
+                      <button
+                        onClick={() => handleResetKey(key)}
+                        title="Undo change"
+                        className="text-slate-500 hover:text-slate-300 transition-colors"
+                      >
+                        <RotateCcw size={11} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

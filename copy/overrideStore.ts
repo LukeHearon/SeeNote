@@ -33,7 +33,10 @@ function persist(overrides: Record<string, string>) {
 }
 
 export function getOverride(key: string): string | undefined {
-  if (!_skipRecording) _accessed.add(key);
+  if (!_skipRecording && !_accessed.has(key)) {
+    _accessed.add(key);
+    copyChannel?.postMessage({ type: 'keyAccessed', key });
+  }
   if (_skipOverrides) return undefined;
   return _overrides[key];
 }
@@ -54,6 +57,14 @@ export function withoutOverrides<T>(fn: () => T): T {
 
 export function setOverride(key: string, value: string) {
   _overrides = { ..._overrides, [key]: value };
+  persist(_overrides);
+  _listeners.forEach(l => l());
+}
+
+export function resetOverride(key: string) {
+  const next = { ..._overrides };
+  delete next[key];
+  _overrides = next;
   persist(_overrides);
   _listeners.forEach(l => l());
 }

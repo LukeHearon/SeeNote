@@ -73,7 +73,10 @@ export function useCopyEditorBridge() {
       e.preventDefault();
       e.stopPropagation();
       const found = findKeyForElement(e.target as Element, valueToKey);
-      if (found) copyChannel?.postMessage({ type: 'pick', key: found });
+      if (found) {
+        copyChannel?.postMessage({ type: 'pick', key: found });
+        setPickMode(false);
+      }
     };
     document.addEventListener('click', handler, true);
     return () => {

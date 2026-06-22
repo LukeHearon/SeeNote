@@ -65,8 +65,7 @@ pub fn close_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_copy_editor_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("copy-editor") {
-        win.set_focus().map_err(|e| e.to_string())?;
+    if app.get_webview_window("copy-editor").is_some() {
         return Ok(());
     }
     WebviewWindowBuilder::new(
