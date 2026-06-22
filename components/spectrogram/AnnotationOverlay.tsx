@@ -1,4 +1,6 @@
 import React from 'react';
+import { annotationOverlay as copy } from '../../copy/ui';
+import { tooltips } from '../../copy/tooltips';
 import { X, Pencil } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { updateAnnotation } from '../../utils/helpers';
@@ -242,7 +244,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                fontWeight: 'bold',
                                textShadow: '0 1px 2px black',
                            }}
-                           placeholder="Name..."
+                           placeholder={copy.namePlaceholder}
                            onMouseDown={(e) => {
                                if (e.button === 1) {
                                    e.preventDefault();
@@ -289,7 +291,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        setEditingInputId(annotation.id);
                        setPencilClickedId(annotation.id);
                      }}
-                     data-tooltip="Edit annotation name"
+                     data-tooltip={tooltips.editAnnotationName}
                    >
                      <Pencil size={10} className="text-white drop-shadow" />
                    </button>
@@ -306,7 +308,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        setEditingInputId(annotation.id);
                        setPencilClickedId(annotation.id);
                      }}
-                     data-tooltip="Edit annotation name"
+                     data-tooltip={tooltips.editAnnotationName}
                    >
                      <Pencil size={10} className="text-white" />
                    </button>

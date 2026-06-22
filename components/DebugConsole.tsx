@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Bug, Copy, Check, X } from 'lucide-react';
+import { tooltips } from '../copy/tooltips';
+import { debugConsole } from '../copy/ui';
 
 interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -22,7 +24,7 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-bold flex items-center gap-2"><Bug size={20} className="text-[#e65161]" /> Debug Console</h3>
+          <h3 className="text-xl font-bold flex items-center gap-2"><Bug size={20} className="text-[#e65161]" /> {debugConsole.title}</h3>
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
@@ -32,7 +34,7 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
                 setTimeout(() => setCopied(false), 1500);
               }}
               className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
-              data-tooltip="Copy logs"
+              data-tooltip={tooltips.copyLogs}
               disabled={logs.length === 0}
             >
               {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
@@ -41,7 +43,7 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
           </div>
         </div>
         <div className="flex-1 bg-slate-900 rounded p-4 overflow-y-auto font-mono text-sm border border-slate-700">
-          {logs.length === 0 ? <span className="text-slate-500 italic">No logs yet...</span> : (
+          {logs.length === 0 ? <span className="text-slate-500 italic">{debugConsole.noLogs}</span> : (
             logs.map((log, i) => (
               <div key={i} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : 'text-slate-300'}`}>
                 <span className="text-slate-500 mr-2">[{log.time}]</span>

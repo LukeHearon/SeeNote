@@ -4,11 +4,6 @@ import { gitSyncUserFields } from '../copy/ui';
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
 const isWindows = /win/.test(ua);
 const isMac = /mac/.test(ua);
-const keychainNote = isWindows
-  ? 'Saved in Windows Credential Manager, never in preferences.json.'
-  : isMac
-    ? 'Saved in your macOS Keychain, never in preferences.json. Unsigned builds may prompt for your password when the token is read.'
-    : 'Saved in your system keyring (Secret Service), never in preferences.json. The keyring may prompt to unlock.';
 
 export interface GitSyncUserFieldsProps {
   syncToken: string;
@@ -63,7 +58,7 @@ export default function GitSyncUserFields({
         />
         {syncTokenDirty && syncToken && !syncToken.startsWith('github_pat_') && (
           <p className="text-yellow-500 text-xs mt-1">
-            Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)
+            {gitSyncUserFields.patFormatWarning}
           </p>
         )}
       </div>
@@ -94,12 +89,13 @@ export default function GitSyncUserFields({
         </div>
         {syncTokenStorage === 'plaintext' ? (
           <p className="text-yellow-500/90 text-xs mt-2 border border-yellow-700/50 bg-yellow-950/30 rounded-lg px-3 py-2">
-            <span className="text-yellow-400 font-medium">{gitSyncUserFields.storedUnencryptedHint}</span> in this
-            project's preferences.json on this machine. It is never pushed to the repo, but
-            anything that can read your files can read the token. If it leaks, revoke it on GitHub.
+            <span className="text-yellow-400 font-medium">{gitSyncUserFields.storedUnencryptedHint}</span>{' '}
+            {gitSyncUserFields.storedUnencryptedDetail}
           </p>
         ) : (
-          <p className="text-gray-500 text-xs mt-2">{keychainNote}</p>
+          <p className="text-gray-500 text-xs mt-2">
+            {isWindows ? gitSyncUserFields.keychainNoteWindows : isMac ? gitSyncUserFields.keychainNoteMac : gitSyncUserFields.keychainNoteLinux}
+          </p>
         )}
       </div>
       <div className="mt-3">

@@ -379,7 +379,7 @@ export default function LaunchScreen({
                           data-tooltip={tooltips.relinkProject}
                         >
                           <FolderSearch size={13} />
-                          Re-link
+                          {launchScreen.relinkButton}
                         </button>
                       )}
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -563,7 +563,7 @@ export default function LaunchScreen({
                           className="mt-1.5 flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
                         >
                           <FolderOpen size={13} />
-                          Locate
+                          {launchScreen.locate}
                         </button>
                       )}
                     </span>
@@ -578,7 +578,7 @@ export default function LaunchScreen({
                       ? <CheckCircle2 size={16} className="text-emerald-400 flex-none" />
                       : <AlertTriangle size={16} className="text-amber-400 flex-none" />}
                     <span>
-                      <span className="text-gray-200">Name</span>{' '}
+                      <span className="text-gray-200">{launchScreen.nameLabel}</span>{' '}
                       <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
                         {readyName !== null ? launchScreen.nameConflictSelected : launchScreen.nameConflictDiffers}
                       </span>
@@ -642,7 +642,7 @@ export default function LaunchScreen({
                         : 'px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors'
                     }
                   >
-                    Re-link
+                    {launchScreen.relinkButton}
                   </button>
                 );
               })()}

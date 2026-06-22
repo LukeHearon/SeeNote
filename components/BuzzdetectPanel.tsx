@@ -11,6 +11,7 @@ import {
 } from '../constants';
 import { clamp } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
+import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 
 // Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
 // same x and the two stay column-for-column aligned.
@@ -497,7 +498,7 @@ export default function BuzzdetectPanel({
 
           {!data && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="text-slate-600 text-xs">No buzzdetect activations for this track</span>
+              <span className="text-slate-600 text-xs">{buzzdetectCopy.noActivations}</span>
             </div>
           )}
 
@@ -533,10 +534,10 @@ export default function BuzzdetectPanel({
             >
               <div className="p-3 space-y-2">
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
-                  <span>Neuron</span>
-                  <span>Threshold</span>
+                  <span>{buzzdetectCopy.neuronHeader}</span>
+                  <span>{buzzdetectCopy.thresholdHeader}</span>
                 </div>
-                {!data && <p className="text-slate-500 text-xs py-2">No data loaded.</p>}
+                {!data && <p className="text-slate-500 text-xs py-2">{buzzdetectCopy.noDataLoaded}</p>}
                 {data && data.neurons.map((n, i) => {
                   const isOn = !hidden.has(n);
                   return (
@@ -558,7 +559,7 @@ export default function BuzzdetectPanel({
                   );
                 })}
                 {data && enabledNeurons.length === 0 && (
-                  <p className="text-slate-500 text-[11px] pt-1">All neurons hidden.</p>
+                  <p className="text-slate-500 text-[11px] pt-1">{buzzdetectCopy.allNeuronsHidden}</p>
                 )}
               </div>
             </div>

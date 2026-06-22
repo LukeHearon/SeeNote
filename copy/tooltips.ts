@@ -37,4 +37,13 @@ export const tooltips = {
   get zoomOut() { return getOverride('tooltips.zoomOut') ?? "Zoom out"; },
   get resetZoom() { return getOverride('tooltips.resetZoom') ?? "Reset zoom"; },
   get setupSyncedProject() { return getOverride('tooltips.setupSyncedProject') ?? "How to set up a synced project"; },
+  get previewVolume() { return getOverride('tooltips.previewVolume') ?? "Preview volume (loudness-normalized)"; },
+  get editAnnotationName() { return getOverride('tooltips.editAnnotationName') ?? "Edit annotation name"; },
+  get copyLogs() { return getOverride('tooltips.copyLogs') ?? "Copy logs"; },
+  get showFileTree() { return getOverride('tooltips.showFileTree') ?? "Show file tree"; },
+  get backToRoot() { return getOverride('tooltips.backToRoot') ?? "Back to root"; },
+  get upOneFolder() { return getOverride('tooltips.upOneFolder') ?? "Up one folder"; },
+  get refreshFileList() { return getOverride('tooltips.refreshFileList') ?? "Refresh file list"; },
+  get collapseAll() { return getOverride('tooltips.collapseAll') ?? "Collapse all"; },
+  get expandAll() { return getOverride('tooltips.expandAll') ?? "Expand all"; },
 };

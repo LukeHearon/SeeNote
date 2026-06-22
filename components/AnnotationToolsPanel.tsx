@@ -3,6 +3,7 @@ import { Settings, Trash2, Play, Square } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
 import { tooltips } from '../copy/tooltips';
+import { annotationToolsPanel as copy } from '../copy/ui';
 
 interface ContextMenuState {
   toolIndex: number;
@@ -205,14 +206,14 @@ function AnnotationToolsPanel({
             className="w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
             onClick={() => { onEditTool(contextMenu.toolIndex); setContextMenu(null); }}
           >
-            Edit
+            {copy.contextEdit}
           </button>
           {(annotationTools[contextMenu.toolIndex]?.exampleFiles?.length ?? 0) > 0 && (
             <button
               className="w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
               onClick={() => { onShowExamples(contextMenu.toolIndex); setContextMenu(null); }}
             >
-              Show examples
+              {copy.showExamples}
             </button>
           )}
           {contextMenu.canDelete && (
@@ -220,7 +221,7 @@ function AnnotationToolsPanel({
               className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-slate-700 transition-colors"
               onClick={() => { onRequestDeleteTool(contextMenu.toolIndex); setContextMenu(null); }}
             >
-              Delete
+              {copy.contextDelete}
             </button>
           )}
         </div>

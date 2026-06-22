@@ -4,6 +4,7 @@ import { HelpAnchor } from './HelpAnchor';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { KeyboardShortcutsView } from './KeyboardShortcutsView';
 import { helpPanel } from '../copy/help';
+import { renderInlineMarkdown } from '../utils/renderInlineMarkdown';
 
 type Tab = 'guide' | 'annotations' | 'shortcuts';
 
@@ -12,10 +13,6 @@ interface HelpPanelProps {
   tab: Tab;
   onTabChange: (tab: Tab) => void;
   onClose: () => void;
-}
-
-function Kbd({ children }: { children: string }) {
-  return <kbd className="font-mono bg-slate-700 px-1 rounded text-slate-200">{children}</kbd>;
 }
 
 function Section({ title, target, children }: { title: string; target?: string; children: React.ReactNode }) {
@@ -66,6 +63,15 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
   const tabPanelId = `help-tabpanel-${tab}`;
 
+  const kbdRenderer = (text: string, key: number) => (
+    <kbd key={key} className="font-mono bg-slate-700 px-1 rounded text-slate-200">{text}</kbd>
+  );
+  const anchorRenderer = (target: string, text: string, key: number) => (
+    <HelpAnchor key={key} target={target}>{text}</HelpAnchor>
+  );
+  const opts = { codeRenderer: kbdRenderer, anchorRenderer };
+  const md = (str: string) => renderInlineMarkdown(str, opts);
+
   return (
     <div
       role="dialog"
@@ -82,7 +88,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
         </div>
 
         {/* Tabs */}
-        <div role="tablist" aria-label="Help sections" className="flex-none flex border-b border-slate-700">
+        <div role="tablist" aria-label={helpPanel.tabsAriaLabel} className="flex-none flex border-b border-slate-700">
           {tabs.map(t => (
             <button
               key={t.id}
@@ -114,236 +120,97 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
           {tab === 'guide' && (
             <>
               <Section title={helpPanel.guideSections.projects}>
-                <p>
-                  SeeNote is organized around <span className="text-white">projects</span>. Each project links an{' '}
-                  <span className="text-white">audio/video directory</span> to an{' '}
-                  <span className="text-white">annotation output directory</span> where label files are saved.
-                </p>
-                <p>
-                  Configure label categories and other settings via{' '}
-                  <HelpAnchor target="project-settings-btn">Project Settings</HelpAnchor>.
-                  All settings—including annotation tools and spectrogram display—persist per project.
-                </p>
+                <p>{md(helpPanel.guide.projects.p1)}</p>
+                <p>{md(helpPanel.guide.projects.p2)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.filePanel} target="file-panel">
-                <p>
-                  Lists every track in the project directory. Tracks with existing annotations are highlighted in the list.
-                  Click any track to open it, or use <Kbd>Cmd+↑</Kbd> / <Kbd>Cmd+↓</Kbd> to step through tracks in order.
-                  Hover a folder and click the arrow to drill into it as the panel root; once inside, the header
-                  shows <span className="text-white">step up one folder</span> and <span className="text-white">back to root</span> buttons.
-                  Right-click a track or folder to reveal its media location or annotation file in the system file manager.
-                  Right-click a track or folder and choose <span className="text-white">Copy ident</span> to copy its ident to the clipboard
-                  (a folder's ident is its path relative to the audio root), or{' '}
-                  <span className="text-white">Import annotations…</span> to load annotations
-                  from an external file; they are filed under that track's ident. If the track already has annotations, you
-                  can <span className="text-white">Overwrite</span> them or <span className="text-white">Merge</span> (append the imported ones).
-                </p>
+                <p>{md(helpPanel.guide.filePanel.p1)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.videoMode}>
-                <p>
-                  The picker in the <span className="text-white">bottom-left corner of the video pane</span> chooses how video is rendered. Saved per project:
-                </p>
+                <p>{md(helpPanel.guide.videoMode.intro)}</p>
                 <ul className="space-y-1 list-none">
-                  <li><span className="text-white">Off:</span> no video — audio only. Lightest on the CPU.</li>
-                  <li><span className="text-white">Fast:</span> the browser <span className="font-mono text-xs">&lt;video&gt;</span> element shows the picture and plays its <em>own</em> audio, free-running. Smooth and cheap, but not spectrogram-synced — no band-pass filter, no pitch-preserving slow-down, and the playhead is approximate. For machines that can't run Accurate.</li>
-                  <li><span className="text-white">Mixed:</span> <span className="font-mono text-xs">&lt;video&gt;</span> (as in Fast) until you make a selection, then frame-accurate decoding for that region. Good for older hardware.</li>
-                  <li><span className="text-white">Accurate:</span> frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU.</li>
+                  <li>{md(helpPanel.guide.videoMode.li_off)}</li>
+                  <li>{md(helpPanel.guide.videoMode.li_fast)}</li>
+                  <li>{md(helpPanel.guide.videoMode.li_mixed)}</li>
+                  <li>{md(helpPanel.guide.videoMode.li_accurate)}</li>
                 </ul>
-                <p className="text-slate-400 text-xs">
-                  When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level.
-                </p>
-                <p className="text-slate-400 text-xs">
-                  Drag the divider below the video all the way up to collapse the pane to a bar; click the bar (or drag it back down) to restore it. Playback keeps running while collapsed.
-                </p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoMode.note1)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoMode.note2)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.videoZoom} target="video-panel">
-                <p>
-                  When the active track has video, controls appear at the{' '}
-                  <span className="text-white">top-right</span> of the video panel.
-                </p>
+                <p>{md(helpPanel.guide.videoZoom.intro)}</p>
                 <ul className="space-y-1 list-none">
-                  <li><span className="text-white"><Kbd>Z</Kbd>:</span> toggle zoom state — restores your last zoomed viewport when turning on, saves it when turning off.</li>
-                  <li><span className="text-white"><Kbd>Shift+Z</Kbd>:</span> toggle the marquee drawing tool. While armed, drag a box over the video to zoom into that region. Press <Kbd>Esc</Kbd> mid-drag to cancel.</li>
-                  <li><span className="text-white"><Kbd>=</Kbd> / <Kbd>+</Kbd> / <Kbd>-</Kbd>:</span> zoom in / out from the current viewport center (while zoomed).</li>
-                  <li><span className="text-white">Pan:</span> while zoomed, scroll (trackpad two-finger or mouse wheel) over the video panel to pan around.</li>
-                  <li><span className="text-white">Zoom in / out / reset:</span> buttons available whenever zoomed in.</li>
-                  <li><span className="text-white">Viewfinder:</span> while zoomed, a minimap appears bottom-right — drag inside it to pan the view.</li>
+                  <li>{md(helpPanel.guide.videoZoom.li1)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li2)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li3)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li4)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li5)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li6)}</li>
                 </ul>
-                <p className="text-slate-400 text-xs">
-                  Zoom is purely visual and never affects the playhead, audio, or annotation timing.
-                </p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoZoom.note1)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.spectrogram} target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
-                  <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
-                  <li><span className="text-white">Zoom:</span> <Kbd>Cmd/Ctrl</Kbd> + scroll wheel.</li>
-                  <li><span className="text-white">Seek:</span> Left-click (in Selection Mode) to move the playhead.</li>
-                  <li><span className="text-white">Play/Pause:</span> <Kbd>Space</Kbd>.</li>
-                  <li><span className="text-white">Toggle speed (1× ↔ last):</span> <Kbd>R</Kbd>.</li>
+                  <li>{md(helpPanel.guide.spectrogram.li1)}</li>
+                  <li>{md(helpPanel.guide.spectrogram.li2)}</li>
+                  <li>{md(helpPanel.guide.spectrogram.li3)}</li>
+                  <li>{md(helpPanel.guide.spectrogram.li4)}</li>
+                  <li>{md(helpPanel.guide.spectrogram.li5)}</li>
                 </ul>
-                <p className="text-slate-400 text-xs">
-                  <HelpAnchor target="spectrogram-settings">Spectrogram settings</HelpAnchor> (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The <span className="text-white">Floor</span> and <span className="text-white">Ceil</span> dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black.
-                </p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.spectrogram.note1)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.twoModes}>
                 <ul className="space-y-2 list-none">
-                  <li>
-                    <span className="text-white">Selection Mode</span> (press <Kbd>S</Kbd> to enter —{' '}
-                    <HelpAnchor target="tool-palette">see palette</HelpAnchor>
-                    ): left-click &amp; drag creates a <span className="italic">selection region</span>.
-                    Playback is bounded to that region. While a selection is active, pressing a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>) drops an annotation onto it.
-                  </li>
-                  <li>
-                    <span className="text-white">Annotation Tool Mode</span> (a tool is active): left-click &amp; drag directly creates an annotation.
-                    Press a number key to switch tools, or <Kbd>S</Kbd> to return to Selection Mode.
-                  </li>
+                  <li>{md(helpPanel.guide.twoModes.li1)}</li>
+                  <li>{md(helpPanel.guide.twoModes.li2)}</li>
                 </ul>
-                <p className="text-slate-400 text-xs">
-                  A selection that overlaps an annotation pops that annotation's name to the selection's
-                  start, so the label stays next to where you're looking. If there's no room before the
-                  annotation's right edge, the name right-justifies against it instead.
-                </p>
-                <p className="text-slate-400 text-xs">
-                  <Kbd>Esc</Kbd> is the universal undo-layer key: it pops the most recently activated layer
-                  (band, filter-tool, selection, annotation tool) in the reverse order you turned them on.
-                </p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.twoModes.note1)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.twoModes.note2)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.transport} target="transport-buttons">
-                <p>
-                  The{' '}
-                  <HelpAnchor target="transport-buttons">transport buttons</HelpAnchor>{' '}
-                  let you skip to the start/end of the file, step between annotations, and play/pause.
-                  Press <Kbd>Space</Kbd> to play or pause from anywhere.
-                </p>
-                <p>
-                  The{' '}
-                  <HelpAnchor target="recenter-playhead">lock playhead button</HelpAnchor>{' '}
-                  (or <Kbd>C</Kbd>) toggles lock mode: when active, the view stays centered on
-                  the playhead during playback and you cannot scroll away. Press <Kbd>C</Kbd>{' '}
-                  again to unlock and scroll freely.
-                </p>
-                <p>
-                  The{' '}
-                  <HelpAnchor target="volume-control">volume slider</HelpAnchor>{' '}
-                  supports up to 2× gain boost (slider past center). Press <Kbd>M</Kbd> to mute.
-                  Right-click the volume control to access <strong>Restart Audio</strong>, which
-                  re-initialises the audio engine (useful after an audio device change on Windows).
-                </p>
+                <p>{md(helpPanel.guide.transport.p1)}</p>
+                <p>{md(helpPanel.guide.transport.p2)}</p>
+                <p>{md(helpPanel.guide.transport.p3)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.playbackSpeed} target="playback-speed">
-                <p>
-                  The{' '}
-                  <HelpAnchor target="playback-speed">speed slider</HelpAnchor>{' '}
-                  scrubs playback between <span className="font-mono text-xs">0.25x</span> and{' '}
-                  <span className="font-mono text-xs">4.0x</span>. Pitch is preserved, so slowing audio down
-                  to inspect a transient won't drop it into a different octave.
-                  Center snaps to <span className="font-mono text-xs">1.0x</span>; scroll-wheel over the slider also nudges the value.
-                </p>
-                <p className="text-slate-400 text-xs">
-                  Speed is saved per project. Video tracks follow the audio clock, so frames stay in sync at any speed.
-                </p>
+                <p>{md(helpPanel.guide.playbackSpeed.p1)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.playbackSpeed.note1)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.bandPassFilter} target="filter-tool">
-                <p>
-                  Press <Kbd>Shift+F</Kbd> (or click the{' '}
-                  <HelpAnchor target="filter-tool">filter button</HelpAnchor>) to ready the filter tool —
-                  the cursor flips to a horizontal bar. Drag vertically on the spectrogram to draw a band:
-                  audio outside the band is attenuated in real time, the out-of-band region darkens,
-                  and the filter engages automatically.
-                </p>
-                <p>
-                  Drag the two horizontal cutoff lines to retune the band in place — they're grabbable
-                  any time a band is active, even when the filter tool isn't selected. Use the{' '}
-                  <HelpAnchor target="filter-strength">strength slider</HelpAnchor>{' '}
-                  to mix between dry (0%, source untouched) and fully band-passed (100%).
-                  Dragging the slider up from 0 re-enables filtering at the new strength,
-                  restoring the last band you drew.
-                </p>
-                <p>
-                  <span className="text-white">F toggles filtering on/off</span>, saving and restoring the last defined band — just like <Kbd>Z</Kbd> for video zoom.
-                  If you've never drawn a band, F engages a default 500 Hz–4 kHz band at 50% so you can hear something immediately and refine from there.
-                  Tool readiness (<Kbd>Shift+F</Kbd>) is independent: a drawn band keeps filtering even after the tool is unreadied.
-                </p>
-                <p>
-                  <Kbd>Esc</Kbd> unwinds the most recent layer: first the band (and filtering), then the
-                  filter tool itself, then selection, then the annotation tool — in the order you turned them on.
-                </p>
-                <p>
-                  <span className="text-white">Persistence:</span> the band cutoffs and strength are saved into the project file. The source audio is never modified and the spectrogram is not recomputed.
-                </p>
+                <p>{md(helpPanel.guide.bandPassFilter.p1)}</p>
+                <p>{md(helpPanel.guide.bandPassFilter.p2)}</p>
+                <p>{md(helpPanel.guide.bandPassFilter.p3)}</p>
+                <p>{md(helpPanel.guide.bandPassFilter.p4)}</p>
+                <p>{md(helpPanel.guide.bandPassFilter.p5)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.timeDisplay} target="time-display">
-                <p>
-                  The{' '}
-                  <HelpAnchor target="current-time">running time</HelpAnchor>{' '}
-                  shows the playhead position in seconds. Click it to type a timestamp and jump directly to that position.
-                </p>
-                <p>
-                  The{' '}
-                  <HelpAnchor target="selection-time">selection fields</HelpAnchor>{' '}
-                  show the active selection's start (<span className="font-mono text-xs text-slate-300">from</span>),
-                  end (<span className="font-mono text-xs text-slate-300">to</span>), and
-                  duration (<span className="font-mono text-xs text-slate-300">dur</span>) in seconds.
-                  Click any field to edit it and nudge the selection boundaries precisely.
-                </p>
+                <p>{md(helpPanel.guide.timeDisplay.p1)}</p>
+                <p>{md(helpPanel.guide.timeDisplay.p2)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.autoSave}>
-                <p>
-                  Annotations save automatically every time you make a change. The file structure mirrors the audio directory.
-                  Clearing all annotations removes the annotation file.
-                </p>
+                <p>{md(helpPanel.guide.autoSave.p1)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.sync}>
-                <p>
-                  Add a <span className="text-white">repository URL</span>, <span className="text-white">access token</span>, and
-                  <span className="text-white"> your name</span> under <span className="text-white">Project Settings → Sync</span> to share
-                  annotations with collaborators through a private GitHub repo. A <span className="text-white">refresh icon</span> then
-                  appears in the toolbar; click it to sync. The <span className="text-white">chevron</span> beside it opens a box
-                  for a custom <span className="text-white">commit message</span> (otherwise the commit is labeled "Update annotations").
-                </p>
-                <p>
-                  Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge
-                  automatically — two people labeling the same recording keep <span className="text-white">both</span> sets; only a deliberate
-                  deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits.
-                  The file tree refreshes automatically after a sync pulls changes, so newly-annotated recordings light up.
-                </p>
-                <p>
-                  Only your annotation files are shared. Media, your annotation tools, and your local settings (including the
-                  token) are <span className="text-white">never</span> uploaded — each labeler keeps their own tools. The annotation
-                  directory must live inside the project folder.
-                </p>
-                <p>
-                  Your token is stored on this machine only. Under <span className="text-white">Token storage</span> you can keep it in
-                  the <span className="text-white">OS keychain</span> (recommended) or switch to <span className="text-white">plaintext</span>,
-                  saved unencrypted in the project's settings.json (still never pushed). Plaintext trades local secrecy for avoiding
-                  keychain password prompts on unsigned builds.
-                </p>
+                <p>{md(helpPanel.guide.sync.p1)}</p>
+                <p>{md(helpPanel.guide.sync.p2)}</p>
+                <p>{md(helpPanel.guide.sync.p3)}</p>
+                <p>{md(helpPanel.guide.sync.p4)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.buzzdetect} target="buzzdetect-toggle">
-                <p>
-                  Set a <span className="text-white">buzzdetect directory</span> under <span className="text-white">Advanced</span> when
-                  creating or editing a project to plot per-frame neuron activations below the spectrogram, located per track by ident
-                  (<span className="font-mono text-xs text-slate-300">{'{ident}_buzzdetect.csv'}</span>). Toggle the panel with the
-                  <HelpAnchor target="buzzdetect-toggle"> activity icon</HelpAnchor> in the toolbar.
-                </p>
-                <p>
-                  Each neuron is one colored line; its dots are filled where the value meets that neuron's threshold and open below it.
-                  Open the panel's <span className="text-white">sliders</span> popover to set per-neuron thresholds and show/hide neurons.
-                  <span className="text-white"> Click a frame</span> to select (and highlight) its audio on the spectrogram;
-                  drag across frames to extend the selection. Drag the panel's top edge to resize it.
-                </p>
+                <p>{md(helpPanel.guide.buzzdetect.p1)}</p>
+                <p>{md(helpPanel.guide.buzzdetect.p2)}</p>
               </Section>
             </>
           )}
@@ -351,46 +218,29 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
           {tab === 'annotations' && (
             <>
               <Section title={helpPanel.annotationSections.tools} target="tool-palette">
-                <p>
-                  Annotation tools are named labels bound to hotkeys <Kbd>0</Kbd>–<Kbd>9</Kbd>.
-                  Key <Kbd>0</Kbd> is always the <span className="text-white">Custom Tool</span> — annotations created with it open immediately for you to type a one-off name.
-                </p>
-                <p>
-                  Open <HelpAnchor target="tool-palette">Annotation Tool Settings</HelpAnchor> (gear icon) to manage tools: drag tools between hotkey slots and the Unassigned bin, click a tool's gear to edit its label and color, or hover a tool and click the trash icon to delete it (deletes are undoable). Hover an empty hotkey slot to create a new tool directly on that key.
-                  Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project: each tool is a folder under the project's <span className="text-white">.seenote/annotation-tools/</span> directory, which can also hold example audio clips for that label.
-                </p>
-                <p>
-                  To bulk-import examples: the <span className="text-white">Import examples</span> button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels.
-                </p>
-                <p>
-                  To add examples to a single tool, edit it (gear icon) and use the <span className="text-white">Files…</span> or <span className="text-white">Folder…</span> buttons under Example clips. Folders are searched recursively; clips are copied into that tool's examples/ and existing filenames are skipped.
-                </p>
-                <p>
-                  Once a tool has example clips, a <span className="text-white">play</span> button appears on its chip (in the palette and in Annotation Tool Settings) — press it to audition the clips, cycling to the next clip on each press. To browse all of a tool's clips with their spectrograms, right-click the tool and choose <span className="text-white">Show examples</span> (or use the <span className="text-white">View</span> button in the tool editor). The library is read-only and its spectrogram settings don't affect the project. Inside it, <Kbd>Space</Kbd> plays/pauses the selected clip, the spectrogram has full time/frequency axes, the frequency range defaults to the clip's full band, and right-clicking a clip reveals it in Finder / File Explorer. Example playback is loudness-normalized (with a volume slider) so quiet and loud clips audition at a comparable level. While any example is sounding, the main track's audio is paused so the two never overlap.
-                </p>
-                <p className="text-slate-400 text-xs">
-                  Inside Annotation Tool Settings, <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd> undo and redo the last tool change.
-                </p>
+                <p>{md(helpPanel.annotations.tools.p1)}</p>
+                <p>{md(helpPanel.annotations.tools.p2)}</p>
+                <p>{md(helpPanel.annotations.tools.p3)}</p>
+                <p>{md(helpPanel.annotations.tools.p4)}</p>
+                <p>{md(helpPanel.annotations.tools.p5)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.annotations.tools.note1)}</p>
               </Section>
 
               <Section title={helpPanel.annotationSections.creating} target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
-                  <li><span className="text-white">From scratch:</span> activate a tool, then drag on the spectrogram.</li>
-                  <li><span className="text-white">From selection:</span> make a selection region, then press a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>).</li>
-                  <li><span className="text-white">Whole track:</span> with a tool active, press <Kbd>Cmd/Ctrl+A</Kbd> to annotate the entire track (with no tool active it selects the whole track instead).</li>
+                  <li>{md(helpPanel.annotations.creating.li1)}</li>
+                  <li>{md(helpPanel.annotations.creating.li2)}</li>
+                  <li>{md(helpPanel.annotations.creating.li3)}</li>
                 </ul>
               </Section>
 
               <Section title={helpPanel.annotationSections.editing}>
                 <ul className="space-y-1.5 list-none">
-                  <li><span className="text-white">Resize:</span> drag the left or right edge handle.</li>
-                  <li>
-                    <span className="text-white">Bound selection:</span> click the center of an annotation to bind the playhead loop to it.
-                    Use <Kbd>Cmd+←</Kbd> / <Kbd>Cmd+→</Kbd> to jump between annotations.
-                  </li>
-                  <li><span className="text-white">Rename:</span> hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically.</li>
-                  <li><span className="text-white">Delete:</span> select an annotation and press <Kbd>Delete</Kbd> / <Kbd>Backspace</Kbd>, or middle-click it directly.</li>
-                  <li><span className="text-white">Undo/Redo:</span> <Kbd>Cmd/Ctrl+Z</Kbd> / <Kbd>Cmd/Ctrl+Shift+Z</Kbd>.</li>
+                  <li>{md(helpPanel.annotations.editing.li1)}</li>
+                  <li>{md(helpPanel.annotations.editing.li2)}</li>
+                  <li>{md(helpPanel.annotations.editing.li3)}</li>
+                  <li>{md(helpPanel.annotations.editing.li4)}</li>
+                  <li>{md(helpPanel.annotations.editing.li5)}</li>
                 </ul>
               </Section>
             </>

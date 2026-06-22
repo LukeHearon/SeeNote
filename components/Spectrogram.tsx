@@ -12,6 +12,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
+import { spectrogramView } from '../copy/ui';
 
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
@@ -856,7 +857,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           />
           <div className="absolute inset-0 bg-slate-900/60" />
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-slate-400 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide">Generating spectrogram…</span>
+            <span className="text-slate-400 text-xs bg-slate-900/70 px-3 py-1 rounded tracking-wide">{spectrogramView.generating}</span>
           </div>
         </div>
       )}

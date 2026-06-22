@@ -148,7 +148,7 @@ export default function ProjectBaseFields({
         </div>
       </div>
 
-      <CollapsibleSection title="Advanced" defaultOpen={advancedDefaultOpen || syncDefaultOpen}>
+      <CollapsibleSection title={projectBaseFields.advancedSection} defaultOpen={advancedDefaultOpen || syncDefaultOpen}>
         <DirectoryField
           label={projectBaseFields.buzzdetectLabel}
           projectDir={projectDir}

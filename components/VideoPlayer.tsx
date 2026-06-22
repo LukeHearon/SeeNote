@@ -3,6 +3,7 @@ import { Music } from 'lucide-react';
 
 import { isZoomed } from '../utils/videoZoom';
 import type { Rect, Viewport } from '../utils/videoZoom';
+import { videoPlayer as videoPlayerCopy } from '../copy/ui';
 
 interface VideoPlayerProps {
   src: string | null;
@@ -100,7 +101,7 @@ export default function VideoPlayer({
   if (!src) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-black text-gray-500">
-        <p>No Media Loaded</p>
+        <p>{videoPlayerCopy.noMediaLoaded}</p>
       </div>
     );
   }
@@ -110,7 +111,7 @@ export default function VideoPlayer({
       {isAudio && (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 z-10 pointer-events-none">
           <Music size={64} className="mb-4 opacity-50" />
-          <p className="text-xl font-medium">Audio Track Active</p>
+          <p className="text-xl font-medium">{videoPlayerCopy.audioTrackActive}</p>
         </div>
       )}
       {(() => {

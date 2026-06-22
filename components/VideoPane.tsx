@@ -14,6 +14,7 @@ import {
   panViewport,
   type Viewport,
 } from '../utils/videoZoom';
+import { videoPane as videoP } from '../copy/ui';
 
 interface VideoPaneProps {
   frameSource: VideoFrameSource | null;
@@ -243,8 +244,8 @@ export default function VideoPane({
       {showDisabledPlaceholder ? (
         <div className="w-full h-full flex flex-col items-center justify-center bg-black text-slate-500 select-none">
           <VideoOff size={48} className="mb-3 opacity-50" />
-          <p className="text-lg font-medium">Video Disabled</p>
-          <p className="text-xs text-slate-600 mt-1">Switch modes with the picker in the bottom-left</p>
+          <p className="text-lg font-medium">{videoP.videoDisabled}</p>
+          <p className="text-xs text-slate-600 mt-1">{videoP.switchModesHint}</p>
         </div>
       ) : usingCanvas ? (
         <CanvasVideoPlayer
@@ -283,8 +284,8 @@ export default function VideoPane({
       {isProcessing && (
         <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
           <Loader2 className="animate-spin text-[#e65161] mb-2" size={48} />
-          <p className="text-[#e65161] font-medium">Processing Media...</p>
-          <p className="text-slate-400 text-sm mt-1">Loading file...</p>
+          <p className="text-[#e65161] font-medium">{videoP.processingMedia}</p>
+          <p className="text-slate-400 text-sm mt-1">{videoP.loadingFile}</p>
         </div>
       )}
       {isBuffering && videoSrc && (
@@ -313,7 +314,7 @@ export default function VideoPane({
             modePickerExpanded ? 'opacity-0 pointer-events-none' : 'opacity-100'
           }`}
         >
-          <span className="text-[10px] font-medium text-white leading-none px-1">MODE</span>
+          <span className="text-[10px] font-medium text-white leading-none px-1">{videoP.modeLabel}</span>
           <div className="bg-slate-900/70 backdrop-blur-sm border border-slate-700 group-hover:border-slate-500 rounded-md p-1 transition-colors duration-150">
             <span className="block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-700 text-slate-300">
               {isAudioTrack ? 'Off' : videoMode.charAt(0).toUpperCase() + videoMode.slice(1)}

@@ -367,8 +367,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
         <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
           <h2 className="text-white text-lg font-semibold mb-4">{projectSettingsModal.orphanedTitle}</h2>
           <p className="text-gray-300 text-sm mb-2">
-            {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} no
-            corresponding media in the new media directory:
+            {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} {projectSettingsModal.orphanedNoMedia}
           </p>
           <ul className="bg-gray-800 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-1">
             {orphanedPaths.map(p => (

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { keyboardShortcutsView as copy } from '../copy/ui';
 
 // ---------------------------------------------------------------------------
 // Shortcut data
@@ -396,7 +397,7 @@ function ShortcutList({
           </div>
         ))
       ) : filteredIndices.length === 0 ? (
-        <p className="text-slate-500 text-xs italic">No shortcuts for this key</p>
+        <p className="text-slate-500 text-xs italic">{copy.noShortcuts}</p>
       ) : (
         <div className="space-y-1">
           {filteredIndices.map(i => {

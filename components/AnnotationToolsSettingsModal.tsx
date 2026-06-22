@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { annotationToolsSettingsModal as copy } from '../copy/ui';
 import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
@@ -320,7 +321,7 @@ export default function AnnotationToolsSettingsModal({
           onDrop={commitDrag}
         >
           <div className="flex-1 flex flex-col min-w-0">
-            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">Hotkeys</h3>
+            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">{copy.hotkeysHeading}</h3>
             {SLOTS.map(k => {
               const tool = annotationTools.find(t => t.key === k);
               const toolIndex = tool ? annotationTools.indexOf(tool) : -1;
@@ -373,7 +374,7 @@ export default function AnnotationToolsSettingsModal({
                           className="w-full h-full flex items-center justify-center rounded text-slate-500 hover:text-slate-300 transition-colors text-xs gap-1"
                         >
                           <Plus size={10} />
-                          New tool
+                          {copy.newTool}
                         </button>
                       )}
                     </div>
@@ -388,7 +389,7 @@ export default function AnnotationToolsSettingsModal({
             style={{ borderColor: isUnassignedHighlighted ? '#3b82f6' : '#334155' }}
             onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) updateTarget({ type: 'unassigned' }); }}
           >
-            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3 flex-none">Unassigned</h3>
+            <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3 flex-none">{copy.unassignedHeading}</h3>
             <div className="overflow-y-auto flex-1 min-h-0">
               {annotationTools
                 .map((t, i) => ({ tool: t, toolIndex: i }))

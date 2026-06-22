@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, GitBranch, ShieldCheck } from 'lucide-react';
 import { gitSyncSetupModal } from '../copy/ui';
+import { renderInlineMarkdown } from '../utils/renderInlineMarkdown';
 
 interface Props {
   onClose: () => void;
@@ -19,6 +20,14 @@ interface Props {
  * the app away. Users copy the paths into a browser.
  */
 export default function GitSyncSetupModal({ onClose, standalone }: Props) {
+  const monoRenderer = (text: string, key: number) => (
+    <span key={key} className="font-mono text-xs text-blue-300 bg-gray-800 rounded px-1 py-0.5 break-all">
+      {text}
+    </span>
+  );
+
+  const md = (str: string) => renderInlineMarkdown(str, { codeRenderer: monoRenderer });
+
   const card = (
     <div
       className={standalone
@@ -37,96 +46,50 @@ export default function GitSyncSetupModal({ onClose, standalone }: Props) {
         </div>
 
         <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0 text-sm text-gray-300 space-y-5">
-          <p>
-            SeeNote can sync your annotations to a private GitHub repository so collaborators
-            stay in step. Only your annotation files are shared — your media, your annotation
-            tools, and your local settings (including your access token) stay on your machine.
-            Each labeler keeps their own tools. This is a one-time setup per project.
-          </p>
+          <p>{md(gitSyncSetupModal.introP)}</p>
 
-          <Step n={1} title="Create a GitHub account">
-            <p>
-              Skip this if you already have one. Otherwise go to{' '}
-              <Mono>github.com</Mono> and sign up — a free account is enough.
-            </p>
+          <Step n={1} title={gitSyncSetupModal.step1_title}>
+            <p>{md(gitSyncSetupModal.step1_p1)}</p>
           </Step>
 
-          <Step n={2} title="Create a private repository">
-            <p>
-              On GitHub, click <B>New</B> (or <B>New repository</B>). Give it a name such as{' '}
-              <Mono>lab-annotations</Mono>, set it to <B>Private</B>, and leave it empty (don't
-              add a README or license). Click <B>Create repository</B>.
-            </p>
+          <Step n={2} title={gitSyncSetupModal.step2_title}>
+            <p>{md(gitSyncSetupModal.step2_p1)}</p>
           </Step>
 
-          <Step n={3} title="Generate an access token">
-            <p>On GitHub, go to:</p>
-            <p className="mt-1">
-              <Mono>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</Mono>
-            </p>
+          <Step n={3} title={gitSyncSetupModal.step3_title}>
+            <p>{md(gitSyncSetupModal.step3_intro)}</p>
+            <p className="mt-1">{md(gitSyncSetupModal.step3_path)}</p>
             <ul className="list-disc pl-5 mt-2 space-y-1">
-              <li>Give the token a name and an expiration you're comfortable with.</li>
-              <li>
-                Under <B>Repository access</B>, choose <B>Only select repositories</B> and pick
-                the repo you made in step 2.
-              </li>
-              <li>
-                In the Permissions section, click the <B>Add Permissions</B> button, check the <B>Contents</B> box,
-                and make sure the Access is set to <B>Read and write</B>.
-              </li>
-              <li>
-                Click <B>Generate token</B> and copy it now — GitHub only shows it once.
-              </li>
+              <li>{md(gitSyncSetupModal.step3_li1)}</li>
+              <li>{md(gitSyncSetupModal.step3_li2)}</li>
+              <li>{md(gitSyncSetupModal.step3_li3)}</li>
+              <li>{md(gitSyncSetupModal.step3_li4)}</li>
             </ul>
           </Step>
 
-          <Step n={4} title="Enter the details in SeeNote">
-            <p>
-              Create or open your project, then open <B>Project Settings</B> (the gear icon) and
-              expand the <B>Sync (GitHub)</B> section. Paste in:
-            </p>
+          <Step n={4} title={gitSyncSetupModal.step4_title}>
+            <p>{md(gitSyncSetupModal.step4_intro)}</p>
             <ul className="list-disc pl-5 mt-2 space-y-1">
-              <li>the <B>repository URL</B> from step 2,</li>
-              <li>the <B>access token</B> from step 3,</li>
-              <li>
-                <B>your name</B> — recorded as the author of your edits so collaborators can see
-                who changed what.
-              </li>
+              <li>{md(gitSyncSetupModal.step4_li1)}</li>
+              <li>{md(gitSyncSetupModal.step4_li2)}</li>
+              <li>{md(gitSyncSetupModal.step4_li3)}</li>
             </ul>
-            <p className="mt-2">Click <B>Save</B>.</p>
+            <p className="mt-2">{md(gitSyncSetupModal.step4_save)}</p>
           </Step>
 
-          <Step n={5} title="Sync">
-            <p>
-              A <B>refresh icon</B> now appears in the project toolbar. Click it to push your
-              annotations and pull in everyone else's. Sync whenever you want to share your work
-              or catch up on theirs.
-            </p>
-            <p className="mt-2">
-              Annotations merge automatically: if two people label the same recording, both sets
-              are kept — only a deliberate deletion removes a label. A short summary shows what
-              changed after each sync.
-            </p>
+          <Step n={5} title={gitSyncSetupModal.step5_title}>
+            <p>{md(gitSyncSetupModal.step5_p1)}</p>
+            <p className="mt-2">{md(gitSyncSetupModal.step5_p2)}</p>
           </Step>
 
-          <Step n={6} title="Add collaborators">
-            <p>
-              In your repository on GitHub, go to{' '}
-              <Mono>Settings → Collaborators → Add people</Mono> and invite each collaborator by
-              their GitHub username. Once they accept, each person repeats steps 3–5 on their own
-              machine — their own token, their own name, the same repository URL. Everyone's edits
-              merge together.
-            </p>
+          <Step n={6} title={gitSyncSetupModal.step6_title}>
+            <p>{md(gitSyncSetupModal.step6_p1)}</p>
           </Step>
 
           <div className="flex items-start gap-2 bg-blue-950/40 border border-blue-900 rounded-lg px-4 py-3">
             <ShieldCheck size={16} className="text-blue-400 flex-none mt-0.5" />
             <p className="text-blue-200 text-xs leading-relaxed">
-              Your token is stored only on this computer and is never uploaded to the repository — by
-              default in your OS keychain. If an unsigned build keeps prompting for a password, switch
-              <B> Token storage</B> to <B>plaintext</B> in Project Settings (saved unencrypted on disk,
-              still never pushed). Keep the token private — anyone who has it can write to your
-              annotations. If it ever leaks, delete it on GitHub and generate a new one.
+              {md(gitSyncSetupModal.securityNote)}
             </p>
           </div>
         </div>
@@ -165,17 +128,5 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
         {children}
       </div>
     </div>
-  );
-}
-
-function B({ children }: { children: React.ReactNode }) {
-  return <span className="text-white font-medium">{children}</span>;
-}
-
-function Mono({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="font-mono text-xs text-blue-300 bg-gray-800 rounded px-1 py-0.5 break-all">
-      {children}
-    </span>
   );
 }

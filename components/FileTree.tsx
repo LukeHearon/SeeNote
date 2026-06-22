@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
+import { fileTree as copy } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 
 interface TreeNode {
   name: string;
@@ -217,7 +219,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
           : <Film size={12} className="flex-none opacity-40" />
         }
         <span className="text-xs truncate flex-1 italic">{node.name}</span>
-        <span className="text-[10px] flex-none opacity-70">(unsupported)</span>
+        <span className="text-[10px] flex-none opacity-70">{copy.unsupported}</span>
       </div>
     );
   }
@@ -536,7 +538,7 @@ function FileTree({
         <button
           onClick={onToggleCollapse}
           className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-          data-tooltip="Show file tree"
+          data-tooltip={tooltips.showFileTree}
         >
           <PanelLeft size={16} />
         </button>
@@ -557,14 +559,14 @@ function FileTree({
               <button
                 onClick={goToRoot}
                 className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
-                data-tooltip="Back to root"
+                data-tooltip={tooltips.backToRoot}
               >
                 <ChevronsLeft size={13} />
               </button>
               <button
                 onClick={goUpOne}
                 className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white flex-none"
-                data-tooltip="Up one folder"
+                data-tooltip={tooltips.upOneFolder}
               >
                 <ChevronLeft size={13} />
               </button>
@@ -581,7 +583,7 @@ function FileTree({
             <button
               onClick={toggleExpandCollapse}
               className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-              data-tooltip={isAnyExpanded ? 'Collapse all' : 'Expand all'}
+              data-tooltip={isAnyExpanded ? tooltips.collapseAll : tooltips.expandAll}
             >
               {isAnyExpanded ? <FoldVertical size={13} /> : <UnfoldVertical size={13} />}
             </button>
@@ -589,7 +591,7 @@ function FileTree({
           <button
             onClick={onRefresh}
             className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            data-tooltip="Refresh file list"
+            data-tooltip={tooltips.refreshFileList}
           >
             <RefreshCw size={13} />
           </button>
@@ -620,7 +622,7 @@ function FileTree({
         {!rootDirectory && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <FolderOpen size={28} className="mb-2 opacity-50" />
-            <p className="text-xs">Open a file or folder to browse</p>
+            <p className="text-xs">{copy.emptyHint}</p>
           </div>
         )}
 
@@ -675,7 +677,7 @@ function FileTree({
                         : <Film size={12} className="flex-none opacity-40" />
                       }
                       <span className="text-xs truncate flex-1 italic">{relNoExt}</span>
-                      <span className="text-[10px] flex-none opacity-70">(unsupported)</span>
+                      <span className="text-[10px] flex-none opacity-70">{copy.unsupported}</span>
                     </div>
                   );
                 }
@@ -787,7 +789,7 @@ function FileTree({
                 setContextMenu(null);
               }}
             >
-              Copy ident
+              {copy.copyIdent}
             </button>
           )}
           {!contextMenu.isDir && isSupportedMediaFile(contextMenu.path) && (
@@ -798,7 +800,7 @@ function FileTree({
                 setContextMenu(null);
               }}
             >
-              Import annotations…
+              {copy.importAnnotations}
             </button>
           )}
           {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (

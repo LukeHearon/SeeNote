@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { annotationToolLibrary as copy } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { X, Play, Pause } from 'lucide-react';
 import { AnnotationTool, SpectrogramSettings } from '../types';
 import { AudioEngine } from '../utils/AudioEngine';
@@ -173,7 +175,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
           <div className="flex items-center gap-2 min-w-0">
             <span className="w-3 h-3 rounded-full flex-none" style={{ backgroundColor: tool.color }} />
             <span className="text-sm font-semibold text-white truncate">{tool.text}</span>
-            <span className="text-xs text-slate-500">— example clips</span>
+            <span className="text-xs text-slate-500">{copy.exampleClipsSubtitle}</span>
           </div>
           <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
             <X size={16} />
@@ -184,7 +186,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
           {/* Clip list */}
           <div className="w-56 border-r border-gray-700 overflow-y-auto flex-none py-2">
             {files.length === 0 && (
-              <p className="px-4 py-2 text-xs text-slate-500">No example clips.</p>
+              <p className="px-4 py-2 text-xs text-slate-500">{copy.noExampleClips}</p>
             )}
             {files.map(f => (
               <button
@@ -222,7 +224,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
                 />
               </div>
               <div>
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-1">Frequency (Hz)</div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-1">{copy.frequencyLabel}</div>
                 <div className="flex items-center gap-1">
                   <input
                     type="number"
@@ -239,7 +241,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
                   />
                 </div>
               </div>
-              <div className="flex-none mb-0.5" data-tooltip="Preview volume (loudness-normalized)">
+              <div className="flex-none mb-0.5" data-tooltip={tooltips.previewVolume}>
                 <VolumeControl volume={volume} muted={muted} setVolume={setVolume} setMuted={setMuted} />
               </div>
             </div>

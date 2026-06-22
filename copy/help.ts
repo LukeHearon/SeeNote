@@ -2,6 +2,7 @@ import { getOverride } from './overrideStore';
 
 export const helpPanel = {
   get panelTitle() { return getOverride('helpPanel.panelTitle') ?? "SeeNote Help"; },
+  get tabsAriaLabel() { return getOverride('helpPanel.tabsAriaLabel') ?? "Help sections"; },
   tabs: {
     get guide() { return getOverride('helpPanel.tabs.guide') ?? "Guide"; },
     get annotations() { return getOverride('helpPanel.tabs.annotations') ?? "Annotations"; },
@@ -26,5 +27,102 @@ export const helpPanel = {
     get tools() { return getOverride('helpPanel.annotationSections.tools') ?? "Annotation Tools"; },
     get creating() { return getOverride('helpPanel.annotationSections.creating') ?? "Creating Annotations"; },
     get editing() { return getOverride('helpPanel.annotationSections.editing') ?? "Editing Annotations"; },
+  },
+  guide: {
+    projects: {
+      get p1() { return getOverride('helpPanel.guide.projects.p1') ?? "SeeNote is organized around **projects**. Each project links an **audio/video directory** to an **annotation output directory** where label files are saved."; },
+      get p2() { return getOverride('helpPanel.guide.projects.p2') ?? "Configure label categories and other settings via [Project Settings](project-settings-btn). All settings—including annotation tools and spectrogram display—persist per project."; },
+    },
+    filePanel: {
+      get p1() { return getOverride('helpPanel.guide.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `Cmd+↑` / `Cmd+↓` to step through tracks in order. Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons. Right-click a track or folder to reveal its media location or annotation file in the system file manager. Right-click a track or folder and choose **Copy ident** to copy its ident to the clipboard (a folder's ident is its path relative to the audio root), or **Import annotations…** to load annotations from an external file; they are filed under that track's ident. If the track already has annotations, you can **Overwrite** them or **Merge** (append the imported ones)."; },
+    },
+    videoMode: {
+      get intro() { return getOverride('helpPanel.guide.videoMode.intro') ?? "The picker in the **bottom-left corner of the video pane** chooses how video is rendered. Saved per project:"; },
+      get li_off() { return getOverride('helpPanel.guide.videoMode.li_off') ?? "**Off:** no video — audio only. Lightest on the CPU."; },
+      get li_fast() { return getOverride('helpPanel.guide.videoMode.li_fast') ?? "**Fast:** the browser `<video>` element shows the picture and plays its _own_ audio, free-running. Smooth and cheap, but not spectrogram-synced — no band-pass filter, no pitch-preserving slow-down, and the playhead is approximate. For machines that can't run Accurate."; },
+      get li_mixed() { return getOverride('helpPanel.guide.videoMode.li_mixed') ?? "**Mixed:** `<video>` (as in Fast) until you make a selection, then frame-accurate decoding for that region. Good for older hardware."; },
+      get li_accurate() { return getOverride('helpPanel.guide.videoMode.li_accurate') ?? "**Accurate:** frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU."; },
+      get note1() { return getOverride('helpPanel.guide.videoMode.note1') ?? "When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level."; },
+      get note2() { return getOverride('helpPanel.guide.videoMode.note2') ?? "Drag the divider below the video all the way up to collapse the pane to a bar; click the bar (or drag it back down) to restore it. Playback keeps running while collapsed."; },
+    },
+    videoZoom: {
+      get intro() { return getOverride('helpPanel.guide.videoZoom.intro') ?? "When the active track has video, controls appear at the **top-right** of the video panel."; },
+      get li1() { return getOverride('helpPanel.guide.videoZoom.li1') ?? "**`Z`:** toggle zoom state — restores your last zoomed viewport when turning on, saves it when turning off."; },
+      get li2() { return getOverride('helpPanel.guide.videoZoom.li2') ?? "**`Shift+Z`:** toggle the marquee drawing tool. While armed, drag a box over the video to zoom into that region. Press `Esc` mid-drag to cancel."; },
+      get li3() { return getOverride('helpPanel.guide.videoZoom.li3') ?? "**`=` / `+` / `-`:** zoom in / out from the current viewport center (while zoomed)."; },
+      get li4() { return getOverride('helpPanel.guide.videoZoom.li4') ?? "**Pan:** while zoomed, scroll (trackpad two-finger or mouse wheel) over the video panel to pan around."; },
+      get li5() { return getOverride('helpPanel.guide.videoZoom.li5') ?? "**Zoom in / out / reset:** buttons available whenever zoomed in."; },
+      get li6() { return getOverride('helpPanel.guide.videoZoom.li6') ?? "**Viewfinder:** while zoomed, a minimap appears bottom-right — drag inside it to pan the view."; },
+      get note1() { return getOverride('helpPanel.guide.videoZoom.note1') ?? "Zoom is purely visual and never affects the playhead, audio, or annotation timing."; },
+    },
+    spectrogram: {
+      get li1() { return getOverride('helpPanel.guide.spectrogram.li1') ?? "**Pan:** Right-click & drag, or scroll wheel."; },
+      get li2() { return getOverride('helpPanel.guide.spectrogram.li2') ?? "**Zoom:** `Cmd/Ctrl` + scroll wheel."; },
+      get li3() { return getOverride('helpPanel.guide.spectrogram.li3') ?? "**Seek:** Left-click (in Selection Mode) to move the playhead."; },
+      get li4() { return getOverride('helpPanel.guide.spectrogram.li4') ?? "**Play/Pause:** `Space`."; },
+      get li5() { return getOverride('helpPanel.guide.spectrogram.li5') ?? "**Toggle speed (1× ↔ last):** `R`."; },
+      get note1() { return getOverride('helpPanel.guide.spectrogram.note1') ?? "[Spectrogram settings](spectrogram-settings) (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The **Floor** and **Ceil** dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black."; },
+    },
+    twoModes: {
+      get li1() { return getOverride('helpPanel.guide.twoModes.li1') ?? "**Selection Mode** (press `S` to enter — [see palette](tool-palette)): left-click & drag creates a _selection region_. Playback is bounded to that region. While a selection is active, pressing a tool key (`0`–`9`) drops an annotation onto it."; },
+      get li2() { return getOverride('helpPanel.guide.twoModes.li2') ?? "**Annotation Tool Mode** (a tool is active): left-click & drag directly creates an annotation. Press a number key to switch tools, or `S` to return to Selection Mode."; },
+      get note1() { return getOverride('helpPanel.guide.twoModes.note1') ?? "A selection that overlaps an annotation pops that annotation's name to the selection's start, so the label stays next to where you're looking. If there's no room before the annotation's right edge, the name right-justifies against it instead."; },
+      get note2() { return getOverride('helpPanel.guide.twoModes.note2') ?? "`Esc` is the universal undo-layer key: it pops the most recently activated layer (band, filter-tool, selection, annotation tool) in the reverse order you turned them on."; },
+    },
+    transport: {
+      get p1() { return getOverride('helpPanel.guide.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere."; },
+      get p2() { return getOverride('helpPanel.guide.transport.p2') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely."; },
+      get p3() { return getOverride('helpPanel.guide.transport.p3') ?? "The [volume slider](volume-control) supports up to 2× gain boost (slider past center). Press `M` to mute. Right-click the volume control to access **Restart Audio**, which re-initialises the audio engine (useful after an audio device change on Windows)."; },
+    },
+    playbackSpeed: {
+      get p1() { return getOverride('helpPanel.guide.playbackSpeed.p1') ?? "The [speed slider](playback-speed) scrubs playback between `0.25x` and `4.0x`. Pitch is preserved, so slowing audio down to inspect a transient won't drop it into a different octave. Center snaps to `1.0x`; scroll-wheel over the slider also nudges the value."; },
+      get note1() { return getOverride('helpPanel.guide.playbackSpeed.note1') ?? "Speed is saved per project. Video tracks follow the audio clock, so frames stay in sync at any speed."; },
+    },
+    bandPassFilter: {
+      get p1() { return getOverride('helpPanel.guide.bandPassFilter.p1') ?? "Press `Shift+F` (or click the [filter button](filter-tool)) to ready the filter tool — the cursor flips to a horizontal bar. Drag vertically on the spectrogram to draw a band: audio outside the band is attenuated in real time, the out-of-band region darkens, and the filter engages automatically."; },
+      get p2() { return getOverride('helpPanel.guide.bandPassFilter.p2') ?? "Drag the two horizontal cutoff lines to retune the band in place — they're grabbable any time a band is active, even when the filter tool isn't selected. Use the [strength slider](filter-strength) to mix between dry (0%, source untouched) and fully band-passed (100%). Dragging the slider up from 0 re-enables filtering at the new strength, restoring the last band you drew."; },
+      get p3() { return getOverride('helpPanel.guide.bandPassFilter.p3') ?? "**F toggles filtering on/off**, saving and restoring the last defined band — just like `Z` for video zoom. If you've never drawn a band, F engages a default 500 Hz–4 kHz band at 50% so you can hear something immediately and refine from there. Tool readiness (`Shift+F`) is independent: a drawn band keeps filtering even after the tool is unreadied."; },
+      get p4() { return getOverride('helpPanel.guide.bandPassFilter.p4') ?? "`Esc` unwinds the most recent layer: first the band (and filtering), then the filter tool itself, then selection, then the annotation tool — in the order you turned them on."; },
+      get p5() { return getOverride('helpPanel.guide.bandPassFilter.p5') ?? "**Persistence:** the band cutoffs and strength are saved into the project file. The source audio is never modified and the spectrogram is not recomputed."; },
+    },
+    timeDisplay: {
+      get p1() { return getOverride('helpPanel.guide.timeDisplay.p1') ?? "The [running time](current-time) shows the playhead position in seconds. Click it to type a timestamp and jump directly to that position."; },
+      get p2() { return getOverride('helpPanel.guide.timeDisplay.p2') ?? "The [selection fields](selection-time) show the active selection's start (`from`), end (`to`), and duration (`dur`) in seconds. Click any field to edit it and nudge the selection boundaries precisely."; },
+    },
+    autoSave: {
+      get p1() { return getOverride('helpPanel.guide.autoSave.p1') ?? "Annotations save automatically every time you make a change. The file structure mirrors the audio directory. Clearing all annotations removes the annotation file."; },
+    },
+    sync: {
+      get p1() { return getOverride('helpPanel.guide.sync.p1') ?? "Add a **repository URL**, **access token**, and **your name** under **Project Settings → Sync** to share annotations with collaborators through a private GitHub repo. A **refresh icon** then appears in the toolbar; click it to sync. The **chevron** beside it opens a box for a custom **commit message** (otherwise the commit is labeled \"Update annotations\")."; },
+      get p2() { return getOverride('helpPanel.guide.sync.p2') ?? "Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge automatically — two people labeling the same recording keep **both** sets; only a deliberate deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits. The file tree refreshes automatically after a sync pulls changes, so newly-annotated recordings light up."; },
+      get p3() { return getOverride('helpPanel.guide.sync.p3') ?? "Only your annotation files are shared. Media, your annotation tools, and your local settings (including the token) are **never** uploaded — each labeler keeps their own tools. The annotation directory must live inside the project folder."; },
+      get p4() { return getOverride('helpPanel.guide.sync.p4') ?? "Your token is stored on this machine only. Under **Token storage** you can keep it in the **OS keychain** (recommended) or switch to **plaintext**, saved unencrypted in the project's settings.json (still never pushed). Plaintext trades local secrecy for avoiding keychain password prompts on unsigned builds."; },
+    },
+    buzzdetect: {
+      get p1() { return getOverride('helpPanel.guide.buzzdetect.p1') ?? "Set a **buzzdetect directory** under **Advanced** when creating or editing a project to plot per-frame neuron activations below the spectrogram, located per track by ident (`{ident}_buzzdetect.csv`). Toggle the panel with the [activity icon](buzzdetect-toggle) in the toolbar."; },
+      get p2() { return getOverride('helpPanel.guide.buzzdetect.p2') ?? "Each neuron is one colored line; its dots are filled where the value meets that neuron's threshold and open below it. Open the panel's **sliders** popover to set per-neuron thresholds and show/hide neurons. **Click a frame** to select (and highlight) its audio on the spectrogram; drag across frames to extend the selection. Drag the panel's top edge to resize it."; },
+    },
+  },
+  annotations: {
+    tools: {
+      get p1() { return getOverride('helpPanel.annotations.tools.p1') ?? "Annotation tools are named labels bound to hotkeys `0`–`9`. Key `0` is always the **Custom Tool** — annotations created with it open immediately for you to type a one-off name."; },
+      get p2() { return getOverride('helpPanel.annotations.tools.p2') ?? "Open [Annotation Tool Settings](tool-palette) (gear icon) to manage tools: drag tools between hotkey slots and the Unassigned bin, click a tool's gear to edit its label and color, or hover a tool and click the trash icon to delete it (deletes are undoable). Hover an empty hotkey slot to create a new tool directly on that key. Renaming a tool updates all existing annotations automatically. Tool configuration is saved per project: each tool is a folder under the project's **.seenote/annotation-tools/** directory, which can also hold example audio clips for that label."; },
+      get p3() { return getOverride('helpPanel.annotations.tools.p3') ?? "To bulk-import examples: the **Import examples** button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels."; },
+      get p4() { return getOverride('helpPanel.annotations.tools.p4') ?? "To add examples to a single tool, edit it (gear icon) and use the **Files…** or **Folder…** buttons under Example clips. Folders are searched recursively; clips are copied into that tool's examples/ and existing filenames are skipped."; },
+      get p5() { return getOverride('helpPanel.annotations.tools.p5') ?? "Once a tool has example clips, a **play** button appears on its chip (in the palette and in Annotation Tool Settings) — press it to audition the clips, cycling to the next clip on each press. To browse all of a tool's clips with their spectrograms, right-click the tool and choose **Show examples** (or use the **View** button in the tool editor). The library is read-only and its spectrogram settings don't affect the project. Inside it, `Space` plays/pauses the selected clip, the spectrogram has full time/frequency axes, the frequency range defaults to the clip's full band, and right-clicking a clip reveals it in Finder / File Explorer. Example playback is loudness-normalized (with a volume slider) so quiet and loud clips audition at a comparable level. While any example is sounding, the main track's audio is paused so the two never overlap."; },
+      get note1() { return getOverride('helpPanel.annotations.tools.note1') ?? "Inside Annotation Tool Settings, `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z` undo and redo the last tool change."; },
+    },
+    creating: {
+      get li1() { return getOverride('helpPanel.annotations.creating.li1') ?? "**From scratch:** activate a tool, then drag on the spectrogram."; },
+      get li2() { return getOverride('helpPanel.annotations.creating.li2') ?? "**From selection:** make a selection region, then press a tool key (`0`–`9`)."; },
+      get li3() { return getOverride('helpPanel.annotations.creating.li3') ?? "**Whole track:** with a tool active, press `Cmd/Ctrl+A` to annotate the entire track (with no tool active it selects the whole track instead)."; },
+    },
+    editing: {
+      get li1() { return getOverride('helpPanel.annotations.editing.li1') ?? "**Resize:** drag the left or right edge handle."; },
+      get li2() { return getOverride('helpPanel.annotations.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `Cmd+←` / `Cmd+→` to jump between annotations."; },
+      get li3() { return getOverride('helpPanel.annotations.editing.li3') ?? "**Rename:** hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically."; },
+      get li4() { return getOverride('helpPanel.annotations.editing.li4') ?? "**Delete:** select an annotation and press `Delete` / `Backspace`, or middle-click it directly."; },
+      get li5() { return getOverride('helpPanel.annotations.editing.li5') ?? "**Undo/Redo:** `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z`."; },
+    },
   },
 };
