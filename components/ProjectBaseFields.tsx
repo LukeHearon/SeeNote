@@ -1,5 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { HelpCircle } from 'lucide-react';
+import { projectBaseFields } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
@@ -73,7 +75,7 @@ export default function ProjectBaseFields({
   return (
     <>
       <div>
-        <label className="text-gray-400 text-sm block mb-1">Project Name</label>
+        <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.projectNameLabel}</label>
         <div className="border-b border-gray-600 focus-within:border-blue-500 pb-1">
           <div
             ref={nameRef}
@@ -108,7 +110,7 @@ export default function ProjectBaseFields({
       </div>
 
       <DirectoryField
-        label="Media"
+        label={projectBaseFields.mediaLabel}
         projectDir={projectDir}
         value={mediaDir}
         onChange={onMediaDirChange}
@@ -117,7 +119,7 @@ export default function ProjectBaseFields({
       />
 
       <DirectoryField
-        label="Annotations"
+        label={projectBaseFields.annotationsLabel}
         projectDir={projectDir}
         value={annotationDir}
         onChange={onAnnotationDirChange}
@@ -128,8 +130,8 @@ export default function ProjectBaseFields({
       <div>
         <div className="flex items-center justify-between">
           <div>
-            <label className="text-gray-400 text-sm block">Output Decimal Places</label>
-            <p className="text-gray-600 text-xs">for start/end timestamps</p>
+            <label className="text-gray-400 text-sm block">{projectBaseFields.decimalPlacesLabel}</label>
+            <p className="text-gray-600 text-xs">{projectBaseFields.decimalPlacesHelp}</p>
           </div>
           <input
             type="number"
@@ -148,31 +150,31 @@ export default function ProjectBaseFields({
 
       <CollapsibleSection title="Advanced" defaultOpen={advancedDefaultOpen || syncDefaultOpen}>
         <DirectoryField
-          label="buzzdetect"
+          label={projectBaseFields.buzzdetectLabel}
           projectDir={projectDir}
           value={buzzdetectDir}
           onChange={onBuzzdetectDirChange}
-          placeholder="(optional) directory of {ident}_buzzdetect.csv"
-          helperText="Activations plotted below the spectrogram, located per track by ident."
+          placeholder={projectBaseFields.buzzdetectPlaceholder}
+          helperText={projectBaseFields.buzzdetectHelp}
           notExistMessage="Directory does not exist."
         />
 
         <CollapsibleSection
-          title="Sync"
+          title={projectBaseFields.syncLabel}
           defaultOpen={syncDefaultOpen}
           headerAction={
             <button
               type="button"
               onClick={openSyncGuideWindow}
               className="text-gray-600 hover:text-gray-400 transition-colors"
-              data-tooltip="How to set up a synced project"
+              data-tooltip={tooltips.setupSyncedProject}
             >
               <HelpCircle size={14} />
             </button>
           }
         >
           <div>
-            <label className="text-gray-400 text-sm block mb-1">Repository URL</label>
+            <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.repoUrlLabel}</label>
             <input
               type="text"
               value={syncRemoteUrl}
@@ -181,7 +183,7 @@ export default function ProjectBaseFields({
                 const normalized = normalizeGitRemoteUrl(syncRemoteUrl);
                 if (normalized !== syncRemoteUrl) onSyncRemoteUrlChange(normalized);
               }}
-              placeholder="https://github.com/your-lab/annotations.git"
+              placeholder={projectBaseFields.repoUrlPlaceholder}
               className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             />
           </div>
@@ -191,7 +193,7 @@ export default function ProjectBaseFields({
               onClick={onAddAccessToken}
               className="text-blue-400 hover:text-blue-300 text-sm transition-colors"
             >
-              Add access token
+              {projectBaseFields.addTokenLabel}
             </button>
           )}
         </CollapsibleSection>

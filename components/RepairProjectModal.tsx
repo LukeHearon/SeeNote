@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertCircle, FolderOpen } from 'lucide-react';
+import { repairProjectModal } from '../copy/ui';
 import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
 import { Project, ProjectSettings } from '../types';
 import { findFirstValidAncestor } from '../utils/helpers';
@@ -27,15 +28,15 @@ function RepairProjectModal({
         <div className="flex items-start gap-3">
           <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
           <div>
-            <h3 className="text-white font-semibold text-base">Media directory not found</h3>
+            <h3 className="text-white font-semibold text-base">{repairProjectModal.title}</h3>
             <p className="text-slate-400 text-sm mt-1">
-              The media directory for <span className="text-white">{repairProject.project.settings.projectName}</span> no longer exists. Please choose a new path.
+              {repairProjectModal.message(repairProject.project.settings.projectName)}
             </p>
           </div>
         </div>
 
         <div>
-          <label className="text-slate-400 text-xs block mb-1">Media Directory <span className="text-amber-400">(missing)</span></label>
+          <label className="text-slate-400 text-xs block mb-1">{repairProjectModal.mediaDirLabel}</label>
           <div className="flex gap-2">
             <input
               type="text"
@@ -61,7 +62,7 @@ function RepairProjectModal({
             onClick={() => setRepairProject(null)}
             className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
           >
-            Cancel
+            {repairProjectModal.cancelButton}
           </button>
           <button
             onClick={async () => {
@@ -75,7 +76,7 @@ function RepairProjectModal({
             }}
             className="px-4 py-2 bg-[#e65161] hover:bg-[#f06575] text-white rounded-lg text-sm transition-colors"
           >
-            Save & Open
+            {repairProjectModal.saveButton}
           </button>
         </div>
       </div>

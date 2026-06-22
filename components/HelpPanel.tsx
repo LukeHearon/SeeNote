@@ -3,6 +3,7 @@ import { X, BookOpen, Keyboard, Layers } from 'lucide-react';
 import { HelpAnchor } from './HelpAnchor';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { KeyboardShortcutsView } from './KeyboardShortcutsView';
+import { helpPanel } from '../copy/help';
 
 type Tab = 'guide' | 'annotations' | 'shortcuts';
 
@@ -52,9 +53,9 @@ function ShortcutGroup({ title, rows }: { title: string; rows: { keys: string; l
 
 export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'guide', label: 'Guide', icon: <BookOpen size={13} /> },
-    { id: 'annotations', label: 'Annotations', icon: <Layers size={13} /> },
-    { id: 'shortcuts', label: 'Shortcuts', icon: <Keyboard size={13} /> },
+    { id: 'guide', label: helpPanel.tabs.guide, icon: <BookOpen size={13} /> },
+    { id: 'annotations', label: helpPanel.tabs.annotations, icon: <Layers size={13} /> },
+    { id: 'shortcuts', label: helpPanel.tabs.shortcuts, icon: <Keyboard size={13} /> },
   ];
 
   // Close on Esc when the panel is open. `stop: true` blocks other hotkey
@@ -74,7 +75,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
     >
         {/* Header */}
         <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-800">
-          <span className="text-[#e65161] font-bold text-base">SeeNote Help</span>
+          <span className="text-[#e65161] font-bold text-base">{helpPanel.panelTitle}</span>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1 rounded hover:bg-slate-700">
             <X size={16} />
           </button>
@@ -112,7 +113,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
           {tab === 'guide' && (
             <>
-              <Section title="Projects">
+              <Section title={helpPanel.guideSections.projects}>
                 <p>
                   SeeNote is organized around <span className="text-white">projects</span>. Each project links an{' '}
                   <span className="text-white">audio/video directory</span> to an{' '}
@@ -125,7 +126,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="File Panel" target="file-panel">
+              <Section title={helpPanel.guideSections.filePanel} target="file-panel">
                 <p>
                   Lists every track in the project directory. Tracks with existing annotations are highlighted in the list.
                   Click any track to open it, or use <Kbd>Cmd+↑</Kbd> / <Kbd>Cmd+↓</Kbd> to step through tracks in order.
@@ -140,7 +141,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Video Mode">
+              <Section title={helpPanel.guideSections.videoMode}>
                 <p>
                   The picker in the <span className="text-white">bottom-left corner of the video pane</span> chooses how video is rendered. Saved per project:
                 </p>
@@ -158,7 +159,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Video Zoom" target="video-panel">
+              <Section title={helpPanel.guideSections.videoZoom} target="video-panel">
                 <p>
                   When the active track has video, controls appear at the{' '}
                   <span className="text-white">top-right</span> of the video panel.
@@ -176,7 +177,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Spectrogram" target="spectrogram-canvas">
+              <Section title={helpPanel.guideSections.spectrogram} target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">Pan:</span> Right-click &amp; drag, or scroll wheel.</li>
                   <li><span className="text-white">Zoom:</span> <Kbd>Cmd/Ctrl</Kbd> + scroll wheel.</li>
@@ -189,7 +190,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Two Modes: Selection vs. Tool">
+              <Section title={helpPanel.guideSections.twoModes}>
                 <ul className="space-y-2 list-none">
                   <li>
                     <span className="text-white">Selection Mode</span> (press <Kbd>S</Kbd> to enter —{' '}
@@ -213,7 +214,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Transport Controls" target="transport-buttons">
+              <Section title={helpPanel.guideSections.transport} target="transport-buttons">
                 <p>
                   The{' '}
                   <HelpAnchor target="transport-buttons">transport buttons</HelpAnchor>{' '}
@@ -236,7 +237,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Playback Speed" target="playback-speed">
+              <Section title={helpPanel.guideSections.playbackSpeed} target="playback-speed">
                 <p>
                   The{' '}
                   <HelpAnchor target="playback-speed">speed slider</HelpAnchor>{' '}
@@ -250,7 +251,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Band-Pass Filter" target="filter-tool">
+              <Section title={helpPanel.guideSections.bandPassFilter} target="filter-tool">
                 <p>
                   Press <Kbd>Shift+F</Kbd> (or click the{' '}
                   <HelpAnchor target="filter-tool">filter button</HelpAnchor>) to ready the filter tool —
@@ -280,7 +281,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Time Display" target="time-display">
+              <Section title={helpPanel.guideSections.timeDisplay} target="time-display">
                 <p>
                   The{' '}
                   <HelpAnchor target="current-time">running time</HelpAnchor>{' '}
@@ -296,14 +297,14 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Auto-save">
+              <Section title={helpPanel.guideSections.autoSave}>
                 <p>
                   Annotations save automatically every time you make a change. The file structure mirrors the audio directory.
                   Clearing all annotations removes the annotation file.
                 </p>
               </Section>
 
-              <Section title="Sync (GitHub)">
+              <Section title={helpPanel.guideSections.sync}>
                 <p>
                   Add a <span className="text-white">repository URL</span>, <span className="text-white">access token</span>, and
                   <span className="text-white"> your name</span> under <span className="text-white">Project Settings → Sync</span> to share
@@ -330,7 +331,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="buzzdetect panel" target="buzzdetect-toggle">
+              <Section title={helpPanel.guideSections.buzzdetect} target="buzzdetect-toggle">
                 <p>
                   Set a <span className="text-white">buzzdetect directory</span> under <span className="text-white">Advanced</span> when
                   creating or editing a project to plot per-frame neuron activations below the spectrogram, located per track by ident
@@ -349,7 +350,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
 
           {tab === 'annotations' && (
             <>
-              <Section title="Annotation Tools" target="tool-palette">
+              <Section title={helpPanel.annotationSections.tools} target="tool-palette">
                 <p>
                   Annotation tools are named labels bound to hotkeys <Kbd>0</Kbd>–<Kbd>9</Kbd>.
                   Key <Kbd>0</Kbd> is always the <span className="text-white">Custom Tool</span> — annotations created with it open immediately for you to type a one-off name.
@@ -372,7 +373,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </p>
               </Section>
 
-              <Section title="Creating Annotations" target="spectrogram-canvas">
+              <Section title={helpPanel.annotationSections.creating} target="spectrogram-canvas">
                 <ul className="space-y-1 list-none">
                   <li><span className="text-white">From scratch:</span> activate a tool, then drag on the spectrogram.</li>
                   <li><span className="text-white">From selection:</span> make a selection region, then press a tool key (<Kbd>0</Kbd>–<Kbd>9</Kbd>).</li>
@@ -380,7 +381,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </ul>
               </Section>
 
-              <Section title="Editing Annotations">
+              <Section title={helpPanel.annotationSections.editing}>
                 <ul className="space-y-1.5 list-none">
                   <li><span className="text-white">Resize:</span> drag the left or right edge handle.</li>
                   <li>

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
+import { createProjectModal } from '../copy/ui';
 import { Project, ProjectSettings, ProjectPreferences } from '../types';
 import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool } from '../utils/tauriCommands';
 import { readProjectSettings, writeProjectPreferences } from '../utils/projectCommands';
@@ -76,21 +77,21 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   };
 
   const handleCreate = async () => {
-    if (!projectDir) { setError('Project directory is required.'); return; }
-    if (!name.trim()) { setError('Project name is required.'); return; }
-    if (!mediaDir) { setError('Media directory is required.'); return; }
-    if (!annotationDir) { setError('Annotations directory is required.'); return; }
+    if (!projectDir) { setError(createProjectModal.errorDirRequired); return; }
+    if (!name.trim()) { setError(createProjectModal.errorNameRequired); return; }
+    if (!mediaDir) { setError(createProjectModal.errorMediaRequired); return; }
+    if (!annotationDir) { setError(createProjectModal.errorAnnotationsRequired); return; }
 
     setError('');
     setIsCreating(true);
 
     const projectDirOk = await checkDirExists(projectDir);
-    if (!projectDirOk) { setError('Project directory does not exist.'); setIsCreating(false); return; }
+    if (!projectDirOk) { setError(createProjectModal.errorDirNotExist); setIsCreating(false); return; }
 
     try {
       const existing = await readProjectSettings(projectDir);
       setExistingProjectName(existing.projectName);
-      setError(`Project "${existing.projectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.`);
+      setError(createProjectModal.errorAlreadyExists(existing.projectName));
       setIsCreating(false);
       return;
     } catch {
@@ -140,23 +141,23 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <SettingsModalShell
-        title="Create New Project"
+        title={createProjectModal.title}
         onClose={onClose}
         tabs={[
-          { label: 'Settings', active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
-          { label: 'Preferences', active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
+          { label: createProjectModal.tabSettings, active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
+          { label: createProjectModal.tabPreferences, active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
         ]}
         footer={
           <>
             <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
-              Cancel
+              {createProjectModal.cancelButton}
             </button>
             <button
               onClick={handleCreate}
               disabled={isCreating}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
-              {isCreating ? 'Creating…' : 'Create Project'}
+              {isCreating ? createProjectModal.creatingButton : createProjectModal.createButton}
             </button>
           </>
         }
@@ -164,14 +165,14 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         {activeTab === 'settings' && (
           <>
             <div>
-              <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
+              <label className="text-gray-400 text-sm block mb-1">{createProjectModal.projectDirLabel}</label>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={projectDir}
                   onChange={e => { setProjectDir(e.target.value); setExistingProjectName(null); }}
                   onBlur={e => checkExistingProject(e.target.value)}
-                  placeholder="/path/to/project"
+                  placeholder={createProjectModal.projectDirPlaceholder}
                   className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                   autoFocus
                 />
@@ -185,14 +186,14 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               {existingProjectName && (
                 <div className="flex items-start gap-2 mt-1">
                   <p className="text-red-400 text-xs flex-1">
-                    Project "{existingProjectName}" already exists in this location. Delete its .seenote directory first, or pick a different location.
+                    {createProjectModal.infoAlreadyExists(existingProjectName!)}
                   </p>
                   {onOpenExisting && (
                     <button
                       onClick={() => onOpenExisting(projectDir)}
                       className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-md transition-colors shrink-0"
                     >
-                      Open Existing Project
+                      {createProjectModal.openExistingButton}
                     </button>
                   )}
                 </div>
@@ -208,11 +209,11 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               mediaDir={mediaDir}
               onMediaDirChange={v => { mediaTouchedRef.current = true; setMediaDir(v); }}
               mediaDirPlaceholder={projectDir ? 'media' : '/path/to/media'}
-              mediaDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
+              mediaDirNotExistMessage={createProjectModal.infoDirWillBeCreated}
               annotationDir={annotationDir}
               onAnnotationDirChange={v => { annotationTouchedRef.current = true; setAnnotationDir(v); }}
               annotationDirPlaceholder={projectDir ? 'annotations' : '/path/to/annotations'}
-              annotationDirNotExistMessage="Directory does not exist yet; it will be created when the project is created."
+              annotationDirNotExistMessage={createProjectModal.infoDirWillBeCreated}
               outputRoundingDecimals={outputRoundingDecimals}
               onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
               buzzdetectDir={buzzdetectDir}
@@ -228,12 +229,12 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         {activeTab === 'preferences' && (
           <>
             <div>
-              <p className="text-gray-400 text-sm font-medium mb-0.5">GitHub Sync</p>
+              <p className="text-gray-400 text-sm font-medium mb-0.5">{createProjectModal.githubSyncLabel}</p>
               {syncRemoteUrl ? (
                 <p className="text-gray-600 text-xs mb-4 font-mono truncate">{syncRemoteUrl}</p>
               ) : (
                 <p className="text-gray-600 text-xs mb-4">
-                  No repository configured. Set a URL on the Settings tab to enable sync.
+                  {createProjectModal.infoNoRepoConfigured}
                 </p>
               )}
               <GitSyncUserFields

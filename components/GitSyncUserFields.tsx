@@ -1,4 +1,5 @@
 import React from 'react';
+import { gitSyncUserFields } from '../copy/ui';
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
 const isWindows = /win/.test(ua);
@@ -40,7 +41,7 @@ export default function GitSyncUserFields({
   return (
     <>
       <div>
-        <label className="text-gray-400 text-sm block mb-1">GitHub access token</label>
+        <label className="text-gray-400 text-sm block mb-1">{gitSyncUserFields.tokenLabel}</label>
         <input
           type="password"
           autoFocus={autoFocusToken}
@@ -57,7 +58,7 @@ export default function GitSyncUserFields({
               if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) e.preventDefault();
             }
           }}
-          placeholder="fine-grained PAT (github_pat_…)"
+          placeholder={gitSyncUserFields.tokenPlaceholder}
           className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
         />
         {syncTokenDirty && syncToken && !syncToken.startsWith('github_pat_') && (
@@ -67,11 +68,11 @@ export default function GitSyncUserFields({
         )}
       </div>
       <div className="mt-3">
-        <label className="text-gray-400 text-sm block mb-1">Token storage</label>
+        <label className="text-gray-400 text-sm block mb-1">{gitSyncUserFields.tokenStorageLabel}</label>
         <div className="flex gap-1 bg-gray-800 border border-gray-600 rounded-lg p-0.5">
           {([
-            ['keychain', 'OS keychain'],
-            ['plaintext', 'Plaintext'],
+            ['keychain', gitSyncUserFields.keychainOption],
+            ['plaintext', gitSyncUserFields.plaintextOption],
           ] as const).map(([mode, title]) => (
             <button
               key={mode}
@@ -88,12 +89,12 @@ export default function GitSyncUserFields({
           ))}
         </div>
         <div className="flex gap-1 mt-1 px-0.5">
-          <span className="flex-1 text-center text-[10px] text-gray-600">Recommended</span>
-          <span className="flex-1 text-center text-[10px] text-gray-600">No password prompts</span>
+          <span className="flex-1 text-center text-[10px] text-gray-600">{gitSyncUserFields.recommendedHint}</span>
+          <span className="flex-1 text-center text-[10px] text-gray-600">{gitSyncUserFields.noPasswordHint}</span>
         </div>
         {syncTokenStorage === 'plaintext' ? (
           <p className="text-yellow-500/90 text-xs mt-2 border border-yellow-700/50 bg-yellow-950/30 rounded-lg px-3 py-2">
-            <span className="text-yellow-400 font-medium">Stored unencrypted</span> in this
+            <span className="text-yellow-400 font-medium">{gitSyncUserFields.storedUnencryptedHint}</span> in this
             project's preferences.json on this machine. It is never pushed to the repo, but
             anything that can read your files can read the token. If it leaks, revoke it on GitHub.
           </p>
@@ -103,13 +104,13 @@ export default function GitSyncUserFields({
       </div>
       <div className="mt-3">
         <label className="text-gray-400 text-sm block mb-1">
-          Your name <span className="text-gray-600">(optional)</span>
+          {gitSyncUserFields.nameLabel}
         </label>
         <input
           type="text"
           value={syncAuthorName}
           onChange={e => onSyncAuthorNameChange(e.target.value)}
-          placeholder="recorded as the author of your annotation edits"
+          placeholder={gitSyncUserFields.namePlaceholder}
           className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
         />
       </div>

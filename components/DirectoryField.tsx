@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { openDirectoryDialog, checkDirExists } from '../utils/tauriCommands';
 import { isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
+import { directoryField } from '../copy/ui';
 
-export const PORTABILITY_WARNING =
-  'This path is outside the project directory; the project will not be portable to other machines unless you also move it.';
+export const PORTABILITY_WARNING = directoryField.portabilityWarning;
 
 interface DirectoryFieldProps {
   /** Base label, e.g. "Media" — rendered as "{label} Directory". */

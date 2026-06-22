@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { annotationToolEditModal } from '../copy/ui';
 import { HexColorPicker } from 'react-colorful';
 import { AnnotationTool, Annotation } from '../types';
 import { HOTKEY_COLORS, SUPPORTED_AUDIO_EXTS } from '../constants';
@@ -89,7 +90,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-72 p-5 shadow-2xl flex flex-col gap-4">
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-slate-400">Label</label>
+            <label className="text-xs text-slate-400">{annotationToolEditModal.labelField}</label>
             <button onClick={handleCancel} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
               <X size={16} />
             </button>
@@ -102,25 +103,25 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
         </div>
 
         <div>
-          <label className="text-xs text-slate-400 mb-1 block">Description</label>
+          <label className="text-xs text-slate-400 mb-1 block">{annotationToolEditModal.descriptionField}</label>
           <textarea
             className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-white outline-none focus:border-blue-500 resize-none"
             rows={3}
-            placeholder="When to use this label…"
+            placeholder={annotationToolEditModal.descriptionPlaceholder}
             value={description}
             onChange={e => setDescription(e.target.value)}
           />
         </div>
 
         {willRenameAnnotations && (
-          <p className="text-xs text-amber-400">Will rename existing annotations across all tracks</p>
+          <p className="text-xs text-amber-400">{annotationToolEditModal.renameWarning}</p>
         )}
         {customMatchCount > 0 && (
-          <p className="text-xs text-blue-400">Will reassociate {customMatchCount} Custom annotation(s) to this tool</p>
+          <p className="text-xs text-blue-400">{annotationToolEditModal.reassociateWarning(customMatchCount)}</p>
         )}
 
         <div>
-          <label className="text-xs text-slate-400 mb-2 block">Color</label>
+          <label className="text-xs text-slate-400 mb-2 block">{annotationToolEditModal.colorField}</label>
           <div className="flex gap-1">
             {swatchColors.map(c => (
               <button
@@ -138,7 +139,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
                   onClick={() => { setCustomActive(true); setShowPicker(v => !v); }}
                   className="w-6 h-6 rounded cursor-pointer transition-all scale-110 p-[2px]"
                   style={{ background: RAINBOW_GRADIENT }}
-                  title="Custom color"
+                  title={annotationToolEditModal.customColorTitle}
                 >
                   <span className="block w-full h-full rounded-sm" style={{ backgroundColor: color }} />
                 </button>
@@ -148,7 +149,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
                   onClick={() => { setCustomActive(true); setShowPicker(v => !v); }}
                   className="w-6 h-6 rounded cursor-pointer transition-all border-2 border-transparent"
                   style={{ background: RAINBOW_GRADIENT }}
-                  title="Custom color"
+                  title={annotationToolEditModal.customColorTitle}
                 />
               )}
               {showPicker && (
@@ -162,26 +163,26 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
 
         {canImport && (
           <div>
-            <label className="text-xs text-slate-400 mb-2 block">Example clips</label>
+            <label className="text-xs text-slate-400 mb-2 block">{annotationToolEditModal.exampleClipsField}</label>
             <div className="flex gap-2">
               <button
                 onClick={handleImportFiles}
                 className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
               >
-                Files…
+                {annotationToolEditModal.filesButton}
               </button>
               <button
                 onClick={handleImportFolder}
                 className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
               >
-                Folder…
+                {annotationToolEditModal.folderButton}
               </button>
               {hasExamples && onShowExamples && (
                 <button
                   onClick={() => onShowExamples(toolIndex)}
                   className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
                 >
-                  View ({tool.exampleFiles!.length})
+                  {annotationToolEditModal.viewButton(tool.exampleFiles!.length)}
                 </button>
               )}
             </div>
@@ -193,7 +194,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             onClick={handleCancel}
             className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
           >
-            Cancel
+            {annotationToolEditModal.cancelButton}
           </button>
           <button
             onClick={() => { onSave(toolIndex, text.trim(), color, description.trim()); onClose(); }}

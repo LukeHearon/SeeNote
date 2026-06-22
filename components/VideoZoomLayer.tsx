@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScanSearch, ZoomIn, ZoomOut, Maximize2, Search } from 'lucide-react';
 import { useHotkeys } from '../hooks/useHotkeys';
+import { tooltips } from '../copy/tooltips';
 import {
   DEFAULT_VIEWPORT,
   ZOOM_STEP,
@@ -260,7 +261,7 @@ export default function VideoZoomLayer({
       <div className={`absolute right-2 top-2 flex gap-2 pointer-events-auto z-30 ${shouldWrapButtons ? 'flex-row flex-wrap justify-end' : 'flex-col'}`}>
         <button
           type="button"
-          title="Toggle zoom (Z)"
+          title={tooltips.toggleZoom}
           aria-pressed={zoomed}
           onClick={() => onToggleZoomState?.()}
           className={`${btn} ${
@@ -273,7 +274,7 @@ export default function VideoZoomLayer({
         </button>
         <button
           type="button"
-          title="Marquee zoom — drag a box on the video to zoom into it"
+          title={tooltips.marqueeZoom}
           aria-pressed={toolActive}
           onClick={() => onToolActiveChange(!toolActive)}
           className={`${btn} ${
@@ -286,7 +287,7 @@ export default function VideoZoomLayer({
         </button>
         <button
           type="button"
-          title="Zoom in"
+          title={tooltips.zoomIn}
           onClick={() => onViewportChange(zoomBy(viewport, ZOOM_STEP))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}
         >
@@ -294,7 +295,7 @@ export default function VideoZoomLayer({
         </button>
         <button
           type="button"
-          title="Zoom out"
+          title={tooltips.zoomOut}
           disabled={!zoomed}
           onClick={() => onViewportChange(zoomBy(viewport, 1 / ZOOM_STEP))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}
@@ -303,7 +304,7 @@ export default function VideoZoomLayer({
         </button>
         <button
           type="button"
-          title="Reset zoom"
+          title={tooltips.resetZoom}
           disabled={!zoomed}
           onClick={() => onViewportChange(clampViewport(DEFAULT_VIEWPORT))}
           className={`${btn} bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700`}

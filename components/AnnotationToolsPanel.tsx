@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Settings, Trash2, Play, Square } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
+import { tooltips } from '../copy/tooltips';
 
 interface ContextMenuState {
   toolIndex: number;
@@ -79,7 +80,7 @@ function AnnotationToolsPanel({
         <button
           onClick={onOpenSettings}
           className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
-          data-tooltip="Annotation Tool Settings"
+          data-tooltip={tooltips.annotationToolSettings}
         >
           <Settings size={12} />
         </button>
@@ -167,7 +168,7 @@ function AnnotationToolsPanel({
                       <button
                         className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
                         onClick={e => { e.stopPropagation(); onPlayExample(tool); }}
-                        data-tooltip={isPlaying ? 'Stop example' : 'Play example clip'}
+                        data-tooltip={isPlaying ? tooltips.stopExample : tooltips.playExample}
                       >
                         {isPlaying ? <Square size={10} /> : <Play size={10} />}
                       </button>
@@ -175,14 +176,14 @@ function AnnotationToolsPanel({
                     <button
                       className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
                       onClick={e => { e.stopPropagation(); onEditTool(toolIndex); }}
-                      data-tooltip="Edit tool"
+                      data-tooltip={tooltips.editTool}
                     >
                       <Settings size={10} />
                     </button>
                     <button
                       className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-600/60 transition-colors"
                       onClick={e => { e.stopPropagation(); onRequestDeleteTool(toolIndex); }}
-                      data-tooltip="Delete tool"
+                      data-tooltip={tooltips.deleteTool}
                     >
                       <Trash2 size={10} />
                     </button>

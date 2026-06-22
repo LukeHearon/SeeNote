@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
+import { projectSettingsModal } from '../copy/ui';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
@@ -271,23 +272,23 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       {step === 'form' && (
         <SettingsModalShell
-          title="Project Settings"
+          title={projectSettingsModal.title}
           onClose={onClose}
           tabs={[
-            { label: 'Settings', active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
-            { label: 'Preferences', active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
+            { label: projectSettingsModal.tabSettings, active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
+            { label: projectSettingsModal.tabPreferences, active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
           ]}
           footer={
             <>
               <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
-                Cancel
+                {projectSettingsModal.cancelButton}
               </button>
               <button
                 onClick={handleFormSubmit}
                 disabled={isBusy}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
               >
-                {isBusy ? 'Checking…' : 'Save'}
+                {isBusy ? projectSettingsModal.savingButton : projectSettingsModal.saveButton}
               </button>
             </>
           }
@@ -295,7 +296,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           {activeTab === 'settings' && (
             <>
               <div>
-                <label className="text-gray-400 text-sm block mb-1">Project Directory</label>
+                <label className="text-gray-400 text-sm block mb-1">{projectSettingsModal.projectDirLabel}</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -306,7 +307,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   <button
                     onClick={() => revealInFileManager(project.projectDir)}
                     className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-                    title="Show in Finder"
+                    title={projectSettingsModal.showInFinderTitle}
                   >
                     <ExternalLink size={16} />
                   </button>
@@ -364,7 +365,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
       {step === 'orphanConfirm' && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
-          <h2 className="text-white text-lg font-semibold mb-4">Orphaned Annotations</h2>
+          <h2 className="text-white text-lg font-semibold mb-4">{projectSettingsModal.orphanedTitle}</h2>
           <p className="text-gray-300 text-sm mb-2">
             {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} no
             corresponding media in the new media directory:
@@ -374,7 +375,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               <li key={p} className="text-gray-400 text-xs font-mono truncate">{p}</li>
             ))}
           </ul>
-          <p className="text-gray-300 text-sm mb-4">What would you like to do with these files?</p>
+          <p className="text-gray-300 text-sm mb-4">{projectSettingsModal.orphanedWhatToDo}</p>
           {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
           <div className="flex gap-3 justify-end">
             <button
@@ -382,14 +383,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               disabled={isBusy}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
-              Retain
+              {projectSettingsModal.retainButton}
             </button>
             <button
               onClick={() => handleOrphanResolution('delete')}
               disabled={isBusy}
               className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
-              {isBusy ? 'Deleting…' : 'Delete Orphaned'}
+              {isBusy ? projectSettingsModal.deletingButton : projectSettingsModal.deleteOrphanedButton}
             </button>
           </div>
         </div>
@@ -397,23 +398,22 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
       {step === 'annotationCopyConfirm' && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
-          <h2 className="text-white text-lg font-semibold mb-4">Move Annotations</h2>
+          <h2 className="text-white text-lg font-semibold mb-4">{projectSettingsModal.moveAnnotationsTitle}</h2>
           <p className="text-gray-300 text-sm mb-6">
-            The annotations directory has changed. Would you like to copy your existing
-            annotation files to the new directory?
+            {projectSettingsModal.moveAnnotationsMessage}
           </p>
           <div className="flex gap-3 justify-end">
             <button
               onClick={() => handleCopyDecision(false)}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-colors"
             >
-              Don't Copy
+              {projectSettingsModal.dontCopyButton}
             </button>
             <button
               onClick={() => handleCopyDecision(true)}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors"
             >
-              Copy Annotations
+              {projectSettingsModal.copyAnnotationsButton}
             </button>
           </div>
         </div>
@@ -421,9 +421,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
       {step === 'conflictConfirm' && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
-          <h2 className="text-white text-lg font-semibold mb-4">Handle Conflicts</h2>
+          <h2 className="text-white text-lg font-semibold mb-4">{projectSettingsModal.handleConflictsTitle}</h2>
           <p className="text-gray-300 text-sm mb-6">
-            If annotation files already exist in the new directory, how should conflicts be resolved?
+            {projectSettingsModal.handleConflictsMessage}
           </p>
           {error && <p className="text-red-400 text-sm mb-3 whitespace-pre-wrap">{error}</p>}
           <div className="flex gap-3 justify-end">
@@ -432,14 +432,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
               disabled={isBusy}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
-              {isBusy ? 'Copying…' : 'Skip Existing'}
+              {isBusy ? projectSettingsModal.copyingButton : projectSettingsModal.skipExistingButton}
             </button>
             <button
               onClick={() => handleConflictResolution('overwrite')}
               disabled={isBusy}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
-              {isBusy ? 'Copying…' : 'Overwrite'}
+              {isBusy ? projectSettingsModal.copyingButton : projectSettingsModal.overwriteButton}
             </button>
           </div>
         </div>

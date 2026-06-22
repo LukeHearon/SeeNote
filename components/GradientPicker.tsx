@@ -2,6 +2,7 @@ import React, { useRef, useCallback, useEffect, useState } from 'react';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 import { MAGMA_MIN_T, interpolateMagmaHex } from '../constants';
+import { tooltips } from '../copy/tooltips';
 
 interface Props {
   value: [string, string];
@@ -158,7 +159,7 @@ export default function GradientPicker({ value, onChange, minT = MAGMA_MIN_T }: 
         style={{ left: tToPercent(tStart), backgroundColor: color0 }}
         onMouseDown={e => handleBarMouseDown(e, 0)}
         onContextMenu={e => handleContextMenu(e, 0)}
-        data-tooltip="Drag to change start color · right-click for a custom color"
+        data-tooltip={tooltips.startColor}
       >
         <ChevronRight size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>
@@ -168,7 +169,7 @@ export default function GradientPicker({ value, onChange, minT = MAGMA_MIN_T }: 
         style={{ left: tToPercent(tEnd), backgroundColor: color1 }}
         onMouseDown={e => handleBarMouseDown(e, 1)}
         onContextMenu={e => handleContextMenu(e, 1)}
-        data-tooltip="Drag to change end color · right-click for a custom color"
+        data-tooltip={tooltips.endColor}
       >
         <ChevronLeft size={10} strokeWidth={3} style={{ color: 'white', filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.7))' }} />
       </div>

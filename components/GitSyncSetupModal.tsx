@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, GitBranch, ShieldCheck } from 'lucide-react';
+import { gitSyncSetupModal } from '../copy/ui';
 
 interface Props {
   onClose: () => void;
@@ -28,7 +29,7 @@ export default function GitSyncSetupModal({ onClose, standalone }: Props) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <div className="flex items-center gap-2">
             <GitBranch size={18} className="text-blue-400" />
-            <h2 className="text-white text-lg font-semibold">Set up a synced project</h2>
+            <h2 className="text-white text-lg font-semibold">{gitSyncSetupModal.title}</h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
             <X size={20} />
@@ -135,7 +136,7 @@ export default function GitSyncSetupModal({ onClose, standalone }: Props) {
             onClick={onClose}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors"
           >
-            Got it
+            {gitSyncSetupModal.gotItButton}
           </button>
         </div>
       </div>

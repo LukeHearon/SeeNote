@@ -5,6 +5,7 @@ import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
+import { tooltips } from '../copy/tooltips';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
@@ -275,7 +276,7 @@ function Toolbar({
           onClick={() => { onSeek(0, true); onSelectionChange(null); onBoundAnnotationChange(null); }}
           disabled={!videoSrc}
           className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-          data-tooltip="Skip to start"
+          data-tooltip={tooltips.skipToStart}
         >
           <SkipBack size={15} />
         </button>
@@ -283,7 +284,7 @@ function Toolbar({
           onClick={() => spectrogramRef.current?.goToPrevAnnotation()}
           disabled={!videoSrc || !canGoPrevAnnotation}
           className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-          data-tooltip="Previous annotation (Cmd+←  or  ;)"
+          data-tooltip={tooltips.prevAnnotation}
         >
           <ChevronLeft size={15} />
         </button>
@@ -305,7 +306,7 @@ function Toolbar({
           onClick={() => spectrogramRef.current?.goToNextAnnotation()}
           disabled={!videoSrc || !canGoNextAnnotation}
           className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-          data-tooltip="Next annotation (Cmd+→  or  ')"
+          data-tooltip={tooltips.nextAnnotation}
         >
           <ChevronRight size={15} />
         </button>
@@ -313,7 +314,7 @@ function Toolbar({
           onClick={() => { onSeek(duration, true); onSelectionChange(null); onBoundAnnotationChange(null); }}
           disabled={!videoSrc}
           className="p-1.5 rounded hover:bg-slate-700 disabled:opacity-40 text-slate-400 hover:text-white transition-colors flex-none"
-          data-tooltip="Skip to end"
+          data-tooltip={tooltips.skipToEnd}
         >
           <SkipForward size={15} />
         </button>
@@ -321,7 +322,7 @@ function Toolbar({
           onClick={onTogglePlayheadLock}
           disabled={!videoSrc}
           className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-          data-tooltip="Lock playhead to center (C)"
+          data-tooltip={tooltips.lockPlayhead}
           data-help-target="recenter-playhead"
         >
           <LocateFixed size={15} />
@@ -351,7 +352,7 @@ function Toolbar({
               className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
               onClick={() => { setVolumeCtxMenu(null); onRestartAudio(); }}
             >
-              Restart Audio
+              {tooltips.restartAudio}
             </button>
           </div>
         </>
@@ -375,7 +376,7 @@ function Toolbar({
           ) : (
             <button
               className="flex items-center justify-end px-2 py-1 w-[5rem] bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
-              data-tooltip="Click to jump to time"
+              data-tooltip={tooltips.jumpToTime}
               onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTimeStore.get().toFixed(2)); }}
             >
               <TimeDisplay currentTimeStore={currentTimeStore} />
@@ -413,7 +414,7 @@ function Toolbar({
                     if (has) { setEditingTimeField(field); setEditingTimeRaw(editVal); }
                     else if (canCreate) { setEditingTimeField(field); setEditingTimeRaw(''); }
                   }}
-                  data-tooltip={has ? `Edit selection ${label}` : canCreate ? `Set selection ${label}` : undefined}
+                  data-tooltip={has ? tooltips.editSelection(label) : canCreate ? tooltips.setSelection(label) : undefined}
                 >
                   {has ? display : ''}
                 </button>
@@ -438,7 +439,7 @@ function Toolbar({
         onClick={filterDisabledByMode ? undefined : onToggleFilterTool}
         disabled={filterDisabledByMode}
         className={`p-1.5 rounded transition-colors ml-2 ${filterDisabledByMode ? 'text-slate-600 cursor-not-allowed' : filterToolActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
-        data-tooltip={filterDisabledByMode ? "Audio filters not available in Fast mode" : "Filter tool (Shift+F)"}
+        data-tooltip={filterDisabledByMode ? tooltips.filterDisabledByMode : tooltips.filterTool}
         data-help-target="filter-tool"
       >
         <Filter size={16} />
@@ -482,7 +483,7 @@ function Toolbar({
           type="button"
           onClick={() => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1)}
           className="flex-none p-0 leading-none"
-          data-tooltip={playbackSpeed !== 1 ? "Click to reset to 1× (click text to set custom speed)" : "Click to restore last speed"}
+          data-tooltip={playbackSpeed !== 1 ? tooltips.resetSpeed : tooltips.restoreSpeed}
         >
           <Gauge size={16} className={playbackSpeed > 1 ? 'text-red-400' : playbackSpeed < 1 ? 'text-blue-400' : 'text-slate-300'} />
         </button>
@@ -502,7 +503,7 @@ function Toolbar({
           <button
             className="text-xs font-mono text-slate-300 hover:text-white tabular-nums w-10 text-right"
             onClick={() => { setEditingSpeed(true); setEditingSpeedRaw(playbackSpeed.toFixed(2)); }}
-            data-tooltip="Click to set playback speed"
+            data-tooltip={tooltips.setSpeed}
           >
             {playbackSpeed.toFixed(2)}x
           </button>
@@ -516,7 +517,7 @@ function Toolbar({
             <button
               onClick={onToggleBuzzdetect}
               className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${buzzdetectEnabled ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-              data-tooltip="buzzdetect activations panel"
+              data-tooltip={tooltips.buzzdetectPanel}
               data-help-target="buzzdetect-toggle"
             >
               <Activity size={16} />
@@ -526,7 +527,7 @@ function Toolbar({
             <button
               onClick={onToggleSettings}
               className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-              data-tooltip="Spectrogram Settings"
+              data-tooltip={tooltips.spectrogramSettings}
               data-help-target="spectrogram-settings"
             >
               <Settings size={16} />

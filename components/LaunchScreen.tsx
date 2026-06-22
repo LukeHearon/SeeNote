@@ -5,6 +5,8 @@ import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openSyncGuideWindow } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
 import { findFirstValidAncestor } from '../utils/helpers';
+import { launchScreen } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
@@ -235,34 +237,34 @@ export default function LaunchScreen({
     <div className="h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
       <div className="flex items-center gap-3 mb-10 shrink-0">
         <AudioWaveform size={36} className="text-blue-400" />
-        <span className="text-white text-3xl font-semibold tracking-tight">SeeNote</span>
+        <span className="text-white text-3xl font-semibold tracking-tight">{launchScreen.appName}</span>
       </div>
 
       <div className="w-full max-w-xl flex flex-col min-h-0">
         <div className="flex items-center justify-between mb-4 shrink-0">
-          <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">Projects</h2>
+          <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">{launchScreen.projectsHeading}</h2>
           <div className="flex items-center gap-2">
             <button
               onClick={openSyncGuideWindow}
               className="flex items-center gap-2 px-3 py-1.5 text-gray-400 hover:text-white hover:bg-gray-800 text-sm rounded-lg transition-colors"
-              data-tooltip="How to set up a project that syncs to GitHub"
+              data-tooltip={tooltips.setupSync}
             >
               <GitBranch size={15} />
-              Set up syncing
+              {launchScreen.setupSyncButton}
             </button>
             <button
               onClick={handleOpenExisting}
               className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
             >
               <FolderOpen size={15} />
-              Open Existing Project
+              {launchScreen.openExistingButton}
             </button>
             <button
               onClick={() => setShowCreate(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
             >
               <Plus size={15} />
-              New Project
+              {launchScreen.newProjectButton}
             </button>
           </div>
         </div>
@@ -271,7 +273,7 @@ export default function LaunchScreen({
           <div className="mb-4 shrink-0 flex items-start gap-2 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm">
             <AlertCircle size={16} className="flex-none mt-0.5" />
             <div>
-              <p className="font-medium">Failed to load projects</p>
+              <p className="font-medium">{launchScreen.loadError}</p>
               <p className="text-red-400 text-xs mt-1 font-mono">{loadError}</p>
             </div>
           </div>
@@ -281,7 +283,7 @@ export default function LaunchScreen({
           <div className="mb-4 shrink-0 flex items-start gap-2 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm">
             <AlertCircle size={16} className="flex-none mt-0.5" />
             <div>
-              <p className="font-medium">Could not open project</p>
+              <p className="font-medium">{launchScreen.openError}</p>
               <p className="text-red-400 text-xs mt-1 font-mono">{openError}</p>
             </div>
           </div>
@@ -290,16 +292,16 @@ export default function LaunchScreen({
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-gray-500 shrink-0">
             <Loader2 size={24} className="animate-spin mr-2" />
-            <span className="text-sm">Loading projects…</span>
+            <span className="text-sm">{launchScreen.loadingProjects}</span>
           </div>
         ) : entries.length === 0 ? (
           <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
-            <p className="text-gray-500 text-sm mb-3">No projects yet.</p>
+            <p className="text-gray-500 text-sm mb-3">{launchScreen.noProjects}</p>
             <button
               onClick={() => setShowCreate(true)}
               className="text-blue-400 hover:text-blue-300 text-sm transition-colors"
             >
-              Create your first project
+              {launchScreen.createFirstProject}
             </button>
           </div>
         ) : (
@@ -343,7 +345,7 @@ export default function LaunchScreen({
                   <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>
                 );
               } else {
-                const tag = entry.status === 'missing-dir' ? '(not found)' : '(settings unreadable)';
+                const tag = entry.status === 'missing-dir' ? launchScreen.projectNotFound : launchScreen.projectSettingsUnreadable;
                 pathLines = (
                   <p className="text-gray-500 text-xs mt-1 truncate">
                     {entry.registry.projectDir} <span className="italic">{tag}</span>
@@ -374,7 +376,7 @@ export default function LaunchScreen({
                         <button
                           onClick={e => handleLocate(e, entry)}
                           className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
-                          data-tooltip="Find this project's folder on disk and re-link it"
+                          data-tooltip={tooltips.relinkProject}
                         >
                           <FolderSearch size={13} />
                           Re-link
@@ -385,7 +387,7 @@ export default function LaunchScreen({
                         <button
                           onClick={e => handleGear(e, entry)}
                           className="text-gray-400 hover:text-white p-1 rounded transition-colors"
-                          data-tooltip="Project settings"
+                          data-tooltip={tooltips.projectSettings}
                         >
                           <Settings size={15} />
                         </button>
@@ -393,7 +395,7 @@ export default function LaunchScreen({
                       <button
                         onClick={e => handleRemove(e, entry, name)}
                         className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                        data-tooltip="Unlink project"
+                        data-tooltip={tooltips.unlinkProject}
                       >
                         <X size={15} />
                       </button>
@@ -401,7 +403,7 @@ export default function LaunchScreen({
                     </div>
                   </div>
                   <p className="text-gray-600 text-xs mt-2">
-                    Last opened {formatDate(entry.registry.lastOpened)}
+                    {launchScreen.lastOpened(formatDate(entry.registry.lastOpened))}
                   </p>
                 </li>
               );
@@ -414,10 +416,10 @@ export default function LaunchScreen({
             <button
               onClick={handleShowDataFolder}
               className="flex items-center gap-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors"
-              data-tooltip="Open the folder where projects are stored"
+              data-tooltip={tooltips.openDataFolder}
             >
               <FolderOpen size={12} />
-              Show data folder
+              {launchScreen.showDataFolder}
             </button>
             <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={projectsFilePath}>
               {projectsFilePath}
@@ -442,7 +444,7 @@ export default function LaunchScreen({
               }}
               className="block w-full text-left px-4 py-1.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
             >
-              Show project in {fmLabel}
+              {launchScreen.showInFileManager(fmLabel)}
             </button>
           </div>
         );
@@ -533,8 +535,8 @@ export default function LaunchScreen({
             <div className="flex items-start gap-3">
               <FolderSearch size={20} className="text-blue-400 flex-none mt-0.5" />
               <div className="min-w-0">
-                <h3 className="text-white font-semibold text-base">Re-link this project?</h3>
-                <p className="text-gray-400 text-sm mt-1">Here's what's in the folder you selected:</p>
+                <h3 className="text-white font-semibold text-base">{launchScreen.relinkTitle}</h3>
+                <p className="text-gray-400 text-sm mt-1">{launchScreen.relinkMessage}</p>
               </div>
             </div>
 
@@ -550,7 +552,7 @@ export default function LaunchScreen({
                     <span className="min-w-0">
                       <span className="text-gray-200">{d.label}</span>{' '}
                       <span className={resolved ? 'text-emerald-400' : 'text-amber-400'}>
-                        {resolved ? 'found' : 'missing'}
+                        {resolved ? launchScreen.statusFound : launchScreen.statusMissing}
                       </span>
                       <span className="block text-gray-500 text-xs break-words">
                         {dirOverrides[d.label] ?? d.path}
@@ -578,7 +580,7 @@ export default function LaunchScreen({
                     <span>
                       <span className="text-gray-200">Name</span>{' '}
                       <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
-                        {readyName !== null ? 'selected' : 'differs'}
+                        {readyName !== null ? launchScreen.nameConflictSelected : launchScreen.nameConflictDiffers}
                       </span>
                     </span>
                   </div>
@@ -591,7 +593,7 @@ export default function LaunchScreen({
                           ? 'bg-blue-600 text-white ring-2 ring-blue-400'
                           : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
                       }
-                      data-tooltip="Keep SeeNote's name (rewrites .seenote/settings.json)"
+                      data-tooltip={tooltips.keepSeeNoteName}
                     >
                       "{relinkPrompt.internalName}"
                     </button>
@@ -603,7 +605,7 @@ export default function LaunchScreen({
                           ? 'bg-blue-600 text-white ring-2 ring-blue-400'
                           : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
                       }
-                      data-tooltip="Use the name from the folder's .seenote/settings.json"
+                      data-tooltip={tooltips.useFolderName}
                     >
                       "{relinkPrompt.settingsName}"
                     </button>
