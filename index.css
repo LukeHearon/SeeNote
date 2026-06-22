@@ -29,6 +29,8 @@ body {
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 
+.pick-mode * { cursor: crosshair !important; }
+
 .help-highlight-overlay {
   position: fixed;
   pointer-events: none;

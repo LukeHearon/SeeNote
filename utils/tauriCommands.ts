@@ -347,6 +347,11 @@ export const fetchRemoteStatus = (
 ): Promise<boolean> =>
   invoke('fetch_remote_status', { projectDir, remoteUrl, token });
 
+/** Open the copy editor in a separate native window. */
+export function openCopyEditorWindow(): void {
+  invoke('open_copy_editor_window').catch(console.error);
+}
+
 /** Open the sync setup guide in a separate native window. */
 export function openSyncGuideWindow(): void {
   invoke('open_sync_guide_window').catch(console.error);
@@ -355,4 +360,12 @@ export function openSyncGuideWindow(): void {
 /** Close the sync guide window (called from inside the window itself). */
 export function closeSyncGuideWindow(): void {
   invoke('close_sync_guide_window').catch(console.error);
+}
+
+export async function saveCopyOverrides(overrides: Record<string, string>): Promise<string> {
+  return invoke<string>('save_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
+}
+
+export async function applyCopyOverrides(overrides: Record<string, string>): Promise<string> {
+  return invoke<string>('apply_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
 }

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import GitSyncSetupModal from './components/GitSyncSetupModal';
+import { CopyEditor } from './components/CopyEditor';
 import { closeSyncGuideWindow } from './utils/tauriCommands';
 
 const rootElement = document.getElementById('root');
@@ -18,6 +19,8 @@ root.render(
   <React.StrictMode>
     {windowMode === 'sync-guide'
       ? <GitSyncSetupModal standalone onClose={closeSyncGuideWindow} />
+      : windowMode === 'copy-editor'
+      ? <CopyEditor />
       : <App />}
   </React.StrictMode>
 );

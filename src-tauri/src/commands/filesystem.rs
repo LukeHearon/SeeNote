@@ -309,6 +309,64 @@ pub async fn save_file_dialog(
     }))
 }
 
+#[tauri::command]
+pub async fn save_copy_overrides(
+    app: tauri::AppHandle,
+    overrides_json: String,
+) -> Result<String, String> {
+    use serde_json::Value;
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let path = data_dir.join("copy-overrides.json");
+
+    let incoming: Value = serde_json::from_str(&overrides_json).map_err(|e| e.to_string())?;
+    let merged = if path.exists() {
+        let existing_raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let mut existing: Value = serde_json::from_str(&existing_raw).unwrap_or(Value::Object(Default::default()));
+        if let (Value::Object(base), Value::Object(patch)) = (&mut existing, incoming) {
+            base.extend(patch);
+        }
+        existing
+    } else {
+        incoming
+    };
+
+    let out = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
+    std::fs::write(&path, out).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn apply_copy_overrides(overrides_json: String) -> Result<String, String> {
+    let repo_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let script = repo_dir.join("scripts").join("apply-copy-overrides.js");
+
+    let mut child = std::process::Command::new("node")
+        .arg(&script)
+        .arg("--stdin")
+        .current_dir(&repo_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(stdin) = child.stdin.take() {
+        use std::io::Write;
+        let mut stdin = stdin;
+        stdin.write_all(overrides_json.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(if stderr.is_empty() { stdout } else { stderr });
+    }
+    Ok(stdout)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
