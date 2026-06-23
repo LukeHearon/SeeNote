@@ -331,7 +331,7 @@ export default function VideoPane({
           }`}
         >
           <div className="self-start bg-slate-900/70 backdrop-blur-sm border border-b-0 border-slate-500 rounded-t-md px-2 pt-0 pb-px">
-            <span className="text-[9px] font-semibold tracking-widest text-slate-400 uppercase leading-none">Video Mode</span>
+            <span className="text-[9px] font-semibold tracking-widest text-slate-400 uppercase leading-none">{videoP.videoModeLabel}</span>
           </div>
           <div className="flex gap-1 rounded-b-md rounded-tr-md bg-slate-900/70 backdrop-blur-sm border border-slate-500 p-1">
             {(['off', 'fast', 'mixed', 'accurate'] as VideoMode[]).map(mode => {

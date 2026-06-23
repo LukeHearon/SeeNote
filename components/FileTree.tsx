@@ -598,14 +598,14 @@ function FileTree({
           <button
             onClick={onToggleFileFilter}
             className={`p-1 rounded hover:bg-slate-700 ${fileFilter !== 'all' ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-            data-tooltip={fileFilter === 'all' ? 'Show all files' : fileFilter === 'unannotated' ? 'Showing: unannotated only' : 'Showing: annotated only'}
+            data-tooltip={fileFilter === 'all' ? tooltips.showAllFiles : fileFilter === 'unannotated' ? tooltips.showingUnannotated : tooltips.showingAnnotated}
           >
             {fileFilter === 'all' ? <Eye size={13} /> : fileFilter === 'unannotated' ? <EyeOff size={13} /> : <Filter size={13} />}
           </button>
           <button
             onClick={onToggleShuffle}
             className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            data-tooltip={shuffleMode ? 'Switch to sorted view' : 'Shuffle queue'}
+            data-tooltip={shuffleMode ? tooltips.switchToSorted : tooltips.shuffleQueue}
           >
             {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
           </button>

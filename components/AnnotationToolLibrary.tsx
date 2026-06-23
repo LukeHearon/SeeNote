@@ -211,7 +211,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
                 onClick={togglePlay}
                 disabled={!clip}
                 className="p-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-100 disabled:opacity-40 transition-colors flex-none mb-0.5"
-                data-tooltip={isPlaying ? 'Pause' : 'Play'}
+                data-tooltip={isPlaying ? tooltips.pause : tooltips.play}
               >
                 {isPlaying ? <Pause size={14} /> : <Play size={14} />}
               </button>

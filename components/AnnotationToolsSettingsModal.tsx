@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
@@ -97,7 +98,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         <button
           onClick={e => { e.stopPropagation(); onPlayExample(); }}
           className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-700 flex-none transition-colors"
-          data-tooltip={isPlaying ? 'Stop example' : 'Play example clip'}
+          data-tooltip={isPlaying ? tooltips.stopExample : tooltips.playExample}
         >
           {isPlaying ? <Square size={12} /> : <Play size={12} />}
         </button>
@@ -105,7 +106,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
       <button
         onClick={e => { e.stopPropagation(); onGearClick(); }}
         className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 flex-none transition-colors"
-        data-tooltip="Edit tool"
+        data-tooltip={tooltips.editTool}
       >
         <Settings size={12} />
       </button>
@@ -113,7 +114,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         <button
           onClick={e => { e.stopPropagation(); onDeleteClick(); }}
           className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-slate-700 flex-none transition-colors"
-          data-tooltip="Delete tool"
+          data-tooltip={tooltips.deleteTool}
         >
           <Trash2 size={12} />
         </button>
@@ -141,7 +142,7 @@ function NewToolInput({ onCommit, onCancel }: {
     <input
       autoFocus
       className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none"
-      placeholder="Tool name…"
+      placeholder={copy.toolNamePlaceholder}
       value={text}
       onChange={e => setText(e.target.value)}
       onKeyDown={e => {
@@ -294,7 +295,7 @@ export default function AnnotationToolsSettingsModal({
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className={`bg-gray-900 border border-gray-700 rounded-xl h-[600px] flex flex-col relative ${hasUnassigned ? 'w-[800px]' : 'w-[640px]'}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
-          <span className="text-sm font-semibold text-white">Annotation Tool Settings</span>
+          <span className="text-sm font-semibold text-white">{copy.settingsTitle}</span>
           <div className="flex items-center gap-3">
             <button
               onClick={async () => {
@@ -304,7 +305,7 @@ export default function AnnotationToolsSettingsModal({
               }}
               disabled={isImporting}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 disabled:opacity-50 transition-colors text-xs"
-              data-tooltip="Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"
+              data-tooltip={tooltips.importExamplesDir}
             >
               <FolderDown size={12} />
               {isImporting ? 'Importing…' : 'Import examples'}
@@ -423,7 +424,7 @@ export default function AnnotationToolsSettingsModal({
                 className="mt-2 flex-none w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
               >
                 <Plus size={10} />
-                New tool
+                {copy.newTool}
               </button>
             )}
           </div>

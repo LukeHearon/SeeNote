@@ -75,7 +75,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
   return (
     <div
       role="dialog"
-      aria-label="SeeNote Help"
+      aria-label={helpPanel.panelTitle}
       aria-modal="true"
       className={`fixed top-0 right-0 bottom-0 z-50 bg-slate-800 border-l border-slate-700 shadow-2xl flex flex-col transition-[transform,width] duration-300 ease-in-out ${tab === 'shortcuts' ? 'w-[520px]' : 'w-80'} ${open ? 'translate-x-0' : 'translate-x-full'}`}
     >

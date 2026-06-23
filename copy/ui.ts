@@ -23,6 +23,7 @@ export const launchScreen = {
   get locate() { return getOverride('ui.launchScreen.locate') ?? "Locate"; },
   get relinkButton() { return getOverride('ui.launchScreen.relinkButton') ?? "Re-link"; },
   get nameLabel() { return getOverride('ui.launchScreen.nameLabel') ?? "Name"; },
+  get cancelButton() { return getOverride('ui.launchScreen.cancelButton') ?? "Cancel"; },
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
 };
@@ -88,6 +89,7 @@ export const annotationToolEditModal = {
   get folderButton() { return getOverride('ui.annotationToolEditModal.folderButton') ?? "Folder…"; },
   viewButton: (count: number) => `View (${count})`,
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
+  get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
 };
 
 export const annotationToolsSettingsModal = {
@@ -95,6 +97,7 @@ export const annotationToolsSettingsModal = {
   get hotkeysHeading() { return getOverride('ui.annotationToolsSettingsModal.hotkeysHeading') ?? "Hotkeys"; },
   get newTool() { return getOverride('ui.annotationToolsSettingsModal.newTool') ?? "New tool"; },
   get unassignedHeading() { return getOverride('ui.annotationToolsSettingsModal.unassignedHeading') ?? "Unassigned"; },
+  get settingsTitle() { return getOverride('ui.annotationToolsSettingsModal.settingsTitle') ?? "Annotation Tool Settings"; },
 };
 
 export const deleteToolConfirmDialog = {
@@ -210,6 +213,7 @@ export const videoPane = {
   get loadingFile() { return getOverride('ui.videoPane.loadingFile') ?? "Loading file..."; },
   get modeLabel() { return getOverride('ui.videoPane.modeLabel') ?? "MODE"; },
   get processingMedia() { return getOverride('ui.videoPane.processingMedia') ?? "Processing Media..."; },
+  get videoModeLabel() { return getOverride('ui.videoPane.videoModeLabel') ?? "Video Mode"; },
 };
 
 export const videoPlayer = {
@@ -239,4 +243,38 @@ export const fileTree = {
 
 export const keyboardShortcutsView = {
   get noShortcuts() { return getOverride('ui.keyboardShortcutsView.noShortcuts') ?? "No shortcuts for this key"; },
+};
+
+export const annotationWindow = {
+  // Sync menu
+  get commitLabel() { return getOverride('ui.annotationWindow.commitLabel') ?? "Commit message (optional)"; },
+  get commitPlaceholder() { return getOverride('ui.annotationWindow.commitPlaceholder') ?? "Update annotations"; },
+  get syncMenuCancel() { return getOverride('ui.annotationWindow.syncMenuCancel') ?? "Cancel"; },
+  get syncMenuConfirm() { return getOverride('ui.annotationWindow.syncMenuConfirm') ?? "Sync"; },
+  // Sync result toast
+  get syncFailedAuth() { return getOverride('ui.annotationWindow.syncFailedAuth') ?? "Access token rejected"; },
+  get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },
+  get syncComplete() { return getOverride('ui.annotationWindow.syncComplete') ?? "Sync complete"; },
+  // Import-conflict dialog
+  get importConflictTitle() { return getOverride('ui.annotationWindow.importConflictTitle') ?? "Annotations already exist"; },
+  get importErrorTitle() { return getOverride('ui.annotationWindow.importErrorTitle') ?? "Could not import annotations"; },
+  get importCancel() { return getOverride('ui.annotationWindow.importCancel') ?? "Cancel"; },
+  get importOverwrite() { return getOverride('ui.annotationWindow.importOverwrite') ?? "Overwrite"; },
+  get importMerge() { return getOverride('ui.annotationWindow.importMerge') ?? "Merge"; },
+  get importOk() { return getOverride('ui.annotationWindow.importOk') ?? "OK"; },
+  // Spectrogram settings panel
+  get freqHeader() { return getOverride('ui.annotationWindow.freqHeader') ?? "Frequency (Hz)"; },
+  get freqMin() { return getOverride('ui.annotationWindow.freqMin') ?? "Min"; },
+  get freqMax() { return getOverride('ui.annotationWindow.freqMax') ?? "Max"; },
+  get fftHeader() { return getOverride('ui.annotationWindow.fftHeader') ?? "FFT"; },
+  get windowSize() { return getOverride('ui.annotationWindow.windowSize') ?? "Window Size"; },
+  get scaleLabel() { return getOverride('ui.annotationWindow.scaleLabel') ?? "Scale"; },
+  get scaleLinear() { return getOverride('ui.annotationWindow.scaleLinear') ?? "Linear"; },
+  get scaleLog() { return getOverride('ui.annotationWindow.scaleLog') ?? "Logarithmic"; },
+  get scaleMel() { return getOverride('ui.annotationWindow.scaleMel') ?? "Mel"; },
+  // Overlays
+  get videoLabel() { return getOverride('ui.annotationWindow.videoLabel') ?? "Video"; },
+  get exampleAudioPlaying() { return getOverride('ui.annotationWindow.exampleAudioPlaying') ?? "Example audio is playing"; },
+  get noMediaTitle() { return getOverride('ui.annotationWindow.noMediaTitle') ?? "No Media Loaded"; },
+  get noMediaHint() { return getOverride('ui.annotationWindow.noMediaHint') ?? "Open a video or audio file to begin annotating"; },
 };

@@ -200,7 +200,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             onClick={() => { onSave(toolIndex, text.trim(), color, description.trim()); onClose(); }}
             className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
           >
-            Save
+            {annotationToolEditModal.saveButton}
           </button>
         </div>
       </div>

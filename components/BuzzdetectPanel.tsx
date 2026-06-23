@@ -12,6 +12,7 @@ import {
 import { clamp } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 
 // Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
 // same x and the two stay column-for-column aligned.
@@ -521,7 +522,7 @@ export default function BuzzdetectPanel({
             data-buzz-ui
             onClick={() => setShowSettings(s => !s)}
             className={`absolute top-1.5 right-1.5 p-1 rounded transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700/70'}`}
-            data-tooltip="buzzdetect settings"
+            data-tooltip={tooltips.buzzdetectSettings}
           >
             <Sliders size={14} />
           </button>

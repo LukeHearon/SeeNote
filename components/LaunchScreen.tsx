@@ -506,7 +506,7 @@ export default function LaunchScreen({
                 onClick={() => closeConfirm(false)}
                 className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
               >
-                Cancel
+                {launchScreen.cancelButton}
               </button>
               <button
                 onClick={() => closeConfirm(true)}
@@ -619,7 +619,7 @@ export default function LaunchScreen({
                 onClick={() => closeRelink({ action: 'cancel' })}
                 className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
               >
-                Cancel
+                {launchScreen.cancelButton}
               </button>
               {(() => {
                 const requiredDirs = relinkPrompt.dirs.filter(d => d.label !== 'buzzdetect');

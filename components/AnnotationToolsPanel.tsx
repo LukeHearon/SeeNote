@@ -77,7 +77,7 @@ function AnnotationToolsPanel({
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden" data-help-target="tool-palette">
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-none">
-        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Labels</span>
+        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>
         <button
           onClick={onOpenSettings}
           className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"

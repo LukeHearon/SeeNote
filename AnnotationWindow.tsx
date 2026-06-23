@@ -42,6 +42,8 @@ import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar from './components/Toolbar';
 import LevelRangeSlider from './components/LevelRangeSlider';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
+import { tooltips } from './copy/tooltips';
+import { annotationWindow, debugConsole } from './copy/ui';
 
 export interface AnnotationWindowProps {
   project: Project;
@@ -1174,14 +1176,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             <button
                 onClick={onClose}
                 className="flex items-center space-x-1 text-slate-400 hover:text-white hover:bg-slate-700 px-2 py-1.5 rounded transition-colors"
-                data-tooltip="Back to projects"
+                data-tooltip={tooltips.backToProjects}
             >
                 <ArrowLeft size={18} />
             </button>
             <button
                 onClick={() => setShowProjectSettings(true)}
                 className="flex items-center space-x-2 px-2 py-1.5 rounded hover:bg-slate-700 transition-colors group"
-                data-tooltip="Project Settings"
+                data-tooltip={tooltips.projectSettings}
                 data-help-target="project-settings-btn"
             >
                 <h1 className="text-xl font-bold">
@@ -1201,11 +1203,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                     disabled={syncing}
                     className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
                     data-tooltip={
-                      syncing ? 'Syncing…'
-                      : hasLocalChanges && hasRemoteChanges ? 'Your annotations aren\'t uploaded yet · Teammates have new annotations'
-                      : hasLocalChanges ? 'Your annotations aren\'t uploaded yet'
-                      : hasRemoteChanges ? 'Teammates have new annotations'
-                      : 'Sync annotations'
+                      syncing ? tooltips.syncing
+                      : hasLocalChanges && hasRemoteChanges ? `${tooltips.syncUnpushed} · ${tooltips.syncUnpulled}`
+                      : hasLocalChanges ? tooltips.syncUnpushed
+                      : hasRemoteChanges ? tooltips.syncUnpulled
+                      : tooltips.syncIdle
                     }
                 >
                     <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
@@ -1220,13 +1222,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                     onClick={() => setSyncMenuOpen(o => !o)}
                     disabled={syncing}
                     className={`p-1 rounded hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-default ${syncMenuOpen ? 'text-white bg-slate-700' : 'text-slate-400'}`}
-                    data-tooltip="Sync with a commit message…"
+                    data-tooltip={tooltips.syncWithMessage}
                 >
                     <ChevronDown size={14} />
                 </button>
                 {syncMenuOpen && (
                   <div className="absolute top-full right-0 mt-1 z-[300] w-72 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-3">
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">Commit message (optional)</label>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">{annotationWindow.commitLabel}</label>
                     <textarea
                       autoFocus
                       value={commitMessage}
@@ -1242,7 +1244,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                         }
                       }}
                       rows={2}
-                      placeholder="Update annotations"
+                      placeholder={annotationWindow.commitPlaceholder}
                       className="w-full text-xs bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-[#e65161]"
                     />
                     <div className="flex justify-end gap-2 mt-2">
@@ -1250,13 +1252,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                         onClick={() => setSyncMenuOpen(false)}
                         className="text-xs px-2.5 py-1 rounded text-slate-300 hover:bg-slate-700"
                       >
-                        Cancel
+                        {annotationWindow.syncMenuCancel}
                       </button>
                       <button
                         onClick={() => { setSyncMenuOpen(false); handleSync(commitMessage); setCommitMessage(''); }}
                         className="text-xs px-2.5 py-1 rounded bg-[#e65161] text-white hover:bg-[#d63d4e]"
                       >
-                        Sync
+                        {annotationWindow.syncMenuConfirm}
                       </button>
                     </div>
                   </div>
@@ -1266,21 +1268,21 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              <button
                 onClick={() => setShowDebug(true)}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                data-tooltip="Debug Console"
+                data-tooltip={debugConsole.title}
             >
                 <Bug size={18} />
             </button>
              <button
                 onClick={() => { setHelpTab('guide'); setShowHelp(prev => !prev); }}
                 className={`p-2 rounded hover:bg-slate-700 transition-colors ${showHelp ? 'text-[#e65161] bg-slate-700' : 'text-slate-400 hover:text-white'}`}
-                data-tooltip="Help Guide (F1)"
+                data-tooltip={tooltips.helpGuide}
             >
                 <HelpCircle size={18} />
             </button>
              <button
                 onClick={() => { setHelpTab('shortcuts'); setShowHelp(true); }}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                data-tooltip="Keyboard Shortcuts"
+                data-tooltip={tooltips.keyboardShortcuts}
             >
                 <Keyboard size={18} />
             </button>
@@ -1293,8 +1295,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           <div className="flex items-start justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-100">
               {syncError
-                ? (syncError.includes('AUTH_FAILED:') ? 'Access token rejected' : 'Sync failed')
-                : 'Sync complete'}
+                ? (syncError.includes('AUTH_FAILED:') ? annotationWindow.syncFailedAuth : annotationWindow.syncFailed)
+                : annotationWindow.syncComplete}
             </h3>
             <button
               onClick={() => { setSyncSummary(null); setSyncError(null); }}
@@ -1349,7 +1351,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       {pendingImport && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
           <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
-            <h3 className="text-sm font-semibold text-slate-100 mb-2">Annotations already exist</h3>
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">{annotationWindow.importConflictTitle}</h3>
             <p className="text-xs text-slate-300 leading-relaxed mb-4">
               This track already has {pendingImport.existing.length} annotation{pendingImport.existing.length !== 1 ? 's' : ''}.
               Importing {pendingImport.incoming.length} from <span className="text-slate-100">{pendingImport.sourceName}</span> —
@@ -1360,19 +1362,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 className="px-3 py-1.5 text-xs rounded text-slate-300 hover:bg-slate-700"
                 onClick={() => setPendingImport(null)}
               >
-                Cancel
+                {annotationWindow.importCancel}
               </button>
               <button
                 className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
                 onClick={() => resolveImport('overwrite')}
               >
-                Overwrite
+                {annotationWindow.importOverwrite}
               </button>
               <button
                 className="px-3 py-1.5 text-xs rounded bg-[#e65161] text-white hover:bg-[#e65161]/80"
                 onClick={() => resolveImport('merge')}
               >
-                Merge
+                {annotationWindow.importMerge}
               </button>
             </div>
           </div>
@@ -1383,14 +1385,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       {importError && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
           <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
-            <h3 className="text-sm font-semibold text-slate-100 mb-2">Could not import annotations</h3>
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">{annotationWindow.importErrorTitle}</h3>
             <p className="text-xs text-slate-300 leading-relaxed mb-4">{importError}</p>
             <div className="flex justify-end">
               <button
                 className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
                 onClick={() => setImportError(null)}
               >
-                OK
+                {annotationWindow.importOk}
               </button>
             </div>
           </div>
@@ -1516,10 +1518,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 type="button"
                 onClick={() => setVideoCollapsed(false)}
                 className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
-                data-tooltip="Expand video panel"
+                data-tooltip={tooltips.expandVideoPanel}
               >
                 <ChevronDown size={16} />
-                <span className="text-xs font-medium uppercase tracking-wide">Video</span>
+                <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
               </button>
             </div>
           )}
@@ -1549,10 +1551,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
                         {/* Frequency */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">Frequency (Hz)</h4>
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.freqHeader}</h4>
                             <div className="flex space-x-2 pt-2">
                                 <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Min</label>
+                                    <label className="text-xs text-slate-400">{annotationWindow.freqMin}</label>
                                     <input
                                         type="number"
                                         value={settings.minFreq}
@@ -1561,7 +1563,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                                     />
                                 </div>
                                 <div className="flex-1">
-                                    <label className="text-xs text-slate-400">Max</label>
+                                    <label className="text-xs text-slate-400">{annotationWindow.freqMax}</label>
                                     <input
                                         type="number"
                                         value={settings.maxFreq}
@@ -1574,9 +1576,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
                         {/* FFT */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">FFT</h4>
+                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.fftHeader}</h4>
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block">Window Size</label>
+                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.windowSize}</label>
                                 <select
                                     value={settings.fftSize}
                                     onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
@@ -1588,15 +1590,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                                 </select>
                             </div>
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block">Scale</label>
+                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.scaleLabel}</label>
                                 <select
                                     value={settings.frequencyScale}
                                     onChange={(e) => setSettings(s => ({...s, frequencyScale: e.target.value as FrequencyScale}))}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
                                 >
-                                    <option value="linear">Linear</option>
-                                    <option value="log">Logarithmic</option>
-                                    <option value="mel">Mel</option>
+                                    <option value="linear">{annotationWindow.scaleLinear}</option>
+                                    <option value="log">{annotationWindow.scaleLog}</option>
+                                    <option value="mel">{annotationWindow.scaleMel}</option>
                                 </select>
                             </div>
                         </div>
@@ -1694,7 +1696,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              {examplePlayer.playingToolId !== null && (
                <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/55 pointer-events-none">
                  <span className="text-xs font-medium text-slate-200 bg-slate-900/80 border border-slate-700 rounded-full px-3 py-1">
-                   Example audio is playing
+                   {annotationWindow.exampleAudioPlaying}
                  </span>
                </div>
              )}
@@ -1725,8 +1727,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              {!videoSrc && (
                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                      <div className="text-slate-600 text-center">
-                         <p className="text-lg font-medium">No Media Loaded</p>
-                         <p className="text-sm">Open a video or audio file to begin annotating</p>
+                         <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
+                         <p className="text-sm">{annotationWindow.noMediaHint}</p>
                      </div>
                  </div>
              )}

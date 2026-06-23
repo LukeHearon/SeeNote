@@ -272,7 +272,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                lineHeight: '30px',
                            }}
                        >
-                           {annotation.text || <span className="opacity-30">Name...</span>}
+                           {annotation.text || <span className="opacity-30">{copy.namePlaceholder}</span>}
                        </span>
                    )
                ) : null}
