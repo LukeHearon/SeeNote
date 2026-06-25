@@ -63,6 +63,8 @@ export function useChunkRenderer({
   const prevCacheVersionRef = useRef<number>(-1);
   // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
   const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Scratch canvas for the area-average pre-shrink step in stage 2.
+  const preshrinkCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // True while the visible viewport still has chunks resolving (first load or a
   // settings-driven rebuild). Drives the "building spectrogram" veil. Computed
@@ -169,6 +171,8 @@ export function useChunkRenderer({
         if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
         const offCtx = offscreen.getContext('2d');
         if (!offCtx) return;
+
+        offCtx.imageSmoothingEnabled = false;
 
         if (canIncremental) {
           // ── Incremental path ────────────────────────────────────────────────
@@ -288,10 +292,37 @@ export function useChunkRenderer({
         // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
         const dxCss = (bbStartTime - startTime) * pixelsPerSecond;
         const dwCss = bbWidth / cps * pixelsPerSecond;
+        const dwPhys = dwCss * dpr;
+        const dxPhys = dxCss * dpr;
+
+        // When cps >> pps the blit is a >1× downsample. Browser bilinear uses
+        // only 2 taps regardless of the scale factor, so it skips source columns
+        // and their weights shift frame-to-frame as dxPhys slides — the
+        // "brightness shimmer". Fix: pre-shrink to near destination width in
+        // ≤2× steps (each step bilinear is accurate at ≤2×) then do a ~1:1 blit.
+        let blitSrc: HTMLCanvasElement = offscreen as unknown as HTMLCanvasElement;
+        let blitW = bbWidth;
+        const downsampleRatio = bbWidth / dwPhys;
+        if (downsampleRatio > 1.5) {
+          const targetW = Math.max(1, Math.round(dwPhys));
+          if (!preshrinkCanvasRef.current) preshrinkCanvasRef.current = document.createElement('canvas');
+          const tmp = preshrinkCanvasRef.current;
+          if (tmp.width !== targetW) tmp.width = targetW;
+          if (tmp.height !== offscreen.height) tmp.height = offscreen.height;
+          const tmpCtx = tmp.getContext('2d');
+          if (tmpCtx) {
+            tmpCtx.imageSmoothingEnabled = true;
+            tmpCtx.imageSmoothingQuality = 'high';
+            tmpCtx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height, 0, 0, targetW, offscreen.height);
+            blitSrc = tmp;
+            blitW = targetW;
+          }
+        }
+
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height,
-                      dxCss * dpr, 0, dwCss * dpr, canvas.height);
+        ctx.drawImage(blitSrc, 0, 0, blitW, offscreen.height,
+                      dxPhys, 0, dwPhys, canvas.height);
 
         // Paint end-of-file region with the background color so it's distinct
         // from zero-value spectrogram data.
