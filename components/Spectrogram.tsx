@@ -10,7 +10,7 @@ import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
-import { useChunkRenderer } from '../hooks/useChunkRenderer';
+import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
 import { spectrogramView } from '../copy/ui';
 
@@ -193,6 +193,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // into useSpectrogramInteraction so its rAF loop reads them stale-closure-free.
   const pixelsPerSecondRef = useRef(0);
   const durationRef = useRef(duration);
+  // Lets the lifetime rAF loop (empty-dep effect) read live isPlaying for the
+  // frame-timing diagnostic without resubscribing.
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
 
   const [containerWidth, setContainerWidth] = useState(0);
 
@@ -317,7 +321,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     chunkCache,
     sampleRate,
     cacheVersion,
-    scrollLeft,
+    scrollLeftRef,
     pixelsPerSecond,
     duration,
     settings,
@@ -579,8 +583,33 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     [currentTimeStore],
   );
 
+  // The spectrogram background no longer reads scrollLeft from a prop (draw reads
+  // scrollLeftRef.current), so a scroll step during playback no longer recreates
+  // `draw` and trips the useLayoutEffect dirty flag. Mark the background dirty on
+  // each media-clock tick while playing so it redraws every frame and tracks the
+  // auto-scroll smoothly — matching the overlay's cadence. When stopped/seeking,
+  // React re-renders still mark dirty via the draw/drawYAxis useLayoutEffect.
   useEffect(() => {
+    if (!isPlaying) return;
+    return currentTimeStore.subscribe(() => { drawDirtyRef.current = true; });
+  }, [currentTimeStore, isPlaying]);
+
+  useEffect(() => {
+    let lastTs = performance.now();
     const tick = () => {
+      // Frame-gap detector: a healthy 60fps loop ticks every ~16.7ms. A gap well
+      // over that means the previous frame's work (or a GC pause / React relayout)
+      // blew the budget — i.e. a real dropped frame, which is what a playback hitch
+      // would be. Logged only while playing so idle/background throttling is quiet.
+      if (DIAG_FRAME_TIMING) {
+        const now = performance.now();
+        const gap = now - lastTs;
+        lastTs = now;
+        if (isPlayingRef.current && gap > 24) {
+          // eslint-disable-next-line no-console
+          console.warn(`[frametiming] frame gap ${gap.toFixed(1)}ms (target ~16.7)`);
+        }
+      }
       if (drawDirtyRef.current) {
         drawRef.current();
         drawYAxisRef.current();

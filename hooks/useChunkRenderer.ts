@@ -3,11 +3,20 @@ import { SpectrogramSettings } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 
+// TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
+// we can tell a real playback hitch (dropped frame) from the sampling twinkle.
+// Set to false to silence. See local/HITCH.md.
+export const DIAG_FRAME_TIMING = true;
+
 export interface ChunkRendererParams {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
   cacheVersion: number;
-  scrollLeft: number;
+  // Read live from a ref (not a prop) so `draw` doesn't recreate on every scroll
+  // step. During playback scrollLeft updates ~50 Hz via React state; depending on
+  // it here would throttle the background redraw to that cadence and make the
+  // spectrogram stutter at high playback rates. See local/HITCH.md.
+  scrollLeftRef: React.MutableRefObject<number>;
   pixelsPerSecond: number;
   duration: number;
   settings: SpectrogramSettings;
@@ -39,7 +48,7 @@ export function useChunkRenderer({
   chunkCache,
   sampleRate,
   cacheVersion,
-  scrollLeft,
+  scrollLeftRef,
   pixelsPerSecond,
   duration,
   settings,
@@ -61,6 +70,12 @@ export function useChunkRenderer({
   // draw() can shift it by columnsShifted and only paint the new right-edge columns.
   const prevBbStartColRef = useRef<number | null>(null);
   const prevCacheVersionRef = useRef<number>(-1);
+  // Timestamp (ms) of the last full redraw. New chunk data bumps cacheVersion
+  // many times/sec while streaming; a full redraw per bump is O(bbWidth×height)
+  // colormap work and drops frames. We throttle data-driven full redraws to this
+  // cadence — incremental keeps motion smooth between them, and each periodic
+  // full redraw flushes columns that resolved to a sharper tier.
+  const lastFullRedrawAtRef = useRef<number>(0);
   // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
   const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // Scratch canvases for the area-average pre-shrink step in stage 2 (ping-pong).
@@ -76,6 +91,7 @@ export function useChunkRenderer({
 
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
+    const t0 = DIAG_FRAME_TIMING ? performance.now() : 0;
     const canvas = canvasRef.current;
     const offscreen = offscreenCanvasRef.current;
     if (!canvas || !offscreen) return;
@@ -87,6 +103,9 @@ export function useChunkRenderer({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Read scroll live from the ref so this redraw can run every rAF frame during
+    // playback rather than being gated by the React state cycle.
+    const scrollLeft = scrollLeftRef.current;
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + cssWidth / pixelsPerSecond;
 
@@ -139,11 +158,19 @@ export function useChunkRenderer({
         const cps = activeTier.colsPerSec;
 
         // Compute the offscreen backbuffer extent. One offscreen pixel per STFT
-        // column at the active tier. Add 1-col margin on each side so sub-pixel
+        // column at the active tier. Add 1-col margin on the left so sub-pixel
         // drawImage shift never reads past the buffer.
         const bbStartCol = Math.floor(startTime * cps) - 1;
-        const bbEndCol   = Math.ceil(endTime * cps) + 1;
-        const bbWidth = Math.max(1, bbEndCol - bbStartCol);
+        // Width is a STABLE column span derived from the (fixed-per-zoom) visible
+        // duration, not from ceil(endTime*cps). The latter wobbles between N and
+        // N+1 as startTime slides sub-column, which resized the offscreen every
+        // other frame and forced a full redraw (the `resize` stutter). A constant
+        // span keeps the buffer the same size frame-to-frame so the incremental
+        // path stays engaged. +3 columns of margin covers the sub-column slop on
+        // both edges plus the left margin above.
+        const visibleDurationSec = cssWidth / pixelsPerSecond;
+        const bbWidth = Math.max(1, Math.ceil(visibleDurationSec * cps) + 3);
+        const bbEndCol = bbStartCol + bbWidth;
         const bbStartTime = bbStartCol / cps;
 
         // Decide between incremental scroll update and full redraw.
@@ -162,11 +189,36 @@ export function useChunkRenderer({
         const columnsShifted = prevStartCol !== null ? bbStartCol - prevStartCol : Infinity;
         const offscreenReady =
             offscreen.width === bbWidth && offscreen.height === canvas.height;
+        // columnsShifted === 0 is the common steady-playback case: the view moved
+        // forward by less than one whole column since last frame, so the offscreen
+        // buffer is still exactly correct and we only need to re-blit it with the
+        // updated sub-pixel offset — no rebuild, no shift. Allowing it here (>= 0)
+        // is the main fix: previously this fell through to a full redraw every such
+        // frame (~80% of playback frames), which was the stutter.
+        //
+        // New chunk data (cacheVersion bump) forces a full redraw so newly-resolved
+        // columns get flushed — but throttled, so a burst of streaming arrivals
+        // can't drive a heavy full redraw every frame.
+        const FULL_REDRAW_THROTTLE_MS = 150;
+        const dataChanged = cacheVersion !== prevCacheVersionRef.current;
+        const dataRedrawDue =
+            dataChanged && (performance.now() - lastFullRedrawAtRef.current) > FULL_REDRAW_THROTTLE_MS;
         const canIncremental =
-            columnsShifted > 0 &&
+            columnsShifted >= 0 &&
             columnsShifted <= Math.floor(bbWidth / 2) &&
             offscreenReady &&
-            cacheVersion === prevCacheVersionRef.current;
+            !dataRedrawDue;
+
+        if (DIAG_FRAME_TIMING && prevStartCol !== null && !canIncremental) {
+          const why =
+            columnsShifted < 0 ? `back-step(${columnsShifted}col)`
+            : columnsShifted > Math.floor(bbWidth / 2) ? `big-jump(${columnsShifted}col)`
+            : !offscreenReady ? 'resize'
+            : dataRedrawDue ? 'cacheVersion(new data)'
+            : '?';
+          // eslint-disable-next-line no-console
+          console.warn(`[frametiming] FULL redraw of ${bbWidth} cols — ${why}`);
+        }
 
         if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
         if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
@@ -177,8 +229,11 @@ export function useChunkRenderer({
 
         if (canIncremental) {
           // ── Incremental path ────────────────────────────────────────────────
-          // 1. Shift the offscreen canvas left by columnsShifted pixels.
-          offCtx.drawImage(offscreen, -columnsShifted, 0);
+          // 1. Shift the offscreen canvas left by columnsShifted pixels. When
+          //    columnsShifted === 0 (sub-column move — the steady-playback hot
+          //    path) the buffer is already correct, so skip the shift and the
+          //    new-column render and fall straight through to the re-blit.
+          if (columnsShifted > 0) offCtx.drawImage(offscreen, -columnsShifted, 0);
 
           // 2. Build data for only the new right-edge columns.
           const newCols = columnsShifted;
@@ -227,7 +282,9 @@ export function useChunkRenderer({
           if (incrCanvas.width !== INCR_CANVAS_W) incrCanvas.width = INCR_CANVAS_W;
           if (incrCanvas.height !== offscreen.height) incrCanvas.height = offscreen.height;
           const incrCtx = incrCanvas.getContext('2d');
-          if (incrCtx) {
+          // newCols === 0 means no shift this frame — nothing to render or blit
+          // (and a 0-width drawImage would throw).
+          if (newCols > 0 && incrCtx) {
             drawSpectrogramChunk(
               incrCtx, vdNew, newCols, nFreqBins,
               newCols, offscreen.height,
@@ -287,7 +344,14 @@ export function useChunkRenderer({
         }
 
         prevBbStartColRef.current = bbStartCol;
-        prevCacheVersionRef.current = cacheVersion;
+        if (!canIncremental) {
+          // Only a full redraw flushes newly-resolved data, so only it marks this
+          // cacheVersion consumed and resets the throttle. If a data bump was
+          // throttled (incremental this frame), dataChanged stays true so the next
+          // frame past the throttle window does the full redraw and flushes it.
+          prevCacheVersionRef.current = cacheVersion;
+          lastFullRedrawAtRef.current = performance.now();
+        }
 
         // Blit offscreen → visible canvas with sub-pixel destination shift.
         // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
@@ -363,7 +427,16 @@ export function useChunkRenderer({
       isBuildingRef.current = building;
       setIsBuilding(building);
     }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeft, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
+
+    if (DIAG_FRAME_TIMING) {
+      const dur = performance.now() - t0;
+      // 8ms = half a 60fps frame budget; a draw this heavy risks a dropped frame.
+      if (dur > 8) {
+        // eslint-disable-next-line no-console
+        console.warn(`[frametiming] draw ${dur.toFixed(1)}ms`);
+      }
+    }
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
 
   return { draw };
 }
