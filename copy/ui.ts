@@ -2,9 +2,9 @@ import { getOverride } from './overrideStore';
 
 export const launchScreen = {
   get appName() { return getOverride('ui.launchScreen.appName') ?? "SeeNote"; },
-  get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Projects"; },
-  get setupSyncButton() { return getOverride('ui.launchScreen.setupSyncButton') ?? "Set up syncing"; },
-  get openExistingButton() { return getOverride('ui.launchScreen.openExistingButton') ?? "Open Existing Project"; },
+  get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Recent Projects"; },
+  get setupSyncButton() { return getOverride('ui.launchScreen.setupSyncButton') ?? "Git Sync Help"; },
+  get openExistingButton() { return getOverride('ui.launchScreen.openExistingButton') ?? "Open Project"; },
   get newProjectButton() { return getOverride('ui.launchScreen.newProjectButton') ?? "New Project"; },
   get loadError() { return getOverride('ui.launchScreen.loadError') ?? "Failed to load projects"; },
   get openError() { return getOverride('ui.launchScreen.openError') ?? "Could not open project"; },
@@ -13,7 +13,7 @@ export const launchScreen = {
   get createFirstProject() { return getOverride('ui.launchScreen.createFirstProject') ?? "Create your first project"; },
   get projectNotFound() { return getOverride('ui.launchScreen.projectNotFound') ?? "(not found)"; },
   get projectSettingsUnreadable() { return getOverride('ui.launchScreen.projectSettingsUnreadable') ?? "(settings unreadable)"; },
-  get showDataFolder() { return getOverride('ui.launchScreen.showDataFolder') ?? "Show data folder"; },
+  get showDataFolder() { return getOverride('ui.launchScreen.showDataFolder') ?? "App Data"; },
   get relinkTitle() { return getOverride('ui.launchScreen.relinkTitle') ?? "Re-link this project?"; },
   get relinkMessage() { return getOverride('ui.launchScreen.relinkMessage') ?? "Here's what's in the folder you selected:"; },
   get statusFound() { return getOverride('ui.launchScreen.statusFound') ?? "found"; },
@@ -146,14 +146,14 @@ export const gitSyncUserFields = {
   get plaintextOption() { return getOverride('ui.gitSyncUserFields.plaintextOption') ?? "Plaintext"; },
   get recommendedHint() { return getOverride('ui.gitSyncUserFields.recommendedHint') ?? "Recommended"; },
   get noPasswordHint() { return getOverride('ui.gitSyncUserFields.noPasswordHint') ?? "No password prompts"; },
-  get storedUnencryptedHint() { return getOverride('ui.gitSyncUserFields.storedUnencryptedHint') ?? "Stored unencrypted"; },
-  get storedUnencryptedDetail() { return getOverride('ui.gitSyncUserFields.storedUnencryptedDetail') ?? "in this project's preferences.json on this machine. It is never pushed to the repo, but anything that can read your files can read the token. If it leaks, revoke it on GitHub."; },
+  get storedUnencryptedHint() { return getOverride('ui.gitSyncUserFields.storedUnencryptedHint') ?? "Stored in plain text"; },
+  get storedUnencryptedDetail() { return getOverride('ui.gitSyncUserFields.storedUnencryptedDetail') ?? "in .seenote/preferences.json within the project directory. It is never pushed to the repo, but anything that can read your files can read the token. This is convenient, but it is not secure. Use a narrowly-scoped PAT and guard it well."; },
   get keychainNoteWindows() { return getOverride('ui.gitSyncUserFields.keychainNoteWindows') ?? "Saved in Windows Credential Manager, never in preferences.json."; },
   get keychainNoteMac() { return getOverride('ui.gitSyncUserFields.keychainNoteMac') ?? "Saved in your macOS Keychain, never in preferences.json. Unsigned builds may prompt for your password when the token is read."; },
   get keychainNoteLinux() { return getOverride('ui.gitSyncUserFields.keychainNoteLinux') ?? "Saved in your system keyring (Secret Service), never in preferences.json. The keyring may prompt to unlock."; },
   get patFormatWarning() { return getOverride('ui.gitSyncUserFields.patFormatWarning') ?? "Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)"; },
-  get nameLabel() { return getOverride('ui.gitSyncUserFields.nameLabel') ?? "Your name (optional)"; },
-  get namePlaceholder() { return getOverride('ui.gitSyncUserFields.namePlaceholder') ?? "recorded as the author of your annotation edits"; },
+  get nameLabel() { return getOverride('ui.gitSyncUserFields.nameLabel') ?? "Annotator name"; },
+  get namePlaceholder() { return getOverride('ui.gitSyncUserFields.namePlaceholder') ?? ""; },
 };
 
 export const projectBaseFields = {
@@ -161,7 +161,7 @@ export const projectBaseFields = {
   get mediaLabel() { return getOverride('ui.projectBaseFields.mediaLabel') ?? "Media"; },
   get annotationsLabel() { return getOverride('ui.projectBaseFields.annotationsLabel') ?? "Annotations"; },
   get decimalPlacesLabel() { return getOverride('ui.projectBaseFields.decimalPlacesLabel') ?? "Output Decimal Places"; },
-  get decimalPlacesHelp() { return getOverride('ui.projectBaseFields.decimalPlacesHelp') ?? "for start/end timestamps"; },
+  get decimalPlacesHelp() { return getOverride('ui.projectBaseFields.decimalPlacesHelp') ?? "for timestamps"; },
   get buzzdetectLabel() { return getOverride('ui.projectBaseFields.buzzdetectLabel') ?? "buzzdetect"; },
   get buzzdetectPlaceholder() { return getOverride('ui.projectBaseFields.buzzdetectPlaceholder') ?? "(optional) directory of {ident}_buzzdetect.csv"; },
   get buzzdetectHelp() { return getOverride('ui.projectBaseFields.buzzdetectHelp') ?? "Activations plotted below the spectrogram, located per track by ident."; },
@@ -173,7 +173,7 @@ export const projectBaseFields = {
 };
 
 export const directoryField = {
-  get portabilityWarning() { return getOverride('ui.directoryField.portabilityWarning') ?? "This path is outside the project directory; the project will not be portable to other machines unless you also move it."; },
+  get portabilityWarning() { return getOverride('ui.directoryField.portabilityWarning') ?? "This path is outside the project directory; SeeNote can read the files, but the project will not be portable to other machines."; },
 };
 
 export const repairProjectModal = {
@@ -247,7 +247,7 @@ export const keyboardShortcutsView = {
 
 export const annotationWindow = {
   // Sync menu
-  get commitLabel() { return getOverride('ui.annotationWindow.commitLabel') ?? "Commit message (optional)"; },
+  get commitLabel() { return getOverride('ui.annotationWindow.commitLabel') ?? "Commit message"; },
   get commitPlaceholder() { return getOverride('ui.annotationWindow.commitPlaceholder') ?? "Update annotations"; },
   get syncMenuCancel() { return getOverride('ui.annotationWindow.syncMenuCancel') ?? "Cancel"; },
   get syncMenuConfirm() { return getOverride('ui.annotationWindow.syncMenuConfirm') ?? "Sync"; },

@@ -30,11 +30,11 @@ export const helpPanel = {
   },
   guide: {
     projects: {
-      get p1() { return getOverride('helpPanel.guide.projects.p1') ?? "SeeNote is organized around **projects**. Each project links an **audio/video directory** to an **annotation output directory** where label files are saved."; },
-      get p2() { return getOverride('helpPanel.guide.projects.p2') ?? "Configure label categories and other settings via [Project Settings](project-settings-btn). All settings—including annotation tools and spectrogram display—persist per project."; },
+      get p1() { return getOverride('helpPanel.guide.projects.p1') ?? "SeeNote is organized around **projects**. Each project links a **media directory** (audio/video) to an **annotation directory** where annotation files are saved."; },
+      get p2() { return getOverride('helpPanel.guide.projects.p2') ?? "Configure project-level settings and user preferences by opening the [project settings](project-settings-btn)."; },
     },
     filePanel: {
-      get p1() { return getOverride('helpPanel.guide.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `Cmd+↑` / `Cmd+↓` to step through tracks in order. Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons. Right-click a track or folder to reveal its media location or annotation file in the system file manager. Right-click a track or folder and choose **Copy ident** to copy its ident to the clipboard (a folder's ident is its path relative to the audio root), or **Import annotations…** to load annotations from an external file; they are filed under that track's ident. If the track already has annotations, you can **Overwrite** them or **Merge** (append the imported ones)."; },
+      get p1() { return getOverride('helpPanel.guide.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `Cmd/Ctrl+↑` / `Cmd/Ctrl+↓` to step through tracks in order. Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons. Right-click a track or folder to reveal its media location or annotation file in the system file manager. Right-click a track or folder and choose **Copy ident** to copy its ident to the clipboard (a folder's ident is its path relative to the audio root), or **Import annotations…** to load annotations from an external file; they are filed under that track's ident. If the track already has annotations, you can **Overwrite** them or **Merge** (append the imported ones)."; },
     },
     videoMode: {
       get intro() { return getOverride('helpPanel.guide.videoMode.intro') ?? "The picker in the **bottom-left corner of the video pane** chooses how video is rendered. Saved per project:"; },
@@ -60,7 +60,7 @@ export const helpPanel = {
       get li2() { return getOverride('helpPanel.guide.spectrogram.li2') ?? "**Zoom:** `Cmd/Ctrl` + scroll wheel."; },
       get li3() { return getOverride('helpPanel.guide.spectrogram.li3') ?? "**Seek:** Left-click (in Selection Mode) to move the playhead."; },
       get li4() { return getOverride('helpPanel.guide.spectrogram.li4') ?? "**Play/Pause:** `Space`."; },
-      get li5() { return getOverride('helpPanel.guide.spectrogram.li5') ?? "**Toggle speed (1× ↔ last):** `R`."; },
+      get li5() { return getOverride('helpPanel.guide.spectrogram.li5') ?? "**Toggle playback rate (1× ↔ last defined):** `R`."; },
       get note1() { return getOverride('helpPanel.guide.spectrogram.note1') ?? "[Spectrogram settings](spectrogram-settings) (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The **Floor** and **Ceil** dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black."; },
     },
     twoModes: {
