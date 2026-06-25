@@ -83,10 +83,6 @@ export default function GitSyncUserFields({
             </button>
           ))}
         </div>
-        <div className="flex gap-1 mt-1 px-0.5">
-          <span className="flex-1 text-center text-[10px] text-gray-600">{gitSyncUserFields.recommendedHint}</span>
-          <span className="flex-1 text-center text-[10px] text-gray-600">{gitSyncUserFields.noPasswordHint}</span>
-        </div>
         {syncTokenStorage === 'plaintext' ? (
           <p className="text-yellow-500/90 text-xs mt-2 border border-yellow-700/50 bg-yellow-950/30 rounded-lg px-3 py-2">
             <span className="text-yellow-400 font-medium">{gitSyncUserFields.storedUnencryptedHint}</span>{' '}
@@ -106,7 +102,6 @@ export default function GitSyncUserFields({
           type="text"
           value={syncAuthorName}
           onChange={e => onSyncAuthorNameChange(e.target.value)}
-          placeholder={gitSyncUserFields.namePlaceholder}
           className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
         />
       </div>

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, HelpCircle } from 'lucide-react';
 import { projectSettingsModal } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
-import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential } from '../utils/tauriCommands';
+import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
@@ -344,6 +345,17 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           {activeTab === 'preferences' && (
             <>
               <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-gray-300 text-sm font-medium">Sync Settings</h3>
+                  <button
+                    type="button"
+                    onClick={openSyncGuideWindow}
+                    className="text-gray-600 hover:text-gray-400 transition-colors"
+                    data-tooltip={tooltips.setupSyncedProject}
+                  >
+                    <HelpCircle size={14} />
+                  </button>
+                </div>
                 <GitSyncUserFields
                   syncToken={syncToken}
                   onSyncTokenChange={v => { setSyncTokenDirty(true); setSyncToken(v.replaceAll('•', '')); }}

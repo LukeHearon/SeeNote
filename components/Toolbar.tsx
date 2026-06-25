@@ -452,6 +452,7 @@ function Toolbar({
         className="flex items-center justify-center"
         style={{ width: 20, height: 64, flexShrink: 0 }}
         data-help-target="filter-strength"
+        data-tooltip={tooltips.filterStrength}
       >
         <input
           type="range" min="0" max="1" step="0.005"

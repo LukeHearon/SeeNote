@@ -143,8 +143,6 @@ export const gitSyncUserFields = {
   get tokenStorageLabel() { return getOverride('ui.gitSyncUserFields.tokenStorageLabel') ?? "Token storage"; },
   get keychainOption() { return getOverride('ui.gitSyncUserFields.keychainOption') ?? "OS keychain"; },
   get plaintextOption() { return getOverride('ui.gitSyncUserFields.plaintextOption') ?? "Plaintext"; },
-  get recommendedHint() { return getOverride('ui.gitSyncUserFields.recommendedHint') ?? "Recommended"; },
-  get noPasswordHint() { return getOverride('ui.gitSyncUserFields.noPasswordHint') ?? "No password prompts"; },
   get storedUnencryptedHint() { return getOverride('ui.gitSyncUserFields.storedUnencryptedHint') ?? "Stored in plain text"; },
   get storedUnencryptedDetail() { return getOverride('ui.gitSyncUserFields.storedUnencryptedDetail') ?? "in .seenote/preferences.json within the project directory. It is never pushed to the repo, but anything that can read your files can read the token. This is convenient, but it is not secure. Use a narrowly-scoped PAT and guard it well."; },
   get keychainNoteWindows() { return getOverride('ui.gitSyncUserFields.keychainNoteWindows') ?? "Saved in Windows Credential Manager, never in preferences.json."; },
@@ -152,7 +150,6 @@ export const gitSyncUserFields = {
   get keychainNoteLinux() { return getOverride('ui.gitSyncUserFields.keychainNoteLinux') ?? "Saved in your system keyring (Secret Service), never in preferences.json. The keyring may prompt to unlock."; },
   get patFormatWarning() { return getOverride('ui.gitSyncUserFields.patFormatWarning') ?? "Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)"; },
   get nameLabel() { return getOverride('ui.gitSyncUserFields.nameLabel') ?? "Annotator name"; },
-  get namePlaceholder() { return getOverride('ui.gitSyncUserFields.namePlaceholder') ?? ""; },
 };
 
 export const projectBaseFields = {
@@ -163,7 +160,6 @@ export const projectBaseFields = {
   get decimalPlacesHelp() { return getOverride('ui.projectBaseFields.decimalPlacesHelp') ?? "for timestamps"; },
   get buzzdetectLabel() { return getOverride('ui.projectBaseFields.buzzdetectLabel') ?? "buzzdetect"; },
   get buzzdetectPlaceholder() { return getOverride('ui.projectBaseFields.buzzdetectPlaceholder') ?? "(optional) directory of {ident}_buzzdetect.csv"; },
-  get buzzdetectHelp() { return getOverride('ui.projectBaseFields.buzzdetectHelp') ?? "Activations plotted below the spectrogram, located per track by ident."; },
   get syncLabel() { return getOverride('ui.projectBaseFields.syncLabel') ?? "Sync"; },
   get repoUrlLabel() { return getOverride('ui.projectBaseFields.repoUrlLabel') ?? "Repository URL"; },
   get repoUrlPlaceholder() { return getOverride('ui.projectBaseFields.repoUrlPlaceholder') ?? "https://github.com/your-lab/annotations.git"; },

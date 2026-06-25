@@ -155,7 +155,6 @@ export default function ProjectBaseFields({
           value={buzzdetectDir}
           onChange={onBuzzdetectDirChange}
           placeholder={projectBaseFields.buzzdetectPlaceholder}
-          helperText={projectBaseFields.buzzdetectHelp}
           notExistMessage="Directory does not exist."
         />
 

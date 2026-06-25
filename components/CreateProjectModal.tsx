@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, HelpCircle } from 'lucide-react';
 import { createProjectModal } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { Project, ProjectSettings, ProjectPreferences } from '../types';
-import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool } from '../utils/tauriCommands';
+import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, openSyncGuideWindow } from '../utils/tauriCommands';
 import { readProjectSettings, writeProjectPreferences } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
@@ -229,7 +230,17 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         {activeTab === 'preferences' && (
           <>
             <div>
-              <p className="text-gray-400 text-sm font-medium mb-0.5">{createProjectModal.githubSyncLabel}</p>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-gray-300 text-sm font-medium">Sync Settings</h3>
+                <button
+                  type="button"
+                  onClick={openSyncGuideWindow}
+                  className="text-gray-600 hover:text-gray-400 transition-colors"
+                  data-tooltip={tooltips.setupSyncedProject}
+                >
+                  <HelpCircle size={14} />
+                </button>
+              </div>
               {syncRemoteUrl ? (
                 <p className="text-gray-600 text-xs mb-4 font-mono truncate">{syncRemoteUrl}</p>
               ) : (

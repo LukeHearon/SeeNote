@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle, GitBranch } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
-import { openDirectoryDialog, openDirectoryDialogAt, openSyncGuideWindow } from '../utils/tauriCommands';
+import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
 import { findFirstValidAncestor } from '../utils/helpers';
 import { launchScreen } from '../copy/ui';
@@ -244,14 +244,6 @@ export default function LaunchScreen({
         <div className="flex items-center justify-between mb-4 shrink-0">
           <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">{launchScreen.projectsHeading}</h2>
           <div className="flex items-center gap-2">
-            <button
-              onClick={openSyncGuideWindow}
-              className="flex items-center gap-2 px-3 py-1.5 text-gray-400 hover:text-white hover:bg-gray-800 text-sm rounded-lg transition-colors"
-              data-tooltip={tooltips.setupSync}
-            >
-              <GitBranch size={15} />
-              {launchScreen.setupSyncButton}
-            </button>
             <button
               onClick={handleOpenExisting}
               className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
