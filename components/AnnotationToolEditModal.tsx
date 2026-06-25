@@ -4,7 +4,7 @@ import { annotationToolEditModal } from '../copy/ui';
 import { HexColorPicker } from 'react-colorful';
 import { AnnotationTool, Annotation } from '../types';
 import { HOTKEY_COLORS, SUPPORTED_AUDIO_EXTS } from '../constants';
-import { openFilesDialog, openDirectoryDialog } from '../utils/tauriCommands';
+import { openFilesDialog } from '../utils/tauriCommands';
 
 // Rainbow gradient shared by the custom-color swatch fill and its active ring.
 const RAINBOW_GRADIENT = 'linear-gradient(to right, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7)';
@@ -62,16 +62,11 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   const canImport = onImportExamples != null && tool.key !== '0';
   const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
 
-  const handleImportFiles = async () => {
+  const handleImport = async () => {
     const paths = await openFilesDialog(null, [
       { name: 'Audio', extensions: [...SUPPORTED_AUDIO_EXTS] },
     ]);
     if (paths && paths.length > 0) await onImportExamples!(toolIndex, paths);
-  };
-
-  const handleImportFolder = async () => {
-    const dir = await openDirectoryDialog();
-    if (dir) await onImportExamples!(toolIndex, [dir]);
   };
 
   useEffect(() => {
@@ -166,23 +161,17 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             <label className="text-xs text-slate-400 mb-2 block">{annotationToolEditModal.exampleClipsField}</label>
             <div className="flex gap-2">
               <button
-                onClick={handleImportFiles}
+                onClick={handleImport}
                 className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
               >
-                {annotationToolEditModal.filesButton}
-              </button>
-              <button
-                onClick={handleImportFolder}
-                className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
-              >
-                {annotationToolEditModal.folderButton}
+                {annotationToolEditModal.importButton}
               </button>
               {hasExamples && onShowExamples && (
                 <button
                   onClick={() => onShowExamples(toolIndex)}
                   className="flex-1 px-2 py-1.5 text-xs text-slate-200 bg-slate-700 hover:bg-slate-600 rounded transition-colors"
                 >
-                  {annotationToolEditModal.viewButton(tool.exampleFiles!.length)}
+                  {annotationToolEditModal.viewButton}
                 </button>
               )}
             </div>

@@ -305,10 +305,10 @@ export default function AnnotationToolsSettingsModal({
               }}
               disabled={isImporting}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 disabled:opacity-50 transition-colors text-xs"
-              data-tooltip={tooltips.importExamplesDir}
+              data-tooltip={tooltips.importToolsDir}
             >
               <FolderDown size={12} />
-              {isImporting ? 'Importing…' : 'Import examples'}
+              {isImporting ? 'Importing…' : 'Import tools'}
             </button>
             <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
               <X size={16} />

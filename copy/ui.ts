@@ -85,9 +85,8 @@ export const annotationToolEditModal = {
   get exampleClipsField() { return getOverride('ui.annotationToolEditModal.exampleClipsField') ?? "Example clips"; },
   get renameWarning() { return getOverride('ui.annotationToolEditModal.renameWarning') ?? "Will rename existing annotations across all tracks"; },
   reassociateWarning: (count: number) => `Will reassociate ${count} Custom annotation(s) to this tool`,
-  get filesButton() { return getOverride('ui.annotationToolEditModal.filesButton') ?? "Files…"; },
-  get folderButton() { return getOverride('ui.annotationToolEditModal.folderButton') ?? "Folder…"; },
-  viewButton: (count: number) => `View (${count})`,
+  get importButton() { return getOverride('ui.annotationToolEditModal.importButton') ?? "Import"; },
+  get viewButton() { return getOverride('ui.annotationToolEditModal.viewButton') ?? "View"; },
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
 };

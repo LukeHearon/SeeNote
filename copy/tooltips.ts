@@ -58,7 +58,7 @@ export const tooltips = {
   get syncUnpulled() { return getOverride('tooltips.syncUnpulled') ?? "New annotations are available to download"; },
   get syncWithMessage() { return getOverride('tooltips.syncWithMessage') ?? "Sync with a commit message…"; },
   get buzzdetectSettings() { return getOverride('tooltips.buzzdetectSettings') ?? "buzzdetect settings"; },
-  get importExamplesDir() { return getOverride('tooltips.importExamplesDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
+  get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
   get showAllFiles() { return getOverride('tooltips.showAllFiles') ?? "Showing: all files"; },
   get showingUnannotated() { return getOverride('tooltips.showingUnannotated') ?? "Showing: unannotated only"; },
   get showingAnnotated() { return getOverride('tooltips.showingAnnotated') ?? "Showing: annotated only"; },
