@@ -256,6 +256,9 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                e.stopPropagation();
                            }}
                            autoFocus={isSelected && annotation.text === ""}
+                           autoCorrect="off"
+                           autoComplete="off"
+                           spellCheck={false}
                        />
                    ) : (
                        <span
