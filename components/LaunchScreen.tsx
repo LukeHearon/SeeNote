@@ -413,8 +413,8 @@ export default function LaunchScreen({
               <FolderOpen size={12} />
               {launchScreen.showDataFolder}
             </button>
-            <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={projectsFilePath}>
-              {projectsFilePath}
+            <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={projectsFilePath?.substring(0, projectsFilePath.lastIndexOf('/'))}>
+              {projectsFilePath?.substring(0, projectsFilePath.lastIndexOf('/'))}
             </span>
           </div>
         )}
