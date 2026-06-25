@@ -91,8 +91,8 @@ export class MultiTierSpectrogramCache {
     if (this.activeTierIndex >= 0 && this.activeTierIndex !== bestIdx) {
       const currentTier = this.tiers[this.activeTierIndex];
       const ratio = currentTier.colsPerSec / pixelsPerSec;
-      // Stay on current tier if it's still within a reasonable range (0.5x to 1.8x)
-      if (ratio >= 0.5 && ratio <= 1.8) {
+      // Stay on current tier if it's still within a reasonable range (0.5x to 3x)
+      if (ratio >= 0.5 && ratio <= 3.0) {
         return currentTier;
       }
     }

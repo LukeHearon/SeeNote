@@ -63,8 +63,9 @@ export function useChunkRenderer({
   const prevCacheVersionRef = useRef<number>(-1);
   // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
   const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Scratch canvas for the area-average pre-shrink step in stage 2.
+  // Scratch canvases for the area-average pre-shrink step in stage 2 (ping-pong).
   const preshrinkCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const preshrink2CanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // True while the visible viewport still has chunks resolving (first load or a
   // settings-driven rebuild). Drives the "building spectrogram" veil. Computed
@@ -295,27 +296,34 @@ export function useChunkRenderer({
         const dwPhys = dwCss * dpr;
         const dxPhys = dxCss * dpr;
 
-        // When cps >> pps the blit is a >1× downsample. Browser bilinear uses
-        // only 2 taps regardless of the scale factor, so it skips source columns
-        // and their weights shift frame-to-frame as dxPhys slides — the
-        // "brightness shimmer". Fix: pre-shrink to near destination width in
-        // ≤2× steps (each step bilinear is accurate at ≤2×) then do a ~1:1 blit.
+        // When cps >> pps the blit is a large downsample. Browser bilinear uses
+        // only 2 taps regardless of scale, so it skips source columns and those
+        // weights shift frame-to-frame as dxPhys slides — "brightness shimmer".
+        // Fix: halve in ≤2× steps until we reach destination width, then blit
+        // ~1:1. Each ≤2× bilinear pass is an accurate area average.
         let blitSrc: HTMLCanvasElement = offscreen as unknown as HTMLCanvasElement;
         let blitW = bbWidth;
-        const downsampleRatio = bbWidth / dwPhys;
-        if (downsampleRatio > 1.5) {
-          const targetW = Math.max(1, Math.round(dwPhys));
+        if (bbWidth / dwPhys > 1.5) {
+          // Use canvas.width + 4 as a stable target rather than round(dwPhys),
+          // which oscillates ±1 every frame as bbWidth changes and causes the
+          // preshrink canvas to resize (and clear) on every other frame.
+          const targetW = canvas.width + 4;
           if (!preshrinkCanvasRef.current) preshrinkCanvasRef.current = document.createElement('canvas');
-          const tmp = preshrinkCanvasRef.current;
-          if (tmp.width !== targetW) tmp.width = targetW;
-          if (tmp.height !== offscreen.height) tmp.height = offscreen.height;
-          const tmpCtx = tmp.getContext('2d');
-          if (tmpCtx) {
-            tmpCtx.imageSmoothingEnabled = true;
-            tmpCtx.imageSmoothingQuality = 'high';
-            tmpCtx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height, 0, 0, targetW, offscreen.height);
-            blitSrc = tmp;
-            blitW = targetW;
+          if (!preshrink2CanvasRef.current) preshrink2CanvasRef.current = document.createElement('canvas');
+          const scratch = [preshrinkCanvasRef.current, preshrink2CanvasRef.current];
+          let flip = 0;
+          while (blitW > targetW) {
+            const stepW = blitW / targetW > 2 ? Math.ceil(blitW / 2) : targetW;
+            const dst = scratch[flip++ & 1];
+            if (dst.width !== stepW) dst.width = stepW;
+            if (dst.height !== offscreen.height) dst.height = offscreen.height;
+            const dstCtx = dst.getContext('2d');
+            if (!dstCtx) break;
+            dstCtx.imageSmoothingEnabled = true;
+            dstCtx.imageSmoothingQuality = 'high';
+            dstCtx.drawImage(blitSrc, 0, 0, blitW, offscreen.height, 0, 0, stepW, offscreen.height);
+            blitSrc = dst;
+            blitW = stepW;
           }
         }
 
