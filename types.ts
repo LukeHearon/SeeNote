@@ -97,6 +97,14 @@ export interface ProjectUiSettings {
   buzzdetectEnabled?: boolean;             // panel shown/hidden
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
+
+  // Panel layout (see hooks/usePanelLayout.ts).
+  playheadLocked?: boolean;
+  filePanelCollapsed?: boolean;
+  videoCollapsed?: boolean;
+  splitRatio?: number;              // video/spectrogram vertical split, 0–1
+  leftPanelRatio?: number;          // file-tree vs tool-palette split within left panel, 0–1
+  leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
 }
 
 /**

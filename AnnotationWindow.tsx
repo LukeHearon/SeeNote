@@ -154,11 +154,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleLeftPanelDrag,
     handleLeftPanelWidthDrag,
   } = usePanelLayout({
-    splitRatio: DEFAULT_SPLIT_RATIO,
-    leftPanelRatio: DEFAULT_LEFT_PANEL_RATIO,
-    leftPanelWidth: DEFAULT_LEFT_PANEL_WIDTH,
+    splitRatio: project.preferences.uiSettings?.splitRatio ?? DEFAULT_SPLIT_RATIO,
+    leftPanelRatio: project.preferences.uiSettings?.leftPanelRatio ?? DEFAULT_LEFT_PANEL_RATIO,
+    leftPanelWidth: project.preferences.uiSettings?.leftPanelWidthRatio != null
+      ? project.preferences.uiSettings.leftPanelWidthRatio * window.innerWidth
+      : DEFAULT_LEFT_PANEL_WIDTH,
   });
-  const [playheadLocked, setPlayheadLocked] = useState(false);
+  const [playheadLocked, setPlayheadLocked] = useState(project.preferences.uiSettings?.playheadLocked ?? false);
   const playheadLockedRef = useRef(false);
   useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
 
@@ -701,6 +703,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectThresholds,
     buzzdetectHiddenNeurons,
     videoMode,
+    playheadLocked,
+    filePanelCollapsed,
+    videoCollapsed,
+    splitRatio,
+    leftPanelRatio,
+    leftPanelWidth,
   });
 
   // Pending-save timer for the annotation autosave. Created here because both
@@ -780,6 +788,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
     setFilterToolActive(false);
+    // Panel layout — restore persisted layout for this project.
+    const savedUi = project.preferences.uiSettings;
+    setPlayheadLocked(savedUi?.playheadLocked ?? false);
+    setFilePanelCollapsed(savedUi?.filePanelCollapsed ?? false);
+    setVideoCollapsed(savedUi?.videoCollapsed ?? false);
+    setSplitRatio(savedUi?.splitRatio ?? DEFAULT_SPLIT_RATIO);
+    setLeftPanelRatio(savedUi?.leftPanelRatio ?? DEFAULT_LEFT_PANEL_RATIO);
+    setLeftPanelWidth(savedUi?.leftPanelWidthRatio != null
+      ? savedUi.leftPanelWidthRatio * window.innerWidth
+      : DEFAULT_LEFT_PANEL_WIDTH);
     setBandPassFilter(project.preferences.bandPassFilter ?? null);
     setFilterStrength(project.preferences.bandPassFilter?.strength ?? 0.5);
     setShuffledFiles([]);

@@ -19,6 +19,13 @@ interface UseProjectPersistenceArgs {
   buzzdetectThresholds: Record<string, number>;
   buzzdetectHiddenNeurons: string[];
   videoMode: VideoMode;
+  // Panel layout.
+  playheadLocked: boolean;
+  filePanelCollapsed: boolean;
+  videoCollapsed: boolean;
+  splitRatio: number;
+  leftPanelRatio: number;
+  leftPanelWidth: number;
 }
 
 // Owns the two debounced "persist UI/settings to the project file" effects that
@@ -42,6 +49,12 @@ export function useProjectPersistence({
   buzzdetectThresholds,
   buzzdetectHiddenNeurons,
   videoMode,
+  playheadLocked,
+  filePanelCollapsed,
+  videoCollapsed,
+  splitRatio,
+  leftPanelRatio,
+  leftPanelWidth,
 }: UseProjectPersistenceArgs) {
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,11 +96,17 @@ export function useProjectPersistence({
         buzzdetectThresholds,
         buzzdetectHiddenNeurons,
         videoMode,
+        playheadLocked,
+        filePanelCollapsed,
+        videoCollapsed,
+        splitRatio,
+        leftPanelRatio,
+        leftPanelWidthRatio: window.innerWidth > 0 ? leftPanelWidth / window.innerWidth : undefined,
       };
       updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, uiSettings });
     }, 600);
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode, playheadLocked, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }
