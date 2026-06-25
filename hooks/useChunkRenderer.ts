@@ -69,6 +69,8 @@ export function useChunkRenderer({
   // Incremental-scroll state: tracks what the offscreen canvas last rendered so
   // draw() can shift it by columnsShifted and only paint the new right-edge columns.
   const prevBbStartColRef = useRef<number | null>(null);
+  const prevDisplayFloorRef = useRef(settings.displayFloor);
+  const prevDisplayCeilRef = useRef(settings.displayCeil);
   const prevCacheVersionRef = useRef<number>(-1);
   // Timestamp (ms) of the last full redraw. New chunk data bumps cacheVersion
   // many times/sec while streaming; a full redraw per bump is O(bbWidth×height)
@@ -185,6 +187,13 @@ export function useChunkRenderer({
         //
         // Fall back to full redraw on: first call, seek, zoom/tier change, resize,
         // or when new chunk data arrived (cacheVersion changed).
+        if (settings.displayFloor !== prevDisplayFloorRef.current ||
+            settings.displayCeil !== prevDisplayCeilRef.current) {
+          prevBbStartColRef.current = null;
+          prevDisplayFloorRef.current = settings.displayFloor;
+          prevDisplayCeilRef.current = settings.displayCeil;
+        }
+
         const prevStartCol = prevBbStartColRef.current;
         const columnsShifted = prevStartCol !== null ? bbStartCol - prevStartCol : Infinity;
         const offscreenReady =
