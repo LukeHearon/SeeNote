@@ -35,7 +35,6 @@ interface Props {
   // Sync (repository URL only — user credentials live in the Preferences tab)
   syncRemoteUrl: string;
   onSyncRemoteUrlChange: (v: string) => void;
-  syncDefaultOpen?: boolean;
   onAddAccessToken?: () => void;
 }
 
@@ -60,7 +59,6 @@ export default function ProjectBaseFields({
   advancedDefaultOpen = false,
   syncRemoteUrl,
   onSyncRemoteUrlChange,
-  syncDefaultOpen = false,
   onAddAccessToken,
 }: Props) {
   const nameRef = useRef<HTMLDivElement>(null);
@@ -148,7 +146,7 @@ export default function ProjectBaseFields({
         </div>
       </div>
 
-      <CollapsibleSection title={projectBaseFields.advancedSection} defaultOpen={advancedDefaultOpen || syncDefaultOpen}>
+      <CollapsibleSection title={projectBaseFields.advancedSection} defaultOpen={advancedDefaultOpen}>
         <DirectoryField
           label={projectBaseFields.buzzdetectLabel}
           projectDir={projectDir}
@@ -158,10 +156,9 @@ export default function ProjectBaseFields({
           notExistMessage="Directory does not exist."
         />
 
-        <CollapsibleSection
-          title={projectBaseFields.syncLabel}
-          defaultOpen={syncDefaultOpen}
-          headerAction={
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-gray-400 text-xs font-medium uppercase tracking-wider">{projectBaseFields.syncLabel}</span>
             <button
               type="button"
               onClick={openSyncGuideWindow}
@@ -170,8 +167,7 @@ export default function ProjectBaseFields({
             >
               <HelpCircle size={14} />
             </button>
-          }
-        >
+          </div>
           <div>
             <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.repoUrlLabel}</label>
             <input
@@ -195,7 +191,7 @@ export default function ProjectBaseFields({
               {projectBaseFields.addTokenLabel}
             </button>
           )}
-        </CollapsibleSection>
+        </div>
       </CollapsibleSection>
     </>
   );

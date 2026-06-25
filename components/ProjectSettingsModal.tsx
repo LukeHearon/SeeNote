@@ -334,7 +334,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
                 syncRemoteUrl={syncRemoteUrl}
                 onSyncRemoteUrlChange={setSyncRemoteUrl}
-                syncDefaultOpen={!!project.settings.gitSync}
                 onAddAccessToken={() => { setActiveTab('preferences'); setFocusToken(true); }}
               />
 
