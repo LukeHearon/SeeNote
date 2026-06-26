@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { BuzzdetectData } from '../types';
 
 // ── Types returned by Rust ────────────────────────────────────────────────────
@@ -142,10 +142,13 @@ export const openFilesDialog = (
   invoke('open_files_dialog', { startPath, filters });
 
 /** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src.
- * Tauri's WKURLSchemeHandler uses the URL path as a literal filesystem path with no
- * percent-decoding, so we must not encode the path at all. */
+ * Delegates to Tauri's `convertFileSrc`, which emits the correct scheme and encoding
+ * per platform: `asset://localhost/...` on macOS/Linux and `http://asset.localhost/...`
+ * on Windows. Do NOT hand-build this string — a literal `asset://localhost` + path
+ * breaks on Windows (drive-letter paths have no leading slash, use backslashes, and
+ * are served under a different scheme), tripping WebView2's URL safety check. */
 export const toAssetUrl = (absolutePath: string): string =>
-  `asset://localhost${absolutePath}`;
+  convertFileSrc(absolutePath);
 
 // ── PCM streaming ─────────────────────────────────────────────────────────────
 

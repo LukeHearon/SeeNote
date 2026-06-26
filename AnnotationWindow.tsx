@@ -8,7 +8,7 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray } from './utils/helpers';
+import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, toAssetUrl } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -410,7 +410,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // Both the tree and nav paths already filter these out; this is a belt-and-suspenders
     // check so a stray caller can't put us into a half-loaded state.
     if (!isSupportedMediaFile(absolutePath)) {
-      addLog(`Skipped unsupported file: ${absolutePath.split('/').pop() ?? absolutePath}`, 'error');
+      addLog(`Skipped unsupported file: ${basename(absolutePath)}`, 'error');
       return;
     }
 
@@ -439,7 +439,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
 
-    const fileName = absolutePath.split('/').pop() ?? absolutePath;
+    const fileName = basename(absolutePath);
     const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
     const ext = getExt(fileName);
     const isAudio = audioExts.includes(ext);

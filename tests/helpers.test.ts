@@ -7,6 +7,7 @@ import {
   parseAudacityContent,
   mergeAnnotations,
   stripExt,
+  basename,
   shuffleArray,
   clamp,
   updateAnnotation,
@@ -223,6 +224,24 @@ describe('stripExt', () => {
   it('does not strip a dot that lives in a directory segment', () => {
     // The final segment has no dot, so nothing is stripped.
     expect(stripExt('/a/b.c/file')).toBe('/a/b.c/file');
+  });
+});
+
+describe('basename', () => {
+  it('returns the final segment of a POSIX path', () => {
+    expect(basename('/Users/luke/audio/bird.mp3')).toBe('bird.mp3');
+  });
+
+  it('returns the final segment of a Windows path', () => {
+    expect(basename('C:\\Users\\Luke\\media\\James 32 Jump.mp4')).toBe('James 32 Jump.mp4');
+  });
+
+  it('handles mixed separators', () => {
+    expect(basename('C:/Users\\Luke/clip.wav')).toBe('clip.wav');
+  });
+
+  it('returns the input unchanged when there is no separator', () => {
+    expect(basename('bird.mp3')).toBe('bird.mp3');
   });
 });
 

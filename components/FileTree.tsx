@@ -45,7 +45,7 @@ interface ContextMenuState {
 }
 
 import { isSupportedMediaFile, SUPPORTED_AUDIO_EXTS, getExt } from '../constants';
-import { stripExt } from '../utils/helpers';
+import { stripExt, basename } from '../utils/helpers';
 
 // OS-aware label for the system file browser
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
@@ -530,7 +530,7 @@ function FileTree({
     }
   }, [rootDirectory, enteredPath]);
 
-  const dirName = enteredPath ? enteredPath.split('/').pop() ?? enteredPath : (rootDirectory?.split('/').pop() || 'No folder');
+  const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : 'No folder');
 
   if (collapsed) {
     return (

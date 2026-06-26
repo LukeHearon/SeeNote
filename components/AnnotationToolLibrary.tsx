@@ -8,6 +8,7 @@ import { createCurrentTimeStore } from '../utils/currentTimeStore';
 import { audioPeak } from '../utils/tauriCommands';
 import { revealInFileManager } from '../utils/projectCommands';
 import { normalizationGain } from '../utils/normalizeGain';
+import { basename } from '../utils/helpers';
 import ExampleSpectrogram from './ExampleSpectrogram';
 import LevelRangeSlider from './LevelRangeSlider';
 import VolumeControl from './VolumeControl';
@@ -24,7 +25,6 @@ interface Props {
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
-const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
 const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 const revealLabel = isMac ? 'Show in Finder' : 'Show in File Explorer';
 
