@@ -86,8 +86,13 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
     setError('');
     setIsCreating(true);
 
-    const projectDirOk = await checkDirExists(projectDir);
-    if (!projectDirOk) { setError(createProjectModal.errorDirNotExist); setIsCreating(false); return; }
+    try {
+      await createDirAll(projectDir);
+    } catch (err) {
+      setError(String(err));
+      setIsCreating(false);
+      return;
+    }
 
     try {
       const existing = await readProjectSettings(projectDir);
@@ -150,6 +155,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         ]}
         footer={
           <>
+            {error && <p className="text-red-400 text-sm flex-1 self-center">{error}</p>}
             <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
               {createProjectModal.cancelButton}
             </button>
@@ -223,7 +229,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               onSyncRemoteUrlChange={setSyncRemoteUrl}
             />
 
-            {error && <p className="text-red-400 text-sm">{error}</p>}
           </>
         )}
 
@@ -258,7 +263,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               />
             </div>
 
-            {error && <p className="text-red-400 text-sm">{error}</p>}
           </>
         )}
       </SettingsModalShell>
