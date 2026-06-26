@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { keyboardShortcutsView as copy } from '../copy/ui';
+import { isMac, formatModKey } from '../utils/platform';
 
 // ---------------------------------------------------------------------------
 // Shortcut data
@@ -39,10 +40,10 @@ const GROUPS: Group[] = [
       { codes: ['Comma'], display: ',', label: 'Nudge video forward one frame' },
       { codes: ['Period'], display: '.', label: 'Nudge video backward one frame' },
       { codes: ['KeyC'], display: 'C', label: 'Toggle lock playhead to center' },
-      { codes: ['ArrowLeft'], display: 'Cmd+←', label: 'Jump to previous annotation' },
-      { codes: ['ArrowRight'], display: 'Cmd+→', label: 'Jump to next annotation' },
-      { codes: ['ArrowUp'], display: 'Cmd+↑', label: 'Previous track' },
-      { codes: ['ArrowDown'], display: 'Cmd+↓', label: 'Next track' },
+      { codes: ['ArrowLeft'], display: '{mod}+←', label: 'Jump to previous annotation' },
+      { codes: ['ArrowRight'], display: '{mod}+→', label: 'Jump to next annotation' },
+      { codes: ['ArrowUp'], display: '{mod}+↑', label: 'Previous track' },
+      { codes: ['ArrowDown'], display: '{mod}+↓', label: 'Next track' },
     ],
   },
   {
@@ -66,11 +67,11 @@ const GROUPS: Group[] = [
     name: 'Annotations',
     bg: 'bg-emerald-600', ring: 'ring-emerald-400', dot: 'bg-emerald-500', text: 'text-emerald-300',
     shortcuts: [
-      { codes: ['KeyA'], display: 'Cmd+A', label: 'Select whole track' },
+      { codes: ['KeyA'], display: '{mod}+A', label: 'Select whole track' },
       { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
-      { codes: ['KeyZ'], display: 'Cmd+Z', label: 'Undo' },
-      { codes: ['KeyZ'], display: 'Cmd+Shift+Z', label: 'Redo' },
-      { codes: ['KeyY'], display: 'Cmd+Y', label: 'Redo' },
+      { codes: ['KeyZ'], display: '{mod}+Z', label: 'Undo' },
+      { codes: ['KeyZ'], display: '{mod}+Shift+Z', label: 'Redo' },
+      { codes: ['KeyY'], display: '{mod}+Y', label: 'Redo' },
     ],
   },
   {
@@ -97,23 +98,25 @@ for (const g of GROUPS) {
   }
 }
 
+// The keyboard-side codes for the primary modifier ({mod}): ⌘ on macOS, Ctrl elsewhere.
+const MOD_CODES = isMac
+  ? ['MetaLeft', 'MetaRight']
+  : ['ControlLeft', 'ControlRight'];
+
 // All codes to highlight when a specific shortcut is hovered
 function codesForShortcut(s: ShortcutEntry): Set<string> {
   const set = new Set(s.codes);
-  if (s.display.includes('Shift+'))  { set.add('ShiftLeft');   set.add('ShiftRight'); }
-  if (s.display.includes('Cmd+'))    { set.add('MetaLeft');    set.add('MetaRight'); }
-  if (s.display.includes('Ctrl'))    { set.add('ControlLeft'); set.add('ControlRight'); }
+  if (s.display.includes('Shift+')) { set.add('ShiftLeft'); set.add('ShiftRight'); }
+  if (s.display.includes('{mod}'))  { MOD_CODES.forEach(c => set.add(c)); }
   return set;
 }
 
 // All shortcuts matching a hovered key code
 function shortcutsForCode(code: string) {
-  if (code === 'ShiftLeft'    || code === 'ShiftRight')
+  if (code === 'ShiftLeft' || code === 'ShiftRight')
     return ALL_SHORTCUTS.filter(s => s.display.includes('Shift+'));
-  if (code === 'MetaLeft'     || code === 'MetaRight')
-    return ALL_SHORTCUTS.filter(s => s.display.includes('Cmd+'));
-  if (code === 'ControlLeft'  || code === 'ControlRight')
-    return ALL_SHORTCUTS.filter(s => s.display.includes('Ctrl'));
+  if (MOD_CODES.includes(code))
+    return ALL_SHORTCUTS.filter(s => s.display.includes('{mod}'));
   return ALL_SHORTCUTS.filter(s => s.codes.includes(code));
 }
 
@@ -122,6 +125,30 @@ function shortcutsForCode(code: string) {
 // ---------------------------------------------------------------------------
 
 type KeyDef = { code: string; label: string; flex: number; small?: boolean };
+
+// Bottom modifier row, drawn to match the host platform's physical layout.
+// macOS: Ctrl · Alt · ⌘ | Space | ⌘ · Alt · Ctrl
+// Windows/Linux: Ctrl · ⊞ · Alt | Space | Alt · ⊞ · Ctrl (super = the Windows key).
+// The 'MetaLeft'/'MetaRight' codes are the super key on every platform.
+const MODIFIER_ROW: KeyDef[] = isMac
+  ? [
+      { code: 'ControlLeft',  label: 'Ctrl', flex: 1.5, small: true },
+      { code: 'AltLeft',      label: 'Alt',  flex: 1.5, small: true },
+      { code: 'MetaLeft',     label: '⌘',    flex: 1.5, small: true },
+      { code: 'Space',        label: 'Space',flex: 6,   small: true },
+      { code: 'MetaRight',    label: '⌘',    flex: 1.5, small: true },
+      { code: 'AltRight',     label: 'Alt',  flex: 1.5, small: true },
+      { code: 'ControlRight', label: 'Ctrl', flex: 1.5, small: true },
+    ]
+  : [
+      { code: 'ControlLeft',  label: 'Ctrl', flex: 1.5, small: true },
+      { code: 'MetaLeft',     label: '⊞',    flex: 1.5, small: true },
+      { code: 'AltLeft',      label: 'Alt',  flex: 1.5, small: true },
+      { code: 'Space',        label: 'Space',flex: 6,   small: true },
+      { code: 'AltRight',     label: 'Alt',  flex: 1.5, small: true },
+      { code: 'MetaRight',    label: '⊞',    flex: 1.5, small: true },
+      { code: 'ControlRight', label: 'Ctrl', flex: 1.5, small: true },
+    ];
 
 const ROWS: KeyDef[][] = [
   [
@@ -200,15 +227,7 @@ const ROWS: KeyDef[][] = [
     { code: 'Slash',        label: '/',    flex: 1 },
     { code: 'ShiftRight',   label: 'Shift',flex: 2.75, small: true },
   ],
-  [
-    { code: 'ControlLeft',  label: 'Ctrl', flex: 1.5,  small: true },
-    { code: 'AltLeft',      label: 'Alt',  flex: 1.5,  small: true },
-    { code: 'MetaLeft',     label: '⌘',    flex: 1.5,  small: true },
-    { code: 'Space',        label: 'Space',flex: 6,    small: true },
-    { code: 'MetaRight',    label: '⌘',    flex: 1.5,  small: true },
-    { code: 'AltRight',     label: 'Alt',  flex: 1.5,  small: true },
-    { code: 'ControlRight', label: 'Ctrl', flex: 1.5,  small: true },
-  ],
+  MODIFIER_ROW,
 ];
 
 // Arrow keys use a fixed pixel width matching a standard letter key
@@ -430,7 +449,7 @@ function ShortcutRow({ display, label, highlighted, onEnter, onLeave }: {
       onMouseLeave={onLeave}
     >
       <span className="text-[11px] text-slate-400 truncate">{label}</span>
-      <span className="font-mono text-[10px] text-slate-300 bg-slate-600 px-1 rounded whitespace-nowrap">{display}</span>
+      <span className="font-mono text-[10px] text-slate-300 bg-slate-600 px-1 rounded whitespace-nowrap">{formatModKey(display)}</span>
     </div>
   );
 }

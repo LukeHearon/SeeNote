@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { isMac } from '../utils/platform';
 
 export type HotkeyMod = 'mod' | 'shift' | 'alt';
 
@@ -32,8 +33,6 @@ export interface HotkeyBinding {
   stop?: boolean;
   handler: (e: KeyboardEvent) => void;
 }
-
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
 function isInputLikeTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;

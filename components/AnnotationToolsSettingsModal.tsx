@@ -4,6 +4,7 @@ import { tooltips } from '../copy/tooltips';
 import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor } from '../constants';
+import { isMac } from '../utils/platform';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
 import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
 
@@ -268,7 +269,6 @@ export default function AnnotationToolsSettingsModal({
   // in the bubble phase). preventDefault + stopPropagation ensure the global
   // mod+z annotation-undo never also fires while this modal is open.
   useEffect(() => {
-    const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
     const handler = (e: KeyboardEvent) => {
       const mod = isMac ? e.metaKey : e.ctrlKey;
       if (!mod) return;

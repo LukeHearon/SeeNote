@@ -6,6 +6,7 @@ import {
   useCopyRerenderOnChange, copyChannel,
 } from '../copy/overrideStore';
 import { applyCopyOverrides } from '../utils/tauriCommands';
+import { formatModKey } from '../utils/platform';
 
 type ViewMode = 'current' | 'modified' | 'all';
 
@@ -108,7 +109,7 @@ export function CopyEditor() {
           ))}
           <button
             onClick={() => copyChannel?.postMessage({ type: 'togglePick' })}
-            title="Toggle pick mode in the main window (⌘⇧E)"
+            title={formatModKey("Toggle pick mode in the main window ({mod}⇧E)")}
             className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-colors ${pickActive ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}
           >
             <Crosshair size={12} />

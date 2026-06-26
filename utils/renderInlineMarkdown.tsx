@@ -1,12 +1,15 @@
 import React from 'react';
+import { formatModKey } from './platform';
 
 export function renderInlineMarkdown(
-  text: string,
+  rawText: string,
   options?: {
     codeRenderer?: (text: string, key: number) => React.ReactNode;
     anchorRenderer?: (target: string, text: string, key: number) => React.ReactNode;
   }
 ): React.ReactNode[] {
+  // Resolve the OS-specific modifier-key token ({mod}) before tokenizing.
+  const text = formatModKey(rawText);
   const codeRenderer = options?.codeRenderer ?? ((t, k) => <code key={k}>{t}</code>);
   const anchorRenderer = options?.anchorRenderer ?? ((target, t, k) => <a key={k} href={target}>{t}</a>);
 

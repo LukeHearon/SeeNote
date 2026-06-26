@@ -34,7 +34,7 @@ export const helpPanel = {
       get p2() { return getOverride('helpPanel.guide.projects.p2') ?? "Configure project-level settings and user preferences by opening the [project settings](project-settings-btn)."; },
     },
     filePanel: {
-      get p1() { return getOverride('helpPanel.guide.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `Cmd/Ctrl+↑` / `Cmd/Ctrl+↓` to step through tracks in order. Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons. Right-click a track or folder to reveal its media location or annotation file in the system file manager. Right-click a track or folder and choose **Copy ident** to copy its ident to the clipboard (a folder's ident is its path relative to the audio root), or **Import annotations…** to load annotations from an external file; they are filed under that track's ident. If the track already has annotations, you can **Overwrite** them or **Merge** (append the imported ones)."; },
+      get p1() { return getOverride('helpPanel.guide.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order. Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons. Right-click a track or folder to reveal its media location or annotation file in the system file manager. Right-click a track or folder and choose **Copy ident** to copy its ident to the clipboard (a folder's ident is its path relative to the audio root), or **Import annotations…** to load annotations from an external file; they are filed under that track's ident. If the track already has annotations, you can **Overwrite** them or **Merge** (append the imported ones)."; },
     },
     videoMode: {
       get intro() { return getOverride('helpPanel.guide.videoMode.intro') ?? "The picker in the **bottom-left corner of the video pane** chooses how video is rendered. Saved per project:"; },
@@ -57,7 +57,7 @@ export const helpPanel = {
     },
     spectrogram: {
       get li1() { return getOverride('helpPanel.guide.spectrogram.li1') ?? "**Pan:** Right-click & drag, or scroll wheel."; },
-      get li2() { return getOverride('helpPanel.guide.spectrogram.li2') ?? "**Zoom:** `Cmd/Ctrl` + scroll wheel."; },
+      get li2() { return getOverride('helpPanel.guide.spectrogram.li2') ?? "**Zoom:** `{mod}` + scroll wheel."; },
       get li3() { return getOverride('helpPanel.guide.spectrogram.li3') ?? "**Seek:** Left-click (in Selection Mode) to move the playhead."; },
       get li4() { return getOverride('helpPanel.guide.spectrogram.li4') ?? "**Play/Pause:** `Space`."; },
       get li5() { return getOverride('helpPanel.guide.spectrogram.li5') ?? "**Toggle playback rate (1× ↔ last defined):** `R`."; },
@@ -110,19 +110,19 @@ export const helpPanel = {
       get p3() { return getOverride('helpPanel.annotations.tools.p3') ?? "To bulk-import examples: the **Import examples** button in Annotation Tool Settings takes a directory of one folder per label holding audio clips, copying the clips in and creating tools for new labels."; },
       get p4() { return getOverride('helpPanel.annotations.tools.p4') ?? "To add examples to a single tool, edit it (gear icon) and use the **Files…** or **Folder…** buttons under Example clips. Folders are searched recursively; clips are copied into that tool's examples/ and existing filenames are skipped."; },
       get p5() { return getOverride('helpPanel.annotations.tools.p5') ?? "Once a tool has example clips, a **play** button appears on its chip (in the palette and in Annotation Tool Settings) — press it to audition the clips, cycling to the next clip on each press. To browse all of a tool's clips with their spectrograms, right-click the tool and choose **Show examples** (or use the **View** button in the tool editor). The library is read-only and its spectrogram settings don't affect the project. Inside it, `Space` plays/pauses the selected clip, the spectrogram has full time/frequency axes, the frequency range defaults to the clip's full band, and right-clicking a clip reveals it in Finder / File Explorer. Example playback is loudness-normalized (with a volume slider) so quiet and loud clips audition at a comparable level. While any example is sounding, the main track's audio is paused so the two never overlap."; },
-      get note1() { return getOverride('helpPanel.annotations.tools.note1') ?? "Inside Annotation Tool Settings, `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z` undo and redo the last tool change."; },
+      get note1() { return getOverride('helpPanel.annotations.tools.note1') ?? "Inside Annotation Tool Settings, `{mod}+Z` / `{mod}+Shift+Z` undo and redo the last tool change."; },
     },
     creating: {
       get li1() { return getOverride('helpPanel.annotations.creating.li1') ?? "**From scratch:** activate a tool, then drag on the spectrogram."; },
       get li2() { return getOverride('helpPanel.annotations.creating.li2') ?? "**From selection:** make a selection region, then press a tool key (`0`–`9`)."; },
-      get li3() { return getOverride('helpPanel.annotations.creating.li3') ?? "**Whole track:** with a tool active, press `Cmd/Ctrl+A` to annotate the entire track (with no tool active it selects the whole track instead)."; },
+      get li3() { return getOverride('helpPanel.annotations.creating.li3') ?? "**Whole track:** with a tool active, press `{mod}+A` to annotate the entire track (with no tool active it selects the whole track instead)."; },
     },
     editing: {
       get li1() { return getOverride('helpPanel.annotations.editing.li1') ?? "**Resize:** drag the left or right edge handle."; },
-      get li2() { return getOverride('helpPanel.annotations.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `Cmd+←` / `Cmd+→` to jump between annotations."; },
+      get li2() { return getOverride('helpPanel.annotations.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `{mod}+←` / `{mod}+→` to jump between annotations."; },
       get li3() { return getOverride('helpPanel.annotations.editing.li3') ?? "**Rename:** hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically."; },
       get li4() { return getOverride('helpPanel.annotations.editing.li4') ?? "**Delete:** select an annotation and press `Delete` / `Backspace`, or middle-click it directly."; },
-      get li5() { return getOverride('helpPanel.annotations.editing.li5') ?? "**Undo/Redo:** `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z`."; },
+      get li5() { return getOverride('helpPanel.annotations.editing.li5') ?? "**Undo/Redo:** `{mod}+Z` / `{mod}+Shift+Z`."; },
     },
   },
 };
