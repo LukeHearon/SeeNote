@@ -9,7 +9,7 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, toAssetUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -201,6 +201,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
+  const [allNonMediaFiles, setAllNonMediaFiles] = useState<string[]>([]);
 
   // Memoized so children whose effects depend on it (e.g. CanvasVideoPlayer's
   // rAF loop) don't tear down on every parent re-render.
@@ -809,9 +810,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
 
-    listMediaFilesRecursive(project.mediaDirectoryAbs)
-      .then(files => {
+    Promise.all([
+      listMediaFilesRecursive(project.mediaDirectoryAbs),
+      listNonMediaFilesRecursive(project.mediaDirectoryAbs),
+    ])
+      .then(([files, nonMedia]) => {
         setAllMediaFiles(files);
+        setAllNonMediaFiles(nonMedia);
         let firstFile = files[0];
         if (project.preferences.shuffleMode && files.length > 0) {
           const shuffled = shuffleArray(files);
@@ -832,6 +837,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       })
       .catch(err => {
         setAllMediaFiles([]);
+        setAllNonMediaFiles([]);
         addLog(`Error scanning audio directory: ${err}`, 'error');
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -864,8 +870,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   const handleRefreshFiles = useCallback(async () => {
     try {
-      const files = await listMediaFilesRecursive(project.mediaDirectoryAbs);
+      const [files, nonMedia] = await Promise.all([
+        listMediaFilesRecursive(project.mediaDirectoryAbs),
+        listNonMediaFilesRecursive(project.mediaDirectoryAbs),
+      ]);
       setAllMediaFiles(files);
+      setAllNonMediaFiles(nonMedia);
       refreshAnnotatedSet(files, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
@@ -898,11 +908,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setVideoSrc(null);
       setAnnotations([]);
       try {
-        const files = await listMediaFilesRecursive(updated.mediaDirectoryAbs);
+        const [files, nonMedia] = await Promise.all([
+          listMediaFilesRecursive(updated.mediaDirectoryAbs),
+          listNonMediaFilesRecursive(updated.mediaDirectoryAbs),
+        ]);
         setAllMediaFiles(files);
+        setAllNonMediaFiles(nonMedia);
         if (files.length > 0) handleOpenTrack(files[0]);
       } catch (err) {
         setAllMediaFiles([]);
+        setAllNonMediaFiles([]);
         addLog(`Error scanning audio directory: ${err}`, 'error');
       }
     }
@@ -1446,6 +1461,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               : undefined,
             onImportAnnotations: handleImportAnnotations,
             onRefresh: handleRefreshFiles,
+            nonMediaFiles: allNonMediaFiles,
             initialEnteredFolderPath: project?.preferences.enteredFolderPath ?? null,
             onEnteredFolderChange: handleEnteredFolderChange,
           };

@@ -105,6 +105,10 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
+/** Recursively list all non-audio/video files under path. */
+export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
+  invoke('list_non_media_files_recursive', { path });
+
 /**
  * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to
  * `null` when no file exists for this ident.

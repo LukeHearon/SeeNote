@@ -261,6 +261,45 @@ fn collect_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::i
     Ok(())
 }
 
+fn collect_non_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
+    let read_dir_iter = match std::fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(e) => {
+            eprintln!("[SeeNote] collect_non_media_files: cannot read dir '{}': {}", dir.display(), e);
+            return Ok(());
+        }
+    };
+    for entry_result in read_dir_iter {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            let _ = collect_non_media_files(&path, files);
+        } else {
+            let (is_audio, is_video) = classify_ext(&path);
+            if !is_audio && !is_video {
+                files.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_non_media_files_recursive(path: String) -> Result<Vec<String>, String> {
+    let root = std::path::Path::new(&path);
+    let mut files = Vec::new();
+    collect_non_media_files(root, &mut files).map_err(|e| e.to_string())?;
+    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(files)
+}
+
 #[tauri::command]
 pub async fn check_dir_exists(path: String) -> Result<bool, String> {
     let p = std::path::Path::new(&path);

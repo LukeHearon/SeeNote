@@ -25,6 +25,7 @@ pub fn run() {
             commands::filesystem::open_files_dialog,
             commands::filesystem::remove_file,
             commands::filesystem::check_dir_exists,
+            commands::filesystem::list_non_media_files_recursive,
             commands::filesystem::save_copy_overrides,
             commands::filesystem::apply_copy_overrides,
             commands::projects::get_app_data_dir,

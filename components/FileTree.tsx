@@ -9,6 +9,7 @@ interface TreeNode {
   isDir: boolean;
   children: TreeNode[];
   fileCount: number; // precomputed — no recursive counting at render time
+  nonMediaFiles?: string[]; // non-audio/video files directly in this dir
 }
 
 interface FileTreeProps {
@@ -34,6 +35,7 @@ interface FileTreeProps {
   onRefresh: () => void;
   initialEnteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
+  nonMediaFiles?: string[];
 }
 
 interface ContextMenuState {
@@ -59,7 +61,7 @@ function computeFileCount(node: TreeNode): number {
   return count;
 }
 
-function buildTree(rootDir: string, files: string[]): TreeNode[] {
+function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = []): TreeNode[] {
   const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0 };
 
   for (const file of files) {
@@ -91,6 +93,29 @@ function buildTree(rootDir: string, files: string[]): TreeNode[] {
 
   // Precompute file counts bottom-up
   for (const child of root.children) computeFileCount(child);
+
+  // Attach non-media files to their containing directory nodes
+  if (nonMediaFiles.length > 0) {
+    const nonMediaByDir = new Map<string, string[]>();
+    for (const file of nonMediaFiles) {
+      const rel = file.substring(rootDir.length + 1);
+      const parts = rel.split(/[\\/]/);
+      if (parts.length <= 1) continue; // root-level, handled separately by component
+      const dirPath = rootDir + '/' + parts.slice(0, -1).join('/');
+      if (!nonMediaByDir.has(dirPath)) nonMediaByDir.set(dirPath, []);
+      nonMediaByDir.get(dirPath)!.push(file);
+    }
+    const attachNonMedia = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.isDir) {
+          const nm = nonMediaByDir.get(n.path);
+          if (nm) n.nonMediaFiles = nm;
+          attachNonMedia(n.children);
+        }
+      }
+    };
+    attachNonMedia(root.children);
+  }
 
   return root.children;
 }
@@ -130,6 +155,8 @@ interface TreeItemProps {
   ancestorPaths: Set<string>;
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
   onEnterFolder: (path: string) => void;
+  expandedNonMedia: Set<string>;
+  toggleNonMedia: (path: string) => void;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
@@ -143,6 +170,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
   ancestorPaths,
   onContextMenu,
   onEnterFolder,
+  expandedNonMedia,
+  toggleNonMedia,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
@@ -195,8 +224,36 @@ const TreeItem: React.FC<TreeItemProps> = ({
             ancestorPaths={ancestorPaths}
             onContextMenu={onContextMenu}
             onEnterFolder={onEnterFolder}
+            expandedNonMedia={expandedNonMedia}
+            toggleNonMedia={toggleNonMedia}
           />
         ))}
+        {isExpanded && node.nonMediaFiles && node.nonMediaFiles.length > 0 && (
+          <div>
+            <button
+              className="flex items-center gap-1 w-full text-left text-slate-600 hover:text-slate-500 py-0.5"
+              style={{ paddingLeft: `${(depth + 1) * 12 + 8}px`, paddingRight: '8px' }}
+              onClick={() => toggleNonMedia(node.path)}
+            >
+              <span className="text-[9px] uppercase tracking-wider opacity-50 select-none">
+                {expandedNonMedia.has(node.path) ? '▾' : '▸'} {node.nonMediaFiles.length} unsupported
+              </span>
+            </button>
+            {expandedNonMedia.has(node.path) && node.nonMediaFiles.map(filePath => {
+              const fname = filePath.split(/[\\/]/).pop() ?? filePath;
+              return (
+                <div
+                  key={filePath}
+                  className="flex items-center w-full py-px text-slate-600 opacity-40 select-none"
+                  style={{ paddingLeft: `${(depth + 1) * 12 + 22}px`, paddingRight: '8px' }}
+                  data-tooltip={fname}
+                >
+                  <span className="text-[10px] truncate flex-1 italic">{fname}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -271,12 +328,14 @@ function FileTree({
   onRefresh,
   initialEnteredFolderPath,
   onEnteredFolderChange,
+  nonMediaFiles,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [enteredPath, setEnteredPath] = useState<string | null>(initialEnteredFolderPath ?? null);
   const scrollToFolderRef = useRef<string | null>(null);
+  const [expandedNonMedia, setExpandedNonMedia] = useState<Set<string>>(new Set());
 
   // Reset enter state when the media root changes
   useEffect(() => {
@@ -322,10 +381,36 @@ function FileTree({
     return allFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
   }, [enteredPath, allFiles]);
 
+  const effectiveNonMediaFiles = useMemo(() => {
+    if (!nonMediaFiles || !effectiveRoot) return [];
+    if (!enteredPath) return nonMediaFiles;
+    const prefix = enteredPath.replace(/\\/g, '/') + '/';
+    return nonMediaFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
+  }, [enteredPath, nonMediaFiles, effectiveRoot]);
+
+  const rootNonMedia = useMemo(() => {
+    if (!effectiveRoot) return [];
+    const rootNorm = effectiveRoot.replace(/\\/g, '/');
+    return effectiveNonMediaFiles.filter(f => {
+      const rel = f.replace(/\\/g, '/').substring(rootNorm.length + 1);
+      return rel.length > 0 && !rel.includes('/');
+    });
+  }, [effectiveNonMediaFiles, effectiveRoot]);
+
+  const toggleNonMedia = useCallback((path: string) => {
+    setExpandedNonMedia(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
   const tree = useMemo(() => {
-    if (!effectiveRoot || effectiveFiles.length === 0) return [];
-    return buildTree(effectiveRoot, effectiveFiles);
-  }, [effectiveRoot, effectiveFiles]);
+    if (!effectiveRoot) return [];
+    if (effectiveFiles.length === 0 && effectiveNonMediaFiles.length === 0) return [];
+    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles);
+  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles]);
 
   // Preserve scroll position across tree rebuilds (refresh, file-list changes,
   // opening a folder's contents) as long as we're still viewing the same folder.
@@ -717,21 +802,51 @@ function FileTree({
         {/* Normal tree mode */}
         {!shuffleMode && (() => {
           const ancestorPaths = getAncestorPaths(currentTrack, effectiveRoot);
-          return tree.map(node => (
-            <TreeItem
-              key={node.path}
-              node={node}
-              currentTrack={currentTrack}
-              onFileSelect={onFileSelect}
-              depth={0}
-              expandedDirs={expandedDirs}
-              toggleDir={toggleDir}
-              annotatedTracks={annotatedTracks}
-              ancestorPaths={ancestorPaths}
-              onContextMenu={handleContextMenu}
-              onEnterFolder={enterFolder}
-            />
-          ));
+          return (
+            <>
+              {tree.map(node => (
+                <TreeItem
+                  key={node.path}
+                  node={node}
+                  currentTrack={currentTrack}
+                  onFileSelect={onFileSelect}
+                  depth={0}
+                  expandedDirs={expandedDirs}
+                  toggleDir={toggleDir}
+                  annotatedTracks={annotatedTracks}
+                  ancestorPaths={ancestorPaths}
+                  onContextMenu={handleContextMenu}
+                  onEnterFolder={enterFolder}
+                  expandedNonMedia={expandedNonMedia}
+                  toggleNonMedia={toggleNonMedia}
+                />
+              ))}
+              {rootNonMedia.length > 0 && (
+                <div>
+                  <button
+                    className="flex items-center gap-1 w-full text-left text-slate-600 hover:text-slate-500 py-0.5 px-2"
+                    onClick={() => toggleNonMedia(effectiveRoot ?? '')}
+                  >
+                    <span className="text-[9px] uppercase tracking-wider opacity-50 select-none">
+                      {expandedNonMedia.has(effectiveRoot ?? '') ? '▾' : '▸'} {rootNonMedia.length} unsupported
+                    </span>
+                  </button>
+                  {expandedNonMedia.has(effectiveRoot ?? '') && rootNonMedia.map(filePath => {
+                    const fname = filePath.split(/[\\/]/).pop() ?? filePath;
+                    return (
+                      <div
+                        key={filePath}
+                        className="flex items-center w-full py-px pl-[22px] pr-2 text-slate-600 opacity-40 select-none"
+                        data-tooltip={fname}
+                      >
+                        <span className="text-[10px] truncate flex-1 italic">{fname}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          );
         })()}
         </div>{/* end scroll container */}
 
