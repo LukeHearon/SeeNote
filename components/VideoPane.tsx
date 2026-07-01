@@ -4,6 +4,7 @@ import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
+import { wantsCanvasRenderer } from '../utils/videoPlaybackMode';
 import { useHotkeys } from '../hooks/useHotkeys';
 import type { VideoMode } from '../types';
 import {
@@ -60,9 +61,7 @@ export default function VideoPane({
   //   mixed: <video> by default; canvas (frame-accurate) once a selection exists
   //   accurate: canvas whenever a frame source is available
   const canvasAvailable = !!frameSource && !isAudioTrack;
-  const wantsCanvas =
-    videoMode === 'accurate' ||
-    (videoMode === 'mixed' && hasSelection);
+  const wantsCanvas = wantsCanvasRenderer(videoMode, hasSelection);
   const usingCanvas = canvasAvailable && wantsCanvas;
   // True when mode=off but the active track is a video — the pane displays a
   // "Video Disabled" placeholder instead of routing through <video>.

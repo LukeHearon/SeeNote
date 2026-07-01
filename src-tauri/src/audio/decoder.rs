@@ -1,17 +1,37 @@
 use anyhow::{Context, Result};
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions};
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
+use symphonia::core::codecs::registry::CodecRegistry;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, Timestamp};
 use std::fs::File;
+use std::sync::OnceLock;
 
 pub struct FileInfo {
     pub duration_secs: f64,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+/// Build (once, lazily) a `CodecRegistry` containing every codec Symphonia registers by default
+/// for the `feature`s enabled in Cargo.toml, plus the Opus decoder.
+///
+/// Symphonia has no built-in Opus support — not even behind a feature flag — so WEBM/Matroska
+/// files (which very commonly carry Opus audio) probe fine via the `mkv` demuxer but fail to
+/// decode with "No decodable audio track found". `symphonia-adapter-libopus` wraps libopus
+/// (statically built via its `bundled` cmake feature, mirroring how `git2` is vendored in this
+/// Cargo.toml) to fill that gap. We start from Symphonia's own default registration function and
+/// add exactly one more decoder, rather than hand-rolling the full default codec list ourselves.
+fn codec_registry() -> &'static CodecRegistry {
+    static REGISTRY: OnceLock<CodecRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut registry = CodecRegistry::new();
+        symphonia::default::register_enabled_codecs(&mut registry);
+        registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
+        registry
+    })
 }
 
 /// Find the first track in the container that has a decodable audio codec.
@@ -20,13 +40,13 @@ pub struct FileInfo {
 /// MP4/MKV with a video track that is often the video, not the audio. Building
 /// an audio decoder against video codec params then fails silently upstream.
 /// We iterate tracks and pick the first one that produces a working decoder.
-fn find_audio_track(format: &dyn FormatReader) -> Option<&symphonia::core::formats::Track> {
-    let codecs = symphonia::default::get_codecs();
+fn find_audio_track(format: &dyn FormatReader) -> Option<&Track> {
+    let codecs = codec_registry();
     format.tracks().iter().find(|t| {
-        t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL
-            && codecs
-                .make(&t.codec_params, &DecoderOptions::default())
-                .is_ok()
+        t.codec_params.as_ref().and_then(|cp| cp.audio()).is_some_and(|p| {
+            p.codec != CODEC_ID_NULL_AUDIO
+                && codecs.make_audio_decoder(p, &AudioDecoderOptions::default()).is_ok()
+        })
     })
 }
 
@@ -39,24 +59,36 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+    let mut format = symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
         .context("Unsupported format")?;
 
-    let mut format = probed.format;
     let (track_id, initial_sr, initial_channels, n_frames, delay, padding) = {
         let track = find_audio_track(format.as_ref())
             .context("No decodable audio track found")?;
-        let p = &track.codec_params;
+        let audio_params = track.codec_params.as_ref().and_then(|cp| cp.audio());
         (
             track.id,
-            p.sample_rate.unwrap_or(44100),
-            p.channels.map(|c| c.count() as u16).unwrap_or(1),
-            p.n_frames,
-            p.delay.unwrap_or(0) as u64,
-            p.padding.unwrap_or(0) as u64,
+            audio_params.and_then(|p| p.sample_rate).unwrap_or(44100),
+            audio_params
+                .and_then(|p| p.channels.as_ref().map(|c| c.count() as u16))
+                .unwrap_or(1),
+            track.num_frames,
+            track.delay.unwrap_or(0) as u64,
+            track.padding.unwrap_or(0) as u64,
         )
     };
+
+    // Matroska/WEBM tracks commonly leave `num_frames` unset — the per-block frame
+    // count isn't tallied by the demuxer — but the Segment's own Duration element
+    // (container-wide, not per-track) is exposed via `media_info()`. Used below as
+    // the fallback when `num_frames` is unavailable.
+    let media_info = *format.media_info();
+    let container_duration_secs = media_info.duration.and_then(|dur| {
+        let ts = Timestamp::try_from(dur.get()).ok()?;
+        let time = media_info.time_base?.calc_time(ts)?;
+        Some(time.as_secs_f64())
+    });
 
     // ── SBR / post-decode sample-rate discovery ────────────────────────────────
     // HE-AAC (common inside MP4) uses Spectral Band Replication (SBR). The
@@ -82,7 +114,7 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
     let duration_secs = if let Some(n) = n_frames {
         n.saturating_sub(delay + padding) as f64 / initial_sr as f64
     } else {
-        0.0
+        container_duration_secs.unwrap_or(0.0)
     };
 
     Ok(FileInfo {
@@ -100,18 +132,21 @@ fn probe_decoded_spec(
     track_id: u32,
 ) -> Option<(u32, u16)> {
     let track = format.tracks().iter().find(|t| t.id == track_id)?;
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+    let audio_params = track.codec_params.as_ref()?.audio()?;
+    let mut decoder = codec_registry()
+        .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
         .ok()?;
 
     for _ in 0..16 {
-        let packet = format.next_packet().ok()?;
-        if packet.track_id() != track_id {
+        // next_packet() returns Ok(None) at EOF and Ok(Some(_))/Err(_) otherwise;
+        // the double `?` propagates both "no more packets" and "read error" as None.
+        let packet = format.next_packet().ok()??;
+        if packet.track_id != track_id {
             continue;
         }
         if let Ok(decoded) = decoder.decode(&packet) {
-            let spec = *decoded.spec();
-            return Some((spec.rate, spec.channels.count() as u16));
+            let spec = decoded.spec().clone();
+            return Some((spec.rate(), spec.channels().count() as u16));
         }
     }
     None
@@ -140,7 +175,7 @@ fn probe_decoded_spec(
 /// sample rate and channel count, starting from an exact sample position.
 pub struct PcmStream {
     format: Box<dyn FormatReader>,
-    decoder: Box<dyn Decoder>,
+    decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     sample_rate: u32,
     channels: u16,
@@ -163,10 +198,6 @@ pub struct PcmStream {
     eof: bool,
     /// Running count of frames returned via `read()`. Used to track position.
     next_output_frame: u64,
-    /// Reusable scratch SampleBuffer for the decode hot path (avoids a new
-    /// allocation on every `fill_next_packet` call). Capacity grows as needed
-    /// but is never shrunk, so steady-state decoding is allocation-free here.
-    sample_buf: Option<SampleBuffer<f32>>,
 }
 
 impl PcmStream {
@@ -181,26 +212,24 @@ impl PcmStream {
             hint.with_extension(ext);
         }
 
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        let mut format = symphonia::default::get_probe()
+            .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
             .context("Unsupported format")?;
 
-        let mut format = probed.format;
         // See find_audio_track: must not rely on default_track() for MP4/MKV,
         // where it may point at the video stream.
         let (track_id, initial_sr, initial_channels, time_base, delay) = {
             let track = find_audio_track(format.as_ref())
                 .context("No decodable audio track found")?;
+            let audio_params = track.codec_params.as_ref().and_then(|cp| cp.audio());
             (
                 track.id,
-                track.codec_params.sample_rate.unwrap_or(44100),
-                track
-                    .codec_params
-                    .channels
-                    .map(|c| c.count() as u16)
+                audio_params.and_then(|p| p.sample_rate).unwrap_or(44100),
+                audio_params
+                    .and_then(|p| p.channels.as_ref().map(|c| c.count() as u16))
                     .unwrap_or(1),
-                track.codec_params.time_base,
-                track.codec_params.delay.unwrap_or(0) as u64,
+                track.time_base,
+                track.delay.unwrap_or(0) as u64,
             )
         };
 
@@ -210,8 +239,13 @@ impl PcmStream {
                 .iter()
                 .find(|t| t.id == track_id)
                 .ok_or_else(|| anyhow::anyhow!("Audio track {track_id} not found after probing"))?;
-            symphonia::default::get_codecs()
-                .make(&track.codec_params, &DecoderOptions::default())
+            let audio_params = track
+                .codec_params
+                .as_ref()
+                .and_then(|cp| cp.audio())
+                .ok_or_else(|| anyhow::anyhow!("Track {track_id} has no audio codec parameters"))?;
+            codec_registry()
+                .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
                 .context("Failed to create decoder")?
         };
 
@@ -231,7 +265,7 @@ impl PcmStream {
             let _ = format.seek(
                 SeekMode::Accurate,
                 SeekTo::Time {
-                    time: Time::from(seek_target),
+                    time: Time::try_from_secs_f64(seek_target).unwrap_or(Time::ZERO),
                     track_id: Some(track_id),
                 },
             );
@@ -251,34 +285,31 @@ impl PcmStream {
 
         for _ in 0..16 {
             let packet = match format.next_packet() {
-                Ok(p) => p,
-                Err(_) => break,
+                Ok(Some(p)) => p,
+                Ok(None) | Err(_) => break,
             };
-            if packet.track_id() != track_id {
+            if packet.track_id != track_id {
                 continue;
             }
             let decoded = match decoder.decode(&packet) {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let spec = *decoded.spec();
-            sample_rate = spec.rate;
-            channels = spec.channels.count() as u16;
+            let spec = decoded.spec().clone();
+            sample_rate = spec.rate();
+            channels = spec.channels().count() as u16;
 
-            // Packet ts is in base units (time_base is based on the container's
+            // Packet pts is in base units (time_base is based on the container's
             // timescale, pre-SBR). Convert to seconds, then to frames at the
-            // real (post-SBR) sample_rate.
-            if let Some(tb) = time_base {
-                let t = tb.calc_time(packet.ts());
-                let pkt_secs = t.seconds as f64 + t.frac;
-                first_abs_frame = (pkt_secs * sample_rate as f64).round() as u64;
-            } else {
-                first_abs_frame = (seek_target * sample_rate as f64).round() as u64;
-            }
+            // real (post-SBR) sample_rate. Fall back to the seek target if the
+            // conversion overflows (implausible in practice, but calc_time can
+            // return None).
+            first_abs_frame = time_base
+                .and_then(|tb| tb.calc_time(packet.pts))
+                .map(|t| (t.as_secs_f64() * sample_rate as f64).round() as u64)
+                .unwrap_or_else(|| (seek_target * sample_rate as f64).round() as u64);
 
-            let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-            buf.copy_interleaved_ref(decoded);
-            pending = buf.samples().to_vec();
+            decoded.copy_to_vec_interleaved::<f32>(&mut pending);
             eof = false;
             break;
         }
@@ -341,8 +372,6 @@ impl PcmStream {
             // next_output_frame tracks position in *audible* frames (what the
             // frontend treats as time = frame / sample_rate).
             next_output_frame: start_frame_audible,
-            // Initialised to None; lazily created on first fill_next_packet call.
-            sample_buf: None,
         })
     }
 
@@ -368,11 +397,12 @@ impl PcmStream {
 
         loop {
             let packet = match self.format.next_packet() {
-                Ok(p) => p,
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(false),
                 Err(_) => return Ok(false),
             };
 
-            if packet.track_id() != self.track_id {
+            if packet.track_id != self.track_id {
                 continue;
             }
 
@@ -381,24 +411,11 @@ impl PcmStream {
                 Err(_) => continue,
             };
 
-            let spec = *decoded.spec();
-            let capacity = decoded.capacity() as u64;
-
-            // Reuse the scratch SampleBuffer if it already fits; otherwise
-            // (re-)allocate. In steady state the packet size is constant, so
-            // this branch is taken only once per stream.
-            let buf = match &mut self.sample_buf {
-                Some(b) if b.capacity() >= capacity as usize => b,
-                slot => {
-                    *slot = Some(SampleBuffer::<f32>::new(capacity, spec));
-                    slot.as_mut().unwrap()
-                }
-            };
-            buf.copy_interleaved_ref(decoded);
-
-            // Reuse pending's allocation: clear + extend avoids a fresh Vec.
-            self.pending.clear();
-            self.pending.extend_from_slice(buf.samples());
+            // `copy_to_vec_interleaved` resizes `pending` to fit exactly and
+            // copies in one call; since `pending` is cleared (not dropped)
+            // above, its capacity is reused across packets so steady-state
+            // decoding stays allocation-free here, same as before.
+            decoded.copy_to_vec_interleaved::<f32>(&mut self.pending);
             return Ok(!self.pending.is_empty());
         }
     }
@@ -606,6 +623,8 @@ mod tests {
         abs_frame_start: u64,
         n_frames: usize,
     ) -> PcmStream {
+        use symphonia::core::formats::TrackType;
+
         let channels = 1u16;
         let sample_rate = 44100u32;
 
@@ -618,57 +637,45 @@ mod tests {
         // next_output_frame = desired_start_frame - delay_frames  (audible coords)
         let next_output_frame = desired_start_frame.saturating_sub(delay_frames);
 
+        // A minimal valid WAV (44 bytes, no data) used purely to obtain a real
+        // FormatReader + AudioDecoder pair to satisfy the struct's fields. The
+        // stream is pre-filled via `pending` and `eof: true`, so neither
+        // `next_packet` nor `decode` is ever called in these tests.
+        static SILENT_WAV: &[u8] = &[
+            b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
+            b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
+            0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
+            b'd', b'a', b't', b'a',  0,0,0,0,
+        ];
+
+        fn open_silent_wav() -> Box<dyn FormatReader> {
+            use symphonia::core::io::ReadOnlySource;
+            let cursor = std::io::Cursor::new(SILENT_WAV);
+            let mss = symphonia::core::io::MediaSourceStream::new(
+                Box::new(ReadOnlySource::new(cursor)),
+                Default::default(),
+            );
+            let mut hint = symphonia::core::formats::probe::Hint::new();
+            hint.with_extension("wav");
+            symphonia::default::get_probe()
+                .probe(&hint, mss, Default::default(), Default::default())
+                .expect("probe silent wav")
+        }
+
         PcmStream {
             // These fields are never exercised by read() in the pure in-memory path
             // because pending is pre-filled and we won't call fill_next_packet.
-            format: {
-                // We need a FormatReader. Open /dev/null via symphonia's raw format
-                // as a throw-away handle — the stream is pre-filled so next_packet
-                // is never called in practice for these tests.  If /dev/null isn't
-                // available on the target platform the test is marked ignore anyway.
-                // Use a static silence WAV bytes as an alternative fallback.
-                // Build a valid minimal WAV (44 bytes) to avoid probe failure.
-                use symphonia::core::io::ReadOnlySource;
-                static SILENT_WAV: &[u8] = &[
-                    b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
-                    b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
-                    0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
-                    b'd', b'a', b't', b'a',  0,0,0,0,
-                ];
-                let cursor = std::io::Cursor::new(SILENT_WAV);
-                let mss = symphonia::core::io::MediaSourceStream::new(
-                    Box::new(ReadOnlySource::new(cursor)),
-                    Default::default(),
-                );
-                let mut hint = symphonia::core::probe::Hint::new();
-                hint.with_extension("wav");
-                symphonia::default::get_probe()
-                    .format(&hint, mss, &Default::default(), &Default::default())
-                    .expect("probe silent wav")
-                    .format
-            },
+            format: open_silent_wav(),
             decoder: {
-                use symphonia::core::codecs::DecoderOptions;
-                static SILENT_WAV: &[u8] = &[
-                    b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
-                    b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
-                    0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
-                    b'd', b'a', b't', b'a',  0,0,0,0,
-                ];
-                let cursor = std::io::Cursor::new(SILENT_WAV);
-                let mss = symphonia::core::io::MediaSourceStream::new(
-                    Box::new(symphonia::core::io::ReadOnlySource::new(cursor)),
-                    Default::default(),
-                );
-                let mut hint = symphonia::core::probe::Hint::new();
-                hint.with_extension("wav");
-                let mut fmt = symphonia::default::get_probe()
-                    .format(&hint, mss, &Default::default(), &Default::default())
-                    .expect("probe silent wav")
-                    .format;
-                let track = fmt.default_track().expect("wav has a track");
-                symphonia::default::get_codecs()
-                    .make(&track.codec_params, &DecoderOptions::default())
+                let fmt = open_silent_wav();
+                let track = fmt.default_track(TrackType::Audio).expect("wav has a track");
+                let audio_params = track
+                    .codec_params
+                    .as_ref()
+                    .and_then(|cp| cp.audio())
+                    .expect("wav track has audio codec params");
+                codec_registry()
+                    .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
                     .expect("make pcm decoder")
             },
             track_id: 0,
@@ -681,7 +688,6 @@ mod tests {
             pending_pos: 0,
             eof: true, // pre-filled; fill_next_packet will see eof and stop
             next_output_frame,
-            sample_buf: None,
         }
     }
 

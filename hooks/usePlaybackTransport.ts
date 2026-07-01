@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { AudioEngine } from '../utils/AudioEngine';
 import { VideoElementEngine } from '../utils/VideoElementEngine';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
+import { wantsCanvasRenderer } from '../utils/videoPlaybackMode';
 import { createCurrentTimeStore } from '../utils/currentTimeStore';
 import { SpectrogramHandle } from '../components/Spectrogram';
 import { Selection, VideoMode, PlaybackTransport } from '../types';
@@ -153,8 +154,7 @@ export function usePlaybackTransport({
         // would just waste decode CPU on hardware that already can't keep up.
         // Refs read current values inside this once-mounted closure.
         const mode = videoModeRef.current;
-        const canvasLive =
-          mode === 'accurate' || (mode === 'mixed' && selectionRef.current !== null);
+        const canvasLive = wantsCanvasRenderer(mode, selectionRef.current !== null);
         if (canvasLive && !videoPrefetchBusyRef.current) {
           const bufferedTo = videoPrefetchEndRef.current;
           if (t + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
@@ -185,13 +185,19 @@ export function usePlaybackTransport({
   }, []);
 
   // Whether the <video> element — not the AudioEngine — is the active transport:
-  // a video file shown through the element (Fast, or Mixed before a selection).
-  // Audio-only files and the canvas-backed modes always use the AudioEngine.
+  // true whenever VideoPane isn't actually rendering the canvas (Fast, Mixed
+  // before a selection, or a canvas-wanting mode whose format has no
+  // VideoFrameSource, e.g. WEBM). Must mirror VideoPane's own canvas/element
+  // choice via the shared `wantsCanvasRenderer` predicate — otherwise the
+  // rendered element and the transport driving it can disagree, leaving the
+  // <video> element mounted but never played/seeked (frozen on frame 1).
   const usesVideoTransport = useCallback((): boolean => {
     if (isAudioTrackRef.current || !videoSrcRef.current) return false;
     const mode = videoModeRef.current;
-    return mode === 'fast' || (mode === 'mixed' && selectionRef.current === null);
-  }, [isAudioTrackRef, videoSrcRef, videoModeRef, selectionRef]);
+    if (mode === 'off') return false;
+    const canvasAvailable = !!frameSourceRef.current;
+    return !(canvasAvailable && wantsCanvasRenderer(mode, selectionRef.current !== null));
+  }, [isAudioTrackRef, videoSrcRef, videoModeRef, selectionRef, frameSourceRef]);
 
   // The active transport. AudioEngine and VideoElementEngine expose the same
   // play/pause/seek/getMediaTime/setGain/setPlaybackSpeed/isPlaying surface, so
