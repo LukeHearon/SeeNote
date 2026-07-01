@@ -4,7 +4,7 @@ import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
-import { wantsCanvasRenderer } from '../utils/videoPlaybackMode';
+import { wantsCanvasRenderer, displayVideoMode } from '../utils/videoPlaybackMode';
 import { useHotkeys } from '../hooks/useHotkeys';
 import type { VideoMode } from '../types';
 import {
@@ -63,6 +63,9 @@ export default function VideoPane({
   const canvasAvailable = !!frameSource && !isAudioTrack;
   const wantsCanvas = wantsCanvasRenderer(videoMode, hasSelection);
   const usingCanvas = canvasAvailable && wantsCanvas;
+  // What the mode picker shows — falls back to 'fast' when this format has no
+  // frame source, without touching the persisted videoMode (see displayVideoMode).
+  const displayMode = displayVideoMode(videoMode, hasSelection, !!frameSource);
   // True when mode=off but the active track is a video — the pane displays a
   // "Video Disabled" placeholder instead of routing through <video>.
   const showDisabledPlaceholder = videoMode === 'off' && !isAudioTrack && !!videoSrc;
@@ -316,7 +319,7 @@ export default function VideoPane({
           <span className="text-[10px] font-medium text-white leading-none px-1">{videoP.modeLabel}</span>
           <div className="bg-slate-900/70 backdrop-blur-sm border border-slate-700 group-hover:border-slate-500 rounded-md p-1 transition-colors duration-150">
             <span className="block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-700 text-slate-300">
-              {isAudioTrack ? 'Off' : videoMode.charAt(0).toUpperCase() + videoMode.slice(1)}
+              {isAudioTrack ? 'Off' : displayMode.charAt(0).toUpperCase() + displayMode.slice(1)}
             </span>
           </div>
         </div>
@@ -340,7 +343,7 @@ export default function VideoPane({
                 mixed: 'Outside a selection, video plays independently (rate 0.5–2×). Inside a selection, audio filters apply and the picture locks to the audio clock.',
                 accurate: 'Full frame-accurate sync throughout. Heaviest on the CPU. MP4/MOV only — other formats fall back automatically.',
               };
-              const active = isAudioTrack ? mode === 'off' : videoMode === mode;
+              const active = isAudioTrack ? mode === 'off' : displayMode === mode;
               return (
                 <button
                   key={mode}

@@ -17,3 +17,22 @@ import type { VideoMode } from '../types';
 export function wantsCanvasRenderer(mode: VideoMode, hasSelection: boolean): boolean {
   return mode === 'accurate' || (mode === 'mixed' && hasSelection);
 }
+
+/**
+ * The mode to *display* in the UI. When `mode` wants the canvas but this
+ * file has no VideoFrameSource (e.g. WEBM — see VideoFrameSource's MP4/MOV-only
+ * `canUseFrameSource`), playback silently falls back to the plain <video>
+ * element — behaviorally identical to Fast. The picker should say so, rather
+ * than claim a frame-accurate guarantee that isn't actually happening.
+ *
+ * Does NOT change the persisted `videoMode` — only what's displayed — so a
+ * later, compatible file still resumes at the mode the user actually picked.
+ */
+export function displayVideoMode(
+  mode: VideoMode,
+  hasSelection: boolean,
+  hasFrameSource: boolean,
+): VideoMode {
+  if (mode !== 'off' && wantsCanvasRenderer(mode, hasSelection) && !hasFrameSource) return 'fast';
+  return mode;
+}
