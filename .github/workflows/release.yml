@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to rebuild (e.g. v0.10.0)'
+        required: true
 
 jobs:
   build:
@@ -17,7 +22,7 @@ jobs:
             args: --target universal-apple-darwin --bundles dmg
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
           - platform: ubuntu-22.04
-            args: --bundles appimage
+            args: --bundles appimage,deb
             rust-targets: ''
           - platform: windows-latest
             args: --bundles nsis
@@ -27,6 +32,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -62,8 +69,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: SeeNote ${{ github.ref_name }}
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: SeeNote ${{ inputs.tag || github.ref_name }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -78,9 +85,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
           REPO="${{ github.repository }}"
-          TAG="${GITHUB_REF_NAME}"
           RELEASE_ID=$(gh api "repos/${REPO}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"$TAG\") | .id")
 
@@ -100,5 +107,6 @@ jobs:
 
           rename_asset "SeeNote_${VERSION}_universal.dmg"    "SeeNote-macOS.dmg"
           rename_asset "SeeNote_${VERSION}_amd64.AppImage"   "SeeNote-Linux.AppImage"
+          rename_asset "SeeNote_${VERSION}_amd64.deb"        "SeeNote-Linux.deb"
           rename_asset "SeeNote_${VERSION}_x64-setup.exe"    "SeeNote-Windows.exe"
 
