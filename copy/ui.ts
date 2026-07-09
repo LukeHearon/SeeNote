@@ -234,6 +234,12 @@ export const fileTree = {
   get emptyHint() { return getOverride('ui.fileTree.emptyHint') ?? "Open a file or folder to browse"; },
   get copyIdent() { return getOverride('ui.fileTree.copyIdent') ?? "Copy ident"; },
   get importAnnotations() { return getOverride('ui.fileTree.importAnnotations') ?? "Import annotations…"; },
+  get noMediaFiles() { return getOverride('ui.fileTree.noMediaFiles') ?? "No media files found in your media dir"; },
+  showingCount(shown: number, total: number) { return getOverride('ui.fileTree.showingCount') ?? `Showing ${shown} of ${total} files`; },
+  noFilesMatchFilter(filter: 'annotated' | 'unannotated') {
+    const label = filter === 'annotated' ? 'annotated only' : 'unannotated only';
+    return getOverride('ui.fileTree.noFilesMatchFilter') ?? `No files match your active filter: ${label}`;
+  },
 };
 
 export const keyboardShortcutsView = {

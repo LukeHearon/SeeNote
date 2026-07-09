@@ -1439,6 +1439,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           const fileTreeProps = {
             rootDirectory: currentDirectory,
             allFiles: displayQueue,
+            allFilesUnfiltered: shuffleMode ? shuffledFiles : allTracks,
             currentTrack: trackPath,
             onFileSelect: handleOpenTrack,
             onToggleCollapse: () => setFilePanelCollapsed(c => {

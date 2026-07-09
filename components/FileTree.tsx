@@ -15,6 +15,7 @@ interface TreeNode {
 interface FileTreeProps {
   rootDirectory: string | null;
   allFiles: string[];
+  allFilesUnfiltered: string[];
   currentTrack: string | null;
   onFileSelect: (path: string) => void;
   collapsed: boolean;
@@ -308,6 +309,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
 function FileTree({
   rootDirectory,
   allFiles,
+  allFilesUnfiltered,
   currentTrack,
   onFileSelect,
   collapsed,
@@ -380,6 +382,12 @@ function FileTree({
     const prefix = enteredPath.replace(/\\/g, '/') + '/';
     return allFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
   }, [enteredPath, allFiles]);
+
+  const effectiveTotalFiles = useMemo(() => {
+    if (!enteredPath) return allFilesUnfiltered;
+    const prefix = enteredPath.replace(/\\/g, '/') + '/';
+    return allFilesUnfiltered.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
+  }, [enteredPath, allFilesUnfiltered]);
 
   const effectiveNonMediaFiles = useMemo(() => {
     if (!nonMediaFiles || !effectiveRoot) return [];
@@ -632,7 +640,7 @@ function FileTree({
   }
 
   return (
-    <div className="flex flex-col select-none h-full bg-slate-900 w-full">
+    <div className="grid grid-rows-[auto_1fr_auto] select-none h-full bg-slate-900 w-full">
       {/* Header */}
       <div
         className="flex items-center justify-between px-2 py-2 bg-slate-800 border-b border-slate-700 flex-none gap-1"
@@ -697,8 +705,8 @@ function FileTree({
         </div>
       </div>
 
-      {/* File list — flex row so scrollbar track is a true sibling, not an overlay */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      {/* File list — grid row; inner flex row keeps scrollbar track a true sibling, not an overlay */}
+      <div className="min-h-0 flex overflow-hidden">
         <div
           ref={scrollContainerRef}
           className="flex-1 min-w-0 overflow-y-scroll no-scrollbar"
@@ -711,8 +719,22 @@ function FileTree({
           </div>
         )}
 
+        {rootDirectory && effectiveTotalFiles.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
+            <Music size={28} className="mb-2 opacity-50" />
+            <p className="text-sm">{copy.noMediaFiles}</p>
+          </div>
+        )}
+
+        {rootDirectory && effectiveTotalFiles.length > 0 && effectiveFiles.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
+            <EyeOff size={28} className="mb-2 opacity-50" />
+            <p className="text-sm">{copy.noFilesMatchFilter(fileFilter as 'annotated' | 'unannotated')}</p>
+          </div>
+        )}
+
         {/* Shuffle mode: windowed flat list (±105 files around current, fade at edges only when files are hidden there) */}
-        {shuffleMode && rootDirectory && (() => {
+        {shuffleMode && rootDirectory && effectiveFiles.length > 0 && (() => {
           const WINDOW = 105;
           const FADE_ZONE = 5; // items at each edge that fade, but only when files are hidden on that side
 
@@ -874,6 +896,12 @@ function FileTree({
           )}
         </div>
       </div>
+
+      {fileFilter !== 'all' && rootDirectory && effectiveFiles.length < effectiveTotalFiles.length && (
+        <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-800">
+          {copy.showingCount(effectiveFiles.length, effectiveTotalFiles.length)}
+        </div>
+      )}
 
       {/* Context menu */}
       {contextMenu && (
