@@ -76,7 +76,7 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,
   zoomSec: DEFAULT_ZOOM_SEC,
-  videoMode: 'accurate',
+  videoMode: 'fast',
 };
 
 // Coerce a persisted videoMode to the current enum. The experimental
