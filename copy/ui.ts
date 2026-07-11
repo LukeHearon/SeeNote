@@ -74,6 +74,10 @@ export const projectSettingsModal = {
   get projectDirLabel() { return getOverride('ui.projectSettingsModal.projectDirLabel') ?? "Project Directory"; },
   get showInFinderTitle() { return getOverride('ui.projectSettingsModal.showInFinderTitle') ?? "Show in Finder"; },
   get orphanedNoMedia() { return getOverride('ui.projectSettingsModal.orphanedNoMedia') ?? "no corresponding media in the new media directory:"; },
+  // Video pane layout preference
+  get videoPaneHeader() { return getOverride('ui.projectSettingsModal.videoPaneHeader') ?? "Video Pane"; },
+  get videoAutoCollapseLabel() { return getOverride('ui.projectSettingsModal.videoAutoCollapseLabel') ?? "Auto-collapse video panel"; },
+  get videoAutoCollapseHint() { return getOverride('ui.projectSettingsModal.videoAutoCollapseHint') ?? "Automatically minimize the video pane on audio files, open it on video files."; },
 };
 
 export const annotationToolEditModal = {
@@ -234,7 +238,7 @@ export const fileTree = {
   get emptyHint() { return getOverride('ui.fileTree.emptyHint') ?? "Open a file or folder to browse"; },
   get copyIdent() { return getOverride('ui.fileTree.copyIdent') ?? "Copy ident"; },
   get importAnnotations() { return getOverride('ui.fileTree.importAnnotations') ?? "Import annotations…"; },
-  get noMediaFiles() { return getOverride('ui.fileTree.noMediaFiles') ?? "No media files found in your media dir"; },
+  get noMediaFiles() { return getOverride('ui.fileTree.noMediaFiles') ?? "No compatible files found in your media directory"; },
   showingCount(shown: number, total: number) { return getOverride('ui.fileTree.showingCount') ?? `Showing ${shown} of ${total} files`; },
   noFilesMatchFilter(filter: 'annotated' | 'unannotated') {
     const label = filter === 'annotated' ? 'annotated only' : 'unannotated only';

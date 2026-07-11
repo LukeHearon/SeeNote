@@ -5,7 +5,7 @@ import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
@@ -41,6 +41,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     project.preferences.gitSyncUser?.tokenStorage ?? 'keychain',
   );
   const [syncAuthorName, setSyncAuthorName] = useState(project.preferences.gitSyncUser?.authorName ?? '');
+  const [videoPaneAutoCollapse, setVideoPaneAutoCollapse] = useState(
+    project.preferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE,
+  );
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
 
@@ -143,6 +146,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       gitSyncUser: newUrl
         ? { authorName: syncAuthorName.trim() || undefined, ...tokenFields }
         : undefined,
+      videoPaneAutoCollapse,
     };
     pendingRef.current = { settings, preferences };
 
@@ -366,6 +370,22 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   onSyncAuthorNameChange={setSyncAuthorName}
                   autoFocusToken={focusToken}
                 />
+              </div>
+
+              <div>
+                <h3 className="text-gray-300 text-sm font-medium mb-3">{projectSettingsModal.videoPaneHeader}</h3>
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={videoPaneAutoCollapse}
+                    onChange={(e) => setVideoPaneAutoCollapse(e.target.checked)}
+                    className="mt-0.5 accent-blue-500"
+                  />
+                  <span>
+                    <span className="block text-sm text-gray-200">{projectSettingsModal.videoAutoCollapseLabel}</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">{projectSettingsModal.videoAutoCollapseHint}</span>
+                  </span>
+                </label>
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

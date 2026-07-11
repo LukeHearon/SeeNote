@@ -138,6 +138,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 </ul>
                 <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoMode.note1)}</p>
                 <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoMode.note2)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoMode.note3)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.videoZoom} target="video-panel">

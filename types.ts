@@ -178,6 +178,8 @@ export interface ProjectPreferences {
   fileFilter?: 'all' | 'annotated' | 'unannotated';
   shuffleMode?: boolean;
   enteredFolderPath?: string;
+  /** Auto-collapse the video pane for audio tracks, auto-open for video tracks. Set in the Preferences tab of project settings. */
+  videoPaneAutoCollapse?: boolean;
   uiSettings?: ProjectUiSettings;
   bandPassFilter?: BandPassFilter | null;
   /** Per-user git sync credentials and author identity. */

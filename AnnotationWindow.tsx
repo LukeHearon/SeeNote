@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, isSupportedMediaFile, migrateVideoMode, getExt } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl } from './utils/tauriCommands';
 import { createViewportStore } from './utils/viewportStore';
@@ -443,11 +443,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     historyIndexRef.current = 0;
 
     const fileName = basename(absolutePath);
-    const audioExts = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma'];
-    const ext = getExt(fileName);
-    const isAudio = audioExts.includes(ext);
+    // Only known video extensions carry a picture; everything else (audio, or
+    // unknown/unsupported) is treated as audio-only. Extension-based so it holds
+    // even when a video's frames can't be decoded (the pane still shows).
+    const isAudio = !isVideoFile(absolutePath);
     setIsAudioTrack(isAudio);
     setTrackName(fileName);
+
+    // Auto-manage the video pane by track type: collapse for audio-only tracks,
+    // re-open (to the last split size) for video tracks. Decided here from the
+    // extension alone, so a later decode error doesn't re-collapse a video pane.
+    // videoPaneAutoCollapse is a Preferences-tab setting (not session state), read
+    // via projectRef so this callback doesn't need to be recreated when it changes.
+    const autoCollapse = projectRef.current.preferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE;
+    if (autoCollapse) setVideoCollapsed(isAudio);
 
     const assetUrl = toAssetUrl(absolutePath);
     setVideoSrc(assetUrl);
@@ -902,6 +911,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     await updateProjectPreferences(project.id, updatedPreferences);
     loadAnnotationTools(updated);
     setVideoMode(migrateVideoMode(updated.preferences.uiSettings?.videoMode));
+    // Apply the auto-collapse preference immediately to the open track so the
+    // pane reflects it without waiting for the next track switch.
+    const autoCollapse = updatedPreferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE;
+    if (autoCollapse && trackPath) setVideoCollapsed(isAudioTrack);
     if (mediaDirChanged) {
       setCurrentDirectory(updated.mediaDirectoryAbs);
       setTrackPath(null);
@@ -922,7 +935,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools]);
+  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools, trackPath, isAudioTrack]);
 
   const handleToggleFileFilter = useCallback(() => {
     const current = project.preferences.fileFilter ?? 'all';

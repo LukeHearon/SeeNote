@@ -44,6 +44,15 @@ export function isSupportedMediaFile(path: string): boolean {
   return SUPPORTED_AUDIO_EXTS.has(ext) || SUPPORTED_VIDEO_EXTS.has(ext);
 }
 
+// True when the file carries a video stream we'd display (by extension). This
+// is purely extension-based, so it stays true for a video file even if its
+// frames can't be fetched/decoded — the video pane should still show. Anything
+// not a known video extension (audio, or unknown/unsupported) is treated as
+// audio-only. Mirror of the audio/video split the file tree uses.
+export function isVideoFile(path: string): boolean {
+  return SUPPORTED_VIDEO_EXTS.has(getExt(path));
+}
+
 export const MIN_ZOOM_SEC = 1;
 export const DEFAULT_ZOOM_SEC = 10;
 
@@ -78,6 +87,12 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   zoomSec: DEFAULT_ZOOM_SEC,
   videoMode: 'fast',
 };
+
+// On by default: opening an audio-only track collapses the video pane;
+// opening a video track re-opens it to the last size. A per-user preference
+// (ProjectPreferences.videoPaneAutoCollapse), set in the Preferences tab of
+// project settings — not a session/layout field like DEFAULT_UI_SETTINGS.
+export const DEFAULT_VIDEO_PANE_AUTO_COLLAPSE = true;
 
 // Coerce a persisted videoMode to the current enum. The experimental
 // 'fast-slave' / 'fast-free' variants (and the original audio-master 'fast')

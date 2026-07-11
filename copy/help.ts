@@ -44,6 +44,7 @@ export const helpPanel = {
       get li_accurate() { return getOverride('helpPanel.guide.videoMode.li_accurate') ?? "**Accurate:** frame-accurate WebCodecs decoding throughout (MP4/MOV only). Best fidelity, heaviest on the CPU."; },
       get note1() { return getOverride('helpPanel.guide.videoMode.note1') ?? "When the picture isn't sample-accurate with the audio, an inaccuracy badge appears in the video pane's top-left corner. If scrubbing or playback stutters, drop one level."; },
       get note2() { return getOverride('helpPanel.guide.videoMode.note2') ?? "Drag the divider below the video all the way up to collapse the pane to a bar; click the bar (or drag it back down) to restore it. Playback keeps running while collapsed."; },
+      get note3() { return getOverride('helpPanel.guide.videoMode.note3') ?? "By default the pane auto-collapses for audio-only tracks and re-opens for video tracks (a video file keeps its pane even if its frames can't be decoded). Toggle this off under **Video Pane** in the Preferences tab of Project Settings to control the pane manually."; },
     },
     videoZoom: {
       get intro() { return getOverride('helpPanel.guide.videoZoom.intro') ?? "When the active track has video, controls appear at the **top-right** of the video panel."; },

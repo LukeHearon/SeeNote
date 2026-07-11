@@ -12,7 +12,7 @@ import {
   clamp,
   updateAnnotation,
 } from '../utils/helpers';
-import { getExt } from '../constants';
+import { getExt, isVideoFile } from '../constants';
 import { Annotation, AnnotationTool } from '../types';
 
 // Helper to build an annotation without repeating boilerplate.
@@ -203,6 +203,22 @@ describe('getExt', () => {
 
   it('uses the last dot for multi-dot names', () => {
     expect(getExt('archive.tar.gz')).toBe('gz');
+  });
+});
+
+describe('isVideoFile', () => {
+  it('is true for known video extensions (case-insensitive)', () => {
+    expect(isVideoFile('clip.mp4')).toBe(true);
+    expect(isVideoFile('/a/b/clip.MOV')).toBe(true);
+    expect(isVideoFile('clip.mkv')).toBe(true);
+    expect(isVideoFile('clip.webm')).toBe(true);
+  });
+
+  it('is false for audio and unknown extensions (treated as audio-only)', () => {
+    expect(isVideoFile('song.mp3')).toBe(false);
+    expect(isVideoFile('song.wav')).toBe(false);
+    expect(isVideoFile('song.ogg')).toBe(false); // scanned but unsupported → audio-only
+    expect(isVideoFile('data.bin')).toBe(false);
   });
 });
 
