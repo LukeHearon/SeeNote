@@ -210,6 +210,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setDebugLogs(prev => [...prev, { time, msg, type }]);
   }, []);
 
+  // Logged separately from the load-time "Video mode: X" line so the debug
+  // console shows exactly when the user (vs. a project load/migration) changed it.
+  const handleVideoModeChange = useCallback((mode: VideoMode) => {
+    addLog(`Video mode changed: ${videoModeRef.current} -> ${mode}`);
+    setVideoMode(mode);
+  }, [addLog]);
+
   // Shared example-clip player for the tool-chip play buttons (palette + tool
   // settings). Independent of the main track's AudioEngine.
   const examplePlayer = useExamplePlayer(addLog);
@@ -462,6 +469,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setVideoSrc(assetUrl);
 
     addLog(`Opening: ${fileName}`);
+    addLog(`Video mode: ${videoModeRef.current}`);
     setIsProcessing(true);
 
     try {
@@ -1557,7 +1565,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onDurationChange={isAudioTrack ? undefined : setDuration}
             videoMode={videoMode}
             hasSelection={selection !== null}
-            onVideoModeChange={setVideoMode}
+            onVideoModeChange={handleVideoModeChange}
             onVideoElement={attachVideoElement}
           />
           {videoCollapsed && (
