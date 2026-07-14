@@ -36,3 +36,12 @@ anyhow = "1"
 # ("there is no TLS stream available"). default-features is off to drop the `ssh`
 # feature (unused; avoids a libssh2 build dep), so https must be listed explicitly.
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl", "https"] }
+# Local-loopback HTTP server for Fast-mode <video> playback on Linux: WebKitGTK's
+# GStreamer media pipeline (webkitwebsrc) has no bridge to Tauri's custom `asset://`
+# scheme handler (only WebKit's generic resource loader does), so <video src="asset://...">
+# fails immediately with MEDIA_ERR_SRC_NOT_SUPPORTED there even though the same custom
+# scheme works fine for fetch/images. See src-tauri/src/commands/video_server.rs.
+tiny_http = "0.12"
+http-range = "0.1"
+percent-encoding = "2"
+mime_guess = "2"

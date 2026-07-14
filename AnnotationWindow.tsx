@@ -9,7 +9,8 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
-import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
+import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -467,7 +468,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (autoCollapse) setVideoCollapsed(isAudio);
 
     const assetUrl = toAssetUrl(absolutePath);
-    setVideoSrc(assetUrl);
+    // On Linux, <video>/<audio> playback goes through WebKitGTK's GStreamer
+    // pipeline, which can't resolve the `asset://` scheme (see toVideoServerUrl
+    // doc comment) — serve over a local HTTP loopback there instead. macOS/Windows
+    // keep using asset:// directly. fetch()-based paths (VideoFrameSource, below)
+    // are unaffected and keep using assetUrl regardless of platform.
+    const videoElementUrl = isLinux ? await toVideoServerUrl(absolutePath) : assetUrl;
+    setVideoSrc(videoElementUrl);
 
     addLog(`Opening: ${fileName}`);
     addLog(`Video mode: ${videoModeRef.current}`);

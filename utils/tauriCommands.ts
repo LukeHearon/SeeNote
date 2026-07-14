@@ -154,6 +154,20 @@ export const openFilesDialog = (
 export const toAssetUrl = (absolutePath: string): string =>
   convertFileSrc(absolutePath);
 
+/** Linux-only alternative to `toAssetUrl` for <video>/<audio> element `src`.
+ * WebKitGTK's GStreamer media pipeline (`webkitwebsrc`, used for real
+ * playback) has no bridge to Tauri's custom `asset://` scheme handler — only
+ * WebKit's generic resource loader (fetch, <img>, XHR) does — so
+ * `<video src="asset://...">` fails immediately there with
+ * MEDIA_ERR_SRC_NOT_SUPPORTED even though the same file plays fine via
+ * fetch() and decodes cleanly via GStreamer directly. This serves the file
+ * over a real loopback HTTP server instead (see
+ * `src-tauri/src/commands/video_server.rs`), which GStreamer's `souphttpsrc`
+ * understands natively. Not needed on macOS/Windows — only call this when
+ * `isLinux` (see `utils/platform.ts`). */
+export const toVideoServerUrl = (absolutePath: string): Promise<string> =>
+  invoke('get_video_server_url', { path: absolutePath });
+
 // ── PCM streaming ─────────────────────────────────────────────────────────────
 
 export interface PcmStreamHandle {

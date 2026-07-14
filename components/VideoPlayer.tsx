@@ -89,9 +89,31 @@ export default function VideoPlayer({
       }
     };
 
+    // Diagnostic logging for the Linux Fast-mode stall investigation (see
+    // toVideoServerUrl doc comment / local/video-issues.md): waiting/stalled/
+    // suspend/seeking/seeked/ended fire around network stalls in ways timeupdate
+    // alone doesn't surface, and correlating their timestamps against the Rust
+    // video_server's request log (eprintln, visible in the terminal running
+    // `npm run tauri dev`) is the fastest way to see whether a stall lines up
+    // with a slow/missing/errored server response or is purely client-side.
+    const handleWaiting = () => onDebugLog?.(`[video] waiting t=${video.currentTime.toFixed(3)}`);
+    const handleStalled = () => onDebugLog?.(`[video] stalled t=${video.currentTime.toFixed(3)}`);
+    const handleSuspend = () => onDebugLog?.(`[video] suspend t=${video.currentTime.toFixed(3)}`);
+    const handleSeeking = () => onDebugLog?.(`[video] seeking t=${video.currentTime.toFixed(3)}`);
+    const handleSeeked = () => onDebugLog?.(`[video] seeked t=${video.currentTime.toFixed(3)}`);
+    const handleEnded = () => onDebugLog?.(`[video] ended t=${video.currentTime.toFixed(3)} dur=${video.duration.toFixed(3)}`);
+    const handleCanPlay = () => onDebugLog?.(`[video] canplay t=${video.currentTime.toFixed(3)}`);
+
     video.addEventListener('durationchange', handleDuration);
     video.addEventListener('loadedmetadata', handleLoaded);
     video.addEventListener('error', handleError);
+    video.addEventListener('waiting', handleWaiting);
+    video.addEventListener('stalled', handleStalled);
+    video.addEventListener('suspend', handleSuspend);
+    video.addEventListener('seeking', handleSeeking);
+    video.addEventListener('seeked', handleSeeked);
+    video.addEventListener('ended', handleEnded);
+    video.addEventListener('canplay', handleCanPlay);
     // If metadata is already available (src swapped on a warm element),
     // fire immediately so the parent can compute the content rect.
     if (video.readyState >= 1 && video.videoWidth > 0) {
@@ -101,6 +123,13 @@ export default function VideoPlayer({
       video.removeEventListener('durationchange', handleDuration);
       video.removeEventListener('loadedmetadata', handleLoaded);
       video.removeEventListener('error', handleError);
+      video.removeEventListener('waiting', handleWaiting);
+      video.removeEventListener('stalled', handleStalled);
+      video.removeEventListener('suspend', handleSuspend);
+      video.removeEventListener('seeking', handleSeeking);
+      video.removeEventListener('seeked', handleSeeked);
+      video.removeEventListener('ended', handleEnded);
+      video.removeEventListener('canplay', handleCanPlay);
     };
   }, [onDurationChange, onDebugLog, onVideoDims, onLoadError, src]);
 
