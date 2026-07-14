@@ -52,6 +52,14 @@ const MICROS_PER_SEC = 1e6;
 
 export interface VideoFrameSourceOptions {
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
+  /** Fires (once) when the platform's WebCodecs VideoDecoder reports it has no
+   *  decoder for this file's codec — e.g. "No decoder found for codec ...".
+   *  Distinct from a *configuration* error: `decoder.configure()` accepts the
+   *  codec optimistically and only surfaces "no decoder" asynchronously on the
+   *  first decode() call. On some platforms (observed on WebKitGTK/Linux)
+   *  WebCodecs delegates to the same OS media framework as the <video>
+   *  element, so this can fire even though open() already resolved. */
+  onDecoderUnsupported?: () => void;
 }
 
 export class VideoFrameSource {
@@ -64,6 +72,9 @@ export class VideoFrameSource {
   /** Sample metadata (no byte data) — used for allCached checks and range math. */
   private samples: Sample[] = [];
   private decoder: VideoDecoder | null = null;
+  /** True once the decoder has reported it has no support for this file's
+   *  codec (see the `error` callback in open()). Exposed via isDecoderUnsupported(). */
+  private decoderUnsupported = false;
   /** Cached frames, sorted ascending by timestamp (μs). */
   private frameCache: VideoFrame[] = [];
   private opened = false;
@@ -154,6 +165,14 @@ export class VideoFrameSource {
             output: (frame) => this.onDecodedFrame(frame),
             error: (e) => {
               this.opts.onDebugLog?.(`[video] decoder error: ${e.message}`, 'error');
+              // WebCodecs surfaces "no decoder for this codec" as a NotSupportedError
+              // from the decode() call, not from configure() (which accepts the codec
+              // string optimistically). Report it once so the UI can stop presenting
+              // this file as playable in this mode.
+              if (e.name === 'NotSupportedError' && !this.decoderUnsupported) {
+                this.decoderUnsupported = true;
+                this.opts.onDecoderUnsupported?.();
+              }
             },
           });
           this.decoder.configure({
@@ -435,6 +454,10 @@ export class VideoFrameSource {
 
   getDimensions(): { width: number; height: number } {
     return { width: this.width, height: this.height };
+  }
+
+  isDecoderUnsupported(): boolean {
+    return this.decoderUnsupported;
   }
 
   getFrameDuration(): number {

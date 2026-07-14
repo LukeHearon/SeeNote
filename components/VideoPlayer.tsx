@@ -27,6 +27,10 @@ interface VideoPlayerProps {
    *  tracks and the canvas-backed modes route sound through AudioEngine, so the
    *  element stays muted. */
   playsOwnAudio?: boolean;
+  /** Fires with the native MediaError code (1-4) whenever the element's
+   *  `error` event fires. Lets the parent distinguish a codec/container the
+   *  machine can't decode (3, 4) from other failures. */
+  onLoadError?: (code: number) => void;
 }
 
 // VideoPlayer renders the browser <video> element for two cases:
@@ -49,6 +53,7 @@ export default function VideoPlayer({
   onVideoDims,
   onVideoElement,
   playsOwnAudio = false,
+  onLoadError,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -73,6 +78,7 @@ export default function VideoPlayer({
       const label = err ? (codeMap[err.code] ?? `code=${err.code}`) : 'unknown';
       const msg = err?.message ? ` — ${err.message}` : '';
       onDebugLog?.(`[video] load error: ${label}${msg} src=${video.currentSrc || video.src}`, 'error');
+      if (err) onLoadError?.(err.code);
     };
     const handleLoaded = () => {
       onDebugLog?.(
@@ -96,7 +102,7 @@ export default function VideoPlayer({
       video.removeEventListener('loadedmetadata', handleLoaded);
       video.removeEventListener('error', handleError);
     };
-  }, [onDurationChange, onDebugLog, onVideoDims, src]);
+  }, [onDurationChange, onDebugLog, onVideoDims, onLoadError, src]);
 
   if (!src) {
     return (

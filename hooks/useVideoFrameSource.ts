@@ -46,6 +46,11 @@ export function useVideoFrameSource({
   // GPU resources; a simple version counter is enough to switch components.
   const [frameSourceVersion, setFrameSourceVersion] = useState(0);
   const preZoomExtentRef = useRef<{ startTime: number; endTime: number } | null>(null);
+  // True once the current frame source's decoder has reported it has no
+  // decoder for this file's codec (see VideoFrameSource.onDecoderUnsupported).
+  // On some platforms this is the *only* place a WebCodecs failure surfaces —
+  // open() already resolved successfully by the time decode() fails.
+  const [frameSourceDecodeError, setFrameSourceDecodeError] = useState(false);
 
   // Pre-roll the frame-source cache so the first frame at startSec is decoded
   // before the audio engine begins emitting samples. Critical for short-selection
@@ -83,9 +88,15 @@ export function useVideoFrameSource({
     if (wantsFrameSource && !has) {
       const url = toAssetUrl(trackPath);
       const expectedTrack = trackPath;
+      setFrameSourceDecodeError(false);
       (async () => {
         try {
-          const source = new VideoFrameSource({ onDebugLog: addLog });
+          const source = new VideoFrameSource({
+            onDebugLog: addLog,
+            onDecoderUnsupported: () => {
+              if (trackPathRef.current === expectedTrack) setFrameSourceDecodeError(true);
+            },
+          });
           await source.open(url);
           if (trackPathRef.current !== expectedTrack) { source.close(); return; }
           frameSourceRef.current = source;
@@ -109,8 +120,15 @@ export function useVideoFrameSource({
       setFrameSourceVersion(v => v + 1);
       videoPrefetchEndRef.current = 0;
       videoPrefetchBusyRef.current = false;
+      setFrameSourceDecodeError(false);
     }
   }, [videoMode, trackPath, isAudioTrack, addLog, trackPathRef, durationRef, selectionRef]);
+
+  // Reset whenever the open track changes — a decode error belongs to the
+  // file that produced it, not to whatever opens next.
+  useEffect(() => {
+    setFrameSourceDecodeError(false);
+  }, [trackPath]);
 
   return {
     frameSourceRef,
@@ -119,6 +137,7 @@ export function useVideoFrameSource({
     preZoomExtentRef,
     frameSourceVersion,
     setFrameSourceVersion,
+    frameSourceDecodeError,
     prerollVideo,
   };
 }

@@ -234,6 +234,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     preZoomExtentRef,
     frameSourceVersion,
     setFrameSourceVersion,
+    frameSourceDecodeError,
     prerollVideo,
   } = useVideoFrameSource({
     trackPath,
@@ -1556,6 +1557,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           <VideoPane
             frameSource={frameSourceRef.current}
             frameSourceVersion={frameSourceVersion}
+            frameSourceDecodeError={frameSourceDecodeError}
             isAudioTrack={isAudioTrack}
             videoSrc={videoSrc}
             isProcessing={isProcessing}

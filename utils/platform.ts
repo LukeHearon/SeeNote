@@ -7,6 +7,9 @@
 export const isMac =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
+export const isLinux =
+  typeof navigator !== 'undefined' && /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent);
+
 /** OS-appropriate label for the primary command modifier: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD_KEY_LABEL = isMac ? '⌘' : 'Ctrl';
 

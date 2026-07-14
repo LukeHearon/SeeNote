@@ -213,6 +213,12 @@ export const videoPane = {
   get modeLabel() { return getOverride('ui.videoPane.modeLabel') ?? "MODE"; },
   get processingMedia() { return getOverride('ui.videoPane.processingMedia') ?? "Processing Media..."; },
   get videoModeLabel() { return getOverride('ui.videoPane.videoModeLabel') ?? "Video Mode"; },
+  get codecErrorTitle() { return getOverride('ui.videoPane.codecErrorTitle') ?? "Can't display this video"; },
+  get codecErrorDecode() { return getOverride('ui.videoPane.codecErrorDecode') ?? "Your system is missing a codec for this video."; },
+  get codecErrorDecodeHintLinux() { return getOverride('ui.videoPane.codecErrorDecodeHintLinux') ?? "Linux: likely a missing GStreamer plugin (varies by codec — commonly gstreamer1.0-libav or gstreamer1.0-plugins-bad)."; },
+  get videoElementErrorLinux() { return getOverride('ui.videoPane.videoElementErrorLinux') ?? "Fast mode's video preview isn't available for this file on Linux. Switch to Accurate mode to view it."; },
+  get videoElementError() { return getOverride('ui.videoPane.videoElementError') ?? "This video couldn't be loaded for playback."; },
+  get codecErrorRead() { return getOverride('ui.videoPane.codecErrorRead') ?? "Couldn't read this file. If it's on a removable drive, check that it's still connected."; },
 };
 
 export const videoPlayer = {

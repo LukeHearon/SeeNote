@@ -7,6 +7,7 @@ import { VideoFrameSource } from '../utils/VideoFrameSource';
 import { wantsCanvasRenderer, displayVideoMode } from '../utils/videoPlaybackMode';
 import { useHotkeys } from '../hooks/useHotkeys';
 import type { VideoMode } from '../types';
+import { isLinux } from '../utils/platform';
 import {
   DEFAULT_VIEWPORT,
   computeContentRect,
@@ -17,9 +18,26 @@ import {
 } from '../utils/videoZoom';
 import { videoPane as videoP } from '../copy/ui';
 
+// MediaError codes (https://developer.mozilla.org/docs/Web/API/MediaError):
+// 3 = DECODE, 4 = SRC_NOT_SUPPORTED. On Linux, code 4 from the <video>
+// element is usually NOT a missing codec — WebKitGTK's GStreamer-backed
+// media pipeline doesn't support Tauri's asset:// custom URI scheme at all
+// (https://bugs.webkit.org/show_bug.cgi?id=146351), so this fires even when
+// the file plays fine in Accurate mode (which fetches bytes directly instead
+// of pointing <video> at asset://). See videoElementErrorLinux in copy/ui.ts.
+const DECODE_ERROR_CODES = new Set([3, 4]);
+// 2 = NETWORK — the element couldn't even fetch the bytes (e.g. the file
+// went away mid-read, a removable drive was disconnected).
+const READ_ERROR_CODE = 2;
+
 interface VideoPaneProps {
   frameSource: VideoFrameSource | null;
   frameSourceVersion: number;
+  /** True once the current frame source's WebCodecs decoder has reported it
+   *  has no decoder for this file's codec (Accurate/Mixed path). On some
+   *  platforms this is the only signal we get for that failure — open()
+   *  can resolve successfully before decode() fails asynchronously. */
+  frameSourceDecodeError: boolean;
   isAudioTrack: boolean;
   videoSrc: string | null;
   isProcessing: boolean;
@@ -43,6 +61,7 @@ interface VideoPaneProps {
 export default function VideoPane({
   frameSource,
   frameSourceVersion,
+  frameSourceDecodeError,
   isAudioTrack,
   videoSrc,
   isProcessing,
@@ -95,6 +114,23 @@ export default function VideoPane({
       warning = "This file's format doesn't support frame-accurate playback. The picture may not stay perfectly in sync with the audio.";
     }
   }
+
+  // ── <video> load-error tracking (Fast / Mixed-without-selection) ───────
+  // Native <video> failures are only meaningful for the <video>-driven paths;
+  // the canvas (WebCodecs) path has its own independent decode pipeline.
+  const [videoLoadErrorCode, setVideoLoadErrorCode] = useState<number | null>(null);
+  useEffect(() => {
+    setVideoLoadErrorCode(null);
+  }, [videoSrc]);
+  const handleVideoLoadError = useCallback((code: number) => {
+    // Code 1 (ABORTED) fires routinely when src is swapped/unmounted mid-load
+    // — not a real failure, so it's not surfaced.
+    if (code === 1) return;
+    setVideoLoadErrorCode(code);
+  }, []);
+
+  const isDecodeError = videoLoadErrorCode !== null && DECODE_ERROR_CODES.has(videoLoadErrorCode);
+  const isReadError = videoLoadErrorCode === READ_ERROR_CODE;
 
   // ── Video-mode picker expand/collapse on hover ──────────────────────────
   const [modePickerExpanded, setModePickerExpanded] = useState(false);
@@ -267,10 +303,30 @@ export default function VideoPane({
           playsOwnAudio={videoElementIsTransport}
           onVideoDims={handleVideoDims}
           onVideoElement={handleVideoElement}
+          onLoadError={handleVideoLoadError}
         />
       )}
 
-      {hasVideo && !isProcessing && (
+      {!showDisabledPlaceholder &&
+        ((!usingCanvas && (isDecodeError || isReadError)) || (usingCanvas && frameSourceDecodeError)) && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black text-slate-300 text-center px-8 select-none">
+          <AlertCircle size={40} className="mb-3 text-[#e65161]" />
+          <p className="text-lg font-medium">{videoP.codecErrorTitle}</p>
+          {usingCanvas ? (
+            <p className="text-sm text-slate-400 mt-2 max-w-md">
+              {videoP.codecErrorDecode}{isLinux ? ` ${videoP.codecErrorDecodeHintLinux}` : ''}
+            </p>
+          ) : isDecodeError ? (
+            <p className="text-sm text-slate-400 mt-2 max-w-md">
+              {isLinux ? videoP.videoElementErrorLinux : videoP.videoElementError}
+            </p>
+          ) : (
+            <p className="text-sm text-slate-400 mt-2 max-w-md">{videoP.codecErrorRead}</p>
+          )}
+        </div>
+      )}
+
+      {hasVideo && !isProcessing && !isDecodeError && !isReadError && !frameSourceDecodeError && (
         <VideoZoomLayer
           viewport={viewport}
           onViewportChange={handleViewportChange}
