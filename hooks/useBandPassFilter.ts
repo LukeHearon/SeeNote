@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, MutableRefObject } from 'react';
-import { BandPassFilter, Project, ProjectPreferences } from '../types';
+import { BandPassFilter } from '../types';
 import { DEFAULT_BAND_PASS_FILTER } from '../constants';
 import { AudioEngine } from '../utils/AudioEngine';
 import { ActivationStackApi } from './useActivationStack';
@@ -19,15 +19,19 @@ export interface BandPassFilterApi {
   handleBandPassFilterDrawn: (f: BandPassFilter) => void;
 }
 
-export interface BandPassFilterParams {
-  project: Project;
+// Only the slice of Project/ProjectPreferences this hook actually reads or
+// writes. Kept generic (not the full `Project`/`ProjectPreferences` types) so
+// callers without a real project (e.g. single-file viewing) can pass a
+// lightweight stand-in instead of fabricating a fake Project.
+export interface BandPassFilterParams<Prefs extends { bandPassFilter?: BandPassFilter | null }> {
+  project: { id: string; preferences: Prefs };
   engineRef: MutableRefObject<AudioEngine | null>;
   activationStack: ActivationStackApi;
-  projectRef: MutableRefObject<Project>;
+  projectRef: MutableRefObject<{ id: string; preferences: Prefs }>;
   // Shared with AnnotationWindow's other persist effects: gates persistence off
   // until the project-change reset has run for this project id.
   prevProjectIdRef: MutableRefObject<string | null>;
-  updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
+  updateProjectPreferences: (id: string, preferences: Prefs) => Promise<unknown>;
 }
 
 /**
@@ -37,14 +41,14 @@ export interface BandPassFilterParams {
  * (engine-push effect) and the project (debounced persistence), so those are
  * passed in.
  */
-export function useBandPassFilter({
+export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilter | null }>({
   project,
   engineRef,
   activationStack,
   projectRef,
   prevProjectIdRef,
   updateProjectPreferences,
-}: BandPassFilterParams): BandPassFilterApi {
+}: BandPassFilterParams<Prefs>): BandPassFilterApi {
   const [filterToolActive, setFilterToolActive] = useState(false);
   const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.preferences.bandPassFilter ?? null);
   const [filterStrength, setFilterStrength] = useState(project.preferences.bandPassFilter?.strength ?? 0.5);
