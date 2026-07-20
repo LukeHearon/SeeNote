@@ -26,6 +26,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [mediaDir, setMediaDir] = useState('');
   const [annotationDir, setAnnotationDir] = useState('');
   const [buzzdetectDir, setBuzzdetectDir] = useState('');
+  // null = auto-detect from each CSV (the default for new projects).
+  const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(null);
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [syncRemoteUrl, setSyncRemoteUrl] = useState('');
@@ -118,6 +120,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         mediaDirectory: makeProjectPath(projectDir, resolvedMediaDir),
         annotationDirectory: makeProjectPath(projectDir, resolvedAnnotationDir),
         buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
+        buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
         outputFormat: 'txt',
         outputRoundingDecimals,
         nameGradientColors: gradientColors,
@@ -225,6 +228,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
               buzzdetectDir={buzzdetectDir}
               onBuzzdetectDirChange={setBuzzdetectDir}
+              buzzdetectFrameLength={buzzdetectFrameLength}
+              onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
               syncRemoteUrl={syncRemoteUrl}
               onSyncRemoteUrlChange={setSyncRemoteUrl}
             />

@@ -155,6 +155,9 @@ export interface ProjectSettings {
   annotationDirectory: ProjectPath;
   /** Optional directory of buzzdetect `{ident}_buzzdetect.csv` files. */
   buzzdetectDirectory?: ProjectPath;
+  /** Frame length in seconds, used as a fallback bin width when it can't be
+   *  inferred from a CSV's `start` column (e.g. fewer than 2 rows). */
+  buzzdetectFrameLength?: number;
   outputFormat: 'txt';
   outputRoundingDecimals?: number;
   nameGradientColors?: [string, string];

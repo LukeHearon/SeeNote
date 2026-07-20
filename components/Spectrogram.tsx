@@ -287,8 +287,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [onViewportChange, scrollLeft, pixelsPerSecond, containerWidth]);
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
-  // currently-visible window. Disabled when a selection is active: the user positioned
-  // the canvas intentionally relative to the selection and auto-scroll disrupts that.
+  // currently-visible window. Suppressed while the playhead is still inside an active
+  // selection: the user positioned the canvas intentionally relative to that selection
+  // and auto-scroll would disrupt that. Once playback moves past the selection (e.g. a
+  // buzzdetect-panel click sets a one-bin selection, then playback continues past it),
+  // auto-scroll resumes tracking — a lingering selection shouldn't permanently freeze it.
   // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
   // the playhead can travel the full width of the screen without the view moving.
   //
@@ -301,11 +304,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // live time from the store so the playhead and the scroll stay in lockstep.
   useEffect(() => {
       const autoScroll = () => {
-          if (!playheadLocked || !isPlaying || selection || !containerRef.current) return;
+          if (!playheadLocked || !isPlaying || !containerRef.current) return;
+          const t = currentTimeStore.get();
+          if (selection && t >= selection.start && t <= selection.end) return;
           const containerWidth = containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
-          const t = currentTimeStore.get();
           const targetScroll = t * pps - containerWidth / 2;
           setScroll(Math.max(0, targetScroll), 'autoScroll');
       };

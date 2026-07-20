@@ -27,6 +27,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
     project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
+  const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
+    project.settings.buzzdetectFrameLength ?? null,
+  );
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
@@ -137,6 +140,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       mediaDirectory: makeProjectPath(project.projectDir, resolvedMediaDir),
       annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
+      buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
       gitSync: newUrl ? { remoteUrl: newUrl } : undefined,
@@ -335,6 +339,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
                 buzzdetectDir={buzzdetectDir}
                 onBuzzdetectDirChange={setBuzzdetectDir}
+                buzzdetectFrameLength={buzzdetectFrameLength}
+                onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
                 advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
                 syncRemoteUrl={syncRemoteUrl}
                 onSyncRemoteUrlChange={setSyncRemoteUrl}

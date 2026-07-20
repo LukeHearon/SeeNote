@@ -111,13 +111,15 @@ export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
 
 /**
  * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to
- * `null` when no file exists for this ident.
+ * `null` when no file exists for this ident. `frameLength`, when given,
+ * overrides auto-detection of the bin width from the CSV's `start` column.
  */
 export const readBuzzdetect = (
   buzzdetectDir: string,
   ident: string,
+  frameLength?: number,
 ): Promise<BuzzdetectData | null> =>
-  invoke('read_buzzdetect', { buzzdetectDir, ident });
+  invoke('read_buzzdetect', { buzzdetectDir, ident, frameLength: frameLength ?? null });
 
 export const createDirAll = (path: string): Promise<void> =>
   invoke('create_dir_all', { path });

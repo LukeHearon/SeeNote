@@ -31,13 +31,16 @@ fn unquote(cell: &str) -> String {
 ///
 /// CSV contract (see local/buzzdetect.md): first column `start` is the time
 /// axis in seconds; every other column is a neuron, optionally prefixed with
-/// `activation_`. Values are raw logits. The bin width is inferred from the
-/// spacing of the first few `start` values and the parse fails if that spacing
-/// is inconsistent — we never assume a fixed bin width.
+/// `activation_`. Values are raw logits. By default the bin width is inferred
+/// from the spacing of the first few `start` values and the parse fails if
+/// that spacing is inconsistent — we never silently assume a fixed bin width.
+/// `frame_length`, when set (the project's buzzdetect override setting),
+/// bypasses inference entirely and is used verbatim as the bin width.
 #[tauri::command]
 pub async fn read_buzzdetect(
     buzzdetect_dir: String,
     ident: String,
+    frame_length: Option<f32>,
 ) -> Result<Option<BuzzdetectData>, String> {
     let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
     let csv_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
@@ -97,8 +100,13 @@ pub async fn read_buzzdetect(
         }
     }
 
-    let bin_width = infer_bin_width(&starts)
-        .map_err(|e| format!("'{}': {}", csv_path.display(), e))?;
+    // An explicitly configured frame length overrides CSV inference entirely
+    // (it's the user asserting the true value, e.g. when a file has too few
+    // rows to infer from, or the CSV's spacing is noisy).
+    let bin_width = match frame_length {
+        Some(w) => w,
+        None => infer_bin_width(&starts).map_err(|e| format!("'{}': {}", csv_path.display(), e))?,
+    };
 
     Ok(Some(BuzzdetectData {
         bin_width,

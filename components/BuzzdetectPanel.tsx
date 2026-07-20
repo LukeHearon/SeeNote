@@ -11,8 +11,10 @@ import {
 } from '../constants';
 import { clamp } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
+import { binAtTime, visibleBinRange } from '../utils/binIndex';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
+import DraftNumberInput from './DraftNumberInput';
 
 // Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
 // same x and the two stay column-for-column aligned.
@@ -44,33 +46,6 @@ interface BuzzdetectPanelProps {
   onBoundAnnotationChange: (id: string | null) => void;
   onSeek: (time: number) => void;
   onScrollWheel?: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
-}
-
-/** Controlled numeric input that lets the user type freely (incl. '-' and
- *  empty) and only commits a parsed value on blur or Enter. */
-function ThresholdInput({ value, color, onCommit }: { value: number; color: string; onCommit: (v: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => { setDraft(String(value)); }, [value]);
-  const commit = () => {
-    const v = parseFloat(draft);
-    if (!isNaN(v)) onCommit(v);
-    else setDraft(String(value));
-  };
-  return (
-    <input
-      type="text"
-      inputMode="decimal"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-      }}
-      className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right outline-none focus:border-[#e65161]"
-      style={{ color }}
-    />
-  );
 }
 
 export default function BuzzdetectPanel({
@@ -157,8 +132,9 @@ export default function BuzzdetectPanel({
     if (!rect) return null;
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
     const t = xToTime(clientX - rect.left, scrollLeft, pixelsPerSecond);
-    const i = Math.floor((t - data.starts[0]) / data.binWidth);
-    return clamp(i, 0, data.starts.length - 1);
+    // Null in the gaps between frames when binWidth is overridden shorter than
+    // the frame spacing — there is genuinely no frame under the cursor there.
+    return binAtTime(data.starts, data.binWidth, t);
   }, [data, viewportStore]);
 
   // The half-open interval [start, start+binWidth) for a bin, end clamped to EOF.
@@ -202,8 +178,11 @@ export default function BuzzdetectPanel({
     const xOf = (t: number) => timeToX(t, scrollLeft, pixelsPerSecond);
 
     // Visible bin index range (with a one-bin margin so partial edges connect).
-    const iLeft = Math.max(0, Math.floor((startTime - starts[0]) / binWidth) - 1);
-    const iRight = Math.min(starts.length - 1, Math.ceil((endTime - starts[0]) / binWidth) + 1);
+    // Searched over `starts` rather than derived arithmetically: frames may be
+    // non-contiguous when binWidth is overridden shorter than the frame spacing.
+    const visible = visibleBinRange(starts, binWidth, startTime, endTime);
+    if (!visible) { ctx.restore(); return; }
+    const { iLeft, iRight } = visible;
 
     const enabled: number[] = [];
     for (let n = 0; n < neurons.length; n++) if (!hidden.has(neurons[n])) enabled.push(n);
@@ -227,6 +206,17 @@ export default function BuzzdetectPanel({
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
 
+    // Frame bands: a faint wash over the time each frame actually covers, so
+    // uncovered time (frame length overridden shorter than the frame spacing)
+    // reads as bare background rather than an implied contiguous grid.
+    ctx.fillStyle = 'rgba(226, 232, 240, 0.045)';
+    for (let i = iLeft; i <= iRight; i++) {
+      const bx = xOf(starts[i]);
+      const bw = binWidth * pixelsPerSecond;
+      if (bx > width || bx + bw < 0) continue;
+      ctx.fillRect(bx, 0, Math.max(1, bw), h);
+    }
+
     // Selection highlight (mirrors the spectrogram's selected region).
     if (selection) {
       const sx = xOf(selection.start);
@@ -241,23 +231,28 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
-    // Hovered bin band — light feedback for the click target.
+    // Hovered bin band — brighter than the resting frame wash so the click
+    // target still reads clearly on top of it.
     if (hoverFrame !== null && hoverFrame >= iLeft && hoverFrame <= iRight) {
       const hx = xOf(starts[hoverFrame]);
-      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
       ctx.fillRect(hx, 0, Math.max(1, binWidth * pixelsPerSecond), h);
     }
 
     // Soft vertical hash marks at frame boundaries (skip when bins get tight).
+    // Both edges of each frame are drawn from `starts`, so an overridden
+    // binWidth reads as separated frames rather than a contiguous grid.
     const binPx = binWidth * pixelsPerSecond;
     if (binPx >= 6) {
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      for (let i = iLeft; i <= iRight + 1; i++) {
-        const x = xOf(starts[0] + i * binWidth);
-        if (x < 0 || x > width) continue;
-        ctx.moveTo(x, 0); ctx.lineTo(x, h);
+      for (let i = iLeft; i <= iRight; i++) {
+        for (const t of [starts[i], starts[i] + binWidth]) {
+          const x = xOf(t);
+          if (x < 0 || x > width) continue;
+          ctx.moveTo(x, 0); ctx.lineTo(x, h);
+        }
       }
       ctx.stroke();
     }
@@ -360,15 +355,27 @@ export default function BuzzdetectPanel({
   const rafRef = useRef<number | null>(null);
   const drawRef = useRef(draw);
   drawRef.current = draw;
+  // Keep the FIRST pending frame rather than cancelling and re-scheduling: the
+  // currentTime store ticks ~50x/s, so cancel-and-reschedule starves the draw
+  // (each tick pushes the callback to the next frame, which the next tick
+  // cancels) and the canvas freezes for the whole of playback.
   const scheduleDraw = useCallback(() => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => drawRef.current());
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      drawRef.current();
+    });
   }, []);
 
   // Redraw on prop-driven changes (data, currentTime, selection, settings…).
   useEffect(() => {
     scheduleDraw();
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
   }, [draw, scheduleDraw]);
 
   // Redraw on spectrogram pan/zoom/resize without any React render: the store
@@ -431,6 +438,21 @@ export default function BuzzdetectPanel({
     const i = binAtClientX(e.clientX);
     if (i === null) return;
     const interval = binInterval(i);
+
+    // Shift+click extends the existing selection to also cover this frame,
+    // merging the two ranges into one bounding interval. Using min/max of the
+    // two ranges naturally handles overlapping bins — the union of two
+    // overlapping intervals is just their combined min/max.
+    if (e.shiftKey && selection) {
+      const merged: Selection = {
+        start: Math.min(selection.start, interval.start),
+        end: Math.max(selection.end, interval.end),
+      };
+      dragSelRef.current = merged;
+      onSelectionChange(merged);
+      return;
+    }
+
     dragAnchorRef.current = i;
     dragSelRef.current = interval;
     setDragging(true);
@@ -532,6 +554,7 @@ export default function BuzzdetectPanel({
               data-buzz-ui
               className="absolute top-9 right-1.5 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-64 max-h-[calc(100%-2.5rem)] overflow-y-auto custom-scrollbar"
               onMouseDown={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
             >
               <div className="p-3 space-y-2">
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
@@ -551,10 +574,11 @@ export default function BuzzdetectPanel({
                       />
                       <span className="w-3 h-3 rounded-sm flex-none" style={{ background: neuronColors[i] }} />
                       <span className="flex-1 text-xs text-slate-200 truncate" title={n}>{n}</span>
-                      <ThresholdInput
+                      <DraftNumberInput
                         value={thresholdOf(n)}
-                        color={neuronColors[i]}
                         onCommit={(v) => onThresholdChange(n, v)}
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right outline-none focus:border-[#e65161]"
+                        style={{ color: neuronColors[i] }}
                       />
                     </div>
                   );

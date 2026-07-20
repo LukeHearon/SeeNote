@@ -2,10 +2,11 @@ import React, { useRef, useEffect } from 'react';
 import { HelpCircle } from 'lucide-react';
 import { projectBaseFields } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_FRAME_LENGTH } from '../constants';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
+import DraftNumberInput from './DraftNumberInput';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
 import { normalizeGitRemoteUrl } from '../utils/gitSync';
 
@@ -31,6 +32,10 @@ interface Props {
   // Advanced
   buzzdetectDir: string;
   onBuzzdetectDirChange: (v: string) => void;
+  // null = auto-detect bin width from each CSV (the default); a number
+  // overrides detection for every file.
+  buzzdetectFrameLength: number | null;
+  onBuzzdetectFrameLengthChange: (v: number | null) => void;
   advancedDefaultOpen?: boolean;
   // Sync (repository URL only — user credentials live in the Preferences tab)
   syncRemoteUrl: string;
@@ -56,6 +61,8 @@ export default function ProjectBaseFields({
   onOutputRoundingDecimalsChange,
   buzzdetectDir,
   onBuzzdetectDirChange,
+  buzzdetectFrameLength,
+  onBuzzdetectFrameLengthChange,
   advancedDefaultOpen = false,
   syncRemoteUrl,
   onSyncRemoteUrlChange,
@@ -147,14 +154,45 @@ export default function ProjectBaseFields({
       </div>
 
       <CollapsibleSection title={projectBaseFields.advancedSection} defaultOpen={advancedDefaultOpen}>
-        <DirectoryField
-          label={projectBaseFields.buzzdetectLabel}
-          projectDir={projectDir}
-          value={buzzdetectDir}
-          onChange={onBuzzdetectDirChange}
-          placeholder={projectBaseFields.buzzdetectPlaceholder}
-          notExistMessage="Directory does not exist."
-        />
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-gray-400 text-xs font-medium uppercase tracking-wider">{projectBaseFields.buzzdetectSectionLabel}</span>
+          </div>
+          <DirectoryField
+            label={projectBaseFields.buzzdetectLabel}
+            projectDir={projectDir}
+            value={buzzdetectDir}
+            onChange={onBuzzdetectDirChange}
+            placeholder={projectBaseFields.buzzdetectPlaceholder}
+            notExistMessage="Directory does not exist."
+          />
+          <div className="flex items-center justify-between mt-2">
+            <div>
+              <label className="text-gray-400 text-sm block">{projectBaseFields.buzzdetectFrameLengthLabel}</label>
+              <p className="text-gray-600 text-xs">
+                {buzzdetectFrameLength === null ? projectBaseFields.buzzdetectFrameLengthAutoHelp : projectBaseFields.buzzdetectFrameLengthOverrideHelp}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {buzzdetectFrameLength !== null && (
+                <DraftNumberInput
+                  value={buzzdetectFrameLength}
+                  onCommit={onBuzzdetectFrameLengthChange}
+                  min={0.001}
+                  className="w-20 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              )}
+              <label className="flex items-center gap-1.5 text-gray-400 text-xs whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={buzzdetectFrameLength !== null}
+                  onChange={e => onBuzzdetectFrameLengthChange(e.target.checked ? DEFAULT_BUZZDETECT_FRAME_LENGTH : null)}
+                />
+                {projectBaseFields.buzzdetectFrameLengthOverrideLabel}
+              </label>
+            </div>
+          </div>
+        </div>
 
         <div>
           <div className="flex items-center justify-between mb-2">

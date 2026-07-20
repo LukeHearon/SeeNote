@@ -48,11 +48,11 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     if (!dir || !ident) { setBuzzdetectData(null); return; }
     let cancelled = false;
     setBuzzdetectData(null);
-    readBuzzdetect(dir, ident)
+    readBuzzdetect(dir, ident, project.settings.buzzdetectFrameLength)
       .then(d => { if (!cancelled) setBuzzdetectData(d); })
       .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
     return () => { cancelled = true; };
-  }, [ident, project.buzzdetectDirectoryAbs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
   const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
