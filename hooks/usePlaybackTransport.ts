@@ -8,6 +8,7 @@ import { SpectrogramHandle } from '../components/Spectrogram';
 import { Selection, VideoMode, PlaybackTransport } from '../types';
 import { DEFAULT_UI_SETTINGS } from '../constants';
 import type { useExamplePlayer } from './useExamplePlayer';
+import { useHotkeys } from './useHotkeys';
 
 interface UsePlaybackTransportArgs {
   project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number } } };
@@ -30,6 +31,11 @@ interface UsePlaybackTransportArgs {
   spectrogramRef: React.RefObject<SpectrogramHandle>;
   examplePlayer: ReturnType<typeof useExamplePlayer>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
+  // Visible-window width in seconds, for the arrow-key ±10%-of-window scrub.
+  zoomSecRef: React.MutableRefObject<number>;
+  // Mirrors useHotkeys's own `enabled`: false while a modal (e.g. the example
+  // library) owns the keyboard, so these bindings must not fire.
+  enabled?: boolean;
 }
 
 // Dual-transport abstraction over AudioEngine and VideoElementEngine. Owns the
@@ -56,9 +62,18 @@ export function usePlaybackTransport({
   spectrogramRef,
   examplePlayer,
   addLog,
+  zoomSecRef,
+  enabled = true,
 }: UsePlaybackTransportArgs) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
+
+  // Whether the spectrogram auto-scrolls to keep the playhead centered.
+  // Toggled by the 'c' shortcut below; read via ref inside that handler so it
+  // always sees the latest value without re-registering the binding.
+  const [playheadLocked, setPlayheadLocked] = useState(false);
+  const playheadLockedRef = useRef(false);
+  useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
 
   // Volume: 0 to 4 (400% or +12dB approx)
   const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
@@ -354,6 +369,29 @@ export function usePlaybackTransport({
     setIsBuffering(false);
   }, [videoMode, isAudioTrack, videoSrc, selection, usesVideoTransport]);
 
+  useHotkeys([
+    { key: 'ArrowLeft', handler: () => seek(Math.max(0, currentTimeRef.current - zoomSecRef.current * 0.1)) },
+    { key: 'ArrowRight', handler: () => seek(Math.min(durationRef.current, currentTimeRef.current + zoomSecRef.current * 0.1)) },
+    { key: ',', handler: () => {
+      if (isAudioTrackRef.current) return;
+      const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
+      seek(Math.max(0, currentTimeRef.current - frameDuration));
+    }},
+    { key: '.', handler: () => {
+      if (isAudioTrackRef.current) return;
+      const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
+      seek(Math.min(durationRef.current, currentTimeRef.current + frameDuration));
+    }},
+    { key: ' ', handler: togglePlay },
+    { key: 'r', handler: () => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1) },
+    { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
+    { key: 'c', handler: () => {
+        const willLock = !playheadLockedRef.current;
+        setPlayheadLocked(willLock);
+        if (willLock) spectrogramRef.current?.recenterPlayhead();
+    }},
+  ], enabled);
+
   return {
     isPlaying, setIsPlaying,
     isBuffering, setIsBuffering,
@@ -361,6 +399,7 @@ export function usePlaybackTransport({
     lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume,
     muted, setMuted,
+    playheadLocked, setPlayheadLocked,
     engineRef,
     videoEngineRef,
     seekRef,

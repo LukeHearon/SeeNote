@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, MutableRefObject } from 'react';
-import { BandPassFilter } from '../types';
+import { BandPassFilter, VideoMode } from '../types';
 import { DEFAULT_BAND_PASS_FILTER } from '../constants';
 import { AudioEngine } from '../utils/AudioEngine';
+import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import { ActivationStackApi } from './useActivationStack';
+import { useHotkeys } from './useHotkeys';
 
 export interface BandPassFilterApi {
   filterToolActive: boolean;
@@ -32,14 +34,25 @@ export interface BandPassFilterParams<Prefs extends { bandPassFilter?: BandPassF
   // until the project-change reset has run for this project id.
   prevProjectIdRef: MutableRefObject<string | null>;
   updateProjectPreferences: (id: string, preferences: Prefs) => Promise<unknown>;
+  // Drives the F / Shift+F hotkeys' isFilterAvailable() gate — see that
+  // helper's doc comment for why audio-only tracks always allow filtering
+  // while Fast-mode video tracks don't.
+  isAudioTrack: boolean;
+  videoMode: VideoMode;
+  // Whether this hook's own hotkeys should be live. Default true; callers
+  // (e.g. AnnotationWindow) pass false while a modal has keyboard focus so
+  // F / Shift+F don't fire underneath it.
+  enabled?: boolean;
 }
 
 /**
  * Self-contained band-pass filter state machine. Holds the filter tool / band /
- * strength state, the engine-push + persistence effects, and every handler that
- * AnnotationWindow wires to Spectrogram and Toolbar. Coupled to the audio engine
+ * strength state, the engine-push + persistence effects, every handler that
+ * AnnotationWindow wires to Spectrogram and Toolbar, and the F / Shift+F hotkey
+ * registration that drives those handlers. Coupled to the audio engine
  * (engine-push effect) and the project (debounced persistence), so those are
- * passed in.
+ * passed in; `isAudioTrack`/`videoMode` gate hotkey availability and `enabled`
+ * lets a caller (e.g. a modal with keyboard focus) suppress the hotkeys entirely.
  */
 export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilter | null }>({
   project,
@@ -48,6 +61,9 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
   projectRef,
   prevProjectIdRef,
   updateProjectPreferences,
+  isAudioTrack,
+  videoMode,
+  enabled = true,
 }: BandPassFilterParams<Prefs>): BandPassFilterApi {
   const [filterToolActive, setFilterToolActive] = useState(false);
   const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.preferences.bandPassFilter ?? null);
@@ -126,6 +142,11 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
       engageBandPassFilter();
     }
   }, [bandPassFilter, engageBandPassFilter, activationStack]);
+
+  useHotkeys([
+    { key: 'f', mods: ['shift'], handler: () => { if (isFilterAvailable(isAudioTrack, videoMode)) handleToggleFilterTool(); } },
+    { key: 'f', handler: () => { if (isFilterAvailable(isAudioTrack, videoMode)) handleToggleFilterState(); } },
+  ], enabled);
 
   // Filter "off" path — snapshots the band to `lastBandPassFilterRef` so it can
   // be restored, clears the band (disabling filtering), and pulls `filterBand`

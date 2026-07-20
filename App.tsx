@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import LaunchScreen from './components/LaunchScreen';
 import AnnotationWindow from './AnnotationWindow';
+import SingleFileWindow from './SingleFileWindow';
 import RepairProjectModal, { RepairProjectState } from './components/RepairProjectModal';
 import TooltipLayer from './components/TooltipLayer';
 import { Project, ProjectPreferences, ProjectSettings } from './types';
@@ -16,6 +17,7 @@ export default function App() {
     removeProject, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [activeFile, setActiveFile] = useState<string | null>(null);
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
 
   // Keep the in-memory active project in lockstep with persisted settings/preferences.
@@ -59,6 +61,14 @@ export default function App() {
     setActiveProject(null);
   }, []);
 
+  const handleOpenFile = useCallback((path: string) => {
+    setActiveFile(path);
+  }, []);
+
+  const handleCloseFile = useCallback(() => {
+    setActiveFile(null);
+  }, []);
+
   if (activeProject) {
     return (
       <AnnotationWindow
@@ -71,6 +81,10 @@ export default function App() {
     );
   }
 
+  if (activeFile) {
+    return <SingleFileWindow filePath={activeFile} onClose={handleCloseFile} />;
+  }
+
   return (
     <>
       <LaunchScreen
@@ -79,6 +93,7 @@ export default function App() {
         loadError={loadError}
         projectsFilePath={projectsFilePath}
         onOpenProject={handleOpenProject}
+        onOpenFile={handleOpenFile}
         createProject={createProject}
         addExistingProject={addExistingProject}
         removeProject={removeProject}

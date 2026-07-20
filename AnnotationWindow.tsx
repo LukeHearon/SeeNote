@@ -27,6 +27,7 @@ import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
+import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
@@ -114,13 +115,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   // Undo/redo history for annotations. The two refs are reset directly by the
-  // track-open / annotation-load / project-change paths below.
+  // track-open / annotation-load / project-change paths below. The hook also
+  // registers its own mod+z/mod+shift+z/mod+y hotkeys.
   const {
     annotationsHistoryRef,
     historyIndexRef,
     handleAnnotationsCommit,
-    undoAnnotations,
-    redoAnnotations,
   } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
@@ -161,9 +161,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       ? project.preferences.uiSettings.leftPanelWidthRatio * window.innerWidth
       : DEFAULT_LEFT_PANEL_WIDTH,
   });
-  const [playheadLocked, setPlayheadLocked] = useState(project.preferences.uiSettings?.playheadLocked ?? false);
-  const playheadLockedRef = useRef(false);
-  useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
+  // playheadLocked / setPlayheadLocked now come from usePlaybackTransport
+  // (below), which also owns the 'c' hotkey that toggles it.
 
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -172,6 +171,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
 
   const [zoomSec, setZoomSec] = useState(project.preferences.uiSettings?.zoomSec ?? DEFAULT_UI_SETTINGS.zoomSec);
+  // Visible-window width in seconds, for the arrow-key ±10%-of-window scrub
+  // (usePlaybackTransport) and the mod+0 zoom-to-fit toggle
+  // (useSpectrogramZoomHotkeys) — both need it as a ref to avoid re-binding
+  // their hotkeys on every zoom change.
+  const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
+  useEffect(() => { zoomSecRef.current = zoomSec; }, [zoomSec]);
 
   // Video-rendering mode (off / fast / mixed / accurate). Drives which player
   // VideoPane mounts and whether handleOpenTrack opens / warms a frame source.
@@ -221,9 +226,67 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Shared example-clip player for the tool-chip play buttons (palette + tool
   // settings). Independent of the main track's AudioEngine.
   const examplePlayer = useExamplePlayer(addLog);
-  // Annotation-tool palette + import-annotations hooks are instantiated below,
-  // after trackPathRef exists; `libraryPlaying` / `exampleAudioActive` come from
-  // there.
+
+  // Shared project-switch guard for the debounced persistence effects
+  // (tool reconcile, band-pass, project settings). Owned here, not in any one hook.
+  const prevProjectIdRef = useRef<string | null>(null);
+
+  // Compute annotation file path: mirrors audio dir structure into annotation dir
+  const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
+    if (!annotationDirectory || !currentDirectory) return null;
+    const rel = trackFilePath.substring(currentDirectory.length);
+    const withoutExt = stripExt(rel);
+    return annotationDirectory + withoutExt + '.txt';
+  }, [annotationDirectory, currentDirectory]);
+
+  // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
+  // persistence effect, and every tool CRUD/import handler. See
+  // hooks/useAnnotationTools.ts. Instantiated here (before useVideoFrameSource/
+  // usePlaybackTransport below) specifically so `libraryToolIndex` exists in
+  // time to gate those hooks' own hotkey registrations — see the `enabled`
+  // args passed to usePlaybackTransport/useBandPassFilter further down.
+  const {
+    annotationTools,
+    setAnnotationTools,
+    annotationToolsRef,
+    panelEditingToolIndex,
+    setPanelEditingToolIndex,
+    panelDeletingToolIndex,
+    setPanelDeletingToolIndex,
+    libraryToolIndex,
+    setLibraryToolIndex,
+    libraryPlaying,
+    setLibraryPlaying,
+    handleShowExamples,
+    loadAnnotationTools,
+    handleCreateTool,
+    handleRenameTool,
+    handleDeleteTool,
+    handlePreviewToolColor,
+    handleReorderTools,
+    handleImportExamples,
+    handleImportExamplesToTool,
+    handleRestoreToolsState,
+  } = useAnnotationTools({
+    project,
+    projectRef,
+    prevProjectIdRef,
+    updateProjectPreferences,
+    addLog,
+    examplePlayer,
+    setAnnotations,
+    handleAnnotationsCommit,
+    activeToolKey,
+    setActiveToolKey,
+    allTracks,
+    trackPath,
+    getAnnotationPath,
+  });
+
+  // An example clip is sounding via either path (chip preview or the modal).
+  // While true the main track's audio is parked so the two never overlap, and
+  // the spectrogram shows a dimmed "example audio is playing" veil.
+  const exampleAudioActive = examplePlayer.playingToolId !== null || libraryPlaying;
 
   // VideoFrameSource lifecycle (frame-perfect MP4/MOV): the source handle ref,
   // its rolling-prefetch bookkeeping, the version counter, prerollVideo, and the
@@ -257,6 +320,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume,
     muted, setMuted,
+    playheadLocked, setPlayheadLocked,
     engineRef,
     currentTimeRef,
     currentTimeStoreRef,
@@ -284,6 +348,27 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     spectrogramRef,
     examplePlayer,
     addLog,
+    zoomSecRef,
+    // The example-library modal owns the keyboard while open — see its own
+    // key handler's comment ("the host disables its own hotkeys"). Without
+    // this, its Space binding would double-fire against this hook's Space.
+    enabled: libraryToolIndex === null,
+  });
+
+  // Spectrogram zoom-in/out/fit-to-track hotkeys (mod+=/mod+-/mod+shift+plus/
+  // mod+0), shared verbatim with SingleFileWindow. mod+0's "remember where I
+  // was" snapshot reads the live scroll position from the viewport store (the
+  // same store the buzzdetect panel subscribes to for x-alignment).
+  useSpectrogramZoomHotkeys({
+    spectrogramRef,
+    durationRef,
+    zoomSecRef,
+    preZoomExtentRef,
+    getViewportStartTime: () => {
+      const { scrollLeft, pixelsPerSecond } = viewportStoreRef.current.get();
+      return pixelsPerSecond > 0 ? scrollLeft / pixelsPerSecond : 0;
+    },
+    enabled: libraryToolIndex === null,
   });
 
   // Keep selectionRef in sync with state (for use in rAF loop without stale closure)
@@ -329,71 +414,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [annotations, boundAnnotationId, activationStack]);
 
-  const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
-  useEffect(() => { zoomSecRef.current = zoomSec; }, [zoomSec]);
-
   // Clear the saved pre-zoom extent on every track change. trackPathRef mirroring
   // lives in useFileNavigation; preZoomExtentRef is owned by useVideoFrameSource,
   // so the reset stays here in the orchestrator where both are in scope.
   useEffect(() => { preZoomExtentRef.current = null; }, [trackPath]);
-
-  // Shared project-switch guard for the debounced persistence effects
-  // (tool reconcile, band-pass, project settings). Owned here, not in any one hook.
-  const prevProjectIdRef = useRef<string | null>(null);
-
-  // Compute annotation file path: mirrors audio dir structure into annotation dir
-  const getAnnotationPath = useCallback((trackFilePath: string): string | null => {
-    if (!annotationDirectory || !currentDirectory) return null;
-    const rel = trackFilePath.substring(currentDirectory.length);
-    const withoutExt = stripExt(rel);
-    return annotationDirectory + withoutExt + '.txt';
-  }, [annotationDirectory, currentDirectory]);
-
-  // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
-  // persistence effect, and every tool CRUD/import handler. See
-  // hooks/useAnnotationTools.ts.
-  const {
-    annotationTools,
-    setAnnotationTools,
-    annotationToolsRef,
-    panelEditingToolIndex,
-    setPanelEditingToolIndex,
-    panelDeletingToolIndex,
-    setPanelDeletingToolIndex,
-    libraryToolIndex,
-    setLibraryToolIndex,
-    libraryPlaying,
-    setLibraryPlaying,
-    handleShowExamples,
-    loadAnnotationTools,
-    handleCreateTool,
-    handleRenameTool,
-    handleDeleteTool,
-    handlePreviewToolColor,
-    handleReorderTools,
-    handleImportExamples,
-    handleImportExamplesToTool,
-    handleRestoreToolsState,
-  } = useAnnotationTools({
-    project,
-    projectRef,
-    prevProjectIdRef,
-    updateProjectPreferences,
-    addLog,
-    examplePlayer,
-    setAnnotations,
-    handleAnnotationsCommit,
-    activeToolKey,
-    setActiveToolKey,
-    allTracks,
-    trackPath,
-    getAnnotationPath,
-  });
-
-  // An example clip is sounding via either path (chip preview or the modal).
-  // While true the main track's audio is parked so the two never overlap, and
-  // the spectrogram shows a dimmed "example audio is playing" veil.
-  const exampleAudioActive = examplePlayer.playingToolId !== null || libraryPlaying;
 
   // Import-annotations flow: parse-error toast, overwrite/merge confirmation,
   // and the disk/live write path. See hooks/useImportAnnotations.ts.
@@ -691,8 +715,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   } = useBuzzdetect({ project, ident, addLog });
 
   // Band-pass filter state machine (filter tool / band / strength + engine-push
-  // and persistence effects). Needs engineRef, the activation stack, and the
-  // project plumbing for debounced persistence. See hooks/useBandPassFilter.ts.
+  // and persistence effects, plus its own F / Shift+F hotkeys). Needs engineRef,
+  // the activation stack, and the project plumbing for debounced persistence.
+  // See hooks/useBandPassFilter.ts.
   const {
     filterToolActive, setFilterToolActive,
     bandPassFilter, setBandPassFilter,
@@ -709,6 +734,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     projectRef,
     prevProjectIdRef,
     updateProjectPreferences,
+    isAudioTrack,
+    videoMode,
+    enabled: libraryToolIndex === null,
   });
 
   // Debounced persistence of spectrogram settings + consolidated UI fields to
@@ -1077,52 +1105,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // Help panel — also fires inside text inputs, since help is universal.
       { key: 'F1', allowInInput: true, handler: () => setShowHelp(prev => !prev) },
 
-      // Mod+key bindings. Order matters: more specific (mod+shift+z) before mod+z.
+      // Mod+key bindings. Undo/redo (useAnnotationHistory), band-pass filter
+      // toggle (useBandPassFilter), spectrogram zoom (useSpectrogramZoomHotkeys),
+      // and playback transport (space/arrows/,/./r/m/c, usePlaybackTransport)
+      // now register their own hotkeys where their state/handlers live — see
+      // those hooks' instantiations above. What's left here is annotation- and
+      // file-navigation-specific glue that only this window has.
       { key: 'a', mods: ['mod'], handler: selectAllOrAnnotateFullTrack },
-      { key: 'z', mods: ['mod', 'shift'], handler: () => redoAnnotations() },
-      { key: 'z', mods: ['mod'], handler: () => undoAnnotations() },
-      { key: 'y', mods: ['mod'], handler: () => redoAnnotations() },
       { key: 'ArrowLeft', mods: ['mod'], handler: () => spectrogramRef.current?.goToPrevAnnotation() },
       { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
-      { key: '=', mods: ['mod'], handler: () => { spectrogramRef.current?.zoomIn(); preZoomExtentRef.current = null; } },
-      { key: '+', mods: ['mod', 'shift'], handler: () => { spectrogramRef.current?.zoomIn(); preZoomExtentRef.current = null; } },
-      { key: '-', mods: ['mod'], handler: () => { spectrogramRef.current?.zoomOut(); preZoomExtentRef.current = null; } },
-      { key: '0', mods: ['mod'], handler: () => {
-          const dur = durationRef.current;
-          if (!dur) return;
-          const { scrollLeft: sl, pixelsPerSecond: pps } = viewportStoreRef.current.get();
-          const startTime = pps > 0 ? sl / pps : 0;
-          const isAtFullExtent = zoomSecRef.current >= dur;
-          if (isAtFullExtent && preZoomExtentRef.current) {
-            const saved = preZoomExtentRef.current;
-            spectrogramRef.current?.zoomToRange(saved.startTime, saved.endTime);
-            preZoomExtentRef.current = null;
-          } else {
-            preZoomExtentRef.current = { startTime, endTime: startTime + zoomSecRef.current };
-            spectrogramRef.current?.zoomToRange(0, dur);
-          }
-      }},
 
-      // Plain arrow keys: scrub playhead ±10% of visible window.
-      { key: 'ArrowLeft', handler: () => seek(Math.max(0, currentTimeRef.current - zoomSecRef.current * 0.1)) },
-      { key: 'ArrowRight', handler: () => seek(Math.min(durationRef.current, currentTimeRef.current + zoomSecRef.current * 0.1)) },
-      // Frame scrub: step back/forward one frame (video tracks only).
-      { key: ',', handler: () => {
-        if (isAudioTrackRef.current) return;
-        const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
-        seek(Math.max(0, currentTimeRef.current - frameDuration));
-      }},
-      { key: '.', handler: () => {
-        if (isAudioTrackRef.current) return;
-        const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);
-        seek(Math.min(durationRef.current, currentTimeRef.current + frameDuration));
-      }},
-
-      // Plain keys.
-      { key: ' ', handler: togglePlay },
-      { key: 'r', handler: () => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1) },
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
       // tool, or band.
@@ -1130,21 +1124,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setActiveToolKey(null);
           activationStack.remove('annotationTool');
       }},
-      // `Shift+F`: ready the filter tool (click-drag to define band).
-      // `F`: toggle filter state on/off (restore last band). Must come after shift binding.
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);
           if (tool) examplePlayer.toggle(tool);
-      }},
-      { key: 'f', mods: ['shift'], handler: () => { if (videoMode !== 'fast') handleToggleFilterTool(); } },
-      { key: 'f', handler: () => { if (videoMode !== 'fast') handleToggleFilterState(); } },
-      { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
-      // `C`: recenter the visible window on the playhead (no zoom change).
-      { key: 'c', handler: () => {
-          const willLock = !playheadLockedRef.current;
-          setPlayheadLocked(willLock);
-          if (willLock) spectrogramRef.current?.recenterPlayhead();
       }},
       // Escape — universal undo of the most-recently-activated layer. Fires
       // even when a text input has focus (HelpPanel's `stop:true` Esc handler
@@ -1706,13 +1689,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                filterStrength={filterStrength}
                setFilterStrength={setFilterStrength}
                videoMode={videoMode}
+               isAudioTrack={isAudioTrack}
                buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
                onRestartAudio={() => { engineRef.current?.restart(); }}
                playheadLocked={playheadLocked}
                onTogglePlayheadLock={() => {
-                 const willLock = !playheadLockedRef.current;
+                 const willLock = !playheadLocked;
                  setPlayheadLocked(willLock);
                  if (willLock) spectrogramRef.current?.recenterPlayhead();
                }}

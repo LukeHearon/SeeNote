@@ -3,6 +3,7 @@ import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2,
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
+import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { tooltips } from '../copy/tooltips';
@@ -55,6 +56,10 @@ interface ToolbarProps {
   filterStrength: number;
   setFilterStrength: (s: number) => void;
   videoMode?: VideoMode;
+  /** Audio-only tracks always play through AudioEngine (pitch-preserving,
+   *  filterable) regardless of videoMode — the Fast-mode restrictions below
+   *  only apply when a <video> element is actually driving playback. */
+  isAudioTrack?: boolean;
   /** Whether a buzzdetect directory is configured (gates the toggle button). */
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
@@ -110,6 +115,7 @@ function Toolbar({
   filterStrength,
   setFilterStrength,
   videoMode,
+  isAudioTrack,
   buzzdetectAvailable,
   buzzdetectEnabled,
   onToggleBuzzdetect,
@@ -129,16 +135,16 @@ function Toolbar({
   useEffect(() => { filterStrengthRef.current = filterStrength; }, [filterStrength]);
   useEffect(() => { bandPassFilterRef.current = bandPassFilter; }, [bandPassFilter]);
 
-  const freeRunning = videoMode === 'fast' || videoMode === 'mixed';
+  const freeRunning = !isAudioTrack && (videoMode === 'fast' || videoMode === 'mixed');
   const effectiveSpeedMin = freeRunning ? 0.5 : SPEED_MIN;
   const effectiveSpeedMax = freeRunning ? 2.0 : SPEED_MAX;
-  const filterDisabledByMode = videoMode === 'fast';
+  const filterDisabledByMode = !isFilterAvailable(isAudioTrack ?? false, videoMode ?? 'fast');
 
   // Clamp speed into the effective range when video mode changes.
   useEffect(() => {
     const clamped = clamp(playbackSpeed, effectiveSpeedMin, effectiveSpeedMax);
     if (clamped !== playbackSpeed) setPlaybackSpeed(clamped);
-  }, [videoMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [videoMode, isAudioTrack]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [speedControlEl, setSpeedControlEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {

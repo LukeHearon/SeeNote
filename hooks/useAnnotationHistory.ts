@@ -1,5 +1,6 @@
 import { useCallback, useRef, MutableRefObject } from 'react';
 import { Annotation } from '../types';
+import { useHotkeys } from './useHotkeys';
 
 export interface AnnotationHistoryApi {
   /** Undo/redo stack of annotation snapshots. Reset directly by track-open /
@@ -19,9 +20,12 @@ export interface AnnotationHistoryApi {
  * commit/undo/redo helpers extracted from AnnotationWindow. The owning
  * component passes its `annotations` setter; history reset (on track open,
  * annotation load, project change) is done by writing the returned refs.
+ * Also registers the mod+z / mod+shift+z / mod+y undo/redo hotkeys;
+ * `enabled` mirrors `useHotkeys`'s own flag for disabling while a modal owns the keyboard.
  */
 export function useAnnotationHistory(
   setAnnotations: (annotations: Annotation[]) => void,
+  enabled: boolean = true,
 ): AnnotationHistoryApi {
   // Undo/redo history for annotations
   const annotationsHistoryRef = useRef<Annotation[][]>([[]]);
@@ -51,6 +55,12 @@ export function useAnnotationHistory(
     historyIndexRef.current++;
     setAnnotations(annotationsHistoryRef.current[historyIndexRef.current]);
   }, [setAnnotations]);
+
+  useHotkeys([
+    { key: 'z', mods: ['mod', 'shift'], handler: () => redoAnnotations() },
+    { key: 'z', mods: ['mod'], handler: () => undoAnnotations() },
+    { key: 'y', mods: ['mod'], handler: () => redoAnnotations() },
+  ], enabled);
 
   return {
     annotationsHistoryRef,

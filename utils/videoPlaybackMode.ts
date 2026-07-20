@@ -36,3 +36,15 @@ export function displayVideoMode(
   if (mode !== 'off' && wantsCanvasRenderer(mode, hasSelection) && !hasFrameSource) return 'fast';
   return mode;
 }
+
+/**
+ * Whether band-pass filtering is actually available right now. Fast mode
+ * disables audio filtering for VIDEO tracks because the <video> element
+ * drives its own playback and plays its own unfiltered audio track — there's
+ * no AudioEngine in the loop for Fast mode to filter. Audio-only tracks have
+ * no such element: the AudioEngine always drives their playback regardless
+ * of `videoMode`, so filtering is always available for them.
+ */
+export function isFilterAvailable(isAudioTrack: boolean, videoMode: VideoMode): boolean {
+  return isAudioTrack || videoMode !== 'fast';
+}

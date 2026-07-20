@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
-import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
+import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
 import { findFirstValidAncestor } from '../utils/helpers';
+import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
 import { launchScreen } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import CreateProjectModal from './CreateProjectModal';
@@ -17,6 +18,7 @@ interface Props {
   loadError: string | null;
   projectsFilePath: string | null;
   onOpenProject: (project: Project) => void;
+  onOpenFile: (path: string) => void;
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
   addExistingProject: (projectDir: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
@@ -42,6 +44,7 @@ export default function LaunchScreen({
   loadError,
   projectsFilePath,
   onOpenProject,
+  onOpenFile,
   createProject,
   addExistingProject,
   removeProject,
@@ -135,6 +138,14 @@ export default function LaunchScreen({
     } catch (err) {
       setOpenError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const handleOpenFile = async () => {
+    setOpenError(null);
+    const extensions = [...SUPPORTED_AUDIO_EXTS, ...SUPPORTED_VIDEO_EXTS];
+    const path = await openFileDialog(null, [{ name: 'Audio/Video', extensions }]);
+    if (!path) return;
+    onOpenFile(path);
   };
 
   // Launch the locate / re-link flow for a single entry: pick a directory,
@@ -244,6 +255,13 @@ export default function LaunchScreen({
         <div className="flex items-center justify-between mb-4 shrink-0">
           <h2 className="text-gray-300 text-sm font-medium uppercase tracking-wider">{launchScreen.projectsHeading}</h2>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleOpenFile}
+              className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
+            >
+              <File size={15} />
+              {launchScreen.openFileButton}
+            </button>
             <button
               onClick={handleOpenExisting}
               className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"

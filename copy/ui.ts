@@ -5,6 +5,7 @@ export const launchScreen = {
   get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Recent Projects"; },
   get setupSyncButton() { return getOverride('ui.launchScreen.setupSyncButton') ?? "Git Sync Help"; },
   get openExistingButton() { return getOverride('ui.launchScreen.openExistingButton') ?? "Open Project"; },
+  get openFileButton() { return getOverride('ui.launchScreen.openFileButton') ?? "Open File"; },
   get newProjectButton() { return getOverride('ui.launchScreen.newProjectButton') ?? "New Project"; },
   get loadError() { return getOverride('ui.launchScreen.loadError') ?? "Failed to load projects"; },
   get openError() { return getOverride('ui.launchScreen.openError') ?? "Could not open project"; },
