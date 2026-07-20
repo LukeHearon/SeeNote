@@ -168,13 +168,15 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|_app, _event| {
             // macOS delivers "Open With SeeNote" launches as file:// URLs via this
             // event rather than argv (see openable_path_from_args's setup-hook use
-            // for the Windows/Linux cold-start equivalent).
-            if let tauri::RunEvent::Opened { urls } = event {
+            // for the Windows/Linux cold-start equivalent). RunEvent::Opened only
+            // exists on macOS/iOS (see tauri's app.rs), hence the cfg gate.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
                 if let Some(path) = urls.into_iter().find_map(|url| url.to_file_path().ok()) {
-                    deliver_open_file(app, path.to_string_lossy().into_owned());
+                    deliver_open_file(_app, path.to_string_lossy().into_owned());
                 }
             }
         });
