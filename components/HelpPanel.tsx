@@ -152,8 +152,10 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li>{md(helpPanel.guide.videoZoom.li4)}</li>
                   <li>{md(helpPanel.guide.videoZoom.li5)}</li>
                   <li>{md(helpPanel.guide.videoZoom.li6)}</li>
+                  <li>{md(helpPanel.guide.videoZoom.li7)}</li>
                 </ul>
                 <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoZoom.note1)}</p>
+                <p className="text-slate-400 text-xs">{md(helpPanel.guide.videoZoom.note2)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.spectrogram} target="spectrogram-canvas">

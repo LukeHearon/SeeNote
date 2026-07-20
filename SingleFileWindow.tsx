@@ -70,6 +70,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const videoModeRef = useRef(videoMode);
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
 
+  // No project to persist against in single-file mode — plain session state.
+  const [videoBrightness, setVideoBrightness] = useState(100);
+  const [videoContrast, setVideoContrast] = useState(100);
+
   const [settings, setSettings] = useState<SpectrogramSettings>(DEFAULT_SPECTROGRAM_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -276,6 +280,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 hasSelection={selection !== null}
                 onVideoModeChange={setVideoMode}
                 onVideoElement={attachVideoElement}
+                brightness={videoBrightness}
+                contrast={videoContrast}
+                onBrightnessChange={setVideoBrightness}
+                onContrastChange={setVideoContrast}
               />
               {videoCollapsed && (
                 <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">

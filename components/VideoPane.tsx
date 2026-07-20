@@ -56,6 +56,12 @@ interface VideoPaneProps {
   /** Exposes the fallback <video> element to the parent so VideoElementEngine
    *  can drive transport on it (Fast / Mixed-without-selection). */
   onVideoElement?: (el: HTMLVideoElement | null) => void;
+  /** Display-only brightness/contrast, as CSS filter percentages (100 = neutral).
+   *  Owned by the parent so it can be persisted per-project. */
+  brightness: number;
+  contrast: number;
+  onBrightnessChange: (v: number) => void;
+  onContrastChange: (v: number) => void;
 }
 
 export default function VideoPane({
@@ -73,6 +79,10 @@ export default function VideoPane({
   hasSelection,
   onVideoModeChange,
   onVideoElement,
+  brightness,
+  contrast,
+  onBrightnessChange,
+  onContrastChange,
 }: VideoPaneProps) {
   // Pick the renderer based on mode.
   //   off:   custom "Video Disabled" placeholder (no element to drive)
@@ -285,26 +295,33 @@ export default function VideoPane({
           <p className="text-lg font-medium">{videoP.videoDisabled}</p>
           <p className="text-xs text-slate-600 mt-1">{videoP.switchModesHint}</p>
         </div>
-      ) : usingCanvas ? (
-        <CanvasVideoPlayer
-          key={frameSourceVersion}
-          frameSource={frameSource!}
-          getMediaTime={getMediaTime}
-          onDebugLog={onDebugLog}
-        />
       ) : (
-        <VideoPlayer
-          src={videoSrc}
-          isAudio={isAudioTrack}
-          onDurationChange={onDurationChange}
-          onDebugLog={onDebugLog}
-          viewport={viewport}
-          contentRect={contentRect}
-          playsOwnAudio={videoElementIsTransport}
-          onVideoDims={handleVideoDims}
-          onVideoElement={handleVideoElement}
-          onLoadError={handleVideoLoadError}
-        />
+        <div
+          className="w-full h-full"
+          style={{ filter: `brightness(${brightness}%) contrast(${contrast}%)` }}
+        >
+          {usingCanvas ? (
+            <CanvasVideoPlayer
+              key={frameSourceVersion}
+              frameSource={frameSource!}
+              getMediaTime={getMediaTime}
+              onDebugLog={onDebugLog}
+            />
+          ) : (
+            <VideoPlayer
+              src={videoSrc}
+              isAudio={isAudioTrack}
+              onDurationChange={onDurationChange}
+              onDebugLog={onDebugLog}
+              viewport={viewport}
+              contentRect={contentRect}
+              playsOwnAudio={videoElementIsTransport}
+              onVideoDims={handleVideoDims}
+              onVideoElement={handleVideoElement}
+              onLoadError={handleVideoLoadError}
+            />
+          )}
+        </div>
       )}
 
       {!showDisabledPlaceholder &&
@@ -336,6 +353,10 @@ export default function VideoPane({
           onToolActiveChange={handleZoomToolActiveChange}
           onToggleZoomState={handleToggleZoomState}
           drawThumbnail={drawThumbnail}
+          brightness={brightness}
+          contrast={contrast}
+          onBrightnessChange={onBrightnessChange}
+          onContrastChange={onContrastChange}
         />
       )}
 

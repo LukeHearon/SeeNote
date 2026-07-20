@@ -56,7 +56,9 @@ export const helpPanel = {
       get li4() { return getOverride('helpPanel.guide.videoZoom.li4') ?? "**Pan:** while zoomed, scroll (trackpad two-finger or mouse wheel) over the video panel to pan around."; },
       get li5() { return getOverride('helpPanel.guide.videoZoom.li5') ?? "**Zoom in / out / reset:** buttons available whenever zoomed in."; },
       get li6() { return getOverride('helpPanel.guide.videoZoom.li6') ?? "**Viewfinder:** while zoomed, a minimap appears bottom-right — drag inside it to pan the view."; },
+      get li7() { return getOverride('helpPanel.guide.videoZoom.li7') ?? "**Brightness / Contrast:** click either button to pop out a slider, with a reset button alongside it."; },
       get note1() { return getOverride('helpPanel.guide.videoZoom.note1') ?? "Zoom is purely visual and never affects the playhead, audio, or annotation timing."; },
+      get note2() { return getOverride('helpPanel.guide.videoZoom.note2') ?? "Brightness/contrast are display-only — they don't affect exported annotations or the underlying video file."; },
     },
     spectrogram: {
       get li1() { return getOverride('helpPanel.guide.spectrogram.li1') ?? "**Pan:** Right-click & drag, or scroll wheel."; },

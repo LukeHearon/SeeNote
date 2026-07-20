@@ -19,6 +19,8 @@ interface UseProjectPersistenceArgs {
   buzzdetectThresholds: Record<string, number>;
   buzzdetectHiddenNeurons: string[];
   videoMode: VideoMode;
+  videoBrightness: number;
+  videoContrast: number;
   // Panel layout.
   playheadLocked: boolean;
   filePanelCollapsed: boolean;
@@ -49,6 +51,8 @@ export function useProjectPersistence({
   buzzdetectThresholds,
   buzzdetectHiddenNeurons,
   videoMode,
+  videoBrightness,
+  videoContrast,
   playheadLocked,
   filePanelCollapsed,
   videoCollapsed,
@@ -96,6 +100,8 @@ export function useProjectPersistence({
         buzzdetectThresholds,
         buzzdetectHiddenNeurons,
         videoMode,
+        videoBrightness,
+        videoContrast,
         playheadLocked,
         filePanelCollapsed,
         videoCollapsed,
@@ -108,5 +114,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode, playheadLocked, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }

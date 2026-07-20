@@ -92,6 +92,8 @@ export interface ProjectUiSettings {
   zoomSec?: number;                 // spectrogram visible duration
   activeTrackPath?: string | null;  // path of last-opened track, relative to project.mediaDirectoryAbs
   videoMode?: VideoMode;            // see VideoMode docs
+  videoBrightness?: number;         // display-only CSS filter, 0-200, 100 = neutral
+  videoContrast?: number;           // display-only CSS filter, 0-200, 100 = neutral
 
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
   buzzdetectEnabled?: boolean;             // panel shown/hidden

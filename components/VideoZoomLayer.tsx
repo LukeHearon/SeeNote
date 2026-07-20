@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScanSearch, ZoomIn, ZoomOut, Maximize2, Search } from 'lucide-react';
+import { ScanSearch, ZoomIn, ZoomOut, Maximize2, Search, Sun, Contrast, RotateCcw } from 'lucide-react';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { tooltips } from '../copy/tooltips';
 import {
@@ -28,7 +28,16 @@ interface VideoZoomLayerProps {
    *  minimap. Absent → minimap shows a plain placeholder. */
   drawThumbnail?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
   onToggleZoomState?: () => void;
+  /** Display-only brightness/contrast, as CSS filter percentages (100 = neutral). */
+  brightness: number;
+  contrast: number;
+  onBrightnessChange: (v: number) => void;
+  onContrastChange: (v: number) => void;
 }
+
+const ADJUST_DEFAULT = 100;
+const ADJUST_MIN = 0;
+const ADJUST_MAX = 200;
 
 const MINIMAP_MAX_W = 168;
 const MINIMAP_MAX_H = 120;
@@ -49,10 +58,28 @@ export default function VideoZoomLayer({
   onToolActiveChange,
   onToggleZoomState,
   drawThumbnail,
+  brightness,
+  contrast,
+  onBrightnessChange,
+  onContrastChange,
 }: VideoZoomLayerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const haveDims = frameW > 0 && frameH > 0;
   const zoomed = isZoomed(viewport);
+
+  // ── Brightness/contrast popout sliders ──────────────────────────────────
+  const [expandedAdjust, setExpandedAdjust] = useState<'brightness' | 'contrast' | null>(null);
+  const adjustRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!expandedAdjust) return;
+    const handler = (e: PointerEvent) => {
+      if (adjustRef.current && !adjustRef.current.contains(e.target as Node)) {
+        setExpandedAdjust(null);
+      }
+    };
+    window.addEventListener('pointerdown', handler);
+    return () => window.removeEventListener('pointerdown', handler);
+  }, [expandedAdjust]);
 
   // Change 4: track container height to detect minimap/button overlap.
   const [containerH, setContainerH] = useState(0);
@@ -225,8 +252,8 @@ export default function VideoZoomLayer({
     height: `${region.h * 100}%`,
   };
 
-  // Change 4: 5 buttons × 36 px + 4 gaps × 8 px + 8 px top padding = 220 px.
-  const STRIP_H = 5 * 36 + 4 * 8 + 8;
+  // Change 4: 7 buttons × 36 px + 6 gaps × 8 px + 8 px top padding = 296 px.
+  const STRIP_H = 7 * 36 + 6 * 8 + 8;
   const shouldWrapButtons = zoomed && containerH > 0 && containerH < STRIP_H + miniH + 24;
 
   const btn =
@@ -311,6 +338,78 @@ export default function VideoZoomLayer({
         >
           <Maximize2 size={18} />
         </button>
+        <div className="relative" ref={expandedAdjust === 'brightness' ? adjustRef : undefined}>
+          <button
+            type="button"
+            title={tooltips.brightness}
+            aria-pressed={expandedAdjust === 'brightness'}
+            onClick={() => setExpandedAdjust(v => (v === 'brightness' ? null : 'brightness'))}
+            className={`${btn} ${
+              expandedAdjust === 'brightness' || brightness !== ADJUST_DEFAULT
+                ? 'bg-[#e65161] border-[#e65161] text-white'
+                : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
+            }`}
+          >
+            <Sun size={18} />
+          </button>
+          {expandedAdjust === 'brightness' && (
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/90 backdrop-blur-sm px-3 py-2 pointer-events-auto shadow-lg">
+              <input
+                type="range"
+                min={ADJUST_MIN}
+                max={ADJUST_MAX}
+                value={brightness}
+                onChange={e => onBrightnessChange(Number(e.target.value))}
+                className="w-32 accent-[#e65161]"
+              />
+              <button
+                type="button"
+                title={tooltips.resetAdjust}
+                disabled={brightness === ADJUST_DEFAULT}
+                onClick={() => onBrightnessChange(ADJUST_DEFAULT)}
+                className="text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
+              >
+                <RotateCcw size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="relative" ref={expandedAdjust === 'contrast' ? adjustRef : undefined}>
+          <button
+            type="button"
+            title={tooltips.contrast}
+            aria-pressed={expandedAdjust === 'contrast'}
+            onClick={() => setExpandedAdjust(v => (v === 'contrast' ? null : 'contrast'))}
+            className={`${btn} ${
+              expandedAdjust === 'contrast' || contrast !== ADJUST_DEFAULT
+                ? 'bg-[#e65161] border-[#e65161] text-white'
+                : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
+            }`}
+          >
+            <Contrast size={18} />
+          </button>
+          {expandedAdjust === 'contrast' && (
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/90 backdrop-blur-sm px-3 py-2 pointer-events-auto shadow-lg">
+              <input
+                type="range"
+                min={ADJUST_MIN}
+                max={ADJUST_MAX}
+                value={contrast}
+                onChange={e => onContrastChange(Number(e.target.value))}
+                className="w-32 accent-[#e65161]"
+              />
+              <button
+                type="button"
+                title={tooltips.resetAdjust}
+                disabled={contrast === ADJUST_DEFAULT}
+                onClick={() => onContrastChange(ADJUST_DEFAULT)}
+                className="text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
+              >
+                <RotateCcw size={14} />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Bottom-right minimap viewfinder — drag to pan. */}

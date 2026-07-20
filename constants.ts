@@ -86,6 +86,8 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   lastDefinedSpeed: 1.5,
   zoomSec: DEFAULT_ZOOM_SEC,
   videoMode: 'fast',
+  videoBrightness: 100,
+  videoContrast: 100,
 };
 
 // On by default: opening an audio-only track collapses the video pane;

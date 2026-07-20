@@ -188,6 +188,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const videoModeRef = useRef(videoMode);
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
 
+  // Display-only video brightness/contrast (CSS filter, 100 = neutral).
+  // Persisted per-project like videoMode, not reset per-track.
+  const [videoBrightness, setVideoBrightness] = useState(
+    project.preferences.uiSettings?.videoBrightness ?? DEFAULT_UI_SETTINGS.videoBrightness,
+  );
+  const [videoContrast, setVideoContrast] = useState(
+    project.preferences.uiSettings?.videoContrast ?? DEFAULT_UI_SETTINGS.videoContrast,
+  );
+
   // buzzdetect activations panel — UI state + load effect live in the hook.
   // Instantiated below, after `ident` and `addLog` exist.
   // The spectrogram's live time→pixel transform, the single source the panel
@@ -757,6 +766,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectThresholds,
     buzzdetectHiddenNeurons,
     videoMode,
+    videoBrightness,
+    videoContrast,
     playheadLocked,
     filePanelCollapsed,
     videoCollapsed,
@@ -836,6 +847,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     );
     setZoomSec(ui.zoomSec);
     setVideoMode(migrateVideoMode(ui.videoMode));
+    setVideoBrightness(ui.videoBrightness);
+    setVideoContrast(ui.videoContrast);
     setBuzzdetectEnabled(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
     setBuzzdetectThresholds(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
@@ -1559,6 +1572,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             hasSelection={selection !== null}
             onVideoModeChange={handleVideoModeChange}
             onVideoElement={attachVideoElement}
+            brightness={videoBrightness}
+            contrast={videoContrast}
+            onBrightnessChange={setVideoBrightness}
+            onContrastChange={setVideoContrast}
           />
           {videoCollapsed && (
             <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
