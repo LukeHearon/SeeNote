@@ -2,7 +2,12 @@ import { getOverride } from './overrideStore';
 
 export const launchScreen = {
   get appName() { return getOverride('ui.launchScreen.appName') ?? "SeeNote"; },
-  get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Recent Projects"; },
+  get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Recent"; },
+  get projectBadge() { return getOverride('ui.launchScreen.projectBadge') ?? "Project"; },
+  get fileBadge() { return getOverride('ui.launchScreen.fileBadge') ?? "File"; },
+  get unlinkFileTitle() { return getOverride('ui.launchScreen.unlinkFileTitle') ?? "Remove from Recent?"; },
+  get unlinkFileMessage() { return getOverride('ui.launchScreen.unlinkFileMessage') ?? "This removes the file from the list. The file itself is not deleted."; },
+  get unlinkButton() { return getOverride('ui.launchScreen.unlinkButton') ?? "Remove"; },
   get setupSyncButton() { return getOverride('ui.launchScreen.setupSyncButton') ?? "Git Sync Help"; },
   get openExistingButton() { return getOverride('ui.launchScreen.openExistingButton') ?? "Open Project"; },
   get openFileButton() { return getOverride('ui.launchScreen.openFileButton') ?? "Open File"; },

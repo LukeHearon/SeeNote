@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ProjectPreferences, ProjectRegistryEntry, ProjectSettings } from '../types';
+import { ProjectPreferences, ProjectRegistryEntry, ProjectSettings, RecentFileEntry } from '../types';
 
 // ── Registry (slim per-machine pointer file) ──────────────────────────────────
 
@@ -44,6 +44,33 @@ export const saveRegistry = (
   entries: ProjectRegistryEntry[],
 ): Promise<void> =>
   invoke('save_projects', { projectsFile, projects: entries.map(toRegistryRecord) });
+
+// ── Recent files (slim per-machine pointer file, single-file mode) ───────────
+
+interface RecentFileRecord {
+  id: string;
+  path: string;
+  last_opened: string;
+}
+
+function toRecentFile(r: RecentFileRecord): RecentFileEntry {
+  return { id: r.id, path: r.path, lastOpened: r.last_opened };
+}
+
+function toRecentFileRecord(e: RecentFileEntry): RecentFileRecord {
+  return { id: e.id, path: e.path, last_opened: e.lastOpened };
+}
+
+export const loadRecentFiles = async (filesFile: string): Promise<RecentFileEntry[]> => {
+  const records: RecentFileRecord[] = await invoke('load_recent_files', { filesFile });
+  return records.map(toRecentFile);
+};
+
+export const saveRecentFiles = (
+  filesFile: string,
+  entries: RecentFileEntry[],
+): Promise<void> =>
+  invoke('save_recent_files', { filesFile, files: entries.map(toRecentFileRecord) });
 
 // ── Per-project settings.json ────────────────────────────────────────────────
 

@@ -23,6 +23,15 @@ pub struct RegistryEntryRecord {
     pub name_gradient_colors: Option<[String; 2]>,
 }
 
+/// Slim registry entry stored in `{app_data}/.projects/files.json`. Tracks
+/// single files opened outside of any project (see `SingleFileWindow`).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RecentFileRecord {
+    pub id: String,
+    pub path: String,
+    pub last_opened: String,
+}
+
 #[derive(Deserialize)]
 pub struct CopySpec {
     pub src: String,
@@ -64,6 +73,29 @@ pub async fn save_projects(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
+    atomic_write(path, &content)
+}
+
+#[tauri::command]
+pub async fn load_recent_files(files_file: String) -> Result<Vec<RecentFileRecord>, String> {
+    let path = Path::new(&files_file);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_recent_files(
+    files_file: String,
+    files: Vec<RecentFileRecord>,
+) -> Result<(), String> {
+    let path = Path::new(&files_file);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(&files).map_err(|e| e.to_string())?;
     atomic_write(path, &content)
 }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
-import { Project, ProjectListEntry, ProjectSettings, RelinkInfo, RelinkResolution } from '../types';
+import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
@@ -29,6 +29,19 @@ interface Props {
   ) => Promise<Project | undefined>;
   reconnectProject: (id: string) => Promise<ProjectListEntry | undefined>;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
+  fileEntries: RecentFileEntry[];
+  isLoadingFiles: boolean;
+  removeRecentFile: (id: string) => Promise<void>;
+}
+
+type UnifiedEntry =
+  | { kind: 'project'; lastOpened: string; entry: ProjectListEntry }
+  | { kind: 'file'; lastOpened: string; entry: RecentFileEntry };
+
+function dirname(p: string): string {
+  const stripped = p.replace(/[/\\]+$/, '');
+  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf('\\'));
+  return idx > 0 ? stripped.slice(0, idx) : stripped.slice(0, idx + 1);
 }
 
 function fileManagerLabel(): string {
@@ -51,6 +64,9 @@ export default function LaunchScreen({
   relinkProject,
   reconnectProject,
   updateProjectSettings,
+  fileEntries,
+  isLoadingFiles,
+  removeRecentFile,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
@@ -206,6 +222,17 @@ export default function LaunchScreen({
     if (ok) await removeProject(entry.registry.id);
   };
 
+  const handleRemoveFile = async (e: React.MouseEvent, file: RecentFileEntry) => {
+    e.stopPropagation();
+    const ok = await askConfirm({
+      title: launchScreen.unlinkFileTitle,
+      message: launchScreen.unlinkFileMessage,
+      confirmLabel: launchScreen.unlinkButton,
+      danger: true,
+    });
+    if (ok) await removeRecentFile(file.id);
+  };
+
   // Re-link button on a non-ok row. Same flow as launchRelink — the button is
   // kept as an explicit affordance, but row-click handles the same case.
   const handleLocate = async (e: React.MouseEvent, entry: ProjectListEntry) => {
@@ -243,6 +270,13 @@ export default function LaunchScreen({
   };
 
   const fmLabel = fileManagerLabel();
+
+  const unified: UnifiedEntry[] = [
+    ...entries.map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
+    ...fileEntries.map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
+  ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
+
+  const loading = isLoading || isLoadingFiles;
 
   return (
     <div className="h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
@@ -299,12 +333,12 @@ export default function LaunchScreen({
           </div>
         )}
 
-        {isLoading ? (
+        {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-500 shrink-0">
             <Loader2 size={24} className="animate-spin mr-2" />
             <span className="text-sm">{launchScreen.loadingProjects}</span>
           </div>
-        ) : entries.length === 0 ? (
+        ) : unified.length === 0 ? (
           <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
             <p className="text-gray-500 text-sm mb-3">{launchScreen.noProjects}</p>
             <button
@@ -316,7 +350,45 @@ export default function LaunchScreen({
           </div>
         ) : (
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
-            {entries.map(entry => {
+            {unified.map(item => {
+              if (item.kind === 'file') {
+                const file = item.entry;
+                const fileName = basename(file.path);
+                const fileDir = dirname(file.path);
+                return (
+                  <li
+                    key={file.id}
+                    onClick={() => onOpenFile(file.path)}
+                    className="group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-bold truncate text-gray-200">{fileName}</p>
+                          <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
+                            {launchScreen.fileBadge}
+                          </span>
+                        </div>
+                        <p className="text-gray-500 text-xs mt-1 truncate">{fileDir}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={e => handleRemoveFile(e, file)}
+                          className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
+                          data-tooltip={tooltips.unlinkFile}
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-gray-600 text-xs mt-2">
+                      {launchScreen.lastOpened(formatDate(file.lastOpened))}
+                    </p>
+                  </li>
+                );
+              }
+
+              const entry = item.entry;
               const isOk = entry.status === 'ok';
               const isUnchecked = entry.status === 'unchecked';
               // Grayed = we've already tried to resolve this entry and it
@@ -372,13 +444,18 @@ export default function LaunchScreen({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold truncate">
-                        {gradientColors && !grayed ? (
-                          <GradientProjectName name={name} nameGradientColors={gradientColors} />
-                        ) : (
-                          <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
-                        )}
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-bold truncate">
+                          {gradientColors && !grayed ? (
+                            <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                          ) : (
+                            <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
+                          )}
+                        </p>
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-950 text-gray-400 border border-gray-700">
+                          {launchScreen.projectBadge}
+                        </span>
+                      </div>
                       {pathLines}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -421,7 +498,7 @@ export default function LaunchScreen({
           </ul>
         )}
 
-        {projectsFilePath && !isLoading && (
+        {projectsFilePath && !loading && (
           <div className="mt-6 flex items-center gap-2">
             <button
               onClick={handleShowDataFolder}

@@ -23,6 +23,7 @@ export const tooltips = {
   get relinkProject() { return getOverride('tooltips.relinkProject') ?? "Find this project's folder on disk and re-link it"; },
   get projectSettings() { return getOverride('tooltips.projectSettings') ?? "Project settings"; },
   get unlinkProject() { return getOverride('tooltips.unlinkProject') ?? "Unlink project"; },
+  get unlinkFile() { return getOverride('tooltips.unlinkFile') ?? "Remove from Recent"; },
   get openDataFolder() { return getOverride('tooltips.openDataFolder') ?? "Open SeeNote’s internal data folder"; },
   get keepSeeNoteName() { return getOverride('tooltips.keepSeeNoteName') ?? "Keep SeeNote's name (rewrites .seenote/settings.json)"; },
   get useFolderName() { return getOverride('tooltips.useFolderName') ?? "Use the name from the folder's .seenote/settings.json"; },

@@ -6,6 +6,7 @@ import RepairProjectModal, { RepairProjectState } from './components/RepairProje
 import TooltipLayer from './components/TooltipLayer';
 import { Project, ProjectPreferences, ProjectSettings } from './types';
 import { useProjects } from './hooks/useProjects';
+import { useRecentFiles } from './hooks/useRecentFiles';
 import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
 import { listDirectory } from './utils/tauriCommands';
 
@@ -16,6 +17,7 @@ export default function App() {
     createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,
     removeProject, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
+  const { fileEntries, isLoadingFiles, touchRecentFile, removeRecentFile } = useRecentFiles();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
@@ -62,8 +64,9 @@ export default function App() {
   }, []);
 
   const handleOpenFile = useCallback((path: string) => {
+    touchRecentFile(path).catch(err => console.error('Failed to record recent file:', err));
     setActiveFile(path);
-  }, []);
+  }, [touchRecentFile]);
 
   const handleCloseFile = useCallback(() => {
     setActiveFile(null);
@@ -100,6 +103,9 @@ export default function App() {
         relinkProject={relinkProject}
         reconnectProject={reconnectProject}
         updateProjectSettings={updateProjectSettings}
+        fileEntries={fileEntries}
+        isLoadingFiles={isLoadingFiles}
+        removeRecentFile={removeRecentFile}
       />
       {repairProject && (
         <RepairProjectModal

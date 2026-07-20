@@ -293,3 +293,14 @@ export type ProjectListEntry =
   | { status: 'ok'; registry: ProjectRegistryEntry; project: Project }
   | { status: 'missing-dir'; registry: ProjectRegistryEntry }
   | { status: 'bad-settings'; registry: ProjectRegistryEntry; error: string };
+
+/**
+ * Pointer record in the per-machine registry at
+ * `{app_data}/.projects/files.json`. Tracks single files opened outside of
+ * any project (see `SingleFileWindow`) for the launch screen's recent list.
+ */
+export interface RecentFileEntry {
+  id: string;
+  path: string; // absolute, this-machine path
+  lastOpened: string; // ISO timestamp
+}

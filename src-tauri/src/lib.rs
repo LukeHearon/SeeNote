@@ -73,6 +73,8 @@ pub fn run() {
             commands::projects::get_app_data_dir,
             commands::projects::load_projects,
             commands::projects::save_projects,
+            commands::projects::load_recent_files,
+            commands::projects::save_recent_files,
             commands::projects::read_project_settings,
             commands::projects::write_project_settings,
             commands::projects::read_project_preferences,
