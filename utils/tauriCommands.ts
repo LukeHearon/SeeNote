@@ -145,6 +145,13 @@ export const openFilesDialog = (
 ): Promise<string[] | null> =>
   invoke('open_files_dialog', { startPath, filters });
 
+/** A file path handed to us at OS launch (file-association "Open With", or a
+ * relaunch forwarded from a second instance) before any frontend listener was
+ * attached. Drains it — a second call returns null. Pair with the `open-file`
+ * event (see hooks/useOsOpenFile.ts) which covers the same cases live. */
+export const takePendingOpenFile = (): Promise<string | null> =>
+  invoke('take_pending_open_file');
+
 /** Converts an absolute local path to a Tauri asset URL for use in <audio>/<video> src.
  * Delegates to Tauri's `convertFileSrc`, which emits the correct scheme and encoding
  * per platform: `asset://localhost/...` on macOS/Linux and `http://asset.localhost/...`

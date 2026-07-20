@@ -61,7 +61,8 @@ Quick reference for agents. One phrase per file.
 - `src-tauri/src/commands/git_sync/merge.rs` — three-way merge of the remote tracking branch into HEAD with conflict resolution
 - `src-tauri/src/commands/git_sync/annotate.rs` — annotation set-merge (conflict-free model) and tree-diff change summaries
 - `src-tauri/src/commands/git_sync/repo.rs` — repo setup (open/init, branch, gitignore), staging/commit, and local/remote status checks
-- `src-tauri/src/lib.rs` — registers all commands in `invoke_handler!`
+- `src-tauri/src/commands/window.rs` — window bounds and secondary-window (sync guide, copy editor) commands; also `PendingOpenFile` state for OS "Open With" launches
+- `src-tauri/src/lib.rs` — registers all commands in `invoke_handler!`; handles OS file-association launches (single-instance relaunch forwarding, `RunEvent::Opened` on macOS, cold-start argv on Windows/Linux)
 
 ## Hooks
 - `hooks/useActivationStack.ts` — tracks which overlay/tool is currently "active" (focus stack)
@@ -82,6 +83,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useFileNavigation.ts` — next/prev/shuffle track navigation
 - `hooks/useVideoFrameSource.ts` — opens and tears down the VideoFrameSource for the active track/mode
 - `hooks/useAnnotationLoad.ts` — loads annotations for a track and resets history
+- `hooks/useOsOpenFile.ts` — routes an OS "Open With SeeNote" launch (file-association cold start, or a relaunch forwarded from a second instance) into the app
 
 ## Shared types & constants
 - `types.ts` — all shared TypeScript types (Project, Annotation, AnnotationTool, etc.)

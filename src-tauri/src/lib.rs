@@ -1,6 +1,8 @@
 mod audio;
 mod commands;
 
+use tauri::Manager;
+
 /// On Linux, WebKitGTK plays Fast-mode `<video>` through GStreamer. On this stack
 /// (Ubuntu 24.04, WebKitGTK 2.52, GStreamer 1.24) the pipeline is prone to an
 /// intermittent preroll/clock stall a fraction of a second into playback. Two
@@ -40,15 +42,68 @@ fn configure_linux_gstreamer() {
     eprintln!("[gstreamer] set {KEY}={ranks} (Linux Fast-mode <video> playback workaround)");
 }
 
+/// Extensions "Open With SeeNote" can hand us, mirroring SUPPORTED_AUDIO_EXTS /
+/// SUPPORTED_VIDEO_EXTS in constants.ts — keep both lists in sync. Used to pick
+/// the file path out of argv (a second-instance relaunch, or a Windows/Linux
+/// cold start) since argv can otherwise contain arbitrary launcher flags.
+const OPENABLE_EXTS: &[&str] = &[
+    "mp3", "flac", "wav", "aac", "m4a", "mp4", "m4v", "mov", "mkv", "webm",
+];
+
+fn openable_path_from_args<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    args.into_iter().find(|arg| {
+        std::path::Path::new(arg)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| OPENABLE_EXTS.contains(&e.to_lowercase().as_str()))
+            .unwrap_or(false)
+    })
+}
+
+/// Stash a just-launched/relaunched file path for the frontend to pick up, and
+/// emit it live in case a listener is already attached (the already-running
+/// case — a fresh cold start races the frontend's first render, so it relies
+/// on draining `PendingOpenFile` via `take_pending_open_file` instead).
+fn deliver_open_file(app: &tauri::AppHandle, path: String) {
+    use tauri::Emitter;
+    if let Some(state) = app.try_state::<commands::window::PendingOpenFile>() {
+        *state.0.lock().unwrap() = Some(path.clone());
+    }
+    let _ = app.emit("open-file", path);
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_focus();
+    }
+}
+
 pub fn run() {
     #[cfg(target_os = "linux")]
     configure_linux_gstreamer();
 
     tauri::Builder::default()
+        // Must be registered before other plugins per tauri-plugin-single-instance docs.
+        // Fires in the FIRST instance when a second launch (e.g. another "Open With
+        // SeeNote") is caught and forwarded here instead of opening a duplicate window.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = openable_path_from_args(argv.into_iter().skip(1)) {
+                deliver_open_file(app, path);
+            } else if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         // manage() after plugin registration is fine — Tauri inserts state into the
         // app container regardless of call order relative to plugins.
         .manage(commands::audio::PcmStreamState::default())
+        .manage(commands::window::PendingOpenFile::default())
+        .setup(|app| {
+            // Windows/Linux hand the launched file to us as a CLI arg on cold start
+            // (macOS instead fires RunEvent::Opened below, so this is a no-op there —
+            // Finder-launched processes get no meaningful argv).
+            if let Some(path) = openable_path_from_args(std::env::args().skip(1)) {
+                deliver_open_file(&app.handle().clone(), path);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::audio::get_file_info,
             commands::audio::audio_peak,
@@ -92,6 +147,7 @@ pub fn run() {
             commands::window::open_sync_guide_window,
             commands::window::close_sync_guide_window,
             commands::window::open_copy_editor_window,
+            commands::window::take_pending_open_file,
             commands::buzzdetect::read_buzzdetect,
             commands::annotation_tools::list_annotation_tools,
             commands::annotation_tools::list_tool_examples,
@@ -110,6 +166,16 @@ pub fn run() {
             commands::credentials::delete_git_credential,
             commands::video_server::get_video_server_url,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // macOS delivers "Open With SeeNote" launches as file:// URLs via this
+            // event rather than argv (see openable_path_from_args's setup-hook use
+            // for the Windows/Linux cold-start equivalent).
+            if let tauri::RunEvent::Opened { urls } = event {
+                if let Some(path) = urls.into_iter().find_map(|url| url.to_file_path().ok()) {
+                    deliver_open_file(app, path.to_string_lossy().into_owned());
+                }
+            }
+        });
 }

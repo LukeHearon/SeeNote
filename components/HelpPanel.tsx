@@ -122,6 +122,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <Section title={helpPanel.guideSections.projects}>
                 <p>{md(helpPanel.guide.projects.p1)}</p>
                 <p>{md(helpPanel.guide.projects.p2)}</p>
+                <p>{md(helpPanel.guide.projects.p3)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.filePanel} target="file-panel">

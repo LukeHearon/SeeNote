@@ -8,6 +8,7 @@ import { Project, ProjectPreferences, ProjectSettings } from './types';
 import { useProjects } from './hooks/useProjects';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
+import { useOsOpenFile } from './hooks/useOsOpenFile';
 import { listDirectory } from './utils/tauriCommands';
 
 export default function App() {
@@ -65,12 +66,17 @@ export default function App() {
 
   const handleOpenFile = useCallback((path: string) => {
     touchRecentFile(path).catch(err => console.error('Failed to record recent file:', err));
+    // Also called from an OS "Open With SeeNote" launch (see useOsOpenFile), which can
+    // land while a project is already open — close it so the new file actually shows.
+    setActiveProject(null);
     setActiveFile(path);
   }, [touchRecentFile]);
 
   const handleCloseFile = useCallback(() => {
     setActiveFile(null);
   }, []);
+
+  useOsOpenFile(handleOpenFile);
 
   if (activeProject) {
     return (

@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+
+/// A file path handed to us at OS launch (file-association "Open With", or a
+/// second-instance relaunch forwarded by tauri-plugin-single-instance) before
+/// the frontend has had a chance to attach its `open-file` event listener.
+/// The frontend drains this once on mount via `take_pending_open_file`, in
+/// addition to listening for the live event — see lib.rs.
+#[derive(Default)]
+pub struct PendingOpenFile(pub Mutex<Option<String>>);
+
+#[tauri::command]
+pub fn take_pending_open_file(state: tauri::State<PendingOpenFile>) -> Option<String> {
+    state.0.lock().unwrap().take()
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct WindowBounds {

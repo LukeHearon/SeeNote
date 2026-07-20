@@ -13,6 +13,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
+# Forwards a second "Open With SeeNote" launch (file already has SeeNote running)
+# into the existing process instead of spawning a duplicate window. See lib.rs.
+tauri-plugin-single-instance = "2"
 # Backend features are required: without one, keyring v3 links a mock in-memory
 # store that drops the credential between Entry instances (saves "succeed" but
 # reads return nothing). Each dep is target-gated, so all three are safe to
