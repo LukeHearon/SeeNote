@@ -42,20 +42,21 @@ fn configure_linux_gstreamer() {
     eprintln!("[gstreamer] set {KEY}={ranks} (Linux Fast-mode <video> playback workaround)");
 }
 
-/// Extensions "Open With SeeNote" can hand us, mirroring SUPPORTED_AUDIO_EXTS /
-/// SUPPORTED_VIDEO_EXTS in constants.ts — keep both lists in sync. Used to pick
-/// the file path out of argv (a second-instance relaunch, or a Windows/Linux
-/// cold start) since argv can otherwise contain arbitrary launcher flags.
-const OPENABLE_EXTS: &[&str] = &[
-    "mp3", "flac", "wav", "aac", "m4a", "mp4", "m4v", "mov", "mkv", "webm",
-];
-
+/// Picks the file path out of argv (a second-instance relaunch, or a
+/// Windows/Linux cold start) since argv can otherwise contain arbitrary
+/// launcher flags. Recognizes the same extensions as `shared::AUDIO_EXTS` /
+/// `shared::VIDEO_EXTS` (the file-scanning classifier) rather than a separate
+/// hand-copied list.
 fn openable_path_from_args<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    use commands::shared::{AUDIO_EXTS, VIDEO_EXTS};
     args.into_iter().find(|arg| {
         std::path::Path::new(arg)
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| OPENABLE_EXTS.contains(&e.to_lowercase().as_str()))
+            .map(|e| {
+                let e = e.to_lowercase();
+                AUDIO_EXTS.contains(&e.as_str()) || VIDEO_EXTS.contains(&e.as_str())
+            })
             .unwrap_or(false)
     })
 }
