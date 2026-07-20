@@ -112,11 +112,6 @@ export const MAX_BUZZDETECT_PANEL_HEIGHT = 600;
 // Logits: 0 is the natural decision boundary (sigmoid 0.5). Used per neuron
 // until the user sets a custom threshold.
 export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
-// buzzdetect's default model frame length, in seconds. Bin width is normally
-// inferred per-file from the CSV's `start` column; this only seeds the value
-// shown when the user turns on the project's frame-length override.
-export const DEFAULT_BUZZDETECT_FRAME_LENGTH = 0.96;
-
 // Categorical palette for neuron polylines, assigned by neuron order. Chosen to
 // read clearly on the slate-900 panel background and stay distinct from the
 // magma spectrogram colormap.

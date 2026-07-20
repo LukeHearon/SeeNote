@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import { HelpCircle } from 'lucide-react';
 import { projectBaseFields } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_FRAME_LENGTH } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
@@ -173,24 +173,16 @@ export default function ProjectBaseFields({
                 {buzzdetectFrameLength === null ? projectBaseFields.buzzdetectFrameLengthAutoHelp : projectBaseFields.buzzdetectFrameLengthOverrideHelp}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              {buzzdetectFrameLength !== null && (
-                <DraftNumberInput
-                  value={buzzdetectFrameLength}
-                  onCommit={onBuzzdetectFrameLengthChange}
-                  min={0.001}
-                  className="w-20 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-              )}
-              <label className="flex items-center gap-1.5 text-gray-400 text-xs whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  checked={buzzdetectFrameLength !== null}
-                  onChange={e => onBuzzdetectFrameLengthChange(e.target.checked ? DEFAULT_BUZZDETECT_FRAME_LENGTH : null)}
-                />
-                {projectBaseFields.buzzdetectFrameLengthOverrideLabel}
-              </label>
-            </div>
+            {/* Always editable — a value here always wins. Clearing the field
+                is the "unset" state, which falls back to auto-detection. */}
+            <DraftNumberInput
+              value={buzzdetectFrameLength}
+              onCommit={onBuzzdetectFrameLengthChange}
+              min={0.001}
+              allowEmpty
+              placeholder={projectBaseFields.buzzdetectFrameLengthPlaceholder}
+              className="w-20 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+            />
           </div>
         </div>
 
