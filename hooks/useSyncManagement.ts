@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Annotation, Project } from '../types';
-import { writeTextFile, syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
+import { syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
 import { readSyncToken } from '../utils/gitSync';
-import { generateAudacityContent } from '../utils/helpers';
+import { persistAnnotations } from '../utils/annotationPersist';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 
 interface UseSyncManagementArgs {
@@ -15,6 +15,11 @@ interface UseSyncManagementArgs {
   // Pending autosave timer; cleared so the in-flight debounce can't fire after sync.
   autoSaveTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   trackPathRef: React.MutableRefObject<string | null>;
+  // Which track's annotations have finished loading from disk (owned by
+  // useAnnotationLoad). The flush must never persist before this matches the
+  // current track — `annotations` would be the transient empty state from a
+  // track switch, and persisting it truncated real annotation files.
+  loadedAnnotationTrackRef: React.MutableRefObject<string | null>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -30,6 +35,7 @@ export function useSyncManagement({
   getAnnotationPath,
   autoSaveTimeoutRef,
   trackPathRef,
+  loadedAnnotationTrackRef,
   addLog,
 }: UseSyncManagementArgs) {
   const [syncing, setSyncing] = useState(false);
@@ -53,13 +59,16 @@ export function useSyncManagement({
   // Flush a pending debounced autosave so in-flight edits are committed to
   // disk before a sync/pull runs. Shared by handleSync and the auto-pull path.
   const flushPendingAutosave = useCallback(async () => {
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current);
-      const annotPath = trackPathRef.current ? getAnnotationPath(trackPathRef.current) : null;
-      if (annotPath) {
-        await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
-      }
-    }
+    if (!autoSaveTimeoutRef.current) return;
+    clearTimeout(autoSaveTimeoutRef.current);
+    autoSaveTimeoutRef.current = null;
+    const trackPath = trackPathRef.current;
+    // Persist only state that reflects a completed load of the current track;
+    // otherwise `annotations` may be the empty placeholder from a track switch.
+    if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) return;
+    const annotPath = getAnnotationPath(trackPath);
+    if (!annotPath) return;
+    await persistAnnotations(annotPath, annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals]);
 

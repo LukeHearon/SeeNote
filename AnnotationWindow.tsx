@@ -102,6 +102,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // after annotations/getAnnotationPath exist); kept in a ref so the
   // earlier-declared track-switch callbacks can call the current version.
   const flushPendingAutosaveRef = useRef<() => Promise<void>>(async () => {});
+  // Which track's annotations have finished loading from disk. Set by the
+  // auto-load effect in useAnnotationLoad; both persistence paths (debounced
+  // autosave and useSyncManagement's flush) refuse to touch disk until it
+  // matches the current track, so the transient empty state during a track
+  // switch can never truncate or delete a real annotation file.
+  const loadedAnnotationTrackRef = useRef<string | null>(null);
 
   // Git sync state, the manual sync handler, and the sync-status effects live in
   // useSyncManagement (set up below, once its dependencies are declared).
@@ -880,6 +886,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     getAnnotationPath,
     autoSaveTimeoutRef,
     trackPathRef,
+    loadedAnnotationTrackRef,
     addLog,
   });
   useEffect(() => { flushPendingAutosaveRef.current = flushPendingAutosave; }, [flushPendingAutosave]);
@@ -921,6 +928,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setAnnotatedFiles,
     setHasLocalChanges,
     autoSaveTimeoutRef,
+    loadedAnnotationTrackRef,
     reloadNonce,
     addLog,
   });
