@@ -87,6 +87,36 @@ export const computeLabelPlacement = (
   return { leftX };
 };
 
+// ---------------------------------------------------------------------------
+// Annotation hover-button horizontal placement.
+//
+// The edit (pencil) and delete buttons normally sit a small inset from the
+// annotation's right edge. When the annotation's end scrolls off the right of
+// the viewport, they pin a small inset from the viewport's right edge instead,
+// so they stay reachable while the body extends off-screen — the right-edge
+// mirror of the screen-left pin in computeLabelPlacement above.
+//
+// Returns the screen x (container pixels) of the button's right edge: callers
+// convert to a div-relative `right` CSS value via `(annEndX - anchorX)`.
+//
+// `naturalInset` and `pinnedInset` are distinct because some buttons (e.g. the
+// delete badge) sit *past* the annotation's own edge — a negative natural
+// inset — which would place the button off-screen if reused as the pinned
+// offset from the viewport edge. `pinnedInset` must keep the button's full
+// width inside the viewport, so it's always a positive margin from the edge.
+export const computeButtonAnchorX = (
+  annStartX: number,
+  annEndX: number,
+  containerWidth: number,
+  naturalInset: number,
+  pinnedInset: number,
+  minMargin: number,
+): number => {
+  const naturalX = annEndX - naturalInset;
+  const pinnedX = containerWidth - pinnedInset;
+  return Math.max(annStartX + minMargin, Math.min(naturalX, pinnedX));
+};
+
 // Maximum horizontal scroll (in pixels). Mirrors Spectrogram's `computeMaxScroll`:
 // allows a 40%-of-viewport overrun past the end of the file so the last events
 // aren't pinned to the right edge. Shared as the single source of truth for the

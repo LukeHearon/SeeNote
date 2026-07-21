@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { timeToX, xToTime, computeLabelPlacement, maxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { timeToX, xToTime, computeLabelPlacement, computeButtonAnchorX, maxScroll, centerScrollLeft } from '../utils/viewportTransform';
 
 describe('viewportTransform', () => {
   it('timeToX maps time to pixels relative to the scroll offset', () => {
@@ -123,6 +123,37 @@ describe('computeLabelPlacement', () => {
     const p100 = computeLabelPlacement({ ...base, textWidth: 100 });
     expect(p0.leftX).toBe(p100.leftX);
     expect(p0.leftX).toBe(366);
+  });
+});
+
+describe('computeButtonAnchorX', () => {
+  it('anchors at the natural inset before the annotation end when fully on-screen', () => {
+    // Annotation [100, 400] in a 1000px viewport; end is nowhere near the edge.
+    const anchorX = computeButtonAnchorX(100, 400, 1000, 20, 20, 24);
+    expect(anchorX).toBe(380);
+  });
+
+  it('pins to the viewport-right inset when the annotation end has scrolled off the right', () => {
+    // Annotation [100, 1500] in a 1000px viewport; end is far off-screen.
+    const anchorX = computeButtonAnchorX(100, 1500, 1000, 20, 20, 24);
+    expect(anchorX).toBe(980);
+  });
+
+  it('never pushes the anchor left of the annotation start plus the minimum margin', () => {
+    // Annotation [950, 5000] in a 1000px viewport: the screen-right pin (980)
+    // would sit past the annotation's own start once the margin is applied,
+    // so the margin floor wins instead.
+    const anchorX = computeButtonAnchorX(950, 5000, 1000, 20, 20, 100);
+    expect(anchorX).toBe(1050);
+  });
+
+  it('uses the (positive) pinned inset, not the natural inset, once pinned', () => {
+    // A badge that overhangs the annotation's own edge (negative natural
+    // inset, mimicking the delete button's -right-3) must still land fully
+    // inside the viewport when pinned, not past its right edge.
+    const anchorX = computeButtonAnchorX(100, 1500, 1000, -12, 12, 16);
+    expect(anchorX).toBe(988);
+    expect(anchorX).toBeLessThanOrEqual(1000);
   });
 });
 

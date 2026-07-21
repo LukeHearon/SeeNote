@@ -4,7 +4,7 @@ import { tooltips } from '../../copy/tooltips';
 import { X, Pencil } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { updateAnnotation } from '../../utils/helpers';
-import { timeToX, computeLabelPlacement } from '../../utils/viewportTransform';
+import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 
 interface AnnotationOverlayProps {
@@ -120,6 +120,19 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         // Convert container-px placement to a style relative to the
         // annotation div (whose origin is at container x = left).
         const labelStyle = { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
+
+        // Screen-right pinning for the edit/delete hover buttons, mirroring the
+        // label's screen-left pin: when the annotation's end scrolls off the
+        // right of the viewport, the buttons pin near the viewport's right edge
+        // instead of sitting off-screen past the annotation's actual end.
+        const PENCIL_INSET = 20; // matches the removed `right-5` (1.25rem)
+        const pencilRight = (left + width) - computeButtonAnchorX(left, left + width, containerWidth, PENCIL_INSET, PENCIL_INSET, 24);
+        // The delete badge overhangs the annotation's own edge (-right-3), but
+        // when pinned it must stay fully inside the viewport, so the pinned
+        // inset is a positive margin rather than reusing the overhang value.
+        const DELETE_NATURAL_INSET = -12; // matches the removed `-right-3` (-0.75rem)
+        const DELETE_PINNED_INSET = 12;
+        const deleteRight = (left + width) - computeButtonAnchorX(left, left + width, containerWidth, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
 
         return (
             <div
@@ -285,7 +298,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                  width > 60 ? (
                    // Render inside the annotation
                    <button
-                     className="absolute top-0 bottom-0 right-5 flex items-center justify-center z-20 opacity-70 hover:opacity-100 transition-opacity"
+                     className="absolute top-0 bottom-0 flex items-center justify-center z-20 opacity-70 hover:opacity-100 transition-opacity"
+                     style={{ right: `${pencilRight}px` }}
                      onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                      onMouseLeave={onAnnotationMouseLeave}
                      onMouseDown={(e) => e.stopPropagation()}
@@ -320,7 +334,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 
                {/* Delete button */}
                <button
-                   className={`absolute -top-3 -right-3 ${isHovered ? 'flex' : 'hidden'} bg-red-500 rounded-full p-0.5 z-30`}
+                   className={`absolute -top-3 ${isHovered ? 'flex' : 'hidden'} bg-red-500 rounded-full p-0.5 z-30`}
+                   style={{ right: `${deleteRight}px` }}
                    onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                    onMouseLeave={onAnnotationMouseLeave}
                    onClick={(e) => {
