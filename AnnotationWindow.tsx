@@ -22,7 +22,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
-import { useSyncManagement } from './hooks/useSyncManagement';
+import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
 import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
@@ -108,6 +108,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // matches the current track, so the transient empty state during a track
   // switch can never truncate or delete a real annotation file.
   const loadedAnnotationTrackRef = useRef<string | null>(null);
+  // Merge ancestor for the post-pull reload: the exact annotation state flushed
+  // at sync start. Written by useSyncManagement, consumed/cleared by
+  // useAnnotationLoad's three-way merge. Owned here, shared by both.
+  const preSyncSnapshotRef = useRef<PreSyncSnapshot | null>(null);
 
   // Git sync state, the manual sync handler, and the sync-status effects live in
   // useSyncManagement (set up below, once its dependencies are declared).
@@ -868,6 +872,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // (with useFileNavigation) so earlier track-switch callbacks can share it.
   const {
     syncing,
+    syncingRef,
     syncSummary,
     setSyncSummary,
     syncIsAutoPull,
@@ -887,6 +892,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     autoSaveTimeoutRef,
     trackPathRef,
     loadedAnnotationTrackRef,
+    preSyncSnapshotRef,
     addLog,
   });
   useEffect(() => { flushPendingAutosaveRef.current = flushPendingAutosave; }, [flushPendingAutosave]);
@@ -929,6 +935,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setHasLocalChanges,
     autoSaveTimeoutRef,
     loadedAnnotationTrackRef,
+    annotationsRef: sortedAnnotationsRef,
+    syncingRef,
+    preSyncSnapshotRef,
     reloadNonce,
     addLog,
   });

@@ -20,7 +20,11 @@
 //!   recording always auto-merge to the union; a deliberate delete is honored;
 //!   nothing is silently dropped. This is the ONLY merge logic with a UI cost
 //!   (there is none — it never prompts). Any other conflicting file auto-
-//!   resolves favor-incoming.
+//!   resolves favor-incoming. **This set-merge is mirrored on the TS side in
+//!   `utils/annotationMerge.ts` (`setMergeContent`)**, which runs on the
+//!   post-pull reload to fold back an edit made while the sync was in flight;
+//!   the two implementations MUST stay in lockstep, including the canonical
+//!   record-identity key (see [`set_merge`]).
 //! - **Commit author is a name the user typed once** — git author is just a
 //!   string, so per-user attribution works with one shared GitHub token.
 //!
@@ -42,7 +46,9 @@ use std::path::Path;
 use git2::{Repository, Signature};
 use serde::Serialize;
 
-use annotate::tree_annotation_delta;
+use crate::commands::shared::{walk_files, ANNOTATION_EXT};
+
+use annotate::{annotation_blobs, tree_annotation_delta};
 use merge::merge_remote;
 use remote::{fetch, push};
 use repo::{
@@ -64,7 +70,7 @@ pub(crate) const REMOTE_NAME: &str = "origin";
 pub(crate) const AUTH_ERROR_PREFIX: &str = "AUTH_FAILED:";
 
 /// What changed as a result of a sync, for the non-blocking post-sync summary.
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSummary {
     /// True if remote history was pulled in (something to merge existed).
@@ -218,6 +224,42 @@ fn sync_blocking(
     let branch = current_branch(&repo);
     ensure_on_branch(&repo, &branch)?;
 
+    // Guard against a mass-deletion disaster before staging. stage_deletions
+    // removes every tracked annotation file absent from disk; if the annotation
+    // directory is unreachable (unmounted volume, renamed/moved folder) every
+    // tracked file reads as "gone" and the silent background auto-pull would
+    // commit deletion of the whole dataset and push it to everyone. Refuse to
+    // sync when the directory is missing/empty while HEAD still tracks files.
+    {
+        let ann_exists = ann_path.exists();
+        // Annotation files present on disk right now (reuse walk_files).
+        let mut disk_count = 0usize;
+        walk_files(ann_path, &mut |p| {
+            if p.extension().and_then(|e| e.to_str()) == Some(ANNOTATION_EXT) {
+                disk_count += 1;
+            }
+        });
+        // Annotation files HEAD tracks under the annotation directory (reuse
+        // annotation_blobs rather than re-walking the tree).
+        let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
+        let tracked_count = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+            Some(tree) => annotation_blobs(&repo, &tree)?
+                .keys()
+                .filter(|p| p.starts_with(&ann_rel_posix))
+                .count(),
+            None => 0,
+        };
+        if tracked_count > 0 && (!ann_exists || disk_count == 0) {
+            return Err(format!(
+                "Annotation directory {} is missing/empty but {} annotation file(s) \
+                 are tracked — refusing to sync, which would delete them for everyone. \
+                 Reconnect the drive or restore the folder, then sync again.",
+                ann_path.display(),
+                tracked_count,
+            ));
+        }
+    }
+
     // 1. Stage the curated set and commit any local changes.
     let message = match commit_message.trim() {
         "" => "Update annotations",
@@ -337,4 +379,55 @@ fn fetch_remote_status_blocking(
     let branch = current_branch(&repo);
     fetch(&repo, &branch, token)?;
     remote_is_ahead(&repo, &branch)
+}
+
+// ---------------------------------------------------------------------------
+// Tests — the mass-deletion guard fires before any network call.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use repo::{stage_and_commit, write_gitignore};
+    use std::path::PathBuf;
+
+    fn make_tmp_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir()
+            .join(format!("seenote_syncguard_{tag}_{}_{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn refuses_sync_when_annotation_dir_missing_but_files_tracked() {
+        let root = make_tmp_root("missing");
+        let repo = Repository::init(&root).unwrap();
+        let ann_rel = PathBuf::from("ann");
+        write_gitignore(&root, &ann_rel).unwrap();
+        std::fs::write(root.join("ann").join("a.txt"), "1.0\t2.0\ta\n").unwrap();
+        let sig = Signature::now("T", "t@seenote.local").unwrap();
+        stage_and_commit(&repo, &root, &ann_rel, &sig, "init").unwrap();
+
+        // Simulate the annotation dir vanishing (unmounted volume / renamed).
+        std::fs::remove_dir_all(root.join("ann")).unwrap();
+
+        // Guard returns Err before any fetch/push, so the bogus remote is never
+        // contacted.
+        let err = sync_blocking(
+            root.to_str().unwrap(),
+            root.join("ann").to_str().unwrap(),
+            "https://example.invalid/x.git",
+            "token",
+            "T",
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("refusing to sync"), "unexpected error: {err}");
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

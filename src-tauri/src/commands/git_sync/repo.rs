@@ -7,7 +7,7 @@ use git2::{Repository, Signature};
 
 use crate::commands::shared::{walk_files, ANNOTATION_EXT};
 
-use super::annotate::annotation_blobs;
+use super::annotate::{annotation_blobs, line_key_set};
 use super::{gerr, DEFAULT_BRANCH, REMOTE_NAME};
 
 // ---------------------------------------------------------------------------
@@ -124,21 +124,56 @@ pub(crate) fn stage_and_commit(
 ) -> Result<bool, String> {
     let mut index = repo.index().map_err(gerr)?;
 
+    // HEAD's annotation blobs (path → content), used to skip precision-only
+    // rewrites below. Empty when there are no commits yet.
+    let head_blobs = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+        Some(tree) => annotation_blobs(repo, &tree)?,
+        None => std::collections::HashMap::new(),
+    };
+
     // (a) Annotation files under the annotation directory. Annotation tools are
     //     deliberately NOT synced — each labeler maintains their own tools.
     let ann_abs = project_path.join(ann_rel);
-    let mut staged_paths: Vec<PathBuf> = Vec::new();
-    collect_annotation_files(&ann_abs, &mut staged_paths);
+    let mut ann_files: Vec<PathBuf> = Vec::new();
+    collect_annotation_files(&ann_abs, &mut ann_files);
+
+    for abs in &ann_files {
+        let rel = match abs.strip_prefix(project_path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let content = std::fs::read_to_string(abs).unwrap_or_default();
+
+        // Fix 2: never commit a 0-byte / whitespace-only annotation file. An
+        // empty file is never a legitimate state (the app deletes the file when
+        // a track has zero annotations), and the set-merge reads an empty file
+        // as "delete every line", truncating the record for every teammate.
+        // Skipping it here means such a file is neither staged nor staged for
+        // deletion: stage_deletions only removes files ABSENT from disk, and
+        // this file exists, so its previously committed content simply stays
+        // untouched in HEAD.
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        // Fix 3: skip a precision-only rewrite — the same records re-serialized
+        // at a different decimal precision. Comparing canonical record sets (not
+        // raw text) means `1.234` vs `1.23400` never creates a commit.
+        let rel_posix = rel.to_string_lossy().replace('\\', "/");
+        if let Some(head_content) = head_blobs.get(&rel_posix) {
+            if line_key_set(&content) == line_key_set(head_content) {
+                continue;
+            }
+        }
+
+        // add_path also picks up modifications; removed files handled below.
+        index.add_path(rel).map_err(gerr)?;
+    }
 
     // (b) The annotation directory's own .gitignore (shared). The .seenote
     //     gitignore is intentionally not staged — it lives in the ignored dir.
-    staged_paths.push(project_path.join(ann_rel).join(".gitignore"));
-
-    for abs in &staged_paths {
-        if let Ok(rel) = abs.strip_prefix(project_path) {
-            // add_path also picks up modifications; removed files handled below.
-            index.add_path(rel).map_err(gerr)?;
-        }
+    if let Ok(rel) = project_path.join(ann_rel).join(".gitignore").strip_prefix(project_path) {
+        index.add_path(rel).map_err(gerr)?;
     }
     // Stage deletions of previously-tracked annotation files that no longer
     // exist on disk, so a deleted recording's labels propagate.
@@ -304,9 +339,12 @@ pub(crate) fn has_local_annotation_changes(
         }
     });
 
+    // Compare by canonical record set, not raw text, so a precision-only
+    // rewrite (same times re-serialized at a different decimal precision) does
+    // not read as a local change and light the status dot.
     for (path, content) in &disk {
         match head_blobs.get(path.as_str()) {
-            Some(head_content) if content == head_content => {}
+            Some(head_content) if line_key_set(content) == line_key_set(head_content) => {}
             _ => return Ok(true),
         }
     }
@@ -319,4 +357,108 @@ pub(crate) fn has_local_annotation_changes(
     }
 
     Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// Tests — staging/commit invariants against a real (tempdir) git repo.
+// Imitates the tempdir pattern in commands/filesystem.rs.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::Repository;
+    use std::path::PathBuf;
+
+    fn make_tmp_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!("seenote_git_test_{tag}_{pid}_{nanos}"));
+        std::fs::create_dir_all(&root).expect("create tmp root");
+        root
+    }
+
+    /// Init a repo with an `ann` annotation dir and its .gitignore in place.
+    fn init_repo(tag: &str) -> (Repository, PathBuf, PathBuf) {
+        let root = make_tmp_root(tag);
+        let repo = Repository::init(&root).expect("init repo");
+        let ann_rel = PathBuf::from("ann");
+        write_gitignore(&root, &ann_rel).expect("write gitignore");
+        (repo, root, ann_rel)
+    }
+
+    fn sig() -> Signature<'static> {
+        Signature::now("Tester", "tester@seenote.local").unwrap()
+    }
+
+    fn write_ann(root: &Path, name: &str, content: &str) {
+        std::fs::write(root.join("ann").join(name), content).unwrap();
+    }
+
+    fn head_blob(repo: &Repository, rel: &str) -> Option<String> {
+        let tree = repo.head().ok()?.peel_to_tree().ok()?;
+        let entry = tree.get_path(Path::new(rel)).ok()?;
+        let blob = repo.find_blob(entry.id()).ok()?;
+        Some(String::from_utf8_lossy(blob.content()).to_string())
+    }
+
+    #[test]
+    fn first_commit_stages_annotation_file() {
+        let (repo, root, ann_rel) = init_repo("first");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+        assert!(committed);
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn empty_file_neither_commits_nor_deletes_head_content() {
+        let (repo, root, ann_rel) = init_repo("empty");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+
+        // Overwrite with whitespace-only content. Must NOT create a commit, and
+        // the previously committed content must survive in HEAD (Fix 2).
+        write_ann(&root, "a.txt", "   \n\n");
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2").unwrap();
+        assert!(!committed, "empty file should not create a commit");
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn precision_only_rewrite_does_not_commit() {
+        let (repo, root, ann_rel) = init_repo("precision");
+        write_ann(&root, "a.txt", "1.234\t2.5\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+
+        // Re-serialize the same record at more decimals (Fix 3).
+        write_ann(&root, "a.txt", "1.23400\t2.50000\ta\n");
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2").unwrap();
+        assert!(!committed, "precision-only rewrite should not create a commit");
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.234\t2.5\ta\n"));
+
+        // And a genuine change still commits.
+        write_ann(&root, "a.txt", "1.234\t2.5\ta\n3.0\t4.0\tb\n");
+        assert!(stage_and_commit(&repo, &root, &ann_rel, &sig(), "m3").unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn local_changes_ignores_precision_rewrite() {
+        let (repo, root, ann_rel) = init_repo("localdot");
+        write_ann(&root, "a.txt", "1.234\t2.5\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+
+        write_ann(&root, "a.txt", "1.23400\t2.50000\ta\n");
+        assert!(!has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+
+        write_ann(&root, "a.txt", "1.234\t2.5\ta\n9.0\t9.5\tz\n");
+        assert!(has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

@@ -3,7 +3,16 @@ import { Annotation, Project } from '../types';
 import { syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
 import { readSyncToken } from '../utils/gitSync';
 import { persistAnnotations } from '../utils/annotationPersist';
+import { generateAudacityContent } from '../utils/helpers';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
+
+// The exact annotation state flushed/committed at sync start, used as the
+// three-way-merge ancestor when the post-pull reload re-reads disk. Shared with
+// useAnnotationLoad, which consumes and clears it. See utils/annotationMerge.ts.
+export interface PreSyncSnapshot {
+  trackPath: string | null;
+  content: string;
+}
 
 interface UseSyncManagementArgs {
   project: Project;
@@ -20,6 +29,9 @@ interface UseSyncManagementArgs {
   // current track — `annotations` would be the transient empty state from a
   // track switch, and persisting it truncated real annotation files.
   loadedAnnotationTrackRef: React.MutableRefObject<string | null>;
+  // Ancestor snapshot for the post-pull three-way merge. Written here at sync
+  // start (right after the flush); read and cleared by useAnnotationLoad.
+  preSyncSnapshotRef: React.MutableRefObject<PreSyncSnapshot | null>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -36,6 +48,7 @@ export function useSyncManagement({
   autoSaveTimeoutRef,
   trackPathRef,
   loadedAnnotationTrackRef,
+  preSyncSnapshotRef,
   addLog,
 }: UseSyncManagementArgs) {
   const [syncing, setSyncing] = useState(false);
@@ -72,6 +85,27 @@ export function useSyncManagement({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals]);
 
+  // Capture the just-flushed state as the merge ancestor: the exact content the
+  // post-pull reload will diff current in-memory + disk against, so an edit made
+  // while the sync ran is folded back in rather than clobbered by the checkout.
+  const snapshotMergeAncestor = useCallback(() => {
+    const trackPath = trackPathRef.current;
+    // Only capture a hydrated track: if the sync starts mid-load, `annotations`
+    // is the transient [] — an empty ancestor would make the reload-merge union
+    // everything and resurrect remote-deleted lines. With no snapshot the
+    // reload blind-replaces from disk, which is correct (no user edits exist).
+    if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) {
+      preSyncSnapshotRef.current = null;
+      return;
+    }
+    const decimals = projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
+    preSyncSnapshotRef.current = {
+      trackPath,
+      content: generateAudacityContent(annotations, decimals),
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotations]);
+
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
   // autosave first so local edits aren't lost, runs the embedded-git pipeline,
   // then reloads the active track if the pull changed anything on disk.
@@ -94,6 +128,7 @@ export function useSyncManagement({
     setSyncIsAutoPull(false);
     try {
       await flushPendingAutosave();
+      snapshotMergeAncestor();
       const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
       if (!token) {
         setSyncError('No access token found for this repository. Open Project Settings → Sync to enter your PAT.');
@@ -125,7 +160,7 @@ export function useSyncManagement({
     } finally {
       setSyncingBoth(false);
     }
-  }, [flushPendingAutosave, addLog, setSyncingBoth]);
+  }, [flushPendingAutosave, snapshotMergeAncestor, addLog, setSyncingBoth]);
 
   // Pull remote annotation changes in (fetch + merge, never push) for the
   // background auto-pull — on project open and the heartbeat below. Silent on
@@ -142,6 +177,7 @@ export function useSyncManagement({
       if (!token) return;
       setSyncingBoth(true);
       await flushPendingAutosave();
+      snapshotMergeAncestor();
       const summary = await pullProject(
         projectRef.current.projectDir,
         annDir,
@@ -165,7 +201,7 @@ export function useSyncManagement({
     } finally {
       setSyncingBoth(false);
     }
-  }, [flushPendingAutosave, addLog, setSyncingBoth]);
+  }, [flushPendingAutosave, snapshotMergeAncestor, addLog, setSyncingBoth]);
 
   // On project load: check local-only sync status, then kick off an
   // auto-pull (no-op if disabled, unconfigured, or no token yet) so the
@@ -211,6 +247,9 @@ export function useSyncManagement({
 
   return {
     syncing,
+    // Exposed so the autosave effect (useAnnotationLoad) can suspend disk writes
+    // while a sync/merge/checkout is in flight.
+    syncingRef,
     syncSummary,
     setSyncSummary,
     syncIsAutoPull,

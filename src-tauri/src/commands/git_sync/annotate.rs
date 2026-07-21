@@ -1,7 +1,7 @@
 //! The annotation set-merge (the heart of the conflict-free model) and the
 //! tree-diff helpers that summarize annotation changes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use git2::{Repository, Tree};
 
@@ -10,17 +10,86 @@ use crate::commands::shared::ANNOTATION_EXT;
 use super::{gerr, SyncSummary};
 
 // ---------------------------------------------------------------------------
+// Record identity (numeric-aware canonical key)
+// ---------------------------------------------------------------------------
+
+/// Canonical identity of one annotation record, so that two textual
+/// representations of the *same* record compare equal.
+///
+/// The app re-serializes times at its `outputRoundingDecimals` setting, so the
+/// same annotation can be written as `1.234` on one machine and `1.23400` on
+/// another. Keying on exact line text would read that as delete+add and churn
+/// every teammate's file; keying on the numeric value makes it a no-op.
+///
+/// Rule (mirrored on the TS side in `utils/annotationMerge.ts` `canonicalKey` /
+/// `setMergeContent` — keep both in sync): split the line on tabs;
+/// if the first two fields parse as `f64`, the key is the bit patterns of
+/// (start, end) plus the untouched remainder of the line (the label and any
+/// further fields). Non-numeric lines fall back to their exact text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum RecordKey {
+    /// Leading start/end parsed numerically; `rest` is the raw remainder of the
+    /// line after the second tab (label and any extra columns), kept verbatim.
+    Timed { start: u64, end: u64, rest: String },
+    /// Line whose first two fields aren't both numeric — identity is exact text.
+    Raw(String),
+}
+
+/// Compute the canonical [`RecordKey`] for one already-trimmed line.
+pub(crate) fn record_key(line: &str) -> RecordKey {
+    let mut fields = line.splitn(3, '\t');
+    let start = fields.next();
+    let end = fields.next();
+    let rest = fields.next().unwrap_or("");
+    if let (Some(s), Some(e)) = (start, end) {
+        if let (Ok(start), Ok(end)) = (s.trim().parse::<f64>(), e.trim().parse::<f64>()) {
+            return RecordKey::Timed {
+                start: start.to_bits(),
+                end: end.to_bits(),
+                rest: rest.to_string(),
+            };
+        }
+    }
+    RecordKey::Raw(line.to_string())
+}
+
+/// Map each record's canonical key to a representative line text. Blank lines
+/// are dropped; on a key collision the first occurrence's text wins.
+pub(crate) fn line_map(s: &str) -> HashMap<RecordKey, String> {
+    let mut map = HashMap::new();
+    for line in s.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            continue;
+        }
+        map.entry(record_key(line)).or_insert_with(|| line.to_string());
+    }
+    map
+}
+
+/// The set of canonical record keys in a file — used to compare two files by
+/// record identity (ignoring precision-only textual differences).
+pub(crate) fn line_key_set(s: &str) -> BTreeSet<RecordKey> {
+    line_map(s).into_keys().collect()
+}
+
+// ---------------------------------------------------------------------------
 // Set-merge (the heart of the conflict-free annotation model)
 // ---------------------------------------------------------------------------
 
 /// Three-way set-merge of annotation file contents. Each non-empty line is one
-/// record; identity is the exact line text. Returns the merged content sorted
-/// by start time.
+/// record; identity is the canonical [`RecordKey`] (numeric-aware, so a
+/// precision-only rewrite is a no-op). Returns the merged content sorted by
+/// start time.
 ///
 /// Rules (against the common `ancestor`):
-/// - a line new on either side (not in ancestor) → keep (union of adds)
-/// - a line in ancestor but removed on either side → drop (honor deletes)
-/// - a line unchanged on both → keep
+/// - a record new on either side (not in ancestor) → keep (union of adds)
+/// - a record in ancestor but removed on either side → drop (honor deletes)
+/// - a record unchanged on both → keep
+///
+/// When several textual representations of the same record exist, the output
+/// text preference is ancestor → theirs → ours, so an unchanged record keeps
+/// its stored text (`1.234` is not overwritten by `1.23400`).
 ///
 /// Consequence: two people adding to the same recording always union; a
 /// deliberate delete propagates; nothing is silently lost. If both edit the
@@ -28,22 +97,24 @@ use super::{gerr, SyncSummary};
 /// sides, so both edited copies are kept (overlapping duplicates) rather than
 /// one being dropped — a known v1 tradeoff (no stable per-annotation IDs yet).
 pub fn set_merge(ancestor: &str, ours: &str, theirs: &str) -> String {
-    let a = line_set(ancestor);
-    let o = line_set(ours);
-    let t = line_set(theirs);
+    let a = line_map(ancestor);
+    let o = line_map(ours);
+    let t = line_map(theirs);
 
     let mut keep: BTreeSet<String> = BTreeSet::new();
-    for line in o.iter().chain(t.iter()) {
-        let in_a = a.contains(line);
-        let in_o = o.contains(line);
-        let in_t = t.contains(line);
+    for key in o.keys().chain(t.keys()) {
+        let in_a = a.contains_key(key);
         let survives = if in_a {
-            in_o && in_t // present in ancestor: kept only if neither side removed it
+            o.contains_key(key) && t.contains_key(key) // kept only if neither side removed it
         } else {
             true // new on a side: an add, keep it
         };
         if survives {
-            keep.insert(line.clone());
+            // Output-text preference: ancestor's text if unchanged, else theirs,
+            // else ours — so a precision-only rewrite keeps the stored text.
+            if let Some(text) = a.get(key).or_else(|| t.get(key)).or_else(|| o.get(key)) {
+                keep.insert(text.clone());
+            }
         }
     }
 
@@ -54,14 +125,6 @@ pub fn set_merge(ancestor: &str, ours: &str, theirs: &str) -> String {
         out.push('\n');
     }
     out
-}
-
-pub(crate) fn line_set(s: &str) -> BTreeSet<String> {
-    s.lines()
-        .map(|l| l.trim_end_matches('\r'))
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.to_string())
-        .collect()
 }
 
 /// Leading tab-delimited field parsed as a start time; non-numeric lines sort
@@ -93,8 +156,8 @@ pub(crate) fn summary_diff(
     paths.extend(after_files.keys());
 
     for path in paths {
-        let before_lines = before_files.get(path).map(|s| line_set(s)).unwrap_or_default();
-        let after_lines = after_files.get(path).map(|s| line_set(s)).unwrap_or_default();
+        let before_lines = before_files.get(path).map(|s| line_key_set(s)).unwrap_or_default();
+        let after_lines = after_files.get(path).map(|s| line_key_set(s)).unwrap_or_default();
         let added = after_lines.difference(&before_lines).count();
         let removed = before_lines.difference(&after_lines).count();
         if added > 0 || removed > 0 {
@@ -157,8 +220,8 @@ pub(crate) fn tree_annotation_delta(
     let mut annotations_added = 0usize;
     let mut annotations_removed = 0usize;
     for path in &all_paths {
-        let before_lines = before_blobs.get(path).map(|s| line_set(s)).unwrap_or_default();
-        let after_lines = after_blobs.get(path).map(|s| line_set(s)).unwrap_or_default();
+        let before_lines = before_blobs.get(path).map(|s| line_key_set(s)).unwrap_or_default();
+        let after_lines = after_blobs.get(path).map(|s| line_key_set(s)).unwrap_or_default();
         let added = after_lines.difference(&before_lines).count();
         let removed = before_lines.difference(&after_lines).count();
         if added > 0 || removed > 0 {
@@ -177,7 +240,7 @@ pub(crate) fn tree_annotation_delta(
 
 #[cfg(test)]
 mod tests {
-    use super::set_merge;
+    use super::{line_key_set, record_key, set_merge, RecordKey};
     use crate::commands::git_sync::auth::{is_auth_error, remote_err};
     use crate::commands::git_sync::AUTH_ERROR_PREFIX;
 
@@ -263,5 +326,60 @@ mod tests {
     #[test]
     fn empty_result_has_no_trailing_newline() {
         assert_eq!(set_merge("1.0\t2.0\ta\n", "", ""), "");
+    }
+
+    // ── numeric record identity (precision no-op) ─────────────────────────────
+
+    #[test]
+    fn record_key_ignores_decimal_precision() {
+        // Same times, different serialized precision -> same key.
+        assert_eq!(record_key("1.234\t2.5\ta"), record_key("1.23400\t2.50000\ta"));
+        assert_eq!(record_key("3\t4\tb"), record_key("3.0\t4.00\tb"));
+        // Different numeric value or label -> different key.
+        assert_ne!(record_key("1.234\t2.5\ta"), record_key("1.235\t2.5\ta"));
+        assert_ne!(record_key("1.234\t2.5\ta"), record_key("1.234\t2.5\tb"));
+        // Non-numeric leading fields fall back to exact-text identity.
+        assert!(matches!(record_key("hdr\tfoo\tbar"), RecordKey::Raw(_)));
+        assert_ne!(record_key("hdr\tfoo"), record_key("hdr\tbar"));
+    }
+
+    #[test]
+    fn precision_rewrite_is_a_noop_keeping_ancestor_text() {
+        // Our side re-serialized the same record at more decimals; theirs is
+        // untouched. Result must be the ancestor's stored text (no churn).
+        let ancestor = "1.234\t2.5\ta\n";
+        let ours = "1.23400\t2.50000\ta\n";
+        let theirs = "1.234\t2.5\ta\n";
+        let merged = set_merge(ancestor, ours, theirs);
+        assert_eq!(norm(&merged), vec!["1.234\t2.5\ta"]);
+    }
+
+    #[test]
+    fn new_record_on_both_sides_prefers_theirs_text() {
+        // Not in ancestor; both sides added the same record at different
+        // precision. Output-text preference is theirs over ours.
+        let merged = set_merge("", "1.2\t3.4\tx\n", "1.20\t3.40\tx\n");
+        assert_eq!(norm(&merged), vec!["1.20\t3.40\tx"]);
+    }
+
+    #[test]
+    fn precision_rewrite_counts_zero_changes() {
+        // line_key_set (what summary_diff / tree_annotation_delta count on) sees
+        // no adds or removes for a precision-only rewrite.
+        let before = line_key_set("1.234\t2.5\ta\n3.0\t4.0\tb\n");
+        let after = line_key_set("1.23400\t2.50000\ta\n3\t4\tb\n");
+        assert_eq!(after.difference(&before).count(), 0);
+        assert_eq!(before.difference(&after).count(), 0);
+    }
+
+    #[test]
+    fn precision_change_does_not_defeat_a_real_delete() {
+        // ours deletes b and rewrites a at new precision; the delete is still
+        // honored and a survives with ancestor text.
+        let ancestor = "1.234\t2.5\ta\n3.0\t4.0\tb\n";
+        let ours = "1.23400\t2.50000\ta\n";
+        let theirs = "1.234\t2.5\ta\n3.0\t4.0\tb\n";
+        let merged = set_merge(ancestor, ours, theirs);
+        assert_eq!(norm(&merged), vec!["1.234\t2.5\ta"]);
     }
 }
