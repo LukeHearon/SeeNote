@@ -5,6 +5,12 @@ import {
   calculateAnnotationLayers,
   generateAudacityContent,
   parseAudacityContent,
+  matchingLinesInContent,
+  exactLabelMatcher,
+  regexLabelMatcher,
+  partialLabelMatcher,
+  buildLabelMatcher,
+  renameLabelInContent,
   mergeAnnotations,
   stripExt,
   basename,
@@ -23,7 +29,6 @@ const ann = (
   extras: Partial<Annotation> = {},
 ): Annotation => ({
   id: extras.id ?? 'id-' + start + '-' + end,
-  toolKey: extras.toolKey ?? '1',
   start,
   end,
   text,
@@ -88,20 +93,20 @@ describe('makeAnnotationFromTool', () => {
   it("uses tool.text for non-custom tools", () => {
     const a = makeAnnotationFromTool(tool, 0, 1);
     expect(a.text).toBe('Bee');
-    expect(a.toolKey).toBe('1');
     expect(a.color).toBe('#ff8800');
   });
 
   it("forces empty text for the custom tool (key '0'), regardless of tool.text", () => {
     const a = makeAnnotationFromTool(customTool, 0, 1);
     expect(a.text).toBe('');
-    expect(a.toolKey).toBe('0');
     expect(a.color).toBe('#00ff00');
   });
 
-  it('throws when the tool key is null (unassigned)', () => {
+  it('stamps the label for a keyless (unassigned) tool — association is by label', () => {
     const unassigned: AnnotationTool = { id: 'tx', key: null, text: 'x', color: '#000' };
-    expect(() => makeAnnotationFromTool(unassigned, 0, 1)).toThrow();
+    const a = makeAnnotationFromTool(unassigned, 0, 1);
+    expect(a.text).toBe('x');
+    expect(a.color).toBe('#000');
   });
 });
 
@@ -341,13 +346,13 @@ describe('parseAudacityContent', () => {
     const content = '0.5\t1.5\tbird\n2.0\t3.0\tnoise\n';
     const result = parseAudacityContent(content, tools);
     expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({ start: 0.5, end: 1.5, text: 'bird', toolKey: '1', color: '#ff0000' });
-    expect(result[1]).toMatchObject({ start: 2.0, end: 3.0, text: 'noise', toolKey: '2', color: '#00ff00' });
+    expect(result[0]).toMatchObject({ start: 0.5, end: 1.5, text: 'bird', color: '#ff0000' });
+    expect(result[1]).toMatchObject({ start: 2.0, end: 3.0, text: 'noise', color: '#00ff00' });
   });
 
-  it('falls back to Custom tool (key 0) and white for unmatched text', () => {
+  it('falls back to white (Custom) for unmatched text', () => {
     const result = parseAudacityContent('1\t2\tunknown\n', tools);
-    expect(result[0]).toMatchObject({ toolKey: '0', color: '#ffffff', text: 'unknown' });
+    expect(result[0]).toMatchObject({ color: '#ffffff', text: 'unknown' });
   });
 
   it('preserves tabs inside the label text', () => {
@@ -366,11 +371,132 @@ describe('parseAudacityContent', () => {
   });
 
   it('round-trips through generateAudacityContent', () => {
-    const original = [ann(0.25, 1.75, 'bird', { toolKey: '1', color: '#ff0000' })];
+    const original = [ann(0.25, 1.75, 'bird', { color: '#ff0000' })];
     const text = generateAudacityContent(original);
     const parsed = parseAudacityContent(text, tools);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]).toMatchObject({ start: 0.25, end: 1.75, text: 'bird', toolKey: '1' });
+    expect(parsed[0]).toMatchObject({ start: 0.25, end: 1.75, text: 'bird' });
+  });
+});
+
+describe('matchingLinesInContent', () => {
+  it('returns start/end/label for each match satisfying the matcher', () => {
+    const content = '0\t1\tbird\n1\t2\tnoise\n2.5\t3.5\tbird\n';
+    expect(matchingLinesInContent(content, exactLabelMatcher('bird'))).toEqual([
+      { start: 0, end: 1, label: 'bird' },
+      { start: 2.5, end: 3.5, label: 'bird' },
+    ]);
+  });
+
+  it('returns an empty array when nothing matches', () => {
+    expect(matchingLinesInContent('0\t1\tbird\n', exactLabelMatcher('frog'))).toEqual([]);
+  });
+
+  it('skips malformed or non-numeric rows', () => {
+    expect(matchingLinesInContent('bad\nrow\tonly\nx\ty\tbird\n0\t1\tbird\n', exactLabelMatcher('bird'))).toEqual([{ start: 0, end: 1, label: 'bird' }]);
+  });
+
+  it('supports a regex matcher, reporting each match\'s own label', () => {
+    const content = '0\t1\tbird-a\n1\t2\tnoise\n2\t3\tbird-b\n';
+    const matcher = regexLabelMatcher('^bird-');
+    expect(matcher).not.toBeNull();
+    expect(matchingLinesInContent(content, matcher!)).toEqual([
+      { start: 0, end: 1, label: 'bird-a' },
+      { start: 2, end: 3, label: 'bird-b' },
+    ]);
+  });
+});
+
+describe('exactLabelMatcher', () => {
+  it('matches only the exact string', () => {
+    const m = exactLabelMatcher('bird');
+    expect(m('bird')).toBe(true);
+    expect(m('birdy')).toBe(false);
+  });
+});
+
+describe('regexLabelMatcher', () => {
+  it('builds a matcher from a valid pattern', () => {
+    const m = regexLabelMatcher('bird.*');
+    expect(m).not.toBeNull();
+    expect(m!('birdsong')).toBe(true);
+    expect(m!('noise')).toBe(false);
+  });
+
+  it('matches anywhere in the label (unanchored)', () => {
+    const m = regexLabelMatcher('buzz\\d');
+    expect(m).not.toBeNull();
+    expect(m!('foo_buzz3_bar')).toBe(true);
+  });
+
+  it('returns null for an invalid pattern instead of throwing', () => {
+    expect(regexLabelMatcher('[unterminated')).toBeNull();
+  });
+});
+
+describe('partialLabelMatcher', () => {
+  it('matches labels containing the text anywhere', () => {
+    const m = partialLabelMatcher('mech_');
+    expect(m).not.toBeNull();
+    expect(m!('mech_auto')).toBe(true);
+    expect(m!('quiet_mech_auto')).toBe(true);
+    expect(m!('noise')).toBe(false);
+  });
+
+  it('treats regex metacharacters in the text literally', () => {
+    const m = partialLabelMatcher('a.b');
+    expect(m).not.toBeNull();
+    expect(m!('xa.by')).toBe(true);
+    expect(m!('xaXby')).toBe(false); // "." must match a literal dot, not "any char"
+  });
+});
+
+describe('buildLabelMatcher', () => {
+  it('defaults to exact matching', () => {
+    const m = buildLabelMatcher('bird', { useRegex: false, partial: false });
+    expect(m).not.toBeNull();
+    expect(m!('bird')).toBe(true);
+    expect(m!('birdy')).toBe(false);
+  });
+
+  it('uses partial matching when only partial is set', () => {
+    const m = buildLabelMatcher('mech_', { useRegex: false, partial: true });
+    expect(m).not.toBeNull();
+    expect(m!('quiet_mech_auto')).toBe(true);
+  });
+
+  it('uses regex matching when useRegex is set, regardless of partial', () => {
+    const m = buildLabelMatcher('buzz\\d', { useRegex: true, partial: false });
+    expect(m).not.toBeNull();
+    expect(m!('foo_buzz3_bar')).toBe(true);
+  });
+
+  it('returns null for an invalid regex', () => {
+    expect(buildLabelMatcher('[unterminated', { useRegex: true, partial: false })).toBeNull();
+  });
+});
+
+describe('renameLabelInContent', () => {
+  it('renames all matching rows and reports the count', () => {
+    const content = '0\t1\tbird\n1\t2\tnoise\n2\t3\tbird\n';
+    const result = renameLabelInContent(content, 'bird', 'sparrow');
+    expect(result.changed).toBe(true);
+    expect(result.count).toBe(2);
+    expect(result.updated).toBe('0\t1\tsparrow\n1\t2\tnoise\n2\t3\tsparrow\n');
+  });
+
+  it('leaves content untouched and reports changed: false when nothing matches', () => {
+    const content = '0\t1\tbird\n';
+    const result = renameLabelInContent(content, 'frog', 'toad');
+    expect(result.changed).toBe(false);
+    expect(result.count).toBe(0);
+    expect(result.updated).toBe(content);
+  });
+
+  it('preserves tabs inside unrelated label text', () => {
+    const content = '0\t1\ta\tb\n1\t2\tbird\n';
+    const result = renameLabelInContent(content, 'bird', 'sparrow');
+    expect(result.updated).toBe('0\t1\ta\tb\n1\t2\tsparrow\n');
   });
 });
 

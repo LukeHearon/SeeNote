@@ -212,5 +212,6 @@ export function useSyncManagement({
     hasRemoteChanges,
     reloadNonce,
     handleSync,
+    flushPendingAutosave,
   };
 }

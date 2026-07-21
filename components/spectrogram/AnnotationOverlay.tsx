@@ -209,14 +209,13 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            onChange={(e) => {
                                const newText = e.target.value;
                                const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
+                                   // Typing a label that matches a defined tool adopts that tool's
+                                   // canonical text + color; anything else is a Custom label (white).
                                    const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
                                    if (matchingTool) {
-                                        return { ...a, text: matchingTool.text, toolKey: matchingTool.key, color: matchingTool.color };
+                                        return { ...a, text: matchingTool.text, color: matchingTool.color };
                                    }
-                                   if (a.toolKey !== "0" && a.color !== "#ffffff" && a.text !== newText) {
-                                       return { ...a, text: newText, toolKey: "0", color: "#ffffff" };
-                                   }
-                                   return { ...a, text: newText };
+                                   return { ...a, text: newText, color: "#ffffff" };
                                });
                                pendingAnnotationsRef.current = newAnnotations;
                                onAnnotationsChange(newAnnotations);

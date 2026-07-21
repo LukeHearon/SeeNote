@@ -7,11 +7,13 @@ export interface Selection {
 
 export interface Annotation {
   id: string;
-  toolKey: string; // The key of the annotation tool (e.g., "0", "1") used to create this annotation
   start: number; // Seconds
   end: number;   // Seconds
   text: string;
-  color?: string; // Hex color
+  // Hex color. Denormalized cache derived from the owning tool by matching
+  // `text` (white when no tool matches — i.e. a Custom/one-off label). Never
+  // written to the annotation file; the tool link is the label itself.
+  color?: string;
 }
 
 // Annotation with UI-only vertical-dodge layer assigned by calculateAnnotationLayers.
@@ -197,6 +199,10 @@ export interface ProjectPreferences {
    * Preferences tab of project settings.
    */
   autoPullRemoteChanges?: boolean;
+  /** Interpret the Find Label search query as a regular expression instead of an exact match. */
+  findLabelUseRegex?: boolean;
+  /** Match the Find Label search query anywhere in a label instead of requiring an exact match. No effect when findLabelUseRegex is on (regex matching is already unanchored). */
+  findLabelPartialMatch?: boolean;
 }
 
 export interface GitSyncConfig {

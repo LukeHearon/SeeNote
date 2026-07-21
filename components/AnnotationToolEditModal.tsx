@@ -13,10 +13,15 @@ interface Props {
   tool: AnnotationTool;
   toolIndex: number;
   annotations: Annotation[];
+  // Create mode: the modal doubles as the "New tool" dialog. Suppresses the
+  // rename warning and live color preview (there's no on-spectrogram tool yet),
+  // and relabels the title/submit button.
+  isCreate?: boolean;
   onClose: () => void;
-  onSave: (toolIndex: number, newText: string, newColor: string, newDescription: string) => void;
+  onSave: (newText: string, newColor: string, newDescription: string) => void;
   // Live (transient) color preview while the user is changing the color.
-  onPreviewColor: (toolIndex: number, color: string) => void;
+  // Omitted in create mode.
+  onPreviewColor?: (toolIndex: number, color: string) => void;
   // Import example clips (files or folders) into this tool. Absent → no import
   // UI (e.g. for the synthetic Custom tool, which has no folder).
   onImportExamples?: (toolIndex: number, paths: string[]) => void | Promise<void>;
@@ -24,15 +29,18 @@ interface Props {
   onShowExamples?: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolEditModal({ tool, toolIndex, annotations, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
+export default function AnnotationToolEditModal({ tool, toolIndex, annotations, isCreate = false, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
   const [text, setText] = useState(tool.text);
   const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
   const [showPicker, setShowPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
-  const willRenameAnnotations = text.trim() !== tool.text;
-  const customMatchCount = annotations.filter(a => a.toolKey === '0' && a.text === text.trim()).length;
+  const willRenameAnnotations = !isCreate && text.trim() !== tool.text;
+  // Annotations already carrying this label that are Custom (white) will be
+  // adopted by this tool once saved. Association is by label, so this covers
+  // both create and rename-to-an-existing-label.
+  const customMatchCount = annotations.filter(a => a.text === text.trim() && (a.color === undefined || a.color === '#ffffff')).length;
 
   const swatchColors = HOTKEY_COLORS.slice(1).filter(c => c !== '#64748b');
 
@@ -49,12 +57,12 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   const didMountRef = useRef(false);
   useEffect(() => {
     if (!didMountRef.current) { didMountRef.current = true; return; }
-    onPreviewColor(toolIndex, color);
+    onPreviewColor?.(toolIndex, color);
   }, [color]);
 
   // Cancel/X path: revert the live preview to the original color, then close.
   const handleCancel = () => {
-    onPreviewColor(toolIndex, originalColorRef.current);
+    onPreviewColor?.(toolIndex, originalColorRef.current);
     onClose();
   };
 
@@ -186,10 +194,11 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             {annotationToolEditModal.cancelButton}
           </button>
           <button
-            onClick={() => { onSave(toolIndex, text.trim(), color, description.trim()); onClose(); }}
-            className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+            onClick={() => { onSave(text.trim(), color, description.trim()); onClose(); }}
+            disabled={isCreate && text.trim() === ''}
+            className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded transition-colors"
           >
-            {annotationToolEditModal.saveButton}
+            {isCreate ? annotationToolEditModal.createButton : annotationToolEditModal.saveButton}
           </button>
         </div>
       </div>

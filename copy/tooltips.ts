@@ -28,6 +28,8 @@ export const tooltips = {
   get keepSeeNoteName() { return getOverride('tooltips.keepSeeNoteName') ?? "Keep SeeNote's name (rewrites .seenote/settings.json)"; },
   get useFolderName() { return getOverride('tooltips.useFolderName') ?? "Use the name from the folder's .seenote/settings.json"; },
   get annotationToolSettings() { return getOverride('tooltips.annotationToolSettings') ?? "Annotation Tool Settings"; },
+  get massRename() { return getOverride('tooltips.massRename') ?? "Mass Rename"; },
+  get findLabel() { return getOverride('tooltips.findLabel') ?? "Find Label"; },
   get stopExample() { return getOverride('tooltips.stopExample') ?? "Stop example"; },
   get playExample() { return getOverride('tooltips.playExample') ?? "Play example clip"; },
   get editTool() { return getOverride('tooltips.editTool') ?? "Edit tool"; },

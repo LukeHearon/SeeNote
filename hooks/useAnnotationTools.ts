@@ -6,11 +6,11 @@ import {
   listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool,
   renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool,
 } from '../utils/tauriCommands';
-import { readTextFile, writeTextFile } from '../utils/tauriCommands';
 import {
   PersistedTool, assembleTools, buildHotkeyMap, diffToolFolders, makeCustomTool,
   mergeImportedTools, toPersistedTools,
 } from '../utils/annotationTools';
+import { renameLabelAcrossTracks } from '../utils/annotationRename';
 import { openDirectoryDialog } from '../utils/tauriCommands';
 import type { useExamplePlayer } from './useExamplePlayer';
 
@@ -81,7 +81,7 @@ export function useAnnotationTools({
   const skipToolPersistRef = useRef(false);
 
   // Keep annotationToolsRef in sync so the load effect can look up current tools
-  // for color/toolKey matching without depending on annotationTools.
+  // for color/label matching without depending on annotationTools.
   useEffect(() => { annotationToolsRef.current = annotationTools; }, [annotationTools]);
 
   // Open the read-only example library for a tool; stop any chip-button preview
@@ -151,9 +151,14 @@ export function useAnnotationTools({
     };
   }, [annotationTools]);
 
-  const handleCreateTool = useCallback((text: string, color: string, key?: string | null) => {
-    setAnnotationTools(prev => [...prev, { id: generateId(), key: key ?? null, text, color }]);
-  }, []);
+  const handleCreateTool = useCallback((text: string, color: string, key?: string | null, description?: string) => {
+    setAnnotationTools(prev => [...prev, { id: generateId(), key: key ?? null, text, color, description }]);
+    // Annotations are linked to a tool purely by matching label, so any existing
+    // annotation carrying this label instantly belongs to the new tool. Refresh
+    // its cached color to match (it was white as a Custom label). Works for
+    // keyless tools too — association no longer depends on a hotkey.
+    setAnnotations(prev => prev.map(a => a.text === text ? { ...a, color } : a));
+  }, [setAnnotations]);
 
   // "Import examples" in the tool settings modal: pick a directory of plain
   // {label}/ folders of audio clips; the backend creates the appropriate tool
@@ -212,11 +217,10 @@ export function useAnnotationTools({
 
     setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, text: newText, color: newColor, description: newDescription } : t));
     setAnnotations(prev => prev.map(a => {
-      if (a.toolKey === tool.key && a.toolKey !== '0') {
+      // Annotations under the old label follow the rename; any already at the
+      // new label (previously Custom) get adopted. Both take the tool's color.
+      if (a.text === oldText || a.text === newText) {
         return { ...a, text: newText, color: newColor };
-      }
-      if (a.toolKey === '0' && a.text === newText && tool.key !== null) {
-        return { ...a, toolKey: tool.key!, color: newColor };
       }
       return a;
     }));
@@ -226,55 +230,34 @@ export function useAnnotationTools({
 
     // Rename matching annotations in every other track's annotation file on disk.
     // The current track's file will be updated by the auto-save triggered above.
-    for (const t of allTracks) {
-      if (t === trackPath) continue;
-      const annotPath = getAnnotationPath(t);
-      if (!annotPath) continue;
-      (async () => {
-        try {
-          const content = await readTextFile(annotPath);
-          if (!content) return;
-          let changed = false;
-          const updated = content.split('\n').map(line => {
-            const parts = line.split('\t');
-            if (parts.length >= 3 && parts.slice(2).join('\t') === oldText) {
-              changed = true;
-              return `${parts[0]}\t${parts[1]}\t${newText}`;
-            }
-            return line;
-          });
-          if (changed) await writeTextFile(annotPath, updated.join('\n'));
-        } catch {
-          // No annotation file for this track — nothing to update.
-        }
-      })();
-    }
+    renameLabelAcrossTracks(allTracks.filter(t => t !== trackPath), getAnnotationPath, oldText, newText);
   }, [annotationTools, allTracks, trackPath, getAnnotationPath]);
 
   const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
     const tool = annotationTools[toolIndex];
     if (!tool) return;
     setAnnotations(prev => mode === 'delete'
-      // Remove the tool's linked annotations entirely.
-      ? prev.filter(a => a.toolKey !== tool.key)
-      // Reassign the tool's linked annotations to Custom.
-      : prev.map(a => a.toolKey === tool.key ? { ...a, toolKey: '0', color: '#ffffff' } : a)
+      // Remove annotations carrying this tool's label entirely.
+      ? prev.filter(a => a.text !== tool.text)
+      // Leave the labels but drop the tool: with no tool to match, they revert
+      // to Custom, so reset their cached color to white.
+      : prev.map(a => a.text === tool.text ? { ...a, color: '#ffffff' } : a)
     );
     setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
     if (activeToolKey === tool.key) setActiveToolKey(null);
   }, [annotationTools, activeToolKey]);
 
   // Transient live preview while the user drags a color in the edit modal.
-  // Updates ONLY the tool's color and its linked (non-Custom) annotations'
-  // colors via the raw setters — no history push, no Custom reassociation. The
-  // settings list and spectrogram both read these from state, so they update
-  // live; the real commit (with history) happens on Save via handleRenameTool.
+  // Updates ONLY the tool's color and its labelled annotations' cached colors
+  // via the raw setters — no history push. The settings list and spectrogram
+  // both read these from state, so they update live; the real commit (with
+  // history) happens on Save via handleRenameTool.
   const handlePreviewToolColor = useCallback((toolIndex: number, color: string) => {
     const tool = annotationToolsRef.current[toolIndex];
-    if (!tool) return;
+    if (!tool || tool.key === '0') return;
     setAnnotationTools(prev => prev.map((t, i) => i === toolIndex ? { ...t, color } : t));
     setAnnotations(prev => prev.map(a =>
-      a.toolKey === tool.key && a.toolKey !== '0' ? { ...a, color } : a
+      a.text === tool.text ? { ...a, color } : a
     ));
   }, []);
 
@@ -282,7 +265,9 @@ export function useAnnotationTools({
     const snapshot = annotationTools;
     if (newTools.length !== snapshot.length) return;
 
-    // Build old→new key remap (by stable index — newTools must preserve indices).
+    // Reordering only shuffles hotkeys; annotations link to tools by label, so
+    // they're untouched. The one thing that must follow the shuffle is the
+    // active-tool selection, which is tracked by hotkey digit.
     const keyRemap = new Map<string, string>();
     const unassignedKeys = new Set<string>();
     for (let i = 0; i < snapshot.length; i++) {
@@ -293,11 +278,6 @@ export function useAnnotationTools({
     }
 
     setAnnotationTools(newTools);
-    setAnnotations(prev => prev.map(a => {
-      if (unassignedKeys.has(a.toolKey)) return { ...a, toolKey: '0', color: '#ffffff' };
-      const remapped = keyRemap.get(a.toolKey);
-      return remapped ? { ...a, toolKey: remapped } : a;
-    }));
     if (activeToolKey && (unassignedKeys.has(activeToolKey) || keyRemap.has(activeToolKey))) {
       setActiveToolKey(unassignedKeys.has(activeToolKey) ? null : keyRemap.get(activeToolKey)!);
     }

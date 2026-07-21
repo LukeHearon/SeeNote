@@ -102,6 +102,7 @@ export const annotationToolEditModal = {
   get viewButton() { return getOverride('ui.annotationToolEditModal.viewButton') ?? "View"; },
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
+  get createButton() { return getOverride('ui.annotationToolEditModal.createButton') ?? "Create tool"; },
 };
 
 export const annotationToolsSettingsModal = {
@@ -204,6 +205,34 @@ export const annotationToolsPanel = {
   get showExamples() { return getOverride('ui.annotationToolsPanel.showExamples') ?? "Show examples"; },
   get contextEdit() { return getOverride('ui.annotationToolsPanel.contextEdit') ?? "Edit"; },
   get contextDelete() { return getOverride('ui.annotationToolsPanel.contextDelete') ?? "Delete"; },
+};
+
+export const massRenameModal = {
+  get title() { return getOverride('ui.massRenameModal.title') ?? "Mass Rename"; },
+  get oldLabelField() { return getOverride('ui.massRenameModal.oldLabelField') ?? "Label to rename"; },
+  get oldLabelPlaceholder() { return getOverride('ui.massRenameModal.oldLabelPlaceholder') ?? "Existing label…"; },
+  get newLabelField() { return getOverride('ui.massRenameModal.newLabelField') ?? "New label"; },
+  get newLabelPlaceholder() { return getOverride('ui.massRenameModal.newLabelPlaceholder') ?? "Replacement label…"; },
+  get breakdownHeading() { return getOverride('ui.massRenameModal.breakdownHeading') ?? "Occurrences by file"; },
+  get scanningLabel() { return getOverride('ui.massRenameModal.scanningLabel') ?? "Scanning…"; },
+  get noMatchesLabel() { return getOverride('ui.massRenameModal.noMatchesLabel') ?? "No matching annotations found."; },
+  totalCountLabel: (count: number, fileCount: number) => `${count} annotation(s) across ${fileCount} file(s)`,
+  get cancelButton() { return getOverride('ui.massRenameModal.cancelButton') ?? "Cancel"; },
+  get renameButton() { return getOverride('ui.massRenameModal.renameButton') ?? "Rename"; },
+  get renamingButton() { return getOverride('ui.massRenameModal.renamingButton') ?? "Renaming…"; },
+};
+
+export const findLabelModal = {
+  get title() { return getOverride('ui.findLabelModal.title') ?? "Find Label"; },
+  get labelField() { return getOverride('ui.findLabelModal.labelField') ?? "Label"; },
+  get labelPlaceholder() { return getOverride('ui.findLabelModal.labelPlaceholder') ?? "Search for a label…"; },
+  get partialCheckboxLabel() { return getOverride('ui.findLabelModal.partialCheckboxLabel') ?? "Partial"; },
+  get regexCheckboxLabel() { return getOverride('ui.findLabelModal.regexCheckboxLabel') ?? "Regex"; },
+  get invalidRegexError() { return getOverride('ui.findLabelModal.invalidRegexError') ?? "Invalid regular expression."; },
+  get scanningLabel() { return getOverride('ui.findLabelModal.scanningLabel') ?? "Searching…"; },
+  get noMatchesLabel() { return getOverride('ui.findLabelModal.noMatchesLabel') ?? "No matching annotations found."; },
+  get cancelButton() { return getOverride('ui.findLabelModal.cancelButton') ?? "Cancel"; },
+  get goButton() { return getOverride('ui.findLabelModal.goButton') ?? "Go"; },
 };
 
 export const annotationToolLibrary = {

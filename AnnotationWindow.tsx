@@ -9,6 +9,7 @@ import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
+import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
 import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
@@ -38,6 +39,8 @@ import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
+import MassRenameModal from './components/MassRenameModal';
+import FindLabelModal from './components/FindLabelModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
@@ -86,6 +89,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
+  const [showMassRename, setShowMassRename] = useState(false);
+  const [showFindLabel, setShowFindLabel] = useState(false);
+
+  // Pending-save timer for the annotation autosave. Declared here (rather than
+  // alongside useSyncManagement below) so handleOpenTrack and the other
+  // track-switch resets, which run earlier, can flush it before wiping
+  // annotation state — otherwise an in-flight debounced write for the track
+  // being left is silently dropped instead of persisted.
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest flushPendingAutosave from useSyncManagement (defined further down,
+  // after annotations/getAnnotationPath exist); kept in a ref so the
+  // earlier-declared track-switch callbacks can call the current version.
+  const flushPendingAutosaveRef = useRef<() => Promise<void>>(async () => {});
 
   // Git sync state, the manual sync handler, and the sync-status effects live in
   // useSyncManagement (set up below, once its dependencies are declared).
@@ -133,9 +149,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Annotation currently bound to the selection region (null = free selection or no selection)
   const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
 
-  // Per-session text buffer for annotation tool reassignment: saves each toolKey's text while an
-  // annotation is bound, so switching back to a prior tool restores the previously-entered text.
-  // Cleared when the bound annotation is deselected.
+  // Per-session text buffer for annotation tool reassignment, keyed by hotkey
+  // digit ('0' = Custom): saves the label held under each tool while an
+  // annotation is bound, so switching back to a prior tool restores the
+  // previously-entered text. Cleared when the bound annotation is deselected.
   const reassignBufferRef = useRef<Record<string, string>>({});
 
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
@@ -248,6 +265,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return annotationDirectory + withoutExt + '.txt';
   }, [annotationDirectory, currentDirectory]);
 
+  // Ident: relative path from audio root to track, without extension
+  const getIdent = useCallback((trackFilePath: string): string | null => {
+    if (!currentDirectory) return null;
+    const rel = trackFilePath.substring(currentDirectory.length + 1);
+    return stripExt(rel);
+  }, [currentDirectory]);
+
   // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
   // persistence effect, and every tool CRUD/import handler. See
   // hooks/useAnnotationTools.ts. Instantiated here (before useVideoFrameSource/
@@ -291,6 +315,21 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     getAnnotationPath,
   });
+
+  // Mass Rename: renames every annotation whose text matches `oldText` to
+  // `newText`, across the whole project — independent of any tool identity.
+  // Current track updates in memory (autosave picks it up); every other
+  // track's annotation file is rewritten on disk via the shared util also
+  // used by handleRenameTool.
+  const handleMassRename = useCallback(async (oldText: string, newText: string): Promise<number> => {
+    const currentCount = annotations.filter(a => a.text === oldText).length;
+    if (currentCount > 0) {
+      setAnnotations(prev => prev.map(a => a.text === oldText ? { ...a, text: newText } : a));
+    }
+    const otherTracks = allTracks.filter(t => t !== trackPath);
+    const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, oldText, newText);
+    return currentCount + diskCount;
+  }, [annotations, allTracks, trackPath, getAnnotationPath]);
 
   // An example clip is sounding via either path (chip preview or the modal).
   // While true the main track's audio is parked so the two never overlap, and
@@ -467,6 +506,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
     videoPrefetchEndRef.current = 0;
     videoPrefetchBusyRef.current = false;
+
+    // Flush any pending debounced autosave for the track being left — otherwise
+    // an edit made just before switching tracks (e.g. a tool rename cascade
+    // updating annotation text/color) never reaches disk.
+    await flushPendingAutosaveRef.current();
 
     setAnnotations([]);
     setIsPlaying(false);
@@ -705,12 +749,48 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => { recomputeCanGo(); }, [sortedAnnotations, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
-  // Ident: relative path from audio root to track, without extension
-  const ident = useMemo(() => {
-    if (!trackPath || !currentDirectory) return null;
-    const rel = trackPath.substring(currentDirectory.length + 1);
-    return stripExt(rel);
-  }, [trackPath, currentDirectory]);
+  const ident = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
+
+  // Find Label "Go": target ident + the match (start/end/label) on a track
+  // that isn't currently open. Set right before handleOpenTrack fires;
+  // consumed by the effect below once that track's annotations finish loading.
+  const pendingGoToLabelRef = useRef<{ ident: string } & LabelMatch | null>(null);
+
+  // Select + scroll to an annotation matching `match` on the current track.
+  // Shared by the same-track and cross-track ("Go") paths so the two don't
+  // diverge on how a match is highlighted. Matches on label too (not just
+  // start/end) since a regex/partial search can return several different
+  // labels at the same or coincidentally-equal times.
+  const goToAnnotationMatch = useCallback((match: LabelMatch) => {
+    const found = annotations.find(a => a.start === match.start && a.end === match.end && a.text === match.label);
+    if (!found) return;
+    setSelectedAnnotationId(found.id);
+    seek(match.start);
+    spectrogramRef.current?.zoomToRange(match.start, match.end);
+  }, [annotations, seek]);
+
+  // Find Label "Go" handler: same-track matches select + scroll immediately;
+  // matches on another track open it first, and the effect below finishes
+  // the job once its annotations have loaded.
+  const handleGoToLabelMatch = useCallback((matchIdent: string, match: LabelMatch) => {
+    if (matchIdent === ident) {
+      goToAnnotationMatch(match);
+      return;
+    }
+    const targetPath = allTracks.find(t => getIdent(t) === matchIdent);
+    if (!targetPath) return;
+    pendingGoToLabelRef.current = { ident: matchIdent, ...match };
+    handleOpenTrack(targetPath);
+  }, [ident, goToAnnotationMatch, allTracks, getIdent, handleOpenTrack]);
+
+  // Finish a cross-track "Go": once the newly-opened track's annotations have
+  // loaded and match the pending target ident, select + scroll, then clear.
+  useEffect(() => {
+    const pending = pendingGoToLabelRef.current;
+    if (!pending || !ident || ident !== pending.ident || annotations.length === 0) return;
+    pendingGoToLabelRef.current = null;
+    goToAnnotationMatch(pending);
+  }, [annotations, ident, goToAnnotationMatch]);
 
   // buzzdetect activations panel UI state + load-by-ident effect.
   const {
@@ -776,14 +856,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     leftPanelWidth,
   });
 
-  // Pending-save timer for the annotation autosave. Created here because both
-  // useSyncManagement (flushes it before sync) and useAnnotationLoad (sets it)
-  // need it — shared boundary, owned by neither hook.
-  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Git sync — owns sync state, the manual handler, and status effects.
   // `setHasLocalChanges` is consumed by the autosave effect below; `reloadNonce`
-  // by the annotation auto-load effect.
+  // by the annotation auto-load effect. `autoSaveTimeoutRef` is declared above
+  // (with useFileNavigation) so earlier track-switch callbacks can share it.
   const {
     syncing,
     syncSummary,
@@ -796,6 +872,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     hasRemoteChanges,
     reloadNonce,
     handleSync,
+    flushPendingAutosave,
   } = useSyncManagement({
     project,
     projectRef,
@@ -805,6 +882,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPathRef,
     addLog,
   });
+  useEffect(() => { flushPendingAutosaveRef.current = flushPendingAutosave; }, [flushPendingAutosave]);
 
   // Custom-commit-message popover: open state + the typed message.
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
@@ -988,6 +1066,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const autoCollapse = updatedPreferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE;
     if (autoCollapse && trackPath) setVideoCollapsed(isAudioTrack);
     if (mediaDirChanged) {
+      await flushPendingAutosaveRef.current();
       setCurrentDirectory(updated.mediaDirectoryAbs);
       setTrackPath(null);
       setVideoSrc(null);
@@ -1013,6 +1092,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const current = project.preferences.fileFilter ?? 'all';
     const next = ({ all: 'unannotated', unannotated: 'annotated', annotated: 'all' } as const)[current];
     updateProjectPreferences(project.id, { ...project.preferences, fileFilter: next });
+  }, [project, updateProjectPreferences]);
+
+  const handleFindLabelUseRegexChange = useCallback((useRegex: boolean) => {
+    updateProjectPreferences(project.id, { ...project.preferences, findLabelUseRegex: useRegex });
+  }, [project, updateProjectPreferences]);
+
+  const handleFindLabelPartialChange = useCallback((partial: boolean) => {
+    updateProjectPreferences(project.id, { ...project.preferences, findLabelPartialMatch: partial });
   }, [project, updateProjectPreferences]);
 
   const handleEnteredFolderChange = useCallback((path: string | null) => {
@@ -1059,14 +1146,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (boundAnnotationId !== null) {
           const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
           if (currentAnnotation) {
+              // The annotation's current owner is whichever defined tool shares
+              // its label; if none, it's a Custom label (bucket '0'). Stash its
+              // text under that owner so toggling back restores what was typed.
+              const currentOwner = annotationTools.find(t => t.key !== '0' && t.text === currentAnnotation.text);
               reassignBufferRef.current = {
                   ...reassignBufferRef.current,
-                  [currentAnnotation.toolKey]: currentAnnotation.text,
+                  [currentOwner?.key ?? '0']: currentAnnotation.text,
               };
               const savedText = reassignBufferRef.current[tool.key ?? ''];
               const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
               const updated = annotations.map(a => a.id === boundAnnotationId
-                  ? { ...a, toolKey: tool.key, text: newText, color: tool.color }
+                  ? { ...a, text: newText, color: tool.color }
                   : a
               );
               handleAnnotationsCommit(updated);
@@ -1545,6 +1636,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onToolActivate={handleToolActivate}
                 onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                 onOpenSettings={() => setShowToolSettings(true)}
+                onOpenMassRename={() => setShowMassRename(true)}
+                onOpenFindLabel={() => setShowFindLabel(true)}
                 onEditTool={setPanelEditingToolIndex}
                 onRequestDeleteTool={setPanelDeletingToolIndex}
                 playingExampleToolId={examplePlayer.playingToolId}
@@ -1842,6 +1935,34 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onShowExamples={handleShowExamples}
         />
       )}
+      {showMassRename && (
+        <MassRenameModal
+          annotations={annotations}
+          allTracks={allTracks}
+          trackPath={trackPath}
+          ident={ident}
+          getAnnotationPath={getAnnotationPath}
+          getIdent={getIdent}
+          onClose={() => setShowMassRename(false)}
+          onApply={handleMassRename}
+        />
+      )}
+      {showFindLabel && (
+        <FindLabelModal
+          annotations={annotations}
+          allTracks={allTracks}
+          trackPath={trackPath}
+          ident={ident}
+          getAnnotationPath={getAnnotationPath}
+          getIdent={getIdent}
+          useRegex={project.preferences.findLabelUseRegex ?? false}
+          onUseRegexChange={handleFindLabelUseRegexChange}
+          partial={project.preferences.findLabelPartialMatch ?? false}
+          onPartialChange={handleFindLabelPartialChange}
+          onClose={() => setShowFindLabel(false)}
+          onGo={handleGoToLabelMatch}
+        />
+      )}
       {panelEditingToolIndex !== null && (
         <AnnotationToolEditModal
           tool={annotationTools[panelEditingToolIndex]}
@@ -1851,8 +1972,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onPreviewColor={handlePreviewToolColor}
           onImportExamples={handleImportExamplesToTool}
           onShowExamples={(idx) => { setPanelEditingToolIndex(null); handleShowExamples(idx); }}
-          onSave={(idx, text, color, description) => {
-            handleRenameTool(idx, text, color, description);
+          onSave={(text, color, description) => {
+            handleRenameTool(panelEditingToolIndex, text, color, description);
             setPanelEditingToolIndex(null);
           }}
         />

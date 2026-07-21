@@ -230,6 +230,8 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p>{md(helpPanel.annotations.tools.p3)}</p>
                 <p>{md(helpPanel.annotations.tools.p4)}</p>
                 <p>{md(helpPanel.annotations.tools.p5)}</p>
+                <p>{md(helpPanel.annotations.tools.p6)}</p>
+                <p>{md(helpPanel.annotations.tools.p7)}</p>
                 <p className="text-slate-400 text-xs">{md(helpPanel.annotations.tools.note1)}</p>
               </Section>
 

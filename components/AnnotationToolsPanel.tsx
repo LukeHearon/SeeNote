@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Settings, Trash2, Play, Square } from 'lucide-react';
+import { Settings, Trash2, Play, Square, TextCursorInput, Search } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
 import { tooltips } from '../copy/tooltips';
@@ -18,6 +18,8 @@ interface AnnotationToolsPanelProps {
   onToolActivate: (key: string) => void;
   onSelectModeActivate: () => void;
   onOpenSettings: () => void;
+  onOpenMassRename: () => void;
+  onOpenFindLabel: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
   // Example-clip playback: id of the tool currently auditioning (null = none),
@@ -33,6 +35,8 @@ function AnnotationToolsPanel({
   onToolActivate,
   onSelectModeActivate,
   onOpenSettings,
+  onOpenMassRename,
+  onOpenFindLabel,
   onEditTool,
   onRequestDeleteTool,
   playingExampleToolId,
@@ -78,13 +82,29 @@ function AnnotationToolsPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-none">
         <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>
-        <button
-          onClick={onOpenSettings}
-          className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
-          data-tooltip={tooltips.annotationToolSettings}
-        >
-          <Settings size={12} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={onOpenFindLabel}
+            className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
+            data-tooltip={tooltips.findLabel}
+          >
+            <Search size={12} />
+          </button>
+          <button
+            onClick={onOpenMassRename}
+            className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
+            data-tooltip={tooltips.massRename}
+          >
+            <TextCursorInput size={12} />
+          </button>
+          <button
+            onClick={onOpenSettings}
+            className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
+            data-tooltip={tooltips.annotationToolSettings}
+          >
+            <Settings size={12} />
+          </button>
+        </div>
       </div>
 
       {/* Tool Grid */}

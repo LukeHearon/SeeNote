@@ -18,7 +18,7 @@ interface Props {
   onDeleteTool: (toolIndex: number, mode: 'unlink' | 'delete') => void;
   // Transient live preview of a tool's color while it's being edited (no history).
   onPreviewColor: (toolIndex: number, color: string) => void;
-  onCreateTool: (text: string, color: string, key?: string | null) => void;
+  onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
   // Restore both tools and their linked annotations atomically — used by the
   // modal-local undo/redo so an "undelete" puts back the reassigned annotations
   // too. Wired in AnnotationWindow to commit through the shared annotation
@@ -126,35 +126,6 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
   );
 }
 
-// Shared inline "new tool" input used by both the Unassigned bin and empty
-// hotkey slots. Centralising it keeps the create UX identical everywhere and
-// avoids duplicating the input markup/keyboard handling.
-function NewToolInput({ onCommit, onCancel }: {
-  onCommit: (text: string) => void;
-  onCancel: () => void;
-}) {
-  const [text, setText] = useState('');
-  const commit = () => {
-    const trimmed = text.trim();
-    if (trimmed) onCommit(trimmed);
-    else onCancel();
-  };
-  return (
-    <input
-      autoFocus
-      className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none"
-      placeholder={copy.toolNamePlaceholder}
-      value={text}
-      onChange={e => setText(e.target.value)}
-      onKeyDown={e => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') onCancel();
-      }}
-      onBlur={commit}
-    />
-  );
-}
-
 export default function AnnotationToolsSettingsModal({
   annotationTools,
   annotations,
@@ -251,10 +222,13 @@ export default function AnnotationToolsSettingsModal({
     setDrag(null);
   };
 
-  // Commit a new tool from either the Unassigned bin (key undefined → null) or
-  // an empty hotkey slot (key = that slot's digit).
-  const commitNewTool = (text: string, key?: string | null) => {
-    withSnapshot(() => onCreateTool(text, pickNextToolColor(annotationTools), key));
+  // Commit a new tool from the create modal. Its hotkey comes from where the
+  // "+ New tool" button was clicked: a specific slot digit, or null for the
+  // Unassigned bin (`addingTo === 'unassigned'`).
+  const commitNewTool = (text: string, color: string, description: string) => {
+    if (addingTo === null) return;
+    const key = addingTo === 'unassigned' ? null : addingTo;
+    withSnapshot(() => onCreateTool(text, color, key, description));
     setAddingTo(null);
   };
 
@@ -352,17 +326,10 @@ export default function AnnotationToolsSettingsModal({
                         onPlayExample={() => onPlayExample(tool)}
                       />
                     </div>
-                  ) : addingTo === k ? (
-                    // Inline create targeting this slot — new tool takes its digit.
-                    <div className="flex-1">
-                      <NewToolInput
-                        onCommit={text => commitNewTool(text, k)}
-                        onCancel={() => setAddingTo(null)}
-                      />
-                    </div>
                   ) : (
                     // Empty slot: dashed box, becomes a "+ New tool" affordance on
-                    // hover. Creating from here assigns the new tool to this digit.
+                    // hover. Creating from here opens the tool modal pre-targeted
+                    // at this digit (the new tool takes it).
                     <div
                       className="flex-1 h-8 rounded border-2 border-dashed"
                       style={{ borderColor: isSlotHighlighted(k) ? '#3b82f6' : '#334155' }}
@@ -411,22 +378,13 @@ export default function AnnotationToolsSettingsModal({
                   </div>
                 ))}
             </div>
-            {addingTo === 'unassigned' ? (
-              <div className="mt-2 flex-none">
-                <NewToolInput
-                  onCommit={text => commitNewTool(text)}
-                  onCancel={() => setAddingTo(null)}
-                />
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingTo('unassigned')}
-                className="mt-2 flex-none w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
-              >
-                <Plus size={10} />
-                {copy.newTool}
-              </button>
-            )}
+            <button
+              onClick={() => setAddingTo('unassigned')}
+              className="mt-2 flex-none w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
+            >
+              <Plus size={10} />
+              {copy.newTool}
+            </button>
           </div>
         </div>
       </div>
@@ -443,12 +401,25 @@ export default function AnnotationToolsSettingsModal({
           // Push the pre-edit snapshot (captured on open, before any live color
           // preview) so undo restores the original text AND color, then apply
           // the final values.
-          onSave={(idx, text, color, description) => {
+          onSave={(text, color, description) => {
             undoStack.current.push(editSnapshotRef.current);
             redoStack.current = [];
-            onRenameTool(idx, text, color, description);
+            onRenameTool(editingToolIndex, text, color, description);
             setEditingToolIndex(null);
           }}
+        />
+      )}
+
+      {addingTo !== null && (
+        <AnnotationToolEditModal
+          // Blank tool seeded with the next unused palette color; `key` records
+          // the target slot ('unassigned' → null) so commitNewTool can assign it.
+          tool={{ id: '', key: addingTo === 'unassigned' ? null : addingTo, text: '', color: pickNextToolColor(annotationTools) }}
+          toolIndex={-1}
+          annotations={annotations}
+          isCreate
+          onClose={() => setAddingTo(null)}
+          onSave={commitNewTool}
         />
       )}
 

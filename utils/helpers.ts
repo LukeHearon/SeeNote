@@ -30,12 +30,12 @@ export const generateId = (): string => {
 };
 
 export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => {
-  if (tool.key === null) throw new Error('Cannot create annotation from unassigned tool');
   return {
     id: generateId(),
-    toolKey: tool.key,
     start,
     end,
+    // The Custom tool (key '0') seeds an empty label so the user types a one-off
+    // name; any other tool stamps its own label (the tool link is the label).
     text: tool.key === '0' ? '' : tool.text,
     color: tool.color,
   };
@@ -140,9 +140,9 @@ export const generateAudacityContent = (annotations: Annotation[], decimals: num
 };
 
 // Parse Audacity TXT (tab-delimited: start \t end \t text) into annotations.
-// Pure: matches each row's text against `tools` to recover the originating
-// tool's key/color, falling back to the Custom tool ('0') and white. Used by
-// both the auto-load effect and annotation import so the two never diverge.
+// Pure: matches each row's text against `tools` to recover the owning tool's
+// color, falling back to white for a Custom (unmatched) label. Used by both the
+// auto-load effect and annotation import so the two never diverge.
 export const parseAudacityContent = (
     content: string,
     tools: AnnotationTool[],
@@ -159,7 +159,6 @@ export const parseAudacityContent = (
                 const matchedTool = tools.find(t => t.text === text);
                 loaded.push({
                     id: generateId(),
-                    toolKey: matchedTool?.key ?? '0',
                     start,
                     end,
                     text,
@@ -169,6 +168,95 @@ export const parseAudacityContent = (
         }
     }
     return loaded;
+};
+
+export type LabelMatcher = (label: string) => boolean;
+
+// Matches a label by exact equality. The default matcher for the mass-rename
+// occurrence scan and (unless the Find Label "regex"/"partial" toggles are
+// on) the find-label search.
+export const exactLabelMatcher = (text: string): LabelMatcher => (label) => label === text;
+
+// Escapes regex metacharacters so `text` can be dropped into a RegExp and
+// matched literally.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Matches a label against a regular expression. Returns null (rather than
+// throwing) if `pattern` isn't a valid regex, so callers can show an inline
+// error instead of crashing the search. Unanchored — like `useRegex`/`partial`
+// combined, a match anywhere in the label counts (`buzz\d` matches
+// "foo_buzz3_bar").
+const buildRegexMatcher = (pattern: string): LabelMatcher | null => {
+    try {
+        const re = new RegExp(pattern);
+        return (label) => re.test(label);
+    } catch {
+        return null;
+    }
+};
+
+export const regexLabelMatcher = (pattern: string): LabelMatcher | null => buildRegexMatcher(pattern);
+
+// Matches a label if `text` occurs anywhere in it — implemented as a regex
+// match on the escaped, literal text, so it shares the same unanchored
+// matching path as regexLabelMatcher instead of a separate `.includes()`.
+export const partialLabelMatcher = (text: string): LabelMatcher | null => buildRegexMatcher(escapeRegExp(text));
+
+// Builds the matcher for the Find Label search from its two independent
+// toggles. `regex` wins when both are on (partial's escaped-literal wrapping
+// is redundant once the query is already unanchored regex). Returns null for
+// an invalid regex pattern.
+export const buildLabelMatcher = (query: string, opts: { useRegex: boolean; partial: boolean }): LabelMatcher | null => {
+    if (opts.useRegex) return buildRegexMatcher(query);
+    if (opts.partial) return partialLabelMatcher(query);
+    return exactLabelMatcher(query);
+};
+
+export interface LabelLineMatch {
+    start: number;
+    end: number;
+    label: string;
+}
+
+// Find Audacity TXT lines (tab-delimited: start \t end \t text) whose label
+// satisfies `matcher`, returning each match's start/end/label (label is
+// included since regex/partial matches can vary from the search query, unlike
+// an exact match). Pure — shared by the mass-rename occurrence scan and the
+// find-label search.
+export const matchingLinesInContent = (content: string, matcher: LabelMatcher): LabelLineMatch[] => {
+    const matches: LabelLineMatch[] = [];
+    for (const line of content.split('\n')) {
+        const parts = line.split('\t');
+        if (parts.length >= 3) {
+            const label = parts.slice(2).join('\t');
+            if (matcher(label)) {
+                const start = parseFloat(parts[0]);
+                const end = parseFloat(parts[1]);
+                if (!isNaN(start) && !isNaN(end)) matches.push({ start, end, label });
+            }
+        }
+    }
+    return matches;
+};
+
+// Rewrite Audacity TXT lines whose label matches `oldText` exactly to
+// `newText`. Pure — shared by tool rename and mass rename so the on-disk
+// rewrite logic exists in one place.
+export const renameLabelInContent = (
+    content: string,
+    oldText: string,
+    newText: string,
+): { updated: string; changed: boolean; count: number } => {
+    let count = 0;
+    const lines = content.split('\n').map(line => {
+        const parts = line.split('\t');
+        if (parts.length >= 3 && parts.slice(2).join('\t') === oldText) {
+            count++;
+            return `${parts[0]}\t${parts[1]}\t${newText}`;
+        }
+        return line;
+    });
+    return { updated: lines.join('\n'), changed: count > 0, count };
 };
 
 // Merge imported annotations onto existing ones by appending. Incoming
