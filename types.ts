@@ -189,6 +189,14 @@ export interface ProjectPreferences {
   bandPassFilter?: BandPassFilter | null;
   /** Per-user git sync credentials and author identity. */
   gitSyncUser?: GitSyncUserConfig;
+  /**
+   * Automatically pull (fetch + merge, never push) remote annotation changes
+   * on project open and on the sync heartbeat, so the working tree never sits
+   * behind the remote. Defaults to on — undefined (older preferences.json
+   * files predating this setting) is treated as enabled. Set in the
+   * Preferences tab of project settings.
+   */
+  autoPullRemoteChanges?: boolean;
 }
 
 export interface GitSyncConfig {

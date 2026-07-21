@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Annotation, Project } from '../types';
-import { writeTextFile, syncProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
+import { writeTextFile, syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
 import { readSyncToken } from '../utils/gitSync';
 import { generateAudacityContent } from '../utils/helpers';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 
 interface UseSyncManagementArgs {
   project: Project;
@@ -33,13 +33,35 @@ export function useSyncManagement({
   addLog,
 }: UseSyncManagementArgs) {
   const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
+  // True when `syncSummary` came from a background auto-pull rather than the
+  // manual Sync button — the toast uses this to pick its title.
+  const [syncIsAutoPull, setSyncIsAutoPull] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const [hasRemoteChanges, setHasRemoteChanges] = useState(false);
   // Bumped after a pull so the auto-load effect re-reads the active track's
   // annotation file (which may have changed on disk during the merge).
   const [reloadNonce, setReloadNonce] = useState(0);
+
+  const setSyncingBoth = useCallback((v: boolean) => {
+    syncingRef.current = v;
+    setSyncing(v);
+  }, []);
+
+  // Flush a pending debounced autosave so in-flight edits are committed to
+  // disk before a sync/pull runs. Shared by handleSync and the auto-pull path.
+  const flushPendingAutosave = useCallback(async () => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      const annotPath = trackPathRef.current ? getAnnotationPath(trackPathRef.current) : null;
+      if (annotPath) {
+        await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals]);
 
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
   // autosave first so local edits aren't lost, runs the embedded-git pipeline,
@@ -56,22 +78,17 @@ export function useSyncManagement({
       setSyncError('No annotation directory configured for this project.');
       return;
     }
-    setSyncing(true);
+    if (syncingRef.current) return; // an auto-pull (or another sync) is already running
+    setSyncingBoth(true);
     setSyncError(null);
     setSyncSummary(null);
+    setSyncIsAutoPull(false);
     try {
-      // Flush a pending debounced autosave so in-flight edits are committed.
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current);
-        const annotPath = trackPathRef.current ? getAnnotationPath(trackPathRef.current) : null;
-        if (annotPath) {
-          await writeTextFile(annotPath, generateAudacityContent(annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS));
-        }
-      }
+      await flushPendingAutosave();
       const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
       if (!token) {
         setSyncError('No access token found for this repository. Open Project Settings → Sync to enter your PAT.');
-        setSyncing(false);
+        setSyncingBoth(false);
         return;
       }
       const summary = await syncProject(
@@ -97,11 +114,53 @@ export function useSyncManagement({
       setSyncError(String(err));
       addLog(`Sync failed: ${err}`, 'error');
     } finally {
-      setSyncing(false);
+      setSyncingBoth(false);
     }
-  }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals, addLog]);
+  }, [flushPendingAutosave, addLog, setSyncingBoth]);
 
-  // On project load, check initial sync status (local only, no network).
+  // Pull remote annotation changes in (fetch + merge, never push) for the
+  // background auto-pull — on project open and the heartbeat below. Silent on
+  // failure (no user-visible error): this runs unattended, and the manual
+  // Sync button remains the place to see and resolve real problems.
+  const handleAutoPull = useCallback(async () => {
+    const cfg = projectRef.current.settings.gitSync;
+    const annDir = projectRef.current.annotationDirectoryAbs;
+    if (!cfg?.remoteUrl || !annDir) return;
+    if (!(projectRef.current.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES)) return;
+    if (syncingRef.current) return; // a manual sync is already running
+    try {
+      const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
+      if (!token) return;
+      setSyncingBoth(true);
+      await flushPendingAutosave();
+      const summary = await pullProject(
+        projectRef.current.projectDir,
+        annDir,
+        cfg.remoteUrl,
+        token,
+        projectRef.current.preferences.gitSyncUser?.authorName ?? '',
+      );
+      if (summary.pulled) {
+        setReloadNonce(n => n + 1);
+        setSyncIsAutoPull(true);
+        setSyncSummary(summary);
+        addLog(
+          `Auto-pull: downloaded +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)`
+        );
+      }
+      const status = await getLocalSyncStatus(projectRef.current.projectDir, annDir);
+      setHasLocalChanges(status.hasLocalChanges);
+      setHasRemoteChanges(status.hasRemoteChanges);
+    } catch {
+      // silently ignore background auto-pull failures
+    } finally {
+      setSyncingBoth(false);
+    }
+  }, [flushPendingAutosave, addLog, setSyncingBoth]);
+
+  // On project load: check local-only sync status, then kick off an
+  // auto-pull (no-op if disabled, unconfigured, or no token yet) so the
+  // project is caught up before the user starts editing.
   useEffect(() => {
     const cfg = project.settings.gitSync;
     const annDir = project.annotationDirectoryAbs;
@@ -111,17 +170,24 @@ export function useSyncManagement({
         setHasLocalChanges(status.hasLocalChanges);
         setHasRemoteChanges(status.hasRemoteChanges);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { handleAutoPull(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.projectDir]);
 
-  // Heartbeat: fetch remote and check if it's ahead (every 2 minutes).
+  // Heartbeat (every 2 minutes): auto-pull when enabled, so it both merges in
+  // remote changes and refreshes the status dots; otherwise fall back to a
+  // status-only fetch so the "remote changed" dot still lights up.
   useEffect(() => {
     const cfg = project.settings.gitSync;
     if (!cfg?.remoteUrl) return;
     const dir = project.projectDir;
     const url = cfg.remoteUrl;
     const id = setInterval(async () => {
+      if (project.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES) {
+        await handleAutoPull();
+        return;
+      }
       try {
         const tok = await readSyncToken(cfg.remoteUrl, project.preferences.gitSyncUser ?? {});
         if (!tok) return;
@@ -132,12 +198,13 @@ export function useSyncManagement({
       }
     }, 2 * 60 * 1000);
     return () => clearInterval(id);
-  }, [project.projectDir, project.settings.gitSync?.remoteUrl]);
+  }, [project.projectDir, project.settings.gitSync?.remoteUrl, project.preferences.autoPullRemoteChanges, handleAutoPull]);
 
   return {
     syncing,
     syncSummary,
     setSyncSummary,
+    syncIsAutoPull,
     syncError,
     setSyncError,
     hasLocalChanges,

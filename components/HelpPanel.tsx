@@ -211,6 +211,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p>{md(helpPanel.guide.sync.p2)}</p>
                 <p>{md(helpPanel.guide.sync.p3)}</p>
                 <p>{md(helpPanel.guide.sync.p4)}</p>
+                <p>{md(helpPanel.guide.sync.p5)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.buzzdetect} target="buzzdetect-toggle">

@@ -362,6 +362,21 @@ export const syncProject = (
 ): Promise<SyncSummary> =>
   invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName, commitMessage });
 
+/**
+ * Pull remote annotation changes in without pushing local commits: stages and
+ * commits local changes (so the merge's checkout can't clobber them), fetches,
+ * and merges — but never pushes. Used for the background auto-pull; pushing
+ * stays an explicit "Sync" action via `syncProject`.
+ */
+export const pullProject = (
+  projectDir: string,
+  annotationDir: string,
+  remoteUrl: string,
+  token: string,
+  authorName: string,
+): Promise<SyncSummary> =>
+  invoke('pull_project', { projectDir, annotationDir, remoteUrl, token, authorName });
+
 /** Check local-only sync state (no network). */
 export const getLocalSyncStatus = (
   projectDir: string,

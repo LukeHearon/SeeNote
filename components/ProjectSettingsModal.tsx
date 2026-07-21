@@ -5,7 +5,7 @@ import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
@@ -46,6 +46,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [syncAuthorName, setSyncAuthorName] = useState(project.preferences.gitSyncUser?.authorName ?? '');
   const [videoPaneAutoCollapse, setVideoPaneAutoCollapse] = useState(
     project.preferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE,
+  );
+  const [autoPullRemoteChanges, setAutoPullRemoteChanges] = useState(
+    project.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES,
   );
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
@@ -151,6 +154,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
         ? { authorName: syncAuthorName.trim() || undefined, ...tokenFields }
         : undefined,
       videoPaneAutoCollapse,
+      autoPullRemoteChanges,
     };
     pendingRef.current = { settings, preferences };
 
@@ -376,6 +380,18 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   onSyncAuthorNameChange={setSyncAuthorName}
                   autoFocusToken={focusToken}
                 />
+                <label className="flex items-start gap-2 cursor-pointer select-none mt-3">
+                  <input
+                    type="checkbox"
+                    checked={autoPullRemoteChanges}
+                    onChange={(e) => setAutoPullRemoteChanges(e.target.checked)}
+                    className="mt-0.5 accent-blue-500"
+                  />
+                  <span>
+                    <span className="block text-sm text-gray-200">{projectSettingsModal.autoPullLabel}</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">{projectSettingsModal.autoPullHint}</span>
+                  </span>
+                </label>
               </div>
 
               <div>

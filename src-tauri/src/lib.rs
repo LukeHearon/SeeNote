@@ -160,6 +160,7 @@ pub fn run() {
             commands::annotation_tools::import_examples_to_tool,
             commands::annotation_tools::import_annotation_tools,
             commands::git_sync::sync_project,
+            commands::git_sync::pull_project,
             commands::git_sync::get_local_sync_status,
             commands::git_sync::fetch_remote_status,
             commands::credentials::get_git_credential,

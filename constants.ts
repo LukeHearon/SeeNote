@@ -96,6 +96,13 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
 // project settings — not a session/layout field like DEFAULT_UI_SETTINGS.
 export const DEFAULT_VIDEO_PANE_AUTO_COLLAPSE = true;
 
+// On by default: remote annotation changes get pulled in automatically (on
+// project open and the sync heartbeat) without an explicit "Sync" click. A
+// per-user preference (ProjectPreferences.autoPullRemoteChanges), set in the
+// Preferences tab of project settings. Undefined (pre-existing
+// preferences.json) is treated as this default, for backwards compatibility.
+export const DEFAULT_AUTO_PULL_REMOTE_CHANGES = true;
+
 // Coerce a persisted videoMode to the current enum. The experimental
 // 'fast-slave' / 'fast-free' variants (and the original audio-master 'fast')
 // all collapse into the single 'fast' mode (video element plays its own audio).

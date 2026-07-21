@@ -84,6 +84,9 @@ export const projectSettingsModal = {
   get videoPaneHeader() { return getOverride('ui.projectSettingsModal.videoPaneHeader') ?? "Video Pane"; },
   get videoAutoCollapseLabel() { return getOverride('ui.projectSettingsModal.videoAutoCollapseLabel') ?? "Auto-collapse video panel"; },
   get videoAutoCollapseHint() { return getOverride('ui.projectSettingsModal.videoAutoCollapseHint') ?? "Automatically minimize the video pane on audio files, open it on video files."; },
+  // Auto-pull preference
+  get autoPullLabel() { return getOverride('ui.projectSettingsModal.autoPullLabel') ?? "Automatically pull remote changes"; },
+  get autoPullHint() { return getOverride('ui.projectSettingsModal.autoPullHint') ?? "Merge in teammates' annotation changes on project open and every couple of minutes, without pushing your own edits."; },
 };
 
 export const annotationToolEditModal = {
@@ -277,6 +280,7 @@ export const annotationWindow = {
   get syncFailedAuth() { return getOverride('ui.annotationWindow.syncFailedAuth') ?? "Access token rejected"; },
   get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },
   get syncComplete() { return getOverride('ui.annotationWindow.syncComplete') ?? "Sync complete"; },
+  get autoPullComplete() { return getOverride('ui.annotationWindow.autoPullComplete') ?? "Annotations updated"; },
   // Import-conflict dialog
   get importConflictTitle() { return getOverride('ui.annotationWindow.importConflictTitle') ?? "Annotations already exist"; },
   get importErrorTitle() { return getOverride('ui.annotationWindow.importErrorTitle') ?? "Could not import annotations"; },

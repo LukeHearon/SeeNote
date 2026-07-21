@@ -788,6 +788,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     syncing,
     syncSummary,
     setSyncSummary,
+    syncIsAutoPull,
     syncError,
     setSyncError,
     hasLocalChanges,
@@ -808,6 +809,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Custom-commit-message popover: open state + the typed message.
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+
+  // Auto-dismiss the sync result toast (manual sync or background auto-pull):
+  // fade it out, then clear it, a few seconds after it appears.
+  const [syncToastFading, setSyncToastFading] = useState(false);
+  useEffect(() => {
+    if (!syncSummary && !syncError) return;
+    setSyncToastFading(false);
+    const fadeTimer = setTimeout(() => setSyncToastFading(true), 4500);
+    const clearTimer = setTimeout(() => {
+      setSyncSummary(null);
+      setSyncError(null);
+    }, 5000);
+    return () => { clearTimeout(fadeTimer); clearTimeout(clearTimer); };
+  }, [syncSummary, syncError, setSyncSummary, setSyncError]);
 
   // Annotation disk I/O for the active track: the debounced auto-save effect and
   // the auto-load effect. getAnnotationPath stays in the orchestrator (shared
@@ -1347,14 +1362,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         </div>
       </header>
 
-      {/* Post-sync summary / error toast (non-blocking). */}
+      {/* Post-sync summary / error toast (non-blocking); fades out and clears itself after a few seconds. */}
       {(syncSummary || syncError) && (
-        <div className="fixed top-20 right-4 z-[300] w-80 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-4">
+        <div className={`fixed top-20 right-4 z-[300] w-80 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-4 transition-opacity duration-500 ${syncToastFading ? 'opacity-0' : 'opacity-100'}`}>
           <div className="flex items-start justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-100">
               {syncError
                 ? (syncError.includes('AUTH_FAILED:') ? annotationWindow.syncFailedAuth : annotationWindow.syncFailed)
-                : annotationWindow.syncComplete}
+                : syncIsAutoPull ? annotationWindow.autoPullComplete : annotationWindow.syncComplete}
             </h3>
             <button
               onClick={() => { setSyncSummary(null); setSyncError(null); }}

@@ -1,11 +1,13 @@
 //! Annotation sync to a remote git repo, using embedded libgit2 (the `git2`
 //! crate) so no system git is required on any machine.
 //!
-//! The single entry point is the `sync_project` command: it stages the
+//! The main entry point is the `sync_project` command: it stages the
 //! annotation files (only files matching [`shared::ANNOTATION_EXT`] inside the
 //! annotation directory — never media, never local settings, never tools),
 //! commits, fetches, merges, and pushes — all under one "Sync" button in the
-//! UI. The load-bearing decisions:
+//! UI. `pull_project` runs the same pipeline minus the push step, for the
+//! background auto-pull that merges in teammates' changes without an explicit
+//! user action. The load-bearing decisions:
 //!
 //! - **Only annotation data is tracked.** Annotation tools are deliberately
 //!   NOT shared — each labeler maintains their own tools locally. The whole
@@ -115,10 +117,32 @@ pub async fn sync_project(
 ) -> Result<SyncSummary, String> {
     // Heavy/blocking libgit2 work off the async runtime's cooperative threads.
     tauri::async_runtime::spawn_blocking(move || {
-        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, &commit_message)
+        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, &commit_message, true)
     })
     .await
     .map_err(|e| format!("sync task panicked: {e}"))?
+}
+
+/// Pull remote annotation changes in without pushing local commits — used for
+/// the background auto-pull (on project open and the heartbeat), so incoming
+/// teammate edits merge in automatically while pushing stays an explicit
+/// "Sync" action. Still stages and commits local changes first: the merge's
+/// checkout step force-updates the working tree to HEAD, so anything
+/// uncommitted would otherwise be clobbered. That commit just stays local
+/// (unpushed) until the next manual sync.
+#[tauri::command]
+pub async fn pull_project(
+    project_dir: String,
+    annotation_dir: String,
+    remote_url: String,
+    token: String,
+    author_name: String,
+) -> Result<SyncSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, "", false)
+    })
+    .await
+    .map_err(|e| format!("pull task panicked: {e}"))?
 }
 
 /// Return local-only sync status (no network). Checks uncommitted annotation
@@ -157,6 +181,7 @@ fn sync_blocking(
     token: &str,
     author_name: &str,
     commit_message: &str,
+    do_push: bool,
 ) -> Result<SyncSummary, String> {
     let project_path = Path::new(project_dir);
     let ann_path = Path::new(annotation_dir);
@@ -218,9 +243,9 @@ fn sync_blocking(
     // 3. Merge remote tracking branch into local (set-merge for annotations).
     let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig)?;
 
-    // 4. Push.
-    let pushed = push(&repo, &branch, token)?;
-    summary.pushed = pushed || pushed_local;
+    // 4. Push (skipped entirely for a pull-only run).
+    let pushed = if do_push { push(&repo, &branch, token)? } else { false };
+    summary.pushed = do_push && (pushed || pushed_local);
 
     // Compute push stats: what we uploaded that wasn't on remote before sync.
     if summary.pushed {
@@ -235,8 +260,10 @@ fn sync_blocking(
     }
 
     if summary.message.is_empty() {
-        summary.message = if summary.pulled || summary.pushed {
+        summary.message = if summary.pushed {
             "Sync complete.".into()
+        } else if summary.pulled {
+            "Pulled remote changes.".into()
         } else {
             "Already up to date.".into()
         };
