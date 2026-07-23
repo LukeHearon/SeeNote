@@ -627,7 +627,7 @@ function FileTree({
 
   if (collapsed) {
     return (
-      <div className="flex flex-col items-center pt-2 gap-2 h-full">
+      <div className="flex flex-col items-center pt-2 gap-2 flex-none">
         <button
           onClick={onToggleCollapse}
           className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"

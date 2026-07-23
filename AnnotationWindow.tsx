@@ -38,6 +38,7 @@ import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
+import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import MassRenameModal from './components/MassRenameModal';
 import FindLabelModal from './components/FindLabelModal';
@@ -1619,6 +1620,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             return (
               <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col h-full relative">
                 <FileTree {...fileTreeProps} collapsed={true} />
+                <CollapsedToolsRail
+                  annotationTools={annotationTools}
+                  activeToolKey={activeToolKey}
+                  onToolActivate={handleToolActivate}
+                />
                 <div
                   className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
                   style={{ right: '-6px', width: '6px' }}
