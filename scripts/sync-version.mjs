@@ -19,4 +19,13 @@ const cargo = readFileSync(cargoPath, "utf8");
 const updated = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
 writeFileSync(cargoPath, updated);
 
-console.log(`Synced version ${version} → tauri.conf.json, Cargo.toml`);
+// Cargo.lock — update just the seenote package's own version entry
+const cargoLockPath = resolve(root, "src-tauri/Cargo.lock");
+const cargoLock = readFileSync(cargoLockPath, "utf8");
+const updatedLock = cargoLock.replace(
+  /(\[\[package\]\]\nname = "seenote"\nversion = ").*(")/,
+  `$1${version}$2`
+);
+writeFileSync(cargoLockPath, updatedLock);
+
+console.log(`Synced version ${version} → tauri.conf.json, Cargo.toml, Cargo.lock`);
