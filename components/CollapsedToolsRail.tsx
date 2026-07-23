@@ -1,17 +1,19 @@
 import React, { useMemo } from 'react';
-import { Hammer } from 'lucide-react';
+import { Hammer, Settings } from 'lucide-react';
 import { AnnotationTool } from '../types';
+import { tooltips } from '../copy/tooltips';
 
 interface CollapsedToolsRailProps {
   annotationTools: AnnotationTool[];
   activeToolKey: string | null;
   onToolActivate: (key: string) => void;
+  onOpenSettings: () => void;
 }
 
 // Colored swatch strip shown in place of the full tools panel when the left
 // panel is collapsed — same slots/order as the Hotkeys pane in Annotation
 // Tool Settings, but rendered as a color swatch instead of a plain number.
-function CollapsedToolsRail({ annotationTools, activeToolKey, onToolActivate }: CollapsedToolsRailProps) {
+function CollapsedToolsRail({ annotationTools, activeToolKey, onToolActivate, onOpenSettings }: CollapsedToolsRailProps) {
   const keyedTools = useMemo(
     () => annotationTools.filter(t => t.key !== null).sort((a, b) => Number(a.key) - Number(b.key)),
     [annotationTools],
@@ -38,6 +40,13 @@ function CollapsedToolsRail({ annotationTools, activeToolKey, onToolActivate }: 
           </button>
         );
       })}
+      <button
+        onClick={onOpenSettings}
+        className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors flex-none mt-0.5"
+        data-tooltip={tooltips.annotationToolSettings}
+      >
+        <Settings size={13} />
+      </button>
     </div>
   );
 }

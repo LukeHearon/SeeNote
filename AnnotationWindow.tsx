@@ -1624,6 +1624,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   annotationTools={annotationTools}
                   activeToolKey={activeToolKey}
                   onToolActivate={handleToolActivate}
+                  onOpenSettings={() => setShowToolSettings(true)}
                 />
                 <div
                   className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
