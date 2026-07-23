@@ -13,6 +13,8 @@ interface Props {
   tool: AnnotationTool;
   toolIndex: number;
   annotations: Annotation[];
+  // All existing tools, used to block creating/renaming to a duplicate label.
+  annotationTools: AnnotationTool[];
   // Create mode: the modal doubles as the "New tool" dialog. Suppresses the
   // rename warning and live color preview (there's no on-spectrogram tool yet),
   // and relabels the title/submit button.
@@ -29,7 +31,7 @@ interface Props {
   onShowExamples?: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolEditModal({ tool, toolIndex, annotations, isCreate = false, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
+export default function AnnotationToolEditModal({ tool, toolIndex, annotations, annotationTools, isCreate = false, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
   const [text, setText] = useState(tool.text);
   const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
@@ -41,6 +43,15 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   // adopted by this tool once saved. Association is by label, so this covers
   // both create and rename-to-an-existing-label.
   const customMatchCount = annotations.filter(a => a.text === text.trim() && (a.color === undefined || a.color === '#ffffff')).length;
+
+  // On create, block an exact (case-sensitive) label collision outright, and
+  // warn (without blocking) on a case-insensitive-only collision.
+  const trimmedText = text.trim();
+  const otherTools = annotationTools.filter((_, i) => i !== toolIndex);
+  const isExactDuplicate = isCreate && otherTools.some(t => t.text === trimmedText);
+  const similarTools = isCreate && trimmedText !== ''
+    ? otherTools.filter(t => t.text !== trimmedText && t.text.toLowerCase() === trimmedText.toLowerCase())
+    : [];
 
   const swatchColors = HOTKEY_COLORS.slice(1).filter(c => c !== '#64748b');
 
@@ -103,6 +114,12 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
             value={text}
             onChange={e => setText(e.target.value)}
           />
+          {isExactDuplicate && (
+            <p className="text-xs text-red-400 mt-1">{annotationToolEditModal.duplicateLabelError}</p>
+          )}
+          {!isExactDuplicate && similarTools.length > 0 && (
+            <p className="text-xs text-amber-400 mt-1">{annotationToolEditModal.similarLabelWarning(similarTools.map(t => t.text))}</p>
+          )}
         </div>
 
         <div>
@@ -195,7 +212,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           </button>
           <button
             onClick={() => { onSave(text.trim(), color, description.trim()); onClose(); }}
-            disabled={isCreate && text.trim() === ''}
+            disabled={isCreate && (text.trim() === '' || isExactDuplicate)}
             className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded transition-colors"
           >
             {isCreate ? annotationToolEditModal.createButton : annotationToolEditModal.saveButton}

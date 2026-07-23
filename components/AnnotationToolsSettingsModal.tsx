@@ -394,6 +394,7 @@ export default function AnnotationToolsSettingsModal({
           tool={annotationTools[editingToolIndex]}
           toolIndex={editingToolIndex}
           annotations={annotations}
+          annotationTools={annotationTools}
           onClose={() => setEditingToolIndex(null)}
           onPreviewColor={onPreviewColor}
           onImportExamples={onImportExamplesToTool}
@@ -417,6 +418,7 @@ export default function AnnotationToolsSettingsModal({
           tool={{ id: '', key: addingTo === 'unassigned' ? null : addingTo, text: '', color: pickNextToolColor(annotationTools) }}
           toolIndex={-1}
           annotations={annotations}
+          annotationTools={annotationTools}
           isCreate
           onClose={() => setAddingTo(null)}
           onSave={commitNewTool}

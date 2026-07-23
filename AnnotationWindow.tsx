@@ -1985,6 +1985,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           tool={annotationTools[panelEditingToolIndex]}
           toolIndex={panelEditingToolIndex}
           annotations={annotations}
+          annotationTools={annotationTools}
           onClose={() => setPanelEditingToolIndex(null)}
           onPreviewColor={handlePreviewToolColor}
           onImportExamples={handleImportExamplesToTool}

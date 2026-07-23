@@ -100,6 +100,8 @@ export const annotationToolEditModal = {
   reassociateWarning: (count: number) => `Will reassociate ${count} Custom annotation(s) to this tool`,
   get importButton() { return getOverride('ui.annotationToolEditModal.importButton') ?? "Import"; },
   get viewButton() { return getOverride('ui.annotationToolEditModal.viewButton') ?? "View"; },
+  get duplicateLabelError() { return getOverride('ui.annotationToolEditModal.duplicateLabelError') ?? "A tool with this label already exists"; },
+  similarLabelWarning: (others: string[]) => `A tool${others.length > 1 ? 's' : ''} with a similar name${others.length > 1 ? 's' : ''} already exists: ${others.join(', ')}`,
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
   get createButton() { return getOverride('ui.annotationToolEditModal.createButton') ?? "Create tool"; },
