@@ -76,7 +76,7 @@ export const helpPanel = {
     },
     transport: {
       get p1() { return getOverride('helpPanel.guide.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere."; },
-      get p2() { return getOverride('helpPanel.guide.transport.p2') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely."; },
+      get p2() { return getOverride('helpPanel.guide.transport.p2') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely. Holding `Alt`/`Option` suspends the lock for as long as it's held (the icon pales), so alt-dragging annotations doesn't fight the auto-scroll."; },
       get p3() { return getOverride('helpPanel.guide.transport.p3') ?? "The [volume slider](volume-control) supports up to 2× gain boost (slider past center). Press `M` to mute. Right-click the volume control to access **Restart Audio**, which re-initialises the audio engine (useful after an audio device change on Windows)."; },
     },
     playbackSpeed: {
@@ -125,6 +125,7 @@ export const helpPanel = {
       get li1() { return getOverride('helpPanel.annotations.creating.li1') ?? "**From scratch:** activate a tool, then drag on the spectrogram."; },
       get li2() { return getOverride('helpPanel.annotations.creating.li2') ?? "**From selection:** make a selection region, then press a tool key (`0`–`9`)."; },
       get li3() { return getOverride('helpPanel.annotations.creating.li3') ?? "**Whole track:** with a tool active, press `{mod}+A` to annotate the entire track (with no tool active it selects the whole track instead)."; },
+      get li4() { return getOverride('helpPanel.annotations.creating.li4') ?? "**While listening:** hold `Alt`/`Option` and drag to annotate without moving the playhead or changing the selection — playback keeps rolling and playhead lock is suspended, so you can mark sounds as you hear them."; },
     },
     editing: {
       get li1() { return getOverride('helpPanel.annotations.editing.li1') ?? "**Resize:** drag the left or right edge handle."; },

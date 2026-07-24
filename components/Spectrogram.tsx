@@ -12,6 +12,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
+import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 
 interface SpectrogramProps {
@@ -281,6 +282,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // for, so a large/lingering selection doesn't freeze auto-scroll indefinitely.
   const lastSuppressedSelectionRef = useRef<Selection | null>(null);
 
+  // Holding Alt suspends playhead lock: while the user is alt-dragging annotations
+  // over what they just heard, the view must not scroll out from under the pointer.
+  // Read through a ref so the auto-scroll subscription doesn't churn on every
+  // press/release; the next store tick picks the lock back up on release.
+  const altHeld = useAltHeld();
+  const altHeldRef = useRef(altHeld);
+  altHeldRef.current = altHeld;
+
   // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
   // Also fires when `onViewportChange` itself becomes available (e.g. the panel
   // is toggled on) so a freshly-mounted consumer gets the current viewport
@@ -310,7 +319,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // live time from the store so the playhead and the scroll stay in lockstep.
   useEffect(() => {
       const autoScroll = () => {
-          if (!playheadLocked || !isPlaying || !containerRef.current) return;
+          if (!playheadLocked || altHeldRef.current || !isPlaying || !containerRef.current) return;
           const t = currentTimeStore.get();
           if (selection && t >= selection.start && t <= selection.end) {
               if (selection !== lastSuppressedSelectionRef.current) {
