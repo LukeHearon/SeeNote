@@ -480,7 +480,6 @@ function FileTree({
     setExpandedDirs(new Set());
   };
 
-  const allDirPaths = useMemo(() => getAllDirPaths(tree), [tree]);
   const isAnyExpanded = expandedDirs.size > 0;
 
   // ── Custom scrollbar ──────────────────────────────────────────────────────
