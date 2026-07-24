@@ -56,8 +56,16 @@ function modsMatch(e: KeyboardEvent, required: HotkeyMod[] | undefined): boolean
 }
 
 function keyMatches(e: KeyboardEvent, key: string): boolean {
-  if (key === 'Digit') return /^[0-9]$/.test(e.key);
+  // Matched via e.code (physical key), not e.key: on macOS, Option remaps
+  // e.key for digits to punctuation/symbols (e.g. Option+3 -> "£"), which
+  // would break digit matching whenever the 'alt' mod is held.
+  if (key === 'Digit') return /^Digit[0-9]$/.test(e.code);
   return e.key.toLowerCase() === key.toLowerCase();
+}
+
+/** Extract "3" from a KeyboardEvent whose `key` binding was `'Digit'`. */
+export function digitFromEvent(e: KeyboardEvent): string {
+  return e.code.slice(-1);
 }
 
 /**

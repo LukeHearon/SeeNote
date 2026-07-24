@@ -14,7 +14,7 @@ import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAss
 import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
-import { useHotkeys } from './hooks/useHotkeys';
+import { useHotkeys, digitFromEvent } from './hooks/useHotkeys';
 import { useExamplePlayer } from './hooks/useExamplePlayer';
 import { useActivationStack } from './hooks/useActivationStack';
 import { useAnnotationHistory } from './hooks/useAnnotationHistory';
@@ -1311,10 +1311,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       // 0-9: activate annotation tool by key, if defined. Stack management
       // (pushIfAbsent on activate; remove on toggle-off) lives in
-      // handleToolActivate so palette clicks and hotkeys agree.
+      // handleToolActivate so palette clicks and hotkeys agree. Also allowed
+      // while Alt is held, since Alt+Digit isn't bound to anything else here.
       { key: 'Digit', handler: (e) => {
-          const tool = annotationTools.find(t => t.key === e.key);
-          if (tool) handleToolActivate(e.key);
+          const digit = digitFromEvent(e);
+          const tool = annotationTools.find(t => t.key === digit);
+          if (tool) handleToolActivate(digit);
+      }},
+      { key: 'Digit', mods: ['alt'], handler: (e) => {
+          const digit = digitFromEvent(e);
+          const tool = annotationTools.find(t => t.key === digit);
+          if (tool) handleToolActivate(digit);
       }},
   ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
