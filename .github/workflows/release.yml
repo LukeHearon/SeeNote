@@ -117,29 +117,50 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-      # Guards against silently shipping an unsigned bundle: a linker-adhoc
-      # binary reports "Sealed Resources=none" and no designated requirement,
-      # which is exactly the state that makes permissions re-prompt.
-      - name: Verify macOS signature
-        if: matrix.platform == 'macos-latest'
+  # Guards against silently shipping an unsigned bundle: a linker-adhoc binary
+  # reports "Sealed Resources=none" and no designated requirement, which is
+  # exactly the state that makes macOS re-prompt for permissions on every
+  # launch and update.
+  #
+  # This checks the published DMG rather than the build tree: the tree is not
+  # reliably still there once tauri-action finishes, and the shipped artifact
+  # is what actually matters anyway.
+  verify-macos-signature:
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      # write, not read: draft releases are only visible to tokens with push access
+      contents: write
+    steps:
+      - name: Verify signature on the published DMG
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if [ -z "$MACOS_SIGNING_IDENTITY" ]; then
             echo "No signing identity configured — skipping verification."
             exit 0
           fi
-          # No -maxdepth: the universal target nests one level deeper than a
-          # native one (target/universal-apple-darwin/release/bundle/macos).
-          APP=$(find src-tauri/target -type d -name 'SeeNote.app' | head -1)
-          if [ -z "$APP" ]; then
-            echo "No SeeNote.app found under src-tauri/target." >&2
-            exit 1
-          fi
-          echo "Verifying $APP"
+
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*.dmg' -D . --clobber
+          DMG=$(ls ./*.dmg | head -1)
+          echo "Verifying $DMG"
+
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint ./mnt >/dev/null
+          trap 'hdiutil detach ./mnt -quiet || true' EXIT
+          APP=./mnt/SeeNote.app
+
           codesign -dvvv "$APP"
           codesign -d -r- "$APP"
           codesign --verify --strict --verbose=2 "$APP"
+
+          # An ad-hoc/linker signature has no designated requirement at all,
+          # so this is the assertion that actually catches a regression.
+          if ! codesign -d -r- "$APP" 2>&1 | grep -q 'designated =>'; then
+            echo "No designated requirement — bundle is effectively unsigned." >&2
+            exit 1
+          fi
 
   rename-assets:
     needs: build
