@@ -106,6 +106,20 @@ export class VideoElementEngine implements PlaybackTransport {
     return this.el?.currentTime ?? 0;
   }
 
+  /** Same as getMediaTime here: the element owns its own output pipeline, so its
+   *  clock needs no latency compensation and pause/play resumes exactly. (The
+   *  distinction matters only for AudioEngine — see AudioEngine.getResumeTime.) */
+  getResumeTime(): number {
+    return this.el?.currentTime ?? 0;
+  }
+
+  /** Drop a bounded play's stop point (e.g. the selection that set it was
+   *  cancelled mid-playback) so the rAF loop in _startRaf() plays through to
+   *  natural EOF instead of stopping at the now-stale endSec. */
+  clearEndSec(): void {
+    this.endSec = null;
+  }
+
   /** Play from `startSec`; if `endSec` is given, stop and fire onEnded there. */
   play(startSec: number, endSec?: number): void {
     const el = this.el;

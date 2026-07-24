@@ -57,9 +57,23 @@ export interface PlaybackTransport {
   get isPlaying(): boolean;
   /** Current playback position in seconds (last known position while paused). */
   getMediaTime(): number;
+  /**
+   * Position to restart from so resumed playback neither repeats nor skips audio.
+   * Distinct from getMediaTime(): the playhead is compensated for output latency
+   * (it shows what's *audible*), but audio through the *scheduled* cursor has
+   * already been handed to the device and will be heard even after pause() —
+   * so resuming from getMediaTime() replays that window. See AudioEngine.
+   */
+  getResumeTime(): number;
   /** Play from `startSec`; if `endSec` is given, stop and fire onEnded there. */
   play(startSec: number, endSec?: number): void;
   pause(): void;
+  /**
+   * Drop a bounded play's stop point mid-playback (the selection that set it was
+   * cancelled) so playback continues to natural EOF instead of stopping at the
+   * now-stale endSec. No-op when not playing or when no end was set.
+   */
+  clearEndSec(): void;
   /** Move the playhead to `sec` without changing the playing state. */
   seek(sec: number): void;
   setGain(gain: number): void;

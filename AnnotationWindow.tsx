@@ -385,6 +385,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     currentTimeStoreRef,
     togglePlay,
     seek,
+    clearSelectionEnd,
     activeTransport,
     getMediaTime,
     attachVideoElement,
@@ -1292,6 +1293,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               setSelection(null);
               frameSourceRef.current?.clearPinnedRange();
               setBoundAnnotationId(null);
+              clearSelectionEnd();
               break;
             case 'filterTool':
               setFilterToolActive(false);
@@ -1340,8 +1342,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     } else {
       activationStack.remove('selection');
       frameSourceRef.current?.clearPinnedRange();
+      // The selection was driving playback's bounded stop — drop it so
+      // playback continues through to EOF instead of stopping at the now-stale
+      // selection end.
+      clearSelectionEnd();
     }
-  }, [activationStack]);
+  }, [activationStack, clearSelectionEnd]);
 
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {

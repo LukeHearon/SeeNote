@@ -102,7 +102,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume, muted, setMuted, playheadLocked, setPlayheadLocked,
     engineRef, currentTimeRef, currentTimeStoreRef,
-    togglePlay, seek, getMediaTime, attachVideoElement,
+    togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
   } = usePlaybackTransport({
     project: { preferences: {} },
     isAudioTrack, isAudioTrackRef, videoMode, videoModeRef,
@@ -204,8 +204,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     } else {
       activationStack.remove('selection');
       frameSourceRef.current?.clearPinnedRange();
+      // The selection was driving playback's bounded stop — drop it so
+      // playback continues through to EOF instead of stopping at the now-stale
+      // selection end.
+      clearSelectionEnd();
     }
-  }, [activationStack, frameSourceRef]);
+  }, [activationStack, frameSourceRef, clearSelectionEnd]);
 
   // Everything else (playback transport, spectrogram zoom, band-pass filter,
   // undo/redo) registers its own hotkeys inside the hook that owns its
@@ -220,6 +224,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
             setSelection(null);
             frameSourceRef.current?.clearPinnedRange();
             setBoundAnnotationId(null);
+            clearSelectionEnd();
             break;
           case 'filterTool':
             setFilterToolActive(false);

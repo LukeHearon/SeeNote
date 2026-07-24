@@ -240,7 +240,14 @@ export function usePlaybackTransport({
       if (isPlaying || isBuffering) {
           // Invalidate any in-flight preroll so its resolution can't start playback
           playTokenRef.current += 1;
-          transport?.pause();
+          // Pause BOTH engines, not just the one activeTransport() currently
+          // names. usesVideoTransport() reads frameSourceRef, which is populated
+          // asynchronously (useVideoFrameSource) with nothing the transport-flip
+          // effect below depends on — so the active engine can change mid-play
+          // without that effect firing, and pausing only the "active" one would
+          // leave the other running to EOF. pause() is idempotent on both.
+          engineRef.current?.pause();
+          videoEngineRef.current?.pause();
           setIsPlaying(false);
           setIsBuffering(false);
           return;
@@ -248,7 +255,10 @@ export function usePlaybackTransport({
       // Starting main playback stops any example clip — they can't both sound.
       examplePlayer.stop();
       const sel = selectionRef.current;
-      const curTime = currentTimeRef.current;
+      // Resume from the transport's scheduled cursor, NOT the playhead: the
+      // playhead is compensated for output latency, and restarting there replays
+      // audio the device has already been handed (see AudioEngine.getResumeTime).
+      const curTime = transport?.getResumeTime() ?? currentTimeRef.current;
       let startSec = curTime;
       // If there's a selection and the playhead is outside it, restart from selection start
       if (sel && (curTime >= sel.end - 0.05 || curTime < sel.start)) {
@@ -339,6 +349,16 @@ export function usePlaybackTransport({
   // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
   useEffect(() => { seekRef.current = seek; }, [seek]);
 
+  // Call when a selection is cancelled/cleared while it's driving playback's
+  // bounded stop, so playback continues through to EOF instead of stopping at
+  // the now-stale selection end ("ghost" stop point). Both engines implement
+  // clearEndSec() and undo their own stop point without interrupting the audio
+  // already in flight — see AudioEngine.clearEndSec for how that's done there.
+  const clearSelectionEnd = useCallback(() => {
+    if (!isPlaying) return;
+    activeTransport()?.clearEndSec();
+  }, [isPlaying, activeTransport]);
+
   // Keep both transports' gain in sync with the volume slider and mute button.
   // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
   useEffect(() => {
@@ -408,6 +428,7 @@ export function usePlaybackTransport({
     currentTimeStoreRef,
     togglePlay,
     seek,
+    clearSelectionEnd,
     usesVideoTransport,
     activeTransport,
     getMediaTime,

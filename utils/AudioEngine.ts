@@ -96,6 +96,10 @@ interface ScheduledNode {
   mediaEnd: number;
   ctxStart: number;
   ctxEnd: number;
+  /** ctxEnd this node would have had without a bounded play's stop(endSec)
+   *  truncation — i.e. the end of its buffer. Equal to ctxEnd when untruncated.
+   *  clearEndSec() re-stops the tail node here to reclaim the truncated audio. */
+  naturalCtxEnd: number;
 }
 
 /** How many frames to fetch per IPC call (~1 second of audio). */
@@ -156,6 +160,18 @@ export class AudioEngine implements PlaybackTransport {
   private playStartCtxSet = false; // false while waiting for first chunk (or on cache hit, until set)
   private playStartMedia = 0;      // media time of first scheduled sample
   private endSec: number | null = null;
+  // Last known SCHEDULED position (no output-latency/filter-delay compensation),
+  // snapshotted alongside pausedAt. This — not pausedAt — is where playback must
+  // resume from: see getResumeTime().
+  private pausedAtSched = 0;
+  // True once this bounded play's stop point is baked into the audio graph (a
+  // source node scheduled with stop(endSec), or a whole cached slice). After
+  // that, clearEndSec() can no longer take effect by simply nulling endSec.
+  private endBoundCommitted = false;
+  // Bumped by clearEndSec(). The pending onEnded of a bounded play (in the
+  // _prefetchLoop tail and _playCached's timer) captures this and stays silent
+  // if it changed — the end bound it was going to report no longer exists.
+  private endBoundEpoch = 0;
 
   // Scheduled nodes that haven't finished yet
   private queue: ScheduledNode[] = [];
@@ -277,7 +293,9 @@ export class AudioEngine implements PlaybackTransport {
     this.isPlayingState = false;
     this.onPlayingFired = false;
     this.pausedAt = startSec;       // keep pausedAt in sync so getMediaTime() is correct during buffering
+    this.pausedAtSched = startSec;
     this.playStartMedia = startSec;
+    this.endBoundCommitted = false;
     this.playStartCtxSet = false;   // anchored later: on first chunk (uncached) or immediately (cache hit)
     this.schedCursor = startSec;
     this.endSec = endSec ?? null;
@@ -344,18 +362,89 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   pause(): void {
-    if (!this.ctx) return;
-    this.pausedAt = this._computeMediaTime();
+    // _cancelPlayback() snapshots both cursors; call it unconditionally so a
+    // play() still awaiting its first chunk (no ctx-dependent state yet) still
+    // has its playId bumped and its stream/await chain torn down.
     this._cancelPlayback();
     this.callbacks.onPaused();
   }
 
   get isPlaying(): boolean { return this.isPlayingState; }
 
+  /**
+   * Where a resume must start so no audio is repeated or skipped.
+   *
+   * getMediaTime() is compensated for output latency and filter group delay: it
+   * reports what is coming out of the speakers *now*, which lags what has been
+   * scheduled by that latency L. But pause() cannot un-render audio already
+   * handed to the device — everything through the scheduled cursor S will still
+   * be heard. Resuming from the compensated position replays [S-L, S], which on
+   * Bluetooth output (L ≈ 150–300ms) is an audible stutter/echo. So resume from
+   * S instead; the playhead stays continuous because the new play() re-subtracts
+   * L from its own anchor.
+   */
+  getResumeTime(): number {
+    return this.isPlayingState ? this._computeMediaTime(false) : this.pausedAtSched;
+  }
+
+  /**
+   * Drop this play's endSec so playback runs on to natural EOF (the selection
+   * that bounded it was cancelled mid-play). Audible continuity is the whole
+   * point here, so this never restarts playback — a restart tears down the Web
+   * Audio graph and reopens the Rust stream, which is the hiccup it exists to
+   * avoid.
+   *
+   * Cheap path: if the chunk containing endSec hasn't been scheduled yet, the
+   * prefetch loop re-reads this.endSec every iteration, so nulling it is enough.
+   *
+   * Once the stop IS baked into the graph — source.stop(endSec) on the tail
+   * chunk, or a cached slice covering exactly the selection — we instead
+   * *extend* the existing play:
+   *   1. Re-stop the tail node at its buffer end, reclaiming the audio the
+   *      truncation cut off (the spec makes the last stop() call the effective
+   *      one, provided the node hasn't stopped yet).
+   *   2. Start a continuation prefetch loop that schedules from schedCursor,
+   *      butted up against that tail on the ctx clock. Same playId, nothing
+   *      cancelled: the already-scheduled audio keeps playing while the new
+   *      stream opens behind it.
+   *   3. Suppress the pending onEnded via endBoundEpoch.
+   * The tail is the cover that hides the stream-open latency. It's the rest of
+   * the selection on the cached path (the common case: selections are preloaded
+   * on commit) and up to one chunk on the streaming path.
+   */
+  clearEndSec(): void {
+    // _cancelPlayback() nulls endSec, so a non-null value here means a bounded
+    // play really is in flight (not one that already ended or was paused).
+    if (this.endSec === null) return;
+    const committed = this.endBoundCommitted;
+    this.endSec = null;
+    this.endBoundCommitted = false;
+    if (!committed) return;
+
+    this.endBoundEpoch++;
+    const tail = this.queue[this.queue.length - 1];
+    if (!tail || !this.ctx) return;
+
+    if (tail.naturalCtxEnd > tail.ctxEnd && this.ctx.currentTime < tail.ctxEnd) {
+      try {
+        tail.source.stop(tail.naturalCtxEnd);
+        tail.ctxEnd = tail.naturalCtxEnd;
+      } catch { /* already stopped — the cover is just shorter */ }
+    }
+    this._log(`endSec cleared; continuing from ${this.schedCursor.toFixed(3)}s `
+      + `(${((tail.ctxEnd - this.ctx.currentTime) * 1000).toFixed(0)}ms of scheduled audio in hand)`);
+    this._prefetchLoop(this.playId, tail.ctxEnd);
+  }
+
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
-    this.pausedAt = clamp(sec, 0, this.fileDurationSec);
+    const target = clamp(sec, 0, this.fileDurationSec);
     this._cancelPlayback();
+    // After _cancelPlayback (which snapshots the pre-seek position), point both
+    // cursors at the seek target: an explicit seek discards whatever is still
+    // draining out of the device buffer, so there's nothing to resume past.
+    this.pausedAt = target;
+    this.pausedAtSched = target;
     // Cancel any in-flight preload for the old position (finding 6).
     this.pcmCache.cancelPreload();
   }
@@ -458,17 +547,22 @@ export class AudioEngine implements PlaybackTransport {
     return 0;
   }
 
-  private _computeMediaTime(): number {
+  /**
+   * @param compensated true (default) → the audible position, for the playhead.
+   *   false → the scheduled position, for resuming playback (see getResumeTime).
+   */
+  private _computeMediaTime(compensated = true): number {
     if (!this.ctx || !this.isPlayingState) {
-      // Not playing: return the last known position. pausedAt is kept in sync
-      // by play() (set to startSec), pause() and seek() so this is always correct
-      // whether we're paused, between play() and first sample, or at rest.
-      return this.pausedAt;
+      // Not playing: return the last known position. Both cursors are kept in
+      // sync by play() (set to startSec), _cancelPlayback() and seek() so this is
+      // correct whether we're paused, between play() and first sample, or at rest.
+      return compensated ? this.pausedAt : this.pausedAtSched;
     }
     // Subtract the band-pass filter's group delay AND the audio output latency so
     // the playhead reflects what's emerging from the speakers, not what's been
     // scheduled. Both are 0 when inactive/unreported.
-    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - this.filterGraph.getDelaySec() - this._outputLatencySec();
+    const lagSec = compensated ? this.filterGraph.getDelaySec() + this._outputLatencySec() : 0;
+    const elapsedCtx = this.ctx.currentTime - this.playStartCtx - lagSec;
     if (elapsedCtx < 0) return this.playStartMedia;
     const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.fileDurationSec);
     // Clamp to endSec so the playhead never visually overshoots the selection
@@ -498,8 +592,16 @@ export class AudioEngine implements PlaybackTransport {
 
   /** Stop all sources and async loops. Does NOT call onPaused/onEnded. */
   private _cancelPlayback(): void {
-    // Snapshot position before stopping
+    // Snapshot both positions before stopping: the audible one for the playhead,
+    // the scheduled one for a resume (see getResumeTime).
     this.pausedAt = this._computeMediaTime();
+    this.pausedAtSched = this._computeMediaTime(false);
+    // Drop the end bound only AFTER the snapshots above (which clamp to it).
+    // Clearing it here makes `endSec !== null` mean exactly "a bounded play is
+    // in flight", which is what clearEndSec() keys off. play() re-arms it, and
+    // setPlaybackSpeed() reads it before restarting.
+    this.endSec = null;
+    this.endBoundCommitted = false;
 
     // Increment playId — all async loops holding a stale id will exit
     this.playId++;
@@ -531,9 +633,18 @@ export class AudioEngine implements PlaybackTransport {
     this.onPlayingFired = false;
   }
 
-  /** Async loop that fetches PCM chunks from Rust and schedules AudioBufferSourceNodes. */
-  private async _prefetchLoop(myPlayId: number): Promise<void> {
+  /**
+   * Async loop that fetches PCM chunks from Rust and schedules AudioBufferSourceNodes.
+   *
+   * @param continueFromCtx when set, this is a *continuation* of a play already in
+   *   flight (see clearEndSec): open the stream at schedCursor rather than the
+   *   play's start, and butt the first chunk against this ctx time instead of
+   *   anchoring a new time origin. The media↔ctx mapping established by the
+   *   original play() stays valid, so the playhead needs no adjustment.
+   */
+  private async _prefetchLoop(myPlayId: number, continueFromCtx?: number): Promise<void> {
     if (!this.ctx || !this.filePath) return;
+    const myEndBoundEpoch = this.endBoundEpoch;
     const ctx = this.ctx;
     const path = this.filePath;
     const ch = this.fileChannels;
@@ -542,14 +653,29 @@ export class AudioEngine implements PlaybackTransport {
     const stretching = speed !== 1.0;
     const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
 
-    // Open the Rust PcmStream at the playback start position
+    // Open the Rust PcmStream at the playback start position (or, for a
+    // continuation, at the point the in-flight audio runs out).
+    const openAt = continueFromCtx !== undefined ? this.schedCursor : this.playStartMedia;
+    // A continuation whose resume point is already at/past EOF has nothing to
+    // schedule (the cleared selection ended at the end of the file) — let the
+    // audio still in flight play out and end naturally.
+    if (continueFromCtx !== undefined && openAt >= this.fileDurationSec) {
+      await this._endAfterQueueDrains(myPlayId, myEndBoundEpoch);
+      return;
+    }
     let handle;
     try {
-      handle = await startPcmStream(path, this.playStartMedia);
+      handle = await startPcmStream(path, openAt);
     } catch (err) {
       if (this.playId !== myPlayId) return;
       console.error('AudioEngine: startPcmStream failed', err);
       this._log(`startPcmStream failed: ${String(err)}`, 'error');
+      if (continueFromCtx !== undefined) {
+        // The already-scheduled audio is fine; only the extension failed. Cutting
+        // it off would be worse than the missing continuation.
+        await this._endAfterQueueDrains(myPlayId, myEndBoundEpoch);
+        return;
+      }
       // Fully tear down so the UI doesn't stay stuck in the "buffering" state
       // and the user can try another file cleanly. Without this, isBuffering
       // remains true on the React side and subsequent plays inherit the hang.
@@ -567,8 +693,10 @@ export class AudioEngine implements PlaybackTransport {
     this.streamId = handle.stream_id;
 
     // `expectedNextCtxStart` tracks where the next chunk should be scheduled.
-    // It's anchored when the first chunk arrives and advances by each chunk's duration.
-    let expectedNextCtxStart = 0;
+    // It's anchored when the first chunk arrives (or, for a continuation, seeded
+    // from the tail of the audio already scheduled) and advances by each chunk's
+    // duration.
+    let expectedNextCtxStart = continueFromCtx ?? 0;
     let reachedEnd = false;
 
     // Generation token: if a concurrent play() cancels this stream and opens a new
@@ -628,6 +756,7 @@ export class AudioEngine implements PlaybackTransport {
               mediaEnd: this.schedCursor,
               ctxStart,
               ctxEnd,
+              naturalCtxEnd: ctxEnd,
             });
             expectedNextCtxStart = ctxEnd;
           }
@@ -698,7 +827,8 @@ export class AudioEngine implements PlaybackTransport {
       // against each other regardless of how many frames SoundTouch produced.
       const ctxStart = expectedNextCtxStart;
       const outputDurationSec = outputFrames / sr;
-      let ctxEnd = ctxStart + outputDurationSec;
+      const naturalCtxEnd = ctxStart + outputDurationSec;
+      let ctxEnd = naturalCtxEnd;
 
       // ── Build AudioBuffer ──────────────────────────────────────────────────
       const audioBuffer = ctx.createBuffer(outputChannels.length, outputFrames, sr);
@@ -722,13 +852,15 @@ export class AudioEngine implements PlaybackTransport {
           source.stop(stopCtxTime);
           ctxEnd = stopCtxTime;
           reachedEnd = true;
+          this.endBoundCommitted = true;  // baked into the graph — clearEndSec() must restart
         } else if (chunkMediaStart >= this.endSec) {
           reachedEnd = true;
+          this.endBoundCommitted = true;
           break;
         }
       }
 
-      this.queue.push({ source, mediaStart: chunkMediaStart, mediaEnd: chunkMediaEnd, ctxStart, ctxEnd });
+      this.queue.push({ source, mediaStart: chunkMediaStart, mediaEnd: chunkMediaEnd, ctxStart, ctxEnd, naturalCtxEnd });
       expectedNextCtxStart = ctxEnd;
       this.schedCursor = chunkMediaEnd;
       this.chunksScheduled++;
@@ -752,17 +884,26 @@ export class AudioEngine implements PlaybackTransport {
 
     // If we exited naturally (EOF or endSec), fire onEnded after the last
     // scheduled node finishes. We wait for the audio clock to pass ctxEnd.
-    if (reachedEnd && this.playId === myPlayId) {
-      const lastCtxEnd = this.queue.length > 0
-        ? this.queue[this.queue.length - 1].ctxEnd
-        : this.ctx?.currentTime ?? 0;
-      const waitMs = Math.max(0, (lastCtxEnd - (this.ctx?.currentTime ?? 0) + this._outputLatencySec()) * 1000 + 50);
-      await sleep(waitMs);
-      if (this.playId === myPlayId) {
-        this._cancelPlayback();
-        this.callbacks.onEnded();
-      }
-    }
+    if (reachedEnd) await this._endAfterQueueDrains(myPlayId, myEndBoundEpoch);
+  }
+
+  /**
+   * Wait for the last scheduled node to finish, then tear down and report EOF.
+   * Both guards must still hold on the far side of the wait: `playId` for a
+   * pause/seek/new play, and `endBoundEpoch` for a clearEndSec() that landed
+   * mid-wait — the end bound this call was going to report has been dropped and
+   * a continuation loop is now scheduling past it.
+   */
+  private async _endAfterQueueDrains(myPlayId: number, myEndBoundEpoch: number): Promise<void> {
+    if (this.playId !== myPlayId || this.endBoundEpoch !== myEndBoundEpoch) return;
+    const lastCtxEnd = this.queue.length > 0
+      ? this.queue[this.queue.length - 1].ctxEnd
+      : this.ctx?.currentTime ?? 0;
+    const waitMs = Math.max(0, (lastCtxEnd - (this.ctx?.currentTime ?? 0) + this._outputLatencySec()) * 1000 + 50);
+    await sleep(waitMs);
+    if (this.playId !== myPlayId || this.endBoundEpoch !== myEndBoundEpoch) return;
+    this._cancelPlayback();
+    this.callbacks.onEnded();
   }
 
   // ── PCM cache ────────────────────────────────────────────────────────────────
@@ -804,16 +945,25 @@ export class AudioEngine implements PlaybackTransport {
       mediaEnd: endSec,
       ctxStart: this.playStartCtx,
       ctxEnd,
+      // The slice IS the selection: nothing was truncated, so there's nothing for
+      // clearEndSec() to reclaim here. Its cover is the rest of the slice.
+      naturalCtxEnd: ctxEnd,
     });
     this.schedCursor = endSec;
     this.chunksScheduled = 1;
+    // The cached slice covers exactly [startSec, endSec] and nothing follows it,
+    // so the end bound is committed the moment it's scheduled.
+    this.endBoundCommitted = true;
 
     // Fire onEnded after the buffer finishes playing. Add output latency so the
     // teardown (which snapshots pausedAt via _computeMediaTime) lands after the
     // audio is actually audible through endSec, not when it was merely scheduled.
     const waitMs = Math.max(0, (ctxEnd - ctx.currentTime + this._outputLatencySec()) * 1000 + 50);
+    const myEndBoundEpoch = this.endBoundEpoch;
     setTimeout(() => {
-      if (this.playId !== myPlayId) return;
+      // Epoch guard: clearEndSec() may have dropped this end bound and started a
+      // continuation loop that is scheduling past it (see clearEndSec).
+      if (this.playId !== myPlayId || this.endBoundEpoch !== myEndBoundEpoch) return;
       this._cancelPlayback();
       this.callbacks.onEnded();
     }, waitMs);
