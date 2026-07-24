@@ -126,6 +126,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Overlay canvas: draws playhead, time ruler, ident, and selection darkening.
   // Must be above annotation HTML divs (z-30 > annotations z-10/20).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Band-pass filter darkening canvas: sits BELOW the annotation HTML divs so
+  // filter darkening never dims annotation labels — they must stay full
+  // brightness regardless of filter state.
+  const filterOverlayCanvasRef = useRef<HTMLCanvasElement>(null);
   // Y-axis canvas: separate element to the left of the spectrogram area, never layered on top of spectrogram content.
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -410,54 +414,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
-    // Render in-progress filter creation OR persistent band. The band overlay
-    // tracks `bandPassFilter` (the audio source of truth) — tool readiness
-    // (`filterToolActive`) only affects whether the cutoff handles are
-    // interactive, not whether the band is visible.
-    const filterBand = creatingFilter
-      ? {
-          yTop: Math.min(creatingFilter.y0, creatingFilter.y1),
-          yBottom: Math.max(creatingFilter.y0, creatingFilter.y1),
-          strength: bandPassFilter?.strength ?? 1,
-        }
-      : bandPassFilter
-      ? {
-          yTop: freqToY(bandPassFilter.high, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
-          yBottom: freqToY(bandPassFilter.low, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
-          strength: bandPassFilter.strength,
-        }
-      : null;
-
-    // In Fast mode the filter has no effect on audio, so don't render it.
-    // For audio tracks, AudioEngine always handles playback with decoded PCM so
-    // the filter always applies — treat as 'accurate' regardless of videoMode.
-    // For video tracks in Fast mode the filter has no effect; in Mixed mode without
-    // a selection the video element's audio track plays instead of AudioEngine.
-    const filterInactive = !isAudioTrack && (videoMode === 'fast' || (videoMode === 'mixed' && !selection));
-    if (filterBand && !filterInactive) {
-      const darkAlpha = 0.5 * filterBand.strength;
-      ctx.fillStyle = `rgba(0, 0, 0, ${darkAlpha})`;
-      if (filterBand.yTop > 0) {
-        ctx.fillRect(0, 0, width, filterBand.yTop);
-      }
-      if (filterBand.yBottom < height) {
-        ctx.fillRect(0, filterBand.yBottom, width, height - filterBand.yBottom);
-      }
-      ctx.strokeStyle = '#60a5fa';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
-      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
-      ctx.stroke();
-    } else if (filterBand && !isAudioTrack && videoMode === 'mixed' && !selection) {
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
-      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
-      ctx.stroke();
-    }
-
     // 2. Draw Playhead Line
     const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
     if (playheadX >= 0 && playheadX <= width) {
@@ -517,7 +473,75 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, creatingFilter, bandPassFilter, videoMode, isAudioTrack, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration]);
+
+  // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
+  // (unlike the overlay canvas above) so filter darkening never dims annotation
+  // labels — labels must stay full brightness/color regardless of filter state.
+  const drawFilterOverlay = useCallback(() => {
+    const canvas = filterOverlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = containerRef.current?.clientWidth ?? canvas.width / dpr;
+    const height = canvas.height / dpr;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Render in-progress filter creation OR persistent band. The band overlay
+    // tracks `bandPassFilter` (the audio source of truth) — tool readiness
+    // (`filterToolActive`) only affects whether the cutoff handles are
+    // interactive, not whether the band is visible.
+    const filterBand = creatingFilter
+      ? {
+          yTop: Math.min(creatingFilter.y0, creatingFilter.y1),
+          yBottom: Math.max(creatingFilter.y0, creatingFilter.y1),
+          strength: bandPassFilter?.strength ?? 1,
+        }
+      : bandPassFilter
+      ? {
+          yTop: freqToY(bandPassFilter.high, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
+          yBottom: freqToY(bandPassFilter.low, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
+          strength: bandPassFilter.strength,
+        }
+      : null;
+
+    // In Fast mode the filter has no effect on audio, so don't render it.
+    // For audio tracks, AudioEngine always handles playback with decoded PCM so
+    // the filter always applies — treat as 'accurate' regardless of videoMode.
+    // For video tracks in Fast mode the filter has no effect; in Mixed mode without
+    // a selection the video element's audio track plays instead of AudioEngine.
+    const filterInactive = !isAudioTrack && (videoMode === 'fast' || (videoMode === 'mixed' && !selection));
+    if (filterBand && !filterInactive) {
+      const darkAlpha = 0.65 * filterBand.strength;
+      ctx.fillStyle = `rgba(0, 0, 0, ${darkAlpha})`;
+      if (filterBand.yTop > 0) {
+        ctx.fillRect(0, 0, width, filterBand.yTop);
+      }
+      if (filterBand.yBottom < height) {
+        ctx.fillRect(0, filterBand.yBottom, width, height - filterBand.yBottom);
+      }
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
+      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
+      ctx.stroke();
+    } else if (filterBand && !isAudioTrack && videoMode === 'mixed' && !selection) {
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
+      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }, [creatingFilter, bandPassFilter, videoMode, isAudioTrack, selection, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Y-axis canvas: draws the frequency axis. Separate from the spectrogram area so it is never layered on top.
   const drawYAxis = useCallback(() => {
@@ -612,6 +636,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     [currentTimeStore],
   );
 
+  // Filter darkening canvas only changes when the band-pass filter itself
+  // changes (not every playback tick), so it gets its own dirty flag driven
+  // solely by drawFilterOverlay's own deps.
+  const drawFilterOverlayRef = useRef(drawFilterOverlay);
+  const filterOverlayDirtyRef = useRef(true);
+  useLayoutEffect(() => {
+    drawFilterOverlayRef.current = drawFilterOverlay;
+    filterOverlayDirtyRef.current = true;
+  }, [drawFilterOverlay]);
+
   // The spectrogram background no longer reads scrollLeft from a prop (draw reads
   // scrollLeftRef.current), so a scroll step during playback no longer recreates
   // `draw` and trips the useLayoutEffect dirty flag. Mark the background dirty on
@@ -648,6 +682,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawOverlayRef.current();
         overlayDirtyRef.current = false;
       }
+      if (filterOverlayDirtyRef.current) {
+        drawFilterOverlayRef.current();
+        filterOverlayDirtyRef.current = false;
+      }
       requestRef.current = requestAnimationFrame(tick);
     };
     requestRef.current = requestAnimationFrame(tick);
@@ -681,12 +719,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           overlayCanvasRef.current.width = newWidth * dpr;
           overlayCanvasRef.current.height = height * dpr;
         }
+        if (filterOverlayCanvasRef.current) {
+          filterOverlayCanvasRef.current.width = newWidth * dpr;
+          filterOverlayCanvasRef.current.height = height * dpr;
+        }
         if (yAxisCanvasRef.current) {
           yAxisCanvasRef.current.width = 50 * dpr;
           yAxisCanvasRef.current.height = height * dpr;
         }
         draw();
         drawOverlay();
+        drawFilterOverlay();
         drawYAxis();
       }
     });
@@ -695,7 +738,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       resizeObserver.observe(containerRef.current);
     }
     return () => resizeObserver.disconnect();
-  }, [draw, drawOverlay, drawYAxis]);
+  }, [draw, drawOverlay, drawFilterOverlay, drawYAxis]);
 
   // --- Annotation navigation ---
 
@@ -938,6 +981,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           </div>
         </div>
       )}
+
+      {/* Band-pass filter darkening canvas — below annotation HTML divs (z-5 < z-10/20)
+          so filter darkening never dims annotation labels. */}
+      <canvas
+        ref={filterOverlayCanvasRef}
+        className="absolute top-0 left-0 w-full h-full pointer-events-none"
+        style={{ zIndex: 5 }}
+      />
 
       {/* Layer 2: annotation HTML divs and selection handles */}
       <div className="absolute top-0 left-0 w-full h-full">
