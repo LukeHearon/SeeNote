@@ -112,6 +112,7 @@ export const annotationToolsSettingsModal = {
   get hotkeysHeading() { return getOverride('ui.annotationToolsSettingsModal.hotkeysHeading') ?? "Hotkeys"; },
   get newTool() { return getOverride('ui.annotationToolsSettingsModal.newTool') ?? "New tool"; },
   get unassignedHeading() { return getOverride('ui.annotationToolsSettingsModal.unassignedHeading') ?? "Unassigned"; },
+  get unassignAll() { return getOverride('ui.annotationToolsSettingsModal.unassignAll') ?? "Unassign All"; },
   get settingsTitle() { return getOverride('ui.annotationToolsSettingsModal.settingsTitle') ?? "Annotation Tool Settings"; },
 };
 

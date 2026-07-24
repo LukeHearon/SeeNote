@@ -222,6 +222,11 @@ export default function AnnotationToolsSettingsModal({
     setDrag(null);
   };
 
+  const unassignAll = () => {
+    const newTools = annotationTools.map((t, i) => (i !== 0 && t.key !== null ? { ...t, key: null } : t));
+    withSnapshot(() => onReorderTools(newTools));
+  };
+
   // Commit a new tool from the create modal. Its hotkey comes from where the
   // "+ New tool" button was clicked: a specific slot digit, or null for the
   // Unassigned bin (`addingTo === 'unassigned'`).
@@ -264,6 +269,7 @@ export default function AnnotationToolsSettingsModal({
   }, []);
 
   const hasUnassigned = annotationTools.some((t, i) => i !== 0 && t.key === null);
+  const hasAssigned = annotationTools.some((t, i) => i !== 0 && t.key !== null);
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
@@ -350,6 +356,13 @@ export default function AnnotationToolsSettingsModal({
                 </div>
               );
             })}
+            <button
+              onClick={unassignAll}
+              disabled={!hasAssigned}
+              className="mt-auto flex-none self-start px-2.5 py-1 rounded border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 disabled:opacity-50 transition-colors text-xs"
+            >
+              {copy.unassignAll}
+            </button>
           </div>
 
           <div
