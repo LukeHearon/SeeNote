@@ -30,7 +30,7 @@ import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
-import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
+import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoElementEngine } from './utils/VideoElementEngine';
@@ -566,6 +566,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
     addLog(`Opening: ${fileName}`);
     addLog(`Video mode: ${videoModeRef.current}`);
+    // Drop the outgoing track's spectrogram now, not when the new one finishes
+    // decoding. Held any longer, the canvas keeps drawing the previous file's
+    // chunks for the whole (potentially multi-second) load, so two different
+    // files appear to have identical content. Batched with setIsProcessing so
+    // the null cache renders as the loading state, not "Spectrogram Unavailable".
+    swapChunkCache(chunkCacheRef, null);
+    setCacheVersion(v => v + 1);
     setIsProcessing(true);
 
     try {
@@ -604,7 +611,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             dur,
             () => setCacheVersion(v => v + 1),
         );
-        chunkCacheRef.current = cache;
+        swapChunkCache(chunkCacheRef, cache);
         setCacheVersion(0);
 
         // Kick off first viewport prefetch immediately
@@ -654,7 +661,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         setDuration(0);
         setSampleRate(44100);
         setIsAudioTrack(false);
-        chunkCacheRef.current = null;
+        swapChunkCache(chunkCacheRef, null);
         setCacheVersion(v => v + 1);
         if (frameSourceRef.current) {
             frameSourceRef.current.close();
@@ -687,7 +694,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       duration,
       () => setCacheVersion(v => v + 1),
     );
-    chunkCacheRef.current = cache;
+    swapChunkCache(chunkCacheRef, cache);
     setCacheVersion(0);
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
   }, [settings.fftSize]);

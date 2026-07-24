@@ -19,6 +19,27 @@ interface ResolvedTier {
   maxChunks: number;
 }
 
+/**
+ * Retire the cache currently held in `ref` and install `next` in its place
+ * (pass null to just drop the current one).
+ *
+ * Retiring matters on a track switch: the outgoing cache's queued/in-flight
+ * fetches otherwise keep issuing FFT work for the file the user just left,
+ * competing for CPU with the incoming track's chunks and firing onChunkLoaded
+ * long after its data stopped being displayable. invalidate() drops its queue,
+ * clears its chunks, and bumps its generation so late results are discarded.
+ *
+ * Every cache swap goes through here so the teardown can't be forgotten at one
+ * of the call sites.
+ */
+export function swapChunkCache(
+  ref: { current: MultiTierSpectrogramCache | null },
+  next: MultiTierSpectrogramCache | null,
+): void {
+  if (ref.current && ref.current !== next) ref.current.invalidate();
+  ref.current = next;
+}
+
 export class MultiTierSpectrogramCache {
   private tiers: ResolvedTier[];
   private tierByNumber: Map<number, ResolvedTier>; // tier number -> resolved tier

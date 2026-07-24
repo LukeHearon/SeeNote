@@ -18,7 +18,7 @@ import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useHotkeys } from './hooks/useHotkeys';
-import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
+import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
 import { annotationWindow } from './copy/ui';
 import { tooltips } from './copy/tooltips';
 
@@ -167,7 +167,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
 
         const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sr, dur, () => setCacheVersion(v => v + 1));
-        chunkCacheRef.current = cache;
+        swapChunkCache(chunkCacheRef, cache);
         setCacheVersion(0);
         cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
         addLog('Spectrogram loading...');
@@ -190,7 +190,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   useEffect(() => {
     if (!sampleRate || !duration) return;
     const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sampleRate, duration, () => setCacheVersion(v => v + 1));
-    chunkCacheRef.current = cache;
+    swapChunkCache(chunkCacheRef, cache);
     setCacheVersion(0);
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
     // eslint-disable-next-line react-hooks/exhaustive-deps

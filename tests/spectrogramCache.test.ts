@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
+import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
 import { TIER_CONFIGS } from '../constants';
 
 // ── Test scaffolding ─────────────────────────────────────────────────────────
@@ -168,5 +168,36 @@ describe('MultiTierSpectrogramCache.selectTier', () => {
     // At pixelsPerSec = 60, pure-best is tier 3. With no prior tier set
     // (activeTierIndex = -1), hysteresis is bypassed and we go straight to 3.
     expect(cache.selectTier(1000 / 60, 1000).tier).toBe(3);
+  });
+});
+
+describe('swapChunkCache', () => {
+  it('invalidates the outgoing cache and installs the new one', () => {
+    const outgoing = makeCache();
+    const incoming = makeCache();
+    // Queue work on the outgoing cache so there is something to tear down.
+    outgoing.prefetchViewport(0, 60, 1);
+    const ref: { current: MultiTierSpectrogramCache | null } = { current: outgoing };
+
+    swapChunkCache(ref, incoming);
+
+    expect(ref.current).toBe(incoming);
+    // invalidate() drops both the queue and the in-flight bookkeeping, so the
+    // retired cache stops reporting (and scheduling) work for the old file.
+    expect(outgoing.pendingCount()).toBe(0);
+  });
+
+  it('drops the current cache when passed null', () => {
+    const outgoing = makeCache();
+    const ref: { current: MultiTierSpectrogramCache | null } = { current: outgoing };
+    swapChunkCache(ref, null);
+    expect(ref.current).toBeNull();
+  });
+
+  it('is a no-op teardown when the same cache is re-installed', () => {
+    const cache = makeCache();
+    const ref: { current: MultiTierSpectrogramCache | null } = { current: cache };
+    swapChunkCache(ref, cache);
+    expect(ref.current).toBe(cache);
   });
 });

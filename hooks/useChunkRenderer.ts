@@ -365,7 +365,24 @@ export function useChunkRenderer({
             offCtx.drawImage(offscreen, -columnsShifted, 0);
             offTier.copyWithin(0, columnsShifted, bbWidth);
             offTier.fill(0, bbWidth - columnsShifted, bbWidth);
-            paintColumns(bbWidth - columnsShifted, columnsShifted);
+            // The self-blit composites source-over, so source columns that carry
+            // no data (fully transparent) leave the destination's PREVIOUS pixels
+            // untouched instead of clearing them. Scrolling into a not-yet-fetched
+            // region therefore smears already-rendered content across it, which
+            // reads as duplicated chunks. offTier already records which columns
+            // should be blank, so clear those runs explicitly after the shift.
+            const shiftedWidth = bbWidth - columnsShifted;
+            let blankStart = -1;
+            for (let i = 0; i <= shiftedWidth; i++) {
+              const blank = i < shiftedWidth && offTier[i] === 0;
+              if (blank) {
+                if (blankStart === -1) blankStart = i;
+              } else if (blankStart !== -1) {
+                offCtx.clearRect(blankStart, 0, i - blankStart, offscreen.height);
+                blankStart = -1;
+              }
+            }
+            paintColumns(shiftedWidth, columnsShifted);
           }
 
           // 2. Repaint interior columns whose data changed since last frame — newly
@@ -483,6 +500,13 @@ export function useChunkRenderer({
             if (dst.height !== offscreen.height) dst.height = offscreen.height;
             const dstCtx = dst.getContext('2d');
             if (!dstCtx) break;
+            // 'copy' rather than the default source-over: these scratch canvases
+            // are reused across frames AND across tracks, and only resize (which
+            // clears) when the target width changes. Under source-over the
+            // transparent columns of an unresolved viewport would let the last
+            // image drawn here show through — the previous frame's content, or
+            // the previous track's entire spectrogram.
+            dstCtx.globalCompositeOperation = 'copy';
             dstCtx.imageSmoothingEnabled = true;
             dstCtx.imageSmoothingQuality = 'high';
             dstCtx.drawImage(blitSrc, 0, 0, blitW, offscreen.height, 0, 0, stepW, offscreen.height);

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
-import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
+import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
 import { drawSpectrogramChunk, freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -208,9 +208,9 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
       filePath, settings.fftSize, sampleRate, duration,
       () => { cacheVersionRef.current += 1; renderSpectrogram(); },
     );
-    cacheRef.current = cache;
+    swapChunkCache(cacheRef, cache);
     renderSpectrogram();
-    return () => { cacheRef.current = null; };
+    return () => { swapChunkCache(cacheRef, null); };
     // renderSpectrogram intentionally omitted: it changes with settings, but a
     // settings-only change is handled by the separate effect below (no need to
     // throw away the cache and re-decode).
