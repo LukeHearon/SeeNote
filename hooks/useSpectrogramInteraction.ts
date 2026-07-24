@@ -39,11 +39,14 @@ export interface SpectrogramInteractionParams {
   setSuppressCustomCursor: (v: boolean) => void;
   // Right-drag pan timestamp (shared with wheel handling).
   lastManualScrollRef: React.MutableRefObject<number>;
+  // Live Alt state, read at annotation-commit time so toggling Alt mid-drag (after
+  // mousedown, before mouseup) can flip whether the new annotation gets highlighted.
+  isAltHeldRef: React.MutableRefObject<boolean>;
 }
 
 export interface SpectrogramInteractionApi {
   // Interaction state (consumed by overlays / draw).
-  creatingAnnotation: { start: number; current: number; quiet?: boolean } | null;
+  creatingAnnotation: { start: number; current: number } | null;
   creatingSelection: { start: number; current: number } | null;
   creatingFilter: { y0: number; y1: number } | null;
   dragStart: { x: number; scroll: number } | null;
@@ -107,11 +110,12 @@ export function useSpectrogramInteraction({
   setCursorPos,
   setSuppressCustomCursor,
   lastManualScrollRef,
+  isAltHeldRef,
 }: SpectrogramInteractionParams): SpectrogramInteractionApi {
   const [dragStart, setDragStart] = useState<{ x: number; scroll: number } | null>(null);
 
   // Interaction State (annotations — only when activeAnnotationTool !== null)
-  const [creatingAnnotation, setCreatingAnnotation] = useState<{ start: number; current: number; quiet?: boolean } | null>(null);
+  const [creatingAnnotation, setCreatingAnnotation] = useState<{ start: number; current: number } | null>(null);
   const [resizingAnnotation, setResizingAnnotation] = useState<{ id: string; side: 'start' | 'end'; originalTime: number } | null>(null);
   const [draggedAnnotation, setDraggedAnnotation] = useState<{ id: string; startOffset: number } | null>(null);
 
@@ -173,9 +177,19 @@ export function useSpectrogramInteraction({
 
   // --- Interaction Handlers ---
 
+  // While playing, a newly made selection that doesn't contain the playhead would
+  // otherwise leave the two out of sync (audio still coming from the old position
+  // while the new range is highlighted) — snap playback to the selection's start.
+  // Left alone while paused: a paused seek is the user's to make explicitly.
+  const snapPlayheadIfOutside = useCallback((start: number, end: number) => {
+    if (!isPlaying) return;
+    const t = currentTimeStore.get();
+    if (t < start || t > end) onSeek(start);
+  }, [isPlaying, currentTimeStore, onSeek]);
+
   // Shared: create an annotation from the active tool, commit it, and enter annotation-bound selection state.
-  // `quiet` (Alt-drag) commits the annotation without selecting it or moving the
-  // selection, so annotating never disturbs an in-progress listen.
+  // `quiet` (Alt-drag) commits the annotation without selecting it, moving the
+  // selection, or touching the playhead, so annotating never disturbs an in-progress listen.
   const commitNewAnnotation = useCallback((start: number, end: number, quiet = false) => {
     if (!activeAnnotationTool) return;
     const newAnnotation = makeAnnotationFromTool(activeAnnotationTool, start, end);
@@ -184,7 +198,8 @@ export function useSpectrogramInteraction({
     onSelectAnnotation(newAnnotation.id);
     onBoundAnnotationChange(newAnnotation.id);
     onSelectionChange({ start, end });
-  }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange]);
+    snapPlayheadIfOutside(start, end);
+  }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange, snapPlayheadIfOutside]);
 
   const getPointerTime = (e: React.MouseEvent) => {
     if (!containerRef.current) return 0;
@@ -571,13 +586,12 @@ export function useSpectrogramInteraction({
       const dx = Math.abs(e.clientX - pendingAnnotationRef.current.startX);
       const heldMs = Date.now() - pendingAnnotationRef.current.startTime;
       if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
-        const quiet = pendingAnnotationRef.current.quiet;
-        if (!quiet) {
+        if (!pendingAnnotationRef.current.quiet) {
           onSelectAnnotation(null);
           onBoundAnnotationChange(null);
           onSelectionChange(null);
         }
-        setCreatingAnnotation({ start: pendingAnnotationRef.current.start, current: t, quiet });
+        setCreatingAnnotation({ start: pendingAnnotationRef.current.start, current: t });
         pendingAnnotationRef.current = null;
       }
       return;
@@ -706,7 +720,10 @@ export function useSpectrogramInteraction({
       const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
       const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
       if (end > start && activeAnnotationTool !== null) {
-        commitNewAnnotation(start, end, creatingAnnotation.quiet);
+        // Read Alt live (not the quiet flag captured at mousedown/drag-start) so
+        // toggling Alt after the drag began still lands correctly: Alt down by
+        // release suppresses the highlight, Alt released by then re-enables it.
+        commitNewAnnotation(start, end, isAltHeldRef.current);
       }
       setCreatingAnnotation(null);
     }
@@ -717,6 +734,7 @@ export function useSpectrogramInteraction({
       if (end > start) {
         onSelectionChange({ start, end });
         onBoundAnnotationChange(null);
+        snapPlayheadIfOutside(start, end);
       } else {
         onSelectionChange(null);
       }

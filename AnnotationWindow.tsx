@@ -1338,6 +1338,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // push/remove.
   const handleSelectionChange = useCallback((s: Selection | null) => {
     setSelection(s);
+    // Sync synchronously, not just via the state-mirroring effect below: a caller
+    // that seeks in the same tick as committing a new selection (e.g. snapping the
+    // playhead into a just-created selection) needs seek()'s bounded-restart logic
+    // to see the new selection immediately, not the stale one from last render.
+    selectionRef.current = s;
     if (s) {
       activationStack.pushIfAbsent('selection');
       // Pin here, not only on commit: every non-null selection (drag, edge

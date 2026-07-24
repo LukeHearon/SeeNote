@@ -221,6 +221,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   zoomSecRef.current = zoomSec;
   durationRef.current = duration;
 
+  // Holding Alt suspends playhead lock: while the user is alt-dragging annotations
+  // over what they just heard, the view must not scroll out from under the pointer.
+  // Read through a ref so the auto-scroll subscription doesn't churn on every
+  // press/release; the next store tick picks the lock back up on release. Also
+  // read live (not captured at mousedown) by useSpectrogramInteraction so toggling
+  // Alt mid-drag can flip whether the just-created annotation gets highlighted.
+  const altHeld = useAltHeld();
+  const altHeldRef = useRef(altHeld);
+  altHeldRef.current = altHeld;
+
   // --- Interaction Handlers ---
   // The pointer-interaction core (annotation/selection/filter create/resize/drag,
   // click-vs-drag detection, pending-intent refs, the out-of-bounds auto-pan rAF
@@ -273,6 +283,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setCursorPos,
     setSuppressCustomCursor,
     lastManualScrollRef,
+    isAltHeldRef: altHeldRef,
   });
 
   // Reset scroll position to 0 when switching tracks
@@ -283,14 +294,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Tracks which selection the auto-scroll effect below has already suppressed a tick
   // for, so a large/lingering selection doesn't freeze auto-scroll indefinitely.
   const lastSuppressedSelectionRef = useRef<Selection | null>(null);
-
-  // Holding Alt suspends playhead lock: while the user is alt-dragging annotations
-  // over what they just heard, the view must not scroll out from under the pointer.
-  // Read through a ref so the auto-scroll subscription doesn't churn on every
-  // press/release; the next store tick picks the lock back up on release.
-  const altHeld = useAltHeld();
-  const altHeldRef = useRef(altHeld);
-  altHeldRef.current = altHeld;
 
   // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
   // Also fires when `onViewportChange` itself becomes available (e.g. the panel
