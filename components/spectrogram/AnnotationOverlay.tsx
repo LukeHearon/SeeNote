@@ -134,6 +134,15 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         const DELETE_PINNED_INSET = 12;
         const deleteRight = (left + width) - computeButtonAnchorX(left, left + width, containerWidth, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
 
+        const deleteAnnotation = () => {
+            onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
+            if (isSelected) onSelectAnnotation(null);
+            if (boundAnnotationId === annotation.id) {
+                onBoundAnnotationChange(null);
+                onSelectionChange(null);
+            }
+        };
+
         return (
             <div
                key={annotation.id}
@@ -158,12 +167,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    // Middle Click Delete
                    if (e.button === 1) {
                        e.preventDefault();
-                       onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
-                       if (isSelected) onSelectAnnotation(null);
-                       if (boundAnnotationId === annotation.id) {
-                         onBoundAnnotationChange(null);
-                         onSelectionChange(null);
-                       }
+                       deleteAnnotation();
                        return;
                    }
                    onSelectAnnotation(annotation.id);
@@ -176,6 +180,11 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center"
                    onMouseDown={(e) => {
                        e.stopPropagation();
+                       if (e.button === 1) {
+                           e.preventDefault();
+                           deleteAnnotation();
+                           return;
+                       }
                        clickDownRef.current = null;
                        onSelectAnnotation(annotation.id);
                        setResizingAnnotation({ id: annotation.id, side: 'start', originalTime: annotation.start });
@@ -190,6 +199,11 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center"
                    onMouseDown={(e) => {
                        e.stopPropagation();
+                       if (e.button === 1) {
+                           e.preventDefault();
+                           deleteAnnotation();
+                           return;
+                       }
                        clickDownRef.current = null;
                        onSelectAnnotation(annotation.id);
                        setResizingAnnotation({ id: annotation.id, side: 'end', originalTime: annotation.end });
@@ -261,8 +275,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                if (e.button === 1) {
                                    e.preventDefault();
                                    e.stopPropagation();
-                                   onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
-                                   if (isSelected) onSelectAnnotation(null);
+                                   deleteAnnotation();
                                    return;
                                }
                                e.stopPropagation();
@@ -339,12 +352,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    onMouseLeave={onAnnotationMouseLeave}
                    onClick={(e) => {
                        e.stopPropagation();
-                       onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
-                       if (isSelected) onSelectAnnotation(null);
-                       if (boundAnnotationId === annotation.id) {
-                         onBoundAnnotationChange(null);
-                         onSelectionChange(null);
-                       }
+                       deleteAnnotation();
                    }}
                >
                    <X size={10} className="text-white" />
