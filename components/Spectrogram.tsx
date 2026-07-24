@@ -12,6 +12,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
+import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 
 interface SpectrogramProps {
@@ -65,6 +66,8 @@ interface SpectrogramProps {
 export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
+  goToTrackStart: () => void;
+  goToTrackEnd: () => void;
   scrollToTime: (time: number) => void;
   recenterPlayhead: () => void;
   zoomToRange: (startTime: number, endTime: number) => void;
@@ -277,6 +280,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setScroll(0, 'identReset');
   }, [ident, setScroll]);
 
+  // Tracks which selection the auto-scroll effect below has already suppressed a tick
+  // for, so a large/lingering selection doesn't freeze auto-scroll indefinitely.
+  const lastSuppressedSelectionRef = useRef<Selection | null>(null);
+
+  // Holding Alt suspends playhead lock: while the user is alt-dragging annotations
+  // over what they just heard, the view must not scroll out from under the pointer.
+  // Read through a ref so the auto-scroll subscription doesn't churn on every
+  // press/release; the next store tick picks the lock back up on release.
+  const altHeld = useAltHeld();
+  const altHeldRef = useRef(altHeld);
+  altHeldRef.current = altHeld;
+
   // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
   // Also fires when `onViewportChange` itself becomes available (e.g. the panel
   // is toggled on) so a freshly-mounted consumer gets the current viewport
@@ -287,11 +302,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }, [onViewportChange, scrollLeft, pixelsPerSecond, containerWidth]);
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
-  // currently-visible window. Suppressed while the playhead is still inside an active
-  // selection: the user positioned the canvas intentionally relative to that selection
-  // and auto-scroll would disrupt that. Once playback moves past the selection (e.g. a
-  // buzzdetect-panel click sets a one-bin selection, then playback continues past it),
-  // auto-scroll resumes tracking — a lingering selection shouldn't permanently freeze it.
+  // currently-visible window. Suppressed for a single tick right after a new selection
+  // appears while the playhead is inside it: the user just positioned the canvas
+  // intentionally relative to that selection (e.g. a buzzdetect-panel click sets a
+  // one-bin selection) and an immediate auto-scroll would yank the view away. Tracked
+  // by identity (lastSuppressedSelectionRef) rather than by re-checking the time range
+  // on every tick — a large/lingering selection must not freeze auto-scroll for as long
+  // as the playhead happens to stay inside it.
   // Also disabled when the entire file fits in the viewport (zoom ≤ 100%): in that case
   // the playhead can travel the full width of the screen without the view moving.
   //
@@ -304,9 +321,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // live time from the store so the playhead and the scroll stay in lockstep.
   useEffect(() => {
       const autoScroll = () => {
-          if (!playheadLocked || !isPlaying || !containerRef.current) return;
+          if (!playheadLocked || altHeldRef.current || !isPlaying || !containerRef.current) return;
           const t = currentTimeStore.get();
-          if (selection && t >= selection.start && t <= selection.end) return;
+          if (selection && t >= selection.start && t <= selection.end) {
+              if (selection !== lastSuppressedSelectionRef.current) {
+                  lastSuppressedSelectionRef.current = selection;
+                  return;
+              }
+          }
           const containerWidth = containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
@@ -724,6 +746,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   }, [sortedAnnotations, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
 
+  // Track start/end: unlike prev/next annotation, these always clear any
+  // active selection/binding rather than jumping to its edge first — they're
+  // an unconditional "go to the absolute start/end" action.
+  const goToTrackStart = useCallback(() => {
+    onSeek(0);
+    scrollToAnnotation(0);
+    onSelectionChange(null);
+    onBoundAnnotationChange(null);
+  }, [onSeek, scrollToAnnotation, onSelectionChange, onBoundAnnotationChange]);
+
+  const goToTrackEnd = useCallback(() => {
+    onSeek(duration);
+    scrollToAnnotation(duration);
+    onSelectionChange(null);
+    onBoundAnnotationChange(null);
+  }, [onSeek, scrollToAnnotation, duration, onSelectionChange, onBoundAnnotationChange]);
+
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
@@ -803,6 +842,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
     goToNextAnnotation,
+    goToTrackStart,
+    goToTrackEnd,
     scrollToTime,
     recenterPlayhead,
     zoomToRange,
@@ -812,7 +853,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     focusAnnotationInput: (id: string) => {
       inputRefs.current[id]?.focus();
     },
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
+  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 

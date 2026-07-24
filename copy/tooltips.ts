@@ -2,10 +2,10 @@ import { getOverride } from './overrideStore';
 import { formatModKey } from '../utils/platform';
 
 export const tooltips = {
-  get skipToStart() { return getOverride('tooltips.skipToStart') ?? "Skip to start"; },
-  get prevAnnotation() { return formatModKey(getOverride('tooltips.prevAnnotation') ?? "Previous annotation ({mod}+←  or  ;)"); },
-  get nextAnnotation() { return formatModKey(getOverride('tooltips.nextAnnotation') ?? "Next annotation ({mod}+→  or  ')"); },
-  get skipToEnd() { return getOverride('tooltips.skipToEnd') ?? "Skip to end"; },
+  get skipToStart() { return formatModKey(getOverride('tooltips.skipToStart') ?? "Skip to start ({mod}+←)"); },
+  get prevAnnotation() { return getOverride('tooltips.prevAnnotation') ?? "Previous annotation (Alt+←)"; },
+  get nextAnnotation() { return getOverride('tooltips.nextAnnotation') ?? "Next annotation (Alt+→)"; },
+  get skipToEnd() { return formatModKey(getOverride('tooltips.skipToEnd') ?? "Skip to end ({mod}+→)"); },
   get lockPlayhead() { return getOverride('tooltips.lockPlayhead') ?? "Lock/Unlock Playhead (C)"; },
   get jumpToTime() { return getOverride('tooltips.jumpToTime') ?? "Jump to time"; },
   editSelection: (label: string) => `Edit selection ${label}`,

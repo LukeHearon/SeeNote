@@ -7,6 +7,7 @@ import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { tooltips } from '../copy/tooltips';
+import { useAltHeld } from '../hooks/useAltHeld';
 
 type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
@@ -126,6 +127,10 @@ function Toolbar({
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
+
+  // Alt suspends playhead lock — pale the lock icon to show it's momentarily inert
+  // while leaving it in its active (locked) state.
+  const altHeld = useAltHeld();
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
@@ -327,7 +332,7 @@ function Toolbar({
         <button
           onClick={onTogglePlayheadLock}
           disabled={!videoSrc}
-          className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          className={`p-1.5 rounded disabled:opacity-40 transition-colors flex-none ${playheadLocked ? `bg-slate-700 ${altHeld ? 'text-[#e65161]/40' : 'text-[#e65161]'}` : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
           data-tooltip={tooltips.lockPlayhead}
           data-help-target="recenter-playhead"
         >

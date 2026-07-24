@@ -40,8 +40,10 @@ const GROUPS: Group[] = [
       { codes: ['Comma'], display: ',', label: 'Nudge video forward one frame' },
       { codes: ['Period'], display: '.', label: 'Nudge video backward one frame' },
       { codes: ['KeyC'], display: 'C', label: 'Toggle lock playhead to center' },
-      { codes: ['ArrowLeft'], display: '{mod}+←', label: 'Jump to previous annotation' },
-      { codes: ['ArrowRight'], display: '{mod}+→', label: 'Jump to next annotation' },
+      { codes: ['ArrowLeft'], display: '{mod}+←', label: 'Jump to start of track' },
+      { codes: ['ArrowRight'], display: '{mod}+→', label: 'Jump to end of track' },
+      { codes: ['ArrowLeft'], display: 'Alt+←', label: 'Jump to previous annotation' },
+      { codes: ['ArrowRight'], display: 'Alt+→', label: 'Jump to next annotation' },
       { codes: ['ArrowUp'], display: '{mod}+↑', label: 'Previous track' },
       { codes: ['ArrowDown'], display: '{mod}+↓', label: 'Next track' },
     ],
@@ -107,6 +109,7 @@ const MOD_CODES = isMac
 function codesForShortcut(s: ShortcutEntry): Set<string> {
   const set = new Set(s.codes);
   if (s.display.includes('Shift+')) { set.add('ShiftLeft'); set.add('ShiftRight'); }
+  if (s.display.includes('Alt+'))   { set.add('AltLeft'); set.add('AltRight'); }
   if (s.display.includes('{mod}'))  { MOD_CODES.forEach(c => set.add(c)); }
   return set;
 }
@@ -115,6 +118,8 @@ function codesForShortcut(s: ShortcutEntry): Set<string> {
 function shortcutsForCode(code: string) {
   if (code === 'ShiftLeft' || code === 'ShiftRight')
     return ALL_SHORTCUTS.filter(s => s.display.includes('Shift+'));
+  if (code === 'AltLeft' || code === 'AltRight')
+    return ALL_SHORTCUTS.filter(s => s.display.includes('Alt+'));
   if (MOD_CODES.includes(code))
     return ALL_SHORTCUTS.filter(s => s.display.includes('{mod}'));
   return ALL_SHORTCUTS.filter(s => s.codes.includes(code));

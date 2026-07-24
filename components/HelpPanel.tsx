@@ -240,6 +240,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                   <li>{md(helpPanel.annotations.creating.li1)}</li>
                   <li>{md(helpPanel.annotations.creating.li2)}</li>
                   <li>{md(helpPanel.annotations.creating.li3)}</li>
+                  <li>{md(helpPanel.annotations.creating.li4)}</li>
                 </ul>
               </Section>
 
