@@ -89,9 +89,9 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         const top = 22 + (annotation.layerIndex * 35);
 
         const baseColor = annotation.color || "#ffffff";
-        const isWhite = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
+        const isCustomAnnotation = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
 
-        const styleVars = isWhite ? {
+        const styleVars = isCustomAnnotation ? {
             borderColor: isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.8)',
             bgColor: isSelected ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.15)',
             textColor: '#ffffff'
@@ -306,7 +306,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                ) : null}
 
                {/* Pencil icon — appears on hover for Custom annotations only, click to focus text input */}
-               {isHovered && isWhite && (
+               {isHovered && isCustomAnnotation && (
                  width > 60 ? (
                    // Render inside the annotation
                    <button
