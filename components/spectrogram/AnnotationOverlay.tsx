@@ -305,8 +305,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    )
                ) : null}
 
-               {/* Pencil icon — appears on hover, click to focus text input */}
-               {isHovered && (
+               {/* Pencil icon — appears on hover for Custom annotations only, click to focus text input */}
+               {isHovered && isWhite && (
                  width > 60 ? (
                    // Render inside the annotation
                    <button
