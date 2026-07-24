@@ -105,10 +105,18 @@ export function useAnnotationTools({
       prevPersistedToolsRef.current = toPersistedTools(tools);
       skipToolPersistRef.current = true;
       setAnnotationTools(tools);
+      // The annotation-load effect can resolve before this (both race on
+      // mount), parsing labels against only the synthetic Custom tool and
+      // stamping them white. Re-match now that the real tools are in so any
+      // annotation loaded early still picks up its tool's color.
+      setAnnotations(prev => prev.map(a => {
+        const match = tools.find(t => t.text === a.text);
+        return match ? { ...a, color: match.color } : a;
+      }));
     } catch (err) {
       addLog(`Error loading annotation tools: ${err}`, 'error');
     }
-  }, []);
+  }, [setAnnotations]);
 
   // Reconcile in-memory tools to disk: folder ops from the snapshot diff, then
   // the hotkey map + Custom color into settings.json. Debounced so rapid
