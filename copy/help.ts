@@ -75,7 +75,7 @@ export const helpPanel = {
       get note2() { return getOverride('helpPanel.guide.twoModes.note2') ?? "`Esc` is the universal undo-layer key: it pops the most recently activated layer (band, filter-tool, selection, annotation tool) in the reverse order you turned them on."; },
     },
     transport: {
-      get p1() { return getOverride('helpPanel.guide.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere."; },
+      get p1() { return getOverride('helpPanel.guide.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere. `{mod}+←` / `{mod}+→` jump straight to the start/end of the track; `Alt+←` / `Alt+→` step to the previous/next annotation."; },
       get p2() { return getOverride('helpPanel.guide.transport.p2') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely. Holding `Alt`/`Option` suspends the lock for as long as it's held (the icon pales), so alt-dragging annotations doesn't fight the auto-scroll."; },
       get p3() { return getOverride('helpPanel.guide.transport.p3') ?? "The [volume slider](volume-control) supports up to 2× gain boost (slider past center). Press `M` to mute. Right-click the volume control to access **Restart Audio**, which re-initialises the audio engine (useful after an audio device change on Windows)."; },
     },
@@ -129,7 +129,7 @@ export const helpPanel = {
     },
     editing: {
       get li1() { return getOverride('helpPanel.annotations.editing.li1') ?? "**Resize:** drag the left or right edge handle."; },
-      get li2() { return getOverride('helpPanel.annotations.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `{mod}+←` / `{mod}+→` to jump between annotations."; },
+      get li2() { return getOverride('helpPanel.annotations.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `Alt+←` / `Alt+→` to jump between annotations."; },
       get li3() { return getOverride('helpPanel.annotations.editing.li3') ?? "**Rename:** hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically."; },
       get li4() { return getOverride('helpPanel.annotations.editing.li4') ?? "**Delete:** select an annotation and press `Delete` / `Backspace`, or middle-click it directly."; },
       get li5() { return getOverride('helpPanel.annotations.editing.li5') ?? "**Undo/Redo:** `{mod}+Z` / `{mod}+Shift+Z`."; },

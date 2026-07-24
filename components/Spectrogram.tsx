@@ -66,6 +66,8 @@ interface SpectrogramProps {
 export interface SpectrogramHandle {
   goToPrevAnnotation: () => void;
   goToNextAnnotation: () => void;
+  goToTrackStart: () => void;
+  goToTrackEnd: () => void;
   scrollToTime: (time: number) => void;
   recenterPlayhead: () => void;
   zoomToRange: (startTime: number, endTime: number) => void;
@@ -744,6 +746,23 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   }, [sortedAnnotations, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
 
+  // Track start/end: unlike prev/next annotation, these always clear any
+  // active selection/binding rather than jumping to its edge first — they're
+  // an unconditional "go to the absolute start/end" action.
+  const goToTrackStart = useCallback(() => {
+    onSeek(0);
+    scrollToAnnotation(0);
+    onSelectionChange(null);
+    onBoundAnnotationChange(null);
+  }, [onSeek, scrollToAnnotation, onSelectionChange, onBoundAnnotationChange]);
+
+  const goToTrackEnd = useCallback(() => {
+    onSeek(duration);
+    scrollToAnnotation(duration);
+    onSelectionChange(null);
+    onBoundAnnotationChange(null);
+  }, [onSeek, scrollToAnnotation, duration, onSelectionChange, onBoundAnnotationChange]);
+
   const scrollToTime = useCallback((time: number) => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
@@ -823,6 +842,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
     goToNextAnnotation,
+    goToTrackStart,
+    goToTrackEnd,
     scrollToTime,
     recenterPlayhead,
     zoomToRange,
@@ -832,7 +853,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     focusAnnotationInput: (id: string) => {
       inputRefs.current[id]?.focus();
     },
-  }), [goToPrevAnnotation, goToNextAnnotation, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
+  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
