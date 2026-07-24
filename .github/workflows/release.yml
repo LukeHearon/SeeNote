@@ -129,7 +129,13 @@ jobs:
             echo "No signing identity configured — skipping verification."
             exit 0
           fi
-          APP=$(find src-tauri/target -name 'SeeNote.app' -maxdepth 6 | head -1)
+          # No -maxdepth: the universal target nests one level deeper than a
+          # native one (target/universal-apple-darwin/release/bundle/macos).
+          APP=$(find src-tauri/target -type d -name 'SeeNote.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "No SeeNote.app found under src-tauri/target." >&2
+            exit 1
+          fi
           echo "Verifying $APP"
           codesign -dvvv "$APP"
           codesign -d -r- "$APP"
