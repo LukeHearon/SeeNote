@@ -357,8 +357,17 @@ export function useSpectrogramInteraction({
             else if (desiredEndPx > containerWidth) overflow = desiredEndPx - containerWidth;
           }
         } else {
-          if (pos.clientX < rect.left) overflow = pos.clientX - rect.left;       // negative → pan left
-          else if (pos.clientX > rect.right) overflow = pos.clientX - rect.right; // positive → pan right
+          // Trigger against the app window's edges, not the container's — the container
+          // rect is asymmetric (e.g. a sidebar keeps its left edge well inside the window,
+          // while its right edge often coincides with the window edge). When the window is
+          // flush against the monitor edge the OS clamps the cursor there, so it can never
+          // physically overflow rect.right. Pulling the bound in by a margin gives both
+          // sides room to trigger before the cursor would need to leave the window.
+          const AUTOPAN_EDGE_MARGIN = 24;
+          const leftBound = AUTOPAN_EDGE_MARGIN;
+          const rightBound = window.innerWidth - AUTOPAN_EDGE_MARGIN;
+          if (pos.clientX < leftBound) overflow = pos.clientX - leftBound;       // negative → pan left
+          else if (pos.clientX > rightBound) overflow = pos.clientX - rightBound; // positive → pan right
         }
 
         if (overflow !== 0) {
