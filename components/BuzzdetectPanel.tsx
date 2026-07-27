@@ -239,6 +239,22 @@ export default function BuzzdetectPanel({
       ctx.fillRect(hx, 0, Math.max(1, binWidth * pixelsPerSecond), h);
     }
 
+    // Darken frames where no enabled neuron cleared its threshold, so detected
+    // frames pop by contrast against a dimmed background.
+    if (enabled.length > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      for (let i = iLeft; i <= iRight; i++) {
+        const bx = xOf(starts[i]);
+        const bw = binWidth * pixelsPerSecond;
+        if (bx > width || bx + bw < 0) continue;
+        let detected = false;
+        for (const n of enabled) {
+          if (values[n][i] >= thresholdOf(neurons[n])) { detected = true; break; }
+        }
+        if (!detected) ctx.fillRect(bx, 0, Math.max(1, bw), h);
+      }
+    }
+
     // Soft vertical hash marks at frame boundaries (skip when bins get tight).
     // Both edges of each frame are drawn from `starts`, so an overridden
     // binWidth reads as separated frames rather than a contiguous grid.
@@ -300,9 +316,10 @@ export default function BuzzdetectPanel({
           const cx = xOf(starts[i] + binWidth / 2);
           if (cx < -4 || cx > width + 4) continue;
           const cy = yOf(values[n][i]);
+          const isPositive = values[n][i] >= th;
           ctx.beginPath();
-          ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-          if (values[n][i] >= th) {
+          ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
+          if (isPositive) {
             ctx.fillStyle = color;
             ctx.fill();
           } else {
