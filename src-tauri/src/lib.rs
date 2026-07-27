@@ -92,6 +92,8 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // manage() after plugin registration is fine — Tauri inserts state into the
         // app container regardless of call order relative to plugins.
         .manage(commands::audio::PcmStreamState::default())
@@ -167,6 +169,10 @@ pub fn run() {
             commands::credentials::set_git_credential,
             commands::credentials::delete_git_credential,
             commands::video_server::get_video_server_url,
+            commands::updater::check_for_update,
+            commands::updater::install_update,
+            commands::updater::is_update_supported,
+            commands::updater::open_releases_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

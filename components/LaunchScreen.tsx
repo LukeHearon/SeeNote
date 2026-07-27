@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
@@ -8,6 +8,7 @@ import { findFirstValidAncestor } from '../utils/helpers';
 import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
 import { launchScreen } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
+import { useAppUpdate } from '../hooks/useAppUpdate';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
@@ -68,6 +69,7 @@ export default function LaunchScreen({
   isLoadingFiles,
   removeRecentFile,
 }: Props) {
+  const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
   const [showCreate, setShowCreate] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -280,9 +282,38 @@ export default function LaunchScreen({
 
   return (
     <div className="h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
-      <div className="flex items-center gap-3 mb-10 shrink-0">
-        <AudioWaveform size={36} className="text-blue-400" />
-        <span className="text-white text-3xl font-semibold tracking-tight">{launchScreen.appName}</span>
+      <div className="flex flex-col items-center gap-3 mb-10 shrink-0">
+        <div className="flex items-center gap-3">
+          <AudioWaveform size={36} className="text-blue-400" />
+          <span className="text-white text-3xl font-semibold tracking-tight">{launchScreen.appName}</span>
+        </div>
+        {update && (
+          <div className="flex items-center gap-2 pl-3 pr-2 py-1 bg-blue-950/60 border border-blue-800 rounded-full text-xs">
+            <span className="text-blue-200">{launchScreen.updateAvailable(update.version)}</span>
+            {updateState === 'error' && (
+              <span className="text-red-400" data-tooltip={updateError ?? undefined}>
+                {launchScreen.updateErrorPrefix}
+              </span>
+            )}
+            {supported && (
+              <button
+                onClick={applyUpdate}
+                disabled={updateState === 'installing'}
+                className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-wait text-white rounded-full transition-colors"
+              >
+                {updateState === 'installing' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                {updateState === 'installing' ? launchScreen.updatingButton : launchScreen.updateButton}
+              </button>
+            )}
+            <button
+              onClick={viewRelease}
+              className="flex items-center gap-1 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-full transition-colors"
+            >
+              <ExternalLink size={11} />
+              {launchScreen.viewButton}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="w-full max-w-xl flex flex-col min-h-0">

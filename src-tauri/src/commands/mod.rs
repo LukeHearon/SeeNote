@@ -6,5 +6,6 @@ pub mod filesystem;
 pub mod git_sync;
 pub mod projects;
 pub mod shared;
+pub mod updater;
 pub mod video_server;
 pub mod window;
