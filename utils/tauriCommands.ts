@@ -177,6 +177,32 @@ export const toAssetUrl = (absolutePath: string): string =>
 export const toVideoServerUrl = (absolutePath: string): Promise<string> =>
   invoke('get_video_server_url', { path: absolutePath });
 
+// ── Auto-update ───────────────────────────────────────────────────────────────
+
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes: string | null;
+}
+
+/** Checks the GitHub releases updater manifest. Resolves to null when already up to date. */
+export const checkForUpdate = (): Promise<UpdateInfo | null> =>
+  invoke('check_for_update');
+
+/** Downloads and installs the available update, then restarts the app. Only
+ * resolves on failure — success ends the process. */
+export const installUpdate = (): Promise<void> =>
+  invoke('install_update');
+
+/** False on a Linux install that isn't running as an AppImage (e.g. .deb) —
+ * there's no artifact the updater can swap in for those. */
+export const isUpdateSupported = (): Promise<boolean> =>
+  invoke('is_update_supported');
+
+/** Opens the GitHub releases page in the user's default browser. */
+export const openReleasesPage = (url: string): Promise<void> =>
+  invoke('open_releases_page', { url });
+
 // ── PCM streaming ─────────────────────────────────────────────────────────────
 
 export interface PcmStreamHandle {

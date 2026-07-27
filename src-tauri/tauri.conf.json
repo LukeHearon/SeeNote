@@ -30,10 +30,17 @@
     }
   },
   "plugins": {
-    "dialog": null
+    "dialog": null,
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIyMEIwNDNBMkQ0OTZEQ0QKUldUTmJVa3RPZ1FMSXVKdUVQdGduWFFVU1lOakdIMFQvMC9IOUd3YjRXUHlOY21mRGJIVklYQnUK",
+      "endpoints": [
+        "https://github.com/LukeHearon/SeeNote/releases/latest/download/latest.json"
+      ]
+    }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

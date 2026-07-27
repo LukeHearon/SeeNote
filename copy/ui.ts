@@ -30,8 +30,13 @@ export const launchScreen = {
   get relinkButton() { return getOverride('ui.launchScreen.relinkButton') ?? "Re-link"; },
   get nameLabel() { return getOverride('ui.launchScreen.nameLabel') ?? "Name"; },
   get cancelButton() { return getOverride('ui.launchScreen.cancelButton') ?? "Cancel"; },
+  get updateButton() { return getOverride('ui.launchScreen.updateButton') ?? "Update"; },
+  get updatingButton() { return getOverride('ui.launchScreen.updatingButton') ?? "Updating…"; },
+  get viewButton() { return getOverride('ui.launchScreen.viewButton') ?? "View"; },
+  get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
+  updateAvailable: (version: string) => `Version ${version} is available`,
 };
 
 export const createProjectModal = {
