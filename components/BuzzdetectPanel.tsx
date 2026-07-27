@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import { Sliders, GripHorizontal } from 'lucide-react';
 import { BuzzdetectData, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
@@ -285,16 +285,6 @@ export default function BuzzdetectPanel({
     }
     ctx.setLineDash([]);
 
-    // Playhead.
-    const px = xOf(currentTimeStore.get());
-    if (px >= 0 && px <= width) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(px, 0); ctx.lineTo(px, h);
-      ctx.stroke();
-    }
-
     // Polylines + dots, one neuron at a time.
     const drawDots = binPx >= 4;
     for (const n of enabled) {
@@ -364,44 +354,80 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, fileWideRange, viewportStore, currentTimeStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, fileWideRange, viewportStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
 
-  // Coalesce redraws into a single rAF (matches the spectrogram's cadence).
-  // `drawRef` always holds the latest `draw` so the viewport subscription (which
-  // is set up once) calls the current closure without re-subscribing per render.
-  const rafRef = useRef<number | null>(null);
+  // Overlay canvas: just the playhead line, aligned to the same time→pixel
+  // transform as the main canvas. Kept separate so playback ticks (~50/s)
+  // repaint only this cheap line instead of the whole data-driven canvas above
+  // (which was causing visible flicker/jank during playback).
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const drawOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = areaSize.width;
+    const h = areaSize.height;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (width <= 0 || h <= 0) return;
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    const { scrollLeft, pixelsPerSecond } = viewportStore.get();
+    const px = timeToX(currentTimeStore.get(), scrollLeft, pixelsPerSecond);
+    if (px >= 0 && px <= width) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, 0); ctx.lineTo(px, h);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }, [viewportStore, currentTimeStore, areaSize]);
+
+  // Self-scheduling rAF loop, split into two dirty flags — matches the
+  // spectrogram's draw/overlay split: `drawDirty` covers the expensive
+  // data-driven canvas (redrawn on data/viewport/selection/threshold changes),
+  // `overlayDirty` covers only the playhead line (redrawn every playback tick).
+  // Without the split, every ~50Hz currentTime tick was re-running the full
+  // canvas — including the per-frame darken-overlay scan — which is what made
+  // the playhead visibly janky during playback.
   const drawRef = useRef(draw);
-  drawRef.current = draw;
-  // Keep the FIRST pending frame rather than cancelling and re-scheduling: the
-  // currentTime store ticks ~50x/s, so cancel-and-reschedule starves the draw
-  // (each tick pushes the callback to the next frame, which the next tick
-  // cancels) and the canvas freezes for the whole of playback.
-  const scheduleDraw = useCallback(() => {
-    if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      drawRef.current();
-    });
-  }, []);
+  const drawDirtyRef = useRef(true);
+  useLayoutEffect(() => {
+    drawRef.current = draw;
+    drawDirtyRef.current = true;
+  }, [draw]);
 
-  // Redraw on prop-driven changes (data, currentTime, selection, settings…).
-  useEffect(() => {
-    scheduleDraw();
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [draw, scheduleDraw]);
+  const drawOverlayRef = useRef(drawOverlay);
+  const overlayDirtyRef = useRef(true);
+  useLayoutEffect(() => {
+    drawOverlayRef.current = drawOverlay;
+    overlayDirtyRef.current = true;
+  }, [drawOverlay]);
 
   // Redraw on spectrogram pan/zoom/resize without any React render: the store
   // notifies, we read the new viewport at draw time. This is what keeps panning
-  // smooth while the panel is open.
-  useEffect(() => viewportStore.subscribe(scheduleDraw), [viewportStore, scheduleDraw]);
-  // Redraw the playhead line as playback advances (time flows through the store,
-  // not a prop), keeping it x-aligned with the spectrogram playhead.
-  useEffect(() => currentTimeStore.subscribe(scheduleDraw), [currentTimeStore, scheduleDraw]);
+  // smooth while the panel is open. Panning shifts both the data canvas and the
+  // playhead, so it marks both dirty.
+  useEffect(() => viewportStore.subscribe(() => {
+    drawDirtyRef.current = true;
+    overlayDirtyRef.current = true;
+  }), [viewportStore]);
+  // Playback ticks only move the playhead line — no need to touch the data canvas.
+  useEffect(() => currentTimeStore.subscribe(() => { overlayDirtyRef.current = true; }), [currentTimeStore]);
+
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      if (drawDirtyRef.current) { drawRef.current(); drawDirtyRef.current = false; }
+      if (overlayDirtyRef.current) { drawOverlayRef.current(); overlayDirtyRef.current = false; }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Keep canvases sized to the drawing area.
   useEffect(() => {
@@ -417,6 +443,10 @@ export default function BuzzdetectPanel({
       if (canvasRef.current) {
         canvasRef.current.width = Math.round(w * dpr);
         canvasRef.current.height = Math.round(hh * dpr);
+      }
+      if (overlayCanvasRef.current) {
+        overlayCanvasRef.current.width = Math.round(w * dpr);
+        overlayCanvasRef.current.height = Math.round(hh * dpr);
       }
       if (yAxisCanvasRef.current) {
         yAxisCanvasRef.current.width = Math.round(Y_AXIS_WIDTH * dpr);
@@ -535,6 +565,7 @@ export default function BuzzdetectPanel({
           }}
         >
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+          <canvas ref={overlayCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
 
           {!data && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
