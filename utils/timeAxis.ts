@@ -31,7 +31,7 @@ export function formatRulerTime(s: number, timeStep: number, viewSpan: number): 
   const m = Math.floor((totalSec % 3600) / 60);
   const sec = totalSec % 60;
 
-  const showHours = viewSpan >= 3600;
+  const showHours = viewSpan >= 3600 || totalSec >= 3600;
 
   if (showHours) {
     return `${h}h${String(m).padStart(2, '0')}m${String(sec).padStart(2, '0')}s`;
