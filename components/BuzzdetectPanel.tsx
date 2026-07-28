@@ -339,6 +339,36 @@ export default function BuzzdetectPanel({
     const enabled: number[] = [];
     for (let n = 0; n < neurons.length; n++) if (!hidden.has(neurons[n])) enabled.push(n);
 
+    // Bin width (seconds) for the polyline (below) and for hover/click: above
+    // MAX_LINE_POINTS visible bins, an auto width groups them so the drawn
+    // line stays near that point count instead of a scratchy per-bin path;
+    // the user's override, if set, replaces that auto width outright. Bucket
+    // boundaries are anchored to absolute time (floor(t / binWidthSec)), not
+    // to iLeft — otherwise a one-bin scroll shifts every bucket boundary and
+    // re-partitions which frames get grouped together, so the "smoothed"
+    // line (and the hover readout) would visibly writhe as you scrolled.
+    const binPx = binWidth * pixelsPerSecond;
+    const visibleCount = iRight - iLeft + 1;
+    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : binWidth;
+    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, binWidth);
+    const grouped = effectiveBinWidthSec > binWidth * 1.0001;
+    const drawDots = binPx >= 4 && !grouped;
+    // Same visibility gate the click/hover handlers use to decide whether a
+    // single-frame selection is meaningful — individual frames read as
+    // distinguishable only while their dots and boundary grid are drawn.
+    framesVisibleRef.current = drawDots;
+    groupedRef.current = grouped;
+    effectiveBinWidthRef.current = effectiveBinWidthSec;
+    if (showSettings) {
+      setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
+    }
+
+    // With individual frames visible, detection rate is a binary per-frame
+    // outcome (each dot is 0 or 1) — not a rate at all — so the axis should
+    // read "Detection"/"No Detection" rather than 0%/100%, and the user's Y
+    // limits (meant for a continuous scale) don't apply.
+    const binaryDetection = seriesMode === 'detectionRate' && drawDots;
+
     // Y-axis scale: the user's manual override if set, else the mode's
     // auto-calculated range (pre-memoised so scrolling/panning does NOT
     // trigger a rescan). Thresholds are cheap and may change without
@@ -363,7 +393,9 @@ export default function BuzzdetectPanel({
     }
     if (!isFinite(yMin) || !isFinite(yMax)) { yMin = -2; yMax = 1; }
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1; }
-    if (!yAxisOverride) {
+    if (binaryDetection) {
+      yMin = 0; yMax = 1;
+    } else if (!yAxisOverride) {
       if (seriesMode === 'activation') {
         // 6% headroom so dots at the extremes aren't clipped.
         const padFrac = (yMax - yMin) * 0.06;
@@ -378,30 +410,6 @@ export default function BuzzdetectPanel({
 
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
-
-    // Bin width (seconds) for the polyline (below) and for hover/click: above
-    // MAX_LINE_POINTS visible bins, an auto width groups them so the drawn
-    // line stays near that point count instead of a scratchy per-bin path;
-    // the user's override, if set, replaces that auto width outright. Bucket
-    // boundaries are anchored to absolute time (floor(t / binWidthSec)), not
-    // to iLeft — otherwise a one-bin scroll shifts every bucket boundary and
-    // re-partitions which frames get grouped together, so the "smoothed"
-    // line (and the hover readout) would visibly writhe as you scrolled.
-    const binPx = binWidth * pixelsPerSecond;
-    const visibleCount = iRight - iLeft + 1;
-    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : binWidth;
-    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, binWidth);
-    const grouped = effectiveBinWidthSec > binWidth * 1.0001;
-    const drawDots = binPx >= 4 && !grouped;
-    // Same visibility gate the click/hover handlers use to decide whether a
-    // single-frame selection is meaningful — individual frames read as
-    // distinguishable only while their dots and boundary grid are drawn.
-    framesVisibleRef.current = drawDots;
-    groupedRef.current = grouped;
-    effectiveBinWidthRef.current = effectiveBinWidthSec;
-    if (showSettings) {
-      setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
-    }
 
     // Frame bands: a faint wash over the time each frame actually covers, so
     // uncovered time (frame length overridden shorter than the frame spacing)
@@ -567,12 +575,17 @@ export default function BuzzdetectPanel({
         yctx.font = '10px sans-serif';
         yctx.textAlign = 'right';
         yctx.textBaseline = 'middle';
-        const TICKS = 4;
-        for (let k = 0; k <= TICKS; k++) {
-          const v = yMin + (k / TICKS) * (yMax - yMin);
-          const y = yOf(v);
-          if (y < 8 || y > h - 6) continue;
-          yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
+        if (binaryDetection) {
+          const yTop = yOf(1);
+          if (yTop >= 8 && yTop <= h - 6) yctx.fillText(buzzdetectCopy.detection, Y_AXIS_WIDTH - 6, yTop, Y_AXIS_WIDTH - 8);
+        } else {
+          const TICKS = 4;
+          for (let k = 0; k <= TICKS; k++) {
+            const v = yMin + (k / TICKS) * (yMax - yMin);
+            const y = yOf(v);
+            if (y < 8 || y > h - 6) continue;
+            yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
+          }
         }
         yctx.restore();
       }
