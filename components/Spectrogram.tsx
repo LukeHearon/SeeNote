@@ -870,13 +870,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       setScroll(newScrollLeft, 'zoom');
       onZoomChange(newZoomSec);
     } else {
+      // While locked-to-playhead and playing, the auto-scroll effect below
+      // recenters on every playback tick and would immediately undo a manual
+      // pan anyway. Applying it regardless still publishes the transient
+      // scroll through the viewport store, which the buzzdetect panel's
+      // independent rAF loop can catch and draw before auto-scroll corrects
+      // it — a visible jiggle there even though the spectrogram itself never
+      // appears to move. Skip the pan outright so nothing transient publishes.
+      if (playheadLocked && isPlaying) return;
       const panAmount = deltaY + deltaX;
       const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
-  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange]);
+  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange, playheadLocked, isPlaying]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
