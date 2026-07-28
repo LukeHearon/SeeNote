@@ -132,6 +132,10 @@ function Toolbar({
   // while leaving it in its active (locked) state.
   const altHeld = useAltHeld();
 
+  // Current-time box grows to fit long durations (e.g. >100,000s) instead of
+  // truncating — width in ch matches the monospace "12345.67s" readout.
+  const timeBoxWidth = `${Math.max(Math.floor(duration || 0).toString().length + 7, 7)}ch`;
+
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
   const filterStrengthRef = useRef(filterStrength);
@@ -375,7 +379,8 @@ function Toolbar({
           {editingTimeField === 'time' ? (
             <input
               autoFocus
-              className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded-md px-2 py-1 w-[5rem] outline-none"
+              className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded-md px-2 py-1 outline-none"
+              style={{ width: timeBoxWidth }}
               value={editingTimeRaw}
               onChange={e => setEditingTimeRaw(e.target.value)}
               onKeyDown={e => {
@@ -386,7 +391,8 @@ function Toolbar({
             />
           ) : (
             <button
-              className="flex items-center justify-end px-2 py-1 w-[5rem] bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+              className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+              style={{ width: timeBoxWidth }}
               data-tooltip={tooltips.jumpToTime}
               onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTimeStore.get().toFixed(2)); }}
             >
