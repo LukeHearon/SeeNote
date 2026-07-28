@@ -220,9 +220,29 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const zoomSecRef = useRef(zoomSec);
 
-  // Keep refs in sync so RAF/window handlers read current values without stale closures.
-  pixelsPerSecondRef.current = pixelsPerSecond;
-  zoomSecRef.current = zoomSec;
+  // Keep refs in sync so RAF/window handlers read current values without stale
+  // closures.
+  //
+  // pixelsPerSecondRef follows the same rule as scrollLeftRef above: the zoom
+  // actions write it SYNCHRONOUSLY, and render must not push a stale prop back
+  // over a fresher write. `zoomSec` is owned by the parent, so a zoom lands in
+  // the ref one commit before it lands in the prop; an unconditional
+  // `ref = pixelsPerSecond` here would regress the ref for that commit. The rAF
+  // draw reads scrollLeft and pixelsPerSecond live, so a regressed pps pairs the
+  // NEW scroll offset with the OLD zoom — startTime = newScroll / oldPps points
+  // at an unrelated part of the file, which showed up as a one-frame flash of a
+  // different region every time the zoom level changed.
+  //
+  // Writing only when the inputs actually change keeps genuine external changes
+  // (toolbar zoom, container resize, track switch) flowing through while leaving
+  // a synchronous write from this frame's zoom action intact.
+  const prevZoomInputsRef = useRef({ zoomSec: -1, containerWidth: -1 });
+  if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
+      prevZoomInputsRef.current.containerWidth !== containerWidth) {
+    prevZoomInputsRef.current = { zoomSec, containerWidth };
+    pixelsPerSecondRef.current = pixelsPerSecond;
+    zoomSecRef.current = zoomSec;
+  }
   durationRef.current = duration;
 
   // Holding Alt suspends playhead lock: while the user is alt-dragging annotations
@@ -355,6 +375,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     sampleRate,
     cacheVersion,
     scrollLeftRef,
+    pixelsPerSecondRef,
     pixelsPerSecond,
     duration,
     settings,
@@ -841,6 +862,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
       const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
       newScrollLeft = clamp(newScrollLeft, 0, maxScroll);
+      // Write zoom and scroll together: the rAF draw reads both live, and a pair
+      // from different zoom levels resolves to the wrong region for that frame.
+      // onZoomChange only reaches us as a prop on a later commit.
+      pixelsPerSecondRef.current = newPixelsPerSecond;
+      zoomSecRef.current = newZoomSec;
       setScroll(newScrollLeft, 'zoom');
       onZoomChange(newZoomSec);
     } else {
@@ -863,6 +889,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
     const newPps = containerWidth / newZoomSec;
     const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
+    // See applyWheel: zoom and scroll must reach the live refs together.
+    pixelsPerSecondRef.current = newPps;
+    zoomSecRef.current = newZoomSec;
     setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
     onZoomChange(newZoomSec);
   }, [duration, onZoomChange, setScroll]);

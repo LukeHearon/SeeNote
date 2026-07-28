@@ -19,6 +19,15 @@ export interface ChunkRendererParams {
   // it here would throttle the background redraw to that cadence and make the
   // spectrogram stutter at high playback rates. See local/HITCH.md.
   scrollLeftRef: React.MutableRefObject<number>;
+  // Read live from a ref for the same reason as scrollLeftRef, and it must be
+  // the SAME ref the zoom actions write synchronously: scroll and zoom are
+  // applied together, so reading one live and the other from a prop pairs a new
+  // scroll offset with the previous zoom for the frames before React commits.
+  // That resolves to an unrelated region of the file (startTime = scroll / pps)
+  // and flashed on screen on every zoom step.
+  pixelsPerSecondRef: React.MutableRefObject<number>;
+  // Same value as the ref, taken as a prop purely so `draw` is recreated and the
+  // dirty flag set when the zoom genuinely changes.
   pixelsPerSecond: number;
   duration: number;
   settings: SpectrogramSettings;
@@ -51,7 +60,8 @@ export function useChunkRenderer({
   sampleRate,
   cacheVersion,
   scrollLeftRef,
-  pixelsPerSecond,
+  pixelsPerSecondRef,
+  pixelsPerSecond: pixelsPerSecondProp,
   duration,
   settings,
   isProcessing,
@@ -125,9 +135,11 @@ export function useChunkRenderer({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Read scroll live from the ref so this redraw can run every rAF frame during
-    // playback rather than being gated by the React state cycle.
+    // Read scroll and zoom live from their refs so this redraw can run every rAF
+    // frame during playback rather than being gated by the React state cycle.
+    // Both come from refs so the pair is always from the same zoom level.
     const scrollLeft = scrollLeftRef.current;
+    const pixelsPerSecond = pixelsPerSecondRef.current || pixelsPerSecondProp;
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + cssWidth / pixelsPerSecond;
 
@@ -564,7 +576,7 @@ export function useChunkRenderer({
         console.warn(`[frametiming] draw ${dur.toFixed(1)}ms`);
       }
     }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecond, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecondRef, pixelsPerSecondProp, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
 
   return { draw };
 }
