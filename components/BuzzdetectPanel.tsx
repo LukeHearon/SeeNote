@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import { Sliders, GripHorizontal } from 'lucide-react';
+import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
 import { BuzzdetectData, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -81,6 +81,14 @@ export default function BuzzdetectPanel({
   const [dragging, setDragging] = useState(false);
   const dragAnchorRef = useRef<number | null>(null);
   const dragSelRef = useRef<Selection | null>(null);
+
+  // User-editable Y-axis range. Null means "use the auto-calculated file-wide
+  // range" (fileWideRange, below); typing into either settings text box pins
+  // it. Reset to null whenever a new file's data loads, so each file starts
+  // from its own auto-calculated range rather than inheriting the last file's
+  // manual override.
+  const [yAxisOverride, setYAxisOverride] = useState<{ min: number; max: number } | null>(null);
+  useEffect(() => { setYAxisOverride(null); }, [data]);
 
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
 
@@ -190,21 +198,30 @@ export default function BuzzdetectPanel({
     const enabled: number[] = [];
     for (let n = 0; n < neurons.length; n++) if (!hidden.has(neurons[n])) enabled.push(n);
 
-    // Y-axis scale: use the file-wide activation range (pre-memoised so
-    // scrolling/panning does NOT trigger a rescan). Thresholds are cheap and
-    // may change without touching data, so fold them in at draw time instead.
-    let yMin = fileWideRange ? fileWideRange.min : Infinity;
-    let yMax = fileWideRange ? fileWideRange.max : -Infinity;
-    for (const n of enabled) {
-      const th = thresholdOf(neurons[n]);
-      if (th < yMin) yMin = th;
-      if (th > yMax) yMax = th;
+    // Y-axis scale: the user's manual override if set, else the file-wide
+    // activation range (pre-memoised so scrolling/panning does NOT trigger a
+    // rescan). Thresholds are cheap and may change without touching data, so
+    // fold them in at draw time instead.
+    let yMin = yAxisOverride ? yAxisOverride.min : (fileWideRange ? fileWideRange.min : Infinity);
+    let yMax = yAxisOverride ? yAxisOverride.max : (fileWideRange ? fileWideRange.max : -Infinity);
+    // A manual override is meant to be respected exactly — as typed — so skip
+    // the auto-mode widening (folding in out-of-range thresholds, headroom
+    // padding) that would otherwise push the drawn extent past what the user
+    // set.
+    if (!yAxisOverride) {
+      for (const n of enabled) {
+        const th = thresholdOf(neurons[n]);
+        if (th < yMin) yMin = th;
+        if (th > yMax) yMax = th;
+      }
     }
     if (!isFinite(yMin) || !isFinite(yMax)) { yMin = -2; yMax = 1; }
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1; }
-    // 6% headroom so dots at the extremes aren't clipped.
-    const padFrac = (yMax - yMin) * 0.06;
-    yMin -= padFrac; yMax += padFrac;
+    if (!yAxisOverride) {
+      // 6% headroom so dots at the extremes aren't clipped.
+      const padFrac = (yMax - yMin) * 0.06;
+      yMin -= padFrac; yMax += padFrac;
+    }
 
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
@@ -309,14 +326,24 @@ export default function BuzzdetectPanel({
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       } else {
-        for (let i = iLeft; i <= iRight; i += groupSize) {
-          const end = Math.min(i + groupSize - 1, iRight);
+        // Groups are anchored to the absolute bin index (floor(i / groupSize)),
+        // not to iLeft — otherwise a one-bin scroll shifts every bucket
+        // boundary and re-partitions which bins get averaged together, so the
+        // "smoothed" line's high-frequency wiggle changes on every scroll tick
+        // even though the visible content barely moved. Anchoring to the
+        // absolute index makes each group's membership (and so its averaged
+        // point) depend only on zoom level, not scroll position.
+        const groupStart = Math.floor(iLeft / groupSize) * groupSize;
+        const groupEndExclusive = Math.floor(iRight / groupSize) * groupSize + groupSize;
+        for (let i = Math.max(groupStart, 0); i < groupEndExclusive; i += groupSize) {
+          const end = Math.min(i + groupSize - 1, starts.length - 1);
           let sumT = 0, sumV = 0, count = 0;
           for (let j = i; j <= end; j++) {
             sumT += starts[j] + binWidth / 2;
             sumV += values[n][j];
             count++;
           }
+          if (count === 0) continue;
           const cx = xOf(sumT / count);
           const cy = yOf(sumV / count);
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
@@ -377,7 +404,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, fileWideRange, viewportStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, fileWideRange, yAxisOverride, viewportStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: just the playhead line, aligned to the same time→pixel
   // transform as the main canvas. Kept separate so playback ticks (~50/s)
@@ -628,6 +655,41 @@ export default function BuzzdetectPanel({
               onWheel={(e) => e.stopPropagation()}
             >
               <div className="p-3 space-y-2">
+                {data && fileWideRange && (
+                  <div className="pb-2 border-b border-slate-700 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
+                      <span>{buzzdetectCopy.yAxisHeader}</span>
+                      {yAxisOverride && (yAxisOverride.min !== fileWideRange.min || yAxisOverride.max !== fileWideRange.max) && (
+                        <button
+                          onClick={() => setYAxisOverride(null)}
+                          className="text-slate-400 hover:text-[#e65161]"
+                          data-tooltip={tooltips.buzzdetectYAxisReset}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <DraftNumberInput
+                        value={yAxisOverride?.min ?? fileWideRange.min}
+                        onCommit={(v) => {
+                          if (v === null) return;
+                          setYAxisOverride({ min: v, max: yAxisOverride?.max ?? fileWideRange.max });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
+                      />
+                      <span className="text-slate-500 text-xs flex-none">–</span>
+                      <DraftNumberInput
+                        value={yAxisOverride?.max ?? fileWideRange.max}
+                        onCommit={(v) => {
+                          if (v === null) return;
+                          setYAxisOverride({ min: yAxisOverride?.min ?? fileWideRange.min, max: v });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
                   <span>{buzzdetectCopy.neuronHeader}</span>
                   <span>{buzzdetectCopy.thresholdHeader}</span>

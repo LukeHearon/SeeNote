@@ -283,6 +283,7 @@ export const buzzdetectPanel = {
   get noDataLoaded() { return getOverride('ui.buzzdetectPanel.noDataLoaded') ?? "No data loaded."; },
   get allNeuronsHidden() { return getOverride('ui.buzzdetectPanel.allNeuronsHidden') ?? "All neurons hidden."; },
   get noActivations() { return getOverride('ui.buzzdetectPanel.noActivations') ?? "No buzzdetect activations for this track"; },
+  get yAxisHeader() { return getOverride('ui.buzzdetectPanel.yAxisHeader') ?? "Y-axis range"; },
 };
 
 export const debugConsole = {
