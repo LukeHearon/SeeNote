@@ -15,6 +15,7 @@ import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys, digitFromEvent } from './hooks/useHotkeys';
+import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import { useExamplePlayer } from './hooks/useExamplePlayer';
 import { useActivationStack } from './hooks/useActivationStack';
 import { useAnnotationHistory } from './hooks/useAnnotationHistory';
@@ -124,7 +125,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
-  const [cacheVersion, setCacheVersion] = useState(0);
+  const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
 
   // Playback transport state (isPlaying/isBuffering/speed/volume/mute), the
   // playback-clock refs, engine refs, and the play/seek surface live in
@@ -573,7 +574,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // files appear to have identical content. Batched with setIsProcessing so
     // the null cache renders as the loading state, not "Spectrogram Unavailable".
     swapChunkCache(chunkCacheRef, null);
-    setCacheVersion(v => v + 1);
+    bumpCacheVersion();
     setIsProcessing(true);
 
     try {
@@ -610,10 +611,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             settings.fftSize,
             sr,
             dur,
-            () => setCacheVersion(v => v + 1),
+            bumpCacheVersion,
         );
         swapChunkCache(chunkCacheRef, cache);
-        setCacheVersion(0);
+        bumpCacheVersion();
 
         // Kick off first viewport prefetch immediately
         cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
@@ -663,7 +664,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         setSampleRate(44100);
         setIsAudioTrack(false);
         swapChunkCache(chunkCacheRef, null);
-        setCacheVersion(v => v + 1);
+        bumpCacheVersion();
         if (frameSourceRef.current) {
             frameSourceRef.current.close();
             frameSourceRef.current = null;
@@ -693,10 +694,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       settings.fftSize,
       sampleRate,
       duration,
-      () => setCacheVersion(v => v + 1),
+      bumpCacheVersion,
     );
     swapChunkCache(chunkCacheRef, cache);
-    setCacheVersion(0);
+    bumpCacheVersion();
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
   }, [settings.fftSize]);
 

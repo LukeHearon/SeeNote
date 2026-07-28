@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowLeft, Bug, ChevronDown } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
+import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
 import Toolbar from './components/Toolbar';
 import LevelRangeSlider from './components/LevelRangeSlider';
@@ -83,7 +84,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, leftPanelRatio: 0, leftPanelWidth: 0 });
 
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
-  const [cacheVersion, setCacheVersion] = useState(0);
+  const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
 
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
@@ -166,9 +167,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
         if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
 
-        const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sr, dur, () => setCacheVersion(v => v + 1));
+        const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sr, dur, bumpCacheVersion);
         swapChunkCache(chunkCacheRef, cache);
-        setCacheVersion(0);
+        bumpCacheVersion();
         cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
         addLog('Spectrogram loading...');
       } catch (err) {
@@ -189,9 +190,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // Rebuild cache when FFT size changes.
   useEffect(() => {
     if (!sampleRate || !duration) return;
-    const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sampleRate, duration, () => setCacheVersion(v => v + 1));
+    const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sampleRate, duration, bumpCacheVersion);
     swapChunkCache(chunkCacheRef, cache);
-    setCacheVersion(0);
+    bumpCacheVersion();
     cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.fftSize]);

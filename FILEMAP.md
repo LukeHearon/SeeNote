@@ -43,7 +43,7 @@ Quick reference for agents. One phrase per file.
 - `utils/BandPassFilterGraph.ts` — persistent Butterworth band-pass filter graph plus async group-delay measurement
 - `utils/PhaseVocoder.ts` — phase vocoder for time-stretching (slow-down playback)
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops
-- `MultiTierSpectrogramCache.ts` — in-memory + IndexedDB cache for rendered spectrogram tiles
+- `MultiTierSpectrogramCache.ts` — in-memory multi-tier cache of decoded spectrogram chunks, with LRU eviction and a bounded fetch queue
 
 ## IPC layer
 - `utils/tauriCommands.ts` — typed wrappers for all general Tauri `invoke()` calls
@@ -76,6 +76,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useProjectPersistence.ts` — debounced persistence of project settings/preferences
 - `hooks/useSyncManagement.ts` — git-sync status polling and sync/commit actions
 - `hooks/useChunkRenderer.ts` — draws cached spectrogram tiles to the canvas as the viewport moves
+- `hooks/useChunkCacheVersion.ts` — chunk-cache version counter, coalesced to one React update per animation frame
 - `hooks/useAnnotationTools.ts` — annotation tool CRUD, hotkey map, and example import
 - `hooks/useImportAnnotations.ts` — imports Audacity/annotation files into the current track
 - `hooks/useSpectrogramInteraction.ts` — spectrogram pointer logic: selection, annotation drag/create, filter draw

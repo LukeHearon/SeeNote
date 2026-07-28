@@ -132,10 +132,11 @@ fn build_spectrogram_response(
     bytes
 }
 
-#[tauri::command]
-pub async fn get_spectrogram_chunk(
-    req: SpectrogramChunkRequest,
-) -> Result<Response, String> {
+/// Decode + STFT a chunk, returning the encoded IPC blob.
+///
+/// Deliberately synchronous: it is pure CPU work (decode, FFT) with no await
+/// points, and it runs on a blocking thread — see `get_spectrogram_chunk`.
+fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let sample_rate = info.sample_rate;
     let n_freq_bins = req.fft_size / 2;
@@ -216,10 +217,9 @@ pub async fn get_spectrogram_chunk(
             }
         }
 
-        let bytes = build_spectrogram_response(
+        return Ok(build_spectrogram_response(
             n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &output,
-        );
-        return Ok(Response::new(bytes));
+        ));
     }
 
     // Standard STFT path for fine-detail tiers.
@@ -288,9 +288,27 @@ pub async fn get_spectrogram_chunk(
     let n_cols = if n_freq_bins > 0 { data.len() / n_freq_bins } else { 0 };
     let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
 
-    let bytes = build_spectrogram_response(
+    Ok(build_spectrogram_response(
         n_cols, n_freq_bins, req.start_sec, actual_duration_sec, sample_rate, &data,
-    );
+    ))
+}
+
+/// Compute one spectrogram chunk, off the async runtime's worker threads.
+///
+/// The work is entirely blocking CPU (symphonia decode + FFT) and can run for
+/// seconds on a coarse chunk of a long file. Run directly in the async command,
+/// it occupies a tokio worker for that whole time; with several chunks in flight
+/// that starves every other command — including `read_pcm_chunk`, which playback
+/// depends on — so the app stalls rather than just the spectrogram filling in
+/// slowly. `spawn_blocking` moves it to the blocking pool, which exists for
+/// exactly this and grows to fit.
+#[tauri::command]
+pub async fn get_spectrogram_chunk(
+    req: SpectrogramChunkRequest,
+) -> Result<Response, String> {
+    let bytes = tokio::task::spawn_blocking(move || compute_spectrogram_chunk(&req))
+        .await
+        .map_err(|e| format!("spectrogram task failed: {e}"))??;
     Ok(Response::new(bytes))
 }
 

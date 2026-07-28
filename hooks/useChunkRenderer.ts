@@ -2,6 +2,7 @@ import React, { useCallback, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
+import { resolveRenderCps } from '../utils/viewportTransform';
 
 // TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
 // we can tell a real playback hitch (dropped frame) from the sampling twinkle.
@@ -173,10 +174,13 @@ export function useChunkRenderer({
           if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
-        // The "global" cps used for the offscreen-canvas grid. Use the active tier's
-        // colsPerSec — fallback chunks at coarser tiers will be resampled by nearest-
-        // col lookup into this grid.
-        const cps = activeTier.colsPerSec;
+        // The "global" cps used for the offscreen-canvas grid. Starts from the
+        // active tier's colsPerSec — fallback chunks at other tiers are resampled by
+        // nearest-col lookup into this grid — but is capped at a few columns per CSS
+        // pixel so the buffer stays proportional to the window rather than to the
+        // file. Without the cap, zooming all the way out on a multi-hour file asks
+        // for a buffer tens of thousands of columns wide. See resolveRenderCps.
+        const cps = resolveRenderCps(activeTier.colsPerSec, pixelsPerSecond);
 
         // Compute the offscreen backbuffer extent. One offscreen pixel per STFT
         // column at the active tier. Add 1-col margin on the left so sub-pixel

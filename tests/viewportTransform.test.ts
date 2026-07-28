@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { timeToX, xToTime, computeLabelPlacement, computeButtonAnchorX, maxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { timeToX, xToTime, computeLabelPlacement, computeButtonAnchorX, maxScroll, centerScrollLeft, resolveRenderCps } from '../utils/viewportTransform';
 
 describe('viewportTransform', () => {
   it('timeToX maps time to pixels relative to the scroll offset', () => {
@@ -188,5 +188,38 @@ describe('centerScrollLeft', () => {
     // 5s file at 100px/s = 500px < 1000px viewport → maxScroll is 0.
     expect(maxScroll(5, pps, width)).toBe(0);
     expect(centerScrollLeft(3, pps, width, 5)).toBe(0);
+  });
+});
+
+describe('resolveRenderCps', () => {
+  it('returns the tier rate unchanged when the screen can resolve it', () => {
+    // Zoomed into a 4s clip on a 1600px canvas: 400 px/s against tier 3's
+    // ~94 col/s. The cap (800) is far above the tier rate, so nothing changes.
+    expect(resolveRenderCps(93.75, 400)).toBe(93.75);
+  });
+
+  it('caps the column rate when the tier is finer than the screen', () => {
+    // 50h file in a 1600px window: ~0.0089 px/s against a coarsest tier of
+    // 1 col/s. Uncapped this asks for 180,000 columns; capped it asks for
+    // ~2 per pixel.
+    const pps = 1600 / (50 * 3600);
+    expect(resolveRenderCps(1, pps)).toBeCloseTo(pps * 2, 12);
+  });
+
+  it('keeps the buffer within a small multiple of the canvas width', () => {
+    const canvasWidth = 1600;
+    for (const durationSec of [4, 300, 3600, 50 * 3600]) {
+      const pps = canvasWidth / durationSec;
+      for (const tierCps of [93.75, 46.875, 1, 0.1]) {
+        const cps = resolveRenderCps(tierCps, pps);
+        const bbWidth = Math.ceil(durationSec * cps) + 3;
+        expect(bbWidth).toBeLessThanOrEqual(canvasWidth * 2 + 4);
+      }
+    }
+  });
+
+  it('honours an explicit maxColsPerPixel', () => {
+    expect(resolveRenderCps(100, 10, 1)).toBe(10);
+    expect(resolveRenderCps(100, 10, 4)).toBe(40);
   });
 });
