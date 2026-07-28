@@ -1,5 +1,5 @@
 import { getSpectrogramChunk } from './utils/tauriCommands';
-import { TIER_CONFIGS, TierConfig } from './constants';
+import { buildTierLadder, TierConfig } from './constants';
 
 export interface CachedChunk {
   data: Uint16Array;
@@ -9,14 +9,6 @@ export interface CachedChunk {
   actualDurationSec: number;
   sampleRate: number;
   lastAccessed: number;
-}
-
-interface ResolvedTier {
-  tier: number;
-  hopSize: number;         // resolved hop in samples
-  colsPerSec: number;      // sampleRate / hopSize
-  chunkDuration: number;
-  maxChunks: number;
 }
 
 /**
@@ -41,8 +33,8 @@ export function swapChunkCache(
 }
 
 export class MultiTierSpectrogramCache {
-  private tiers: ResolvedTier[];
-  private tierByNumber: Map<number, ResolvedTier>; // tier number -> resolved tier
+  private tiers: TierConfig[];
+  private tierByNumber: Map<number, TierConfig>; // tier number -> tier config
   private caches: Map<number, Map<number, CachedChunk>>; // tier -> (chunkIdx -> chunk)
   // Cap concurrent Tauri IPC/FFT calls so the first chunks in view complete
   // quickly rather than all chunks competing for CPU simultaneously.
@@ -60,24 +52,16 @@ export class MultiTierSpectrogramCache {
     private readonly duration: number,
     private readonly onChunkLoaded: () => void,
   ) {
-    // Resolve tier configs into concrete hop sizes.
-    // NOTE: Math.round() here is benign for sample-accuracy. The hop size
-    // determines the STFT column grid WITHIN a chunk, and all downstream
-    // time math uses `chunk.actualDurationSec` + `chunk.nCols` (i.e. the
-    // *reported* column spacing, not a reconstructed one), so a 1-sample
-    // rounding in hopSize does not shift annotations or playhead.
-    // Annotations are stored in absolute seconds and never round-trip
-    // through column indices.
-    this.tiers = TIER_CONFIGS.map(tc => {
-      const hopSize = tc.hopSamples ?? Math.round(sampleRate * (tc.hopMultiplier ?? 1));
-      return {
-        tier: tc.tier,
-        hopSize,
-        colsPerSec: sampleRate / hopSize,
-        chunkDuration: tc.chunkDuration,
-        maxChunks: tc.maxChunks,
-      };
-    });
+    // Build the ladder for THIS file: its length depends on the duration, so a
+    // short clip gets only the fine tiers it can use and a long recording gets
+    // coarse tiers all the way down to a whole-file view. See buildTierLadder.
+    //
+    // NOTE: hop sizes are exact powers of two in samples, so colsPerSec is not
+    // rounded. Even if it were, all downstream time math uses the *reported*
+    // `chunk.actualDurationSec` / `chunk.nCols` rather than a reconstructed
+    // column spacing, and annotations are stored in absolute seconds and never
+    // round-trip through column indices.
+    this.tiers = buildTierLadder(sampleRate, duration, fftSize);
 
     // Index tiers by their tier number for O(1) lookup.
     this.tierByNumber = new Map(this.tiers.map(t => [t.tier, t]));
@@ -96,7 +80,7 @@ export class MultiTierSpectrogramCache {
    * Picks the coarsest tier where we have at least 1 data column per pixel.
    * Uses hysteresis to avoid rapid tier switching at boundaries.
    */
-  selectTier(visibleDuration: number, canvasWidth: number): ResolvedTier {
+  selectTier(visibleDuration: number, canvasWidth: number): TierConfig {
     const pixelsPerSec = canvasWidth / visibleDuration;
 
     // Find the coarsest tier with >= 1 column per pixel
@@ -142,8 +126,9 @@ export class MultiTierSpectrogramCache {
   }
 
   /**
-   * Try to get a chunk at the preferred tier; fall back to coarser tiers.
-   * Returns the ultra-overview as last resort.
+   * Try to get a chunk at the preferred tier; fall back to coarser tiers first
+   * (a blurry placeholder beats a hole), then to finer ones that may still be
+   * cached from a previous zoom level.
    */
   getChunkWithFallback(timeSec: number, preferredTier: number): { chunk: CachedChunk; tier: number } | null {
     // Try preferred tier first

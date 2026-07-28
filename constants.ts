@@ -150,24 +150,106 @@ export const DEFAULT_BAND_PASS_FILTER = { low: 500, high: 4000, strength: 0.5 };
 // Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
 export const DRAG_INTENT_HOLD_MS = 250;
 
-// Multi-resolution spectrogram tier configuration.
-// Each tier defines a temporal resolution for a range of zoom levels.
-// hopMultiplier: hop = sampleRate * multiplier (for tiers scaled to sample rate)
-// hopSamples: fixed hop size in samples (for fine-detail tiers)
+// ── Multi-resolution spectrogram tier ladder ─────────────────────────────────
+//
+// Each tier is one temporal resolution, serving the range of zoom levels where
+// its column rate is at least the viewport's pixel rate. The ladder is built
+// per file rather than hardcoded, because the zoom range a file spans depends
+// on its duration: a 4s clip only ever needs the finest tier, while a 50h file
+// viewed whole needs ~0.02 col/s. The old fixed table bottomed out at 1 col/s,
+// so a whole-file view of anything longer than about an hour fell off the end
+// of the ladder and asked for far more columns than the screen could show.
+
+/** Hop of the finest tier, in samples. ~93 col/s at 48 kHz. */
+export const FINEST_HOP_SAMPLES = 512;
+
+/** Hop ratio between adjacent tiers. */
+export const TIER_HOP_RATIO = 4;
+
+/**
+ * Columns per cached chunk, uniform across tiers.
+ *
+ * Fixing the *column* count rather than the duration keeps both the IPC payload
+ * (cols × bins × 2 bytes) and the work per request bounded at every tier —
+ * coarse tiers were previously specified by duration, which made a single
+ * coarse request span (and decode) hours of audio.
+ *
+ * The value trades payload size against per-chunk overhead: every chunk pays one
+ * `PcmStream::open`, whose container scan costs time proportional to how deep
+ * into the file the chunk starts (~230ms at 25h into a 50h MP3). Fewer, larger
+ * chunks amortize that; 1024 columns keeps a typical viewport at ~3 chunks.
+ */
+export const COLS_PER_CHUNK = 1024;
+
+/**
+ * Columns the coarsest tier spends on the whole file. The ladder keeps stepping
+ * coarser until one tier represents the entire file in this many columns.
+ *
+ * It must be comfortably *below* any screen's pixel count, not merely bounded:
+ * selectTier takes the coarsest tier whose column rate still covers the pixel
+ * rate, so if the coarsest tier were only slightly finer than a whole-file
+ * view's pixel rate, selection would skip past it to the next tier and the view
+ * would cost 4× more columns than it can show. Sitting a full step below every
+ * realistic viewport width means a whole-file view lands between this budget and
+ * TIER_HOP_RATIO× it, whatever the window size.
+ */
+export const OVERVIEW_TARGET_COLS = 1024;
+
+/** Per-tier LRU budget in bytes; converted to a chunk count using fftSize. */
+export const TIER_CACHE_BYTES = 16 * 1024 * 1024;
+
+/** Safety bound on ladder length (a 4^n ladder reaches 50h in 8 steps). */
+const MAX_TIERS = 12;
+
 export interface TierConfig {
-  tier: number;
-  hopMultiplier?: number;  // hop = sampleRate * multiplier
-  hopSamples?: number;     // fixed hop size (takes precedence if set)
+  tier: number;            // index into the ladder; 0 = coarsest
+  hopSize: number;         // hop in samples
+  colsPerSec: number;      // sampleRate / hopSize
   chunkDuration: number;   // seconds per cached chunk
   maxChunks: number;       // LRU cache capacity for this tier
 }
 
-export const TIER_CONFIGS: TierConfig[] = [
-  { tier: 0, hopMultiplier: 1.0,   chunkDuration: 600, maxChunks: 6  },
-  { tier: 1, hopMultiplier: 0.1,   chunkDuration: 120, maxChunks: 8  },
-  { tier: 2, hopSamples: 1024,     chunkDuration: 30,  maxChunks: 12 },
-  { tier: 3, hopSamples: 512,      chunkDuration: 15,  maxChunks: 16 },
-];
+/**
+ * Build the tier ladder for one file, coarsest first.
+ *
+ * Tiers step by TIER_HOP_RATIO from FINEST_HOP_SAMPLES upward, stopping once
+ * one tier can represent the whole file within OVERVIEW_TARGET_COLS columns.
+ * Short files therefore get a short ladder (a 4s clip gets a single tier) and
+ * only long files pay for coarse tiers they can actually use.
+ *
+ * Tier numbers are indices into the returned array, so lower is coarser — the
+ * ordering `getChunkWithFallback` relies on when it walks toward coarser tiers
+ * for a placeholder.
+ */
+export function buildTierLadder(
+  sampleRate: number,
+  durationSec: number,
+  fftSize: number,
+): TierConfig[] {
+  const bins = Math.max(1, Math.floor(fftSize / 2));
+  const bytesPerChunk = COLS_PER_CHUNK * bins * 2;
+  const maxChunks = Math.max(4, Math.min(24, Math.round(TIER_CACHE_BYTES / bytesPerChunk)));
+
+  const hops: number[] = [];
+  let hop = FINEST_HOP_SAMPLES;
+  for (let i = 0; i < MAX_TIERS; i++) {
+    hops.push(hop);
+    // A non-positive duration or sample rate means we don't know the file yet;
+    // one tier is enough to render whatever arrives.
+    if (!(durationSec > 0) || !(sampleRate > 0)) break;
+    if ((durationSec * sampleRate) / hop <= OVERVIEW_TARGET_COLS) break;
+    hop *= TIER_HOP_RATIO;
+  }
+  hops.reverse(); // coarsest first
+
+  return hops.map((hopSize, tier) => ({
+    tier,
+    hopSize,
+    colsPerSec: sampleRate / hopSize,
+    chunkDuration: (COLS_PER_CHUNK * hopSize) / sampleRate,
+    maxChunks,
+  }));
+}
 
 // Interpolate the Roseus/Magma colormap at position t in [0, 1] and return a hex color string.
 export function interpolateMagmaHex(t: number): string {

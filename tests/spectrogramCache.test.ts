@@ -1,26 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
-import { TIER_CONFIGS } from '../constants';
+import {
+  buildTierLadder,
+  COLS_PER_CHUNK,
+  FINEST_HOP_SAMPLES,
+  OVERVIEW_TARGET_COLS,
+  TIER_HOP_RATIO,
+} from '../constants';
 
 // ── Test scaffolding ─────────────────────────────────────────────────────────
 //
-// We only exercise `selectTier()`, which is a pure function of the resolved
-// tier table built in the constructor plus the internal `activeTierIndex`
-// (hysteresis state). The constructor also kicks off `loadUltraOverview()`,
-// which invokes a Tauri IPC command. In the node test environment that call
-// rejects and is swallowed by the catch inside `loadUltraOverview` — so
-// instantiation is safe without stubbing anything. We do NOT fake IndexedDB
-// or Tauri IPC; we just don't touch any code path that depends on a fetched
-// chunk.
+// We only exercise pure logic: `buildTierLadder` and `selectTier`. The latter
+// depends on the ladder built in the constructor plus `activeTierIndex`
+// (hysteresis state). Nothing here touches a code path that needs a fetched
+// chunk, so no Tauri IPC stubbing is required beyond tests/setup.ts.
 //
-// With the canonical TIER_CONFIGS and sampleRate = 48000:
-//   tier 0: hopMultiplier 1.0   → hopSize 48000 → colsPerSec  1
-//   tier 1: hopMultiplier 0.1   → hopSize  4800 → colsPerSec 10
-//   tier 2: hopSamples    1024  → hopSize  1024 → colsPerSec ≈ 46.875
-//   tier 3: hopSamples     512  → hopSize   512 → colsPerSec   93.75
+// The ladder is per-file now, so the tier numbers below follow from
+// SAMPLE_RATE/DURATION rather than from a fixed table. For a 1h file at 48 kHz
+// the ladder steps by 4 from a 512-sample hop until one tier covers the file in
+// under OVERVIEW_TARGET_COLS columns:
+//
+//   tier 0: hop 524288 → colsPerSec  0.092   (coarsest; whole file ≈ 330 cols)
+//   tier 1: hop 131072 → colsPerSec  0.366
+//   tier 2: hop  32768 → colsPerSec  1.465
+//   tier 3: hop   8192 → colsPerSec  5.859
+//   tier 4: hop   2048 → colsPerSec 23.438
+//   tier 5: hop    512 → colsPerSec 93.75    (finest)
 //
 // `selectTier` picks the FIRST tier (coarsest, lowest index) whose colsPerSec
-// is ≥ pixelsPerSec = canvasWidth / visibleDuration. If none qualifies, it
+// is >= pixelsPerSec = canvasWidth / visibleDuration. If none qualifies, it
 // falls back to the finest tier (last index).
 
 const SAMPLE_RATE = 48000;
@@ -28,8 +36,6 @@ const FFT_SIZE = 1024;
 const DURATION = 3600; // 1 hour
 
 function makeCache(): MultiTierSpectrogramCache {
-  // onChunkLoaded is a no-op; the only async work the constructor starts is
-  // loadUltraOverview(), which will reject internally and be caught.
   return new MultiTierSpectrogramCache(
     '/nonexistent/test.wav',
     FFT_SIZE,
@@ -39,135 +45,143 @@ function makeCache(): MultiTierSpectrogramCache {
   );
 }
 
-// Sanity-check our derivations match the source-of-truth tier configs.
-describe('TIER_CONFIGS sanity', () => {
-  it('has 4 tiers ordered coarsest-to-finest', () => {
-    expect(TIER_CONFIGS).toHaveLength(4);
-    expect(TIER_CONFIGS.map(t => t.tier)).toEqual([0, 1, 2, 3]);
+const LADDER = buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE);
+
+describe('buildTierLadder', () => {
+  it('orders tiers coarsest-to-finest with tier number = index', () => {
+    expect(LADDER.map(t => t.tier)).toEqual(LADDER.map((_, i) => i));
+    for (let i = 1; i < LADDER.length; i++) {
+      expect(LADDER[i].colsPerSec).toBeGreaterThan(LADDER[i - 1].colsPerSec);
+      expect(LADDER[i].hopSize).toBe(LADDER[i - 1].hopSize / TIER_HOP_RATIO);
+    }
+  });
+
+  it('always ends at the finest hop', () => {
+    for (const dur of [4, 300, 3600, 50 * 3600]) {
+      const ladder = buildTierLadder(SAMPLE_RATE, dur, FFT_SIZE);
+      expect(ladder[ladder.length - 1].hopSize).toBe(FINEST_HOP_SAMPLES);
+    }
+  });
+
+  it('extends only as far as the file needs — a short clip gets one tier', () => {
+    // 4s at 48 kHz is 375 columns at the finest hop, already under the
+    // whole-file budget, so no coarse tier is worth building.
+    const ladder = buildTierLadder(SAMPLE_RATE, 4, FFT_SIZE);
+    expect(ladder).toHaveLength(1);
+    expect(ladder[0].hopSize).toBe(FINEST_HOP_SAMPLES);
+  });
+
+  it('reaches a tier that covers the whole file within the column budget', () => {
+    // The regression this ladder exists for: the old fixed table bottomed out
+    // at 1 col/s, so a 50h file viewed whole needed 180,000 columns.
+    for (const dur of [300, 3600, 50 * 3600]) {
+      const ladder = buildTierLadder(SAMPLE_RATE, dur, FFT_SIZE);
+      const coarsest = ladder[0];
+      expect(dur * coarsest.colsPerSec).toBeLessThanOrEqual(OVERVIEW_TARGET_COLS);
+      // ...and no coarser than it needs to be: one tier finer would exceed it
+      // (except for a single-tier ladder, which is already at the finest hop).
+      if (ladder.length > 1) {
+        expect(dur * ladder[1].colsPerSec).toBeGreaterThan(OVERVIEW_TARGET_COLS);
+      }
+    }
+  });
+
+  it('keeps a whole-file view at a few columns per pixel, at any file length', () => {
+    // The property the ladder exists to guarantee: the cost of viewing an
+    // entire file scales with the window, not with the file. Under the old
+    // fixed table a 50h file wanted 180,000 columns for a 1600px window — 112
+    // per pixel. Checked through selectTier, which is what the renderer calls.
+    const canvasWidth = 1600;
+    for (const dur of [4, 300, 3600, 50 * 3600]) {
+      const cache = new MultiTierSpectrogramCache(
+        '/nonexistent/test.wav', FFT_SIZE, SAMPLE_RATE, dur, () => {},
+      );
+      const selected = cache.selectTier(dur, canvasWidth);
+      const colsPerPixel = (dur * selected.colsPerSec) / canvasWidth;
+      // selectTier takes the coarsest tier that still covers the pixel rate,
+      // so it overshoots by at most one ladder step.
+      expect(colsPerPixel).toBeLessThanOrEqual(TIER_HOP_RATIO);
+    }
+  });
+
+  it('sizes chunks at a fixed column count, not a fixed duration', () => {
+    for (const t of LADDER) {
+      expect(t.chunkDuration * t.colsPerSec).toBeCloseTo(COLS_PER_CHUNK, 6);
+    }
+  });
+
+  it('shrinks the per-tier chunk budget as fftSize (and so chunk size) grows', () => {
+    const small = buildTierLadder(SAMPLE_RATE, DURATION, 512)[0].maxChunks;
+    const large = buildTierLadder(SAMPLE_RATE, DURATION, 4096)[0].maxChunks;
+    expect(large).toBeLessThan(small);
+    expect(large).toBeGreaterThanOrEqual(4); // never below the floor
+  });
+
+  it('survives an unknown file (zero duration) with a usable single tier', () => {
+    const ladder = buildTierLadder(SAMPLE_RATE, 0, FFT_SIZE);
+    expect(ladder).toHaveLength(1);
+    expect(ladder[0].colsPerSec).toBeGreaterThan(0);
   });
 });
 
 describe('MultiTierSpectrogramCache.selectTier', () => {
-  it('returns the coarsest tier (tier 0) when the full file is visible', () => {
+  it('returns a near-coarsest tier when the full file is visible', () => {
     const cache = makeCache();
-    // visibleDuration = 3600s, canvasWidth = 1000 → 0.278 px/s.
-    // Tier 0's colsPerSec = 1 ≥ 0.278, so tier 0 wins.
-    const t = cache.selectTier(DURATION, 1000);
-    expect(t.tier).toBe(0);
+    // 3600s over 1000px = 0.278 px/s. Tier 0 (0.092 col/s) is deliberately
+    // coarser than any screen's pixel rate, so tier 1 (0.366) is the coarsest
+    // that still covers it.
+    expect(cache.selectTier(DURATION, 1000).tier).toBe(1);
   });
 
-  it('returns the finest tier (tier 3) for extremely high zoom', () => {
+  it('returns the finest tier for extremely high zoom', () => {
     const cache = makeCache();
-    // visibleDuration = 0.1s, canvasWidth = 1000 → 10000 px/s.
-    // No tier has colsPerSec ≥ 10000, so bestIdx falls through to the last
-    // (finest) tier.
-    const t = cache.selectTier(0.1, 1000);
-    expect(t.tier).toBe(3);
+    // 0.1s over 1000px = 10000 px/s. No tier qualifies, so it falls through
+    // to the finest.
+    expect(cache.selectTier(0.1, 1000).tier).toBe(LADDER.length - 1);
   });
 
-  it('returns tier 1 when pixelsPerSec is just at its boundary (10 px/s)', () => {
+  it('picks a tier whose column rate just covers the pixel rate', () => {
     const cache = makeCache();
-    // visibleDuration = 100s, canvasWidth = 1000 → exactly 10 px/s.
-    // Tier 1 colsPerSec = 10 ≥ 10 → tier 1.
-    const t = cache.selectTier(100, 1000);
-    expect(t.tier).toBe(1);
-  });
-
-  it('steps from tier 1 to tier 2 when pixelsPerSec crosses just above 10', () => {
-    const cache = makeCache();
-    // First call: 10 px/s lands on tier 1 (and sets activeTierIndex=1).
-    expect(cache.selectTier(100, 1000).tier).toBe(1);
-
-    // Now pixelsPerSec = 1000/99 ≈ 10.10. Tier 1's 10 < 10.10, so bestIdx
-    // advances to tier 2 (46.875 ≥ 10.10).
-    //
-    // Hysteresis check: ratio = currentTier.colsPerSec / pixelsPerSec
-    //                        = 10 / 10.10 ≈ 0.99, which is in [0.5, 3.0],
-    // so hysteresis HOLDS us on tier 1.
-    //
-    // To actually step up to tier 2 we need to push ratio below 0.5,
-    // i.e. pixelsPerSec > 20.
-    const held = cache.selectTier(99, 1000);
-    expect(held.tier).toBe(1);
-
-    // pixelsPerSec = 1000/40 = 25 → ratio 10/25 = 0.4 < 0.5 → release.
-    const stepped = cache.selectTier(40, 1000);
-    expect(stepped.tier).toBe(2);
+    // Exactly tier 3's colsPerSec (5.859 px/s) → tier 3, not tier 4.
+    const visible = 1000 / LADDER[3].colsPerSec;
+    expect(cache.selectTier(visible, 1000).tier).toBe(3);
   });
 
   it('hysteresis: a small zoom change does NOT thrash tiers', () => {
     const cache = makeCache();
-    // Land on tier 2: pixelsPerSec = 30, tier 2 colsPerSec ≈ 46.875 ≥ 30.
-    // (Tier 1 fails: 10 < 30.) So bestIdx = 2.
-    expect(cache.selectTier(1000 / 30, 1000).tier).toBe(2);
+    expect(cache.selectTier(1000 / LADDER[3].colsPerSec, 1000).tier).toBe(3);
 
-    // Slight zoom-in: pixelsPerSec = 60 → bestIdx would become tier 3
-    // (93.75 ≥ 60, 46.875 < 60). But ratio = 46.875 / 60 = 0.78, within
-    // [0.5, 3.0] → stay on tier 2.
-    const t = cache.selectTier(1000 / 60, 1000);
-    expect(t.tier).toBe(2);
+    // pps just above tier 3's rate: the pure best would step to tier 4, but
+    // ratio = 5.859 / 6.5 = 0.90 is inside [0.5, 3.0], so we hold.
+    expect(cache.selectTier(1000 / 6.5, 1000).tier).toBe(3);
   });
 
-  it('hysteresis: a small zoom-OUT does not thrash tiers either', () => {
+  it('hysteresis releases on a large zoom-in (ratio < 0.5)', () => {
     const cache = makeCache();
-    // Land on tier 2 at pixelsPerSec = 30.
-    expect(cache.selectTier(1000 / 30, 1000).tier).toBe(2);
-
-    // Zoom out slightly: pixelsPerSec = 15. Now tier 1 (colsPerSec 10) still
-    // fails — wait, 10 < 15, so tier 2 is still the best fit anyway. Pick
-    // a value where bestIdx would drop to tier 1: pixelsPerSec = 8 → tier 1
-    // qualifies (10 ≥ 8). But ratio = 46.875 / 8 ≈ 5.86, which is > 3.0 →
-    // hysteresis releases and we move to the new best (tier 1).
-    //
-    // To get a "small" zoom-out that hysteresis SHOULD absorb, use
-    // pixelsPerSec = 20: tier 1 fails (10 < 20), tier 2 still wins → no
-    // tier change to absorb. Use pixelsPerSec = 9: tier 1 wins (10 ≥ 9),
-    // ratio = 46.875 / 9 ≈ 5.21 > 3.0 → also releases. The 3.0 ceiling
-    // means zooming out aggressively enough to actually pick a coarser
-    // tier will always release. So instead, just confirm that a zoom-out
-    // that doesn't change bestIdx leaves us put.
-    const t = cache.selectTier(1000 / 25, 1000); // pps=25, tier 2 best
-    expect(t.tier).toBe(2);
-  });
-
-  it('hysteresis releases on a large zoom change (ratio outside [0.5, 3.0])', () => {
-    const cache = makeCache();
-    // Land on tier 1: pixelsPerSec = 5 → tier 1 (10 ≥ 5) wins (tier 0 also
-    // qualifies? no: tier 0 colsPerSec = 1, 1 < 5, so tier 0 fails; tier 1
-    // is the first/coarsest that qualifies).
-    expect(cache.selectTier(1000 / 5, 1000).tier).toBe(1);
-
-    // Big zoom-in: pixelsPerSec = 50 → bestIdx = tier 3 (93.75 ≥ 50, 46.875
-    // < 50). Ratio = 10/50 = 0.2 < 0.5 → release, switch to tier 3.
-    const t = cache.selectTier(1000 / 50, 1000);
-    expect(t.tier).toBe(3);
+    expect(cache.selectTier(1000 / LADDER[3].colsPerSec, 1000).tier).toBe(3);
+    // pps 20 → ratio 5.859/20 = 0.29 → release; coarsest tier clearing 20 is 4.
+    expect(cache.selectTier(1000 / 20, 1000).tier).toBe(4);
   });
 
   it('hysteresis releases on a large zoom-out (ratio > 3.0)', () => {
     const cache = makeCache();
-    // Land on tier 3: pixelsPerSec = 60 → tier 3 wins (93.75 ≥ 60, 46.875<60).
-    expect(cache.selectTier(1000 / 60, 1000).tier).toBe(3);
-
-    // Big zoom-out: pixelsPerSec = 5 → bestIdx = tier 1 (10 ≥ 5).
-    // Ratio = currentTier(3).colsPerSec / pps = 93.75 / 5 = 18.75 > 3.0 → release.
-    const t = cache.selectTier(1000 / 5, 1000);
-    expect(t.tier).toBe(1);
+    // Land on the finest tier, then zoom way out.
+    expect(cache.selectTier(0.1, 1000).tier).toBe(LADDER.length - 1);
+    // pps 1 → ratio 93.75/1 → release; coarsest tier clearing 1 col/s is 2.
+    expect(cache.selectTier(1000 / 1, 1000).tier).toBe(2);
   });
 
-  it('returned tier exposes resolved hopSize and colsPerSec consistent with sampleRate', () => {
+  it('exposes a hop and column rate consistent with the sample rate', () => {
     const cache = makeCache();
-    const t = cache.selectTier(DURATION, 1000); // tier 0
-    expect(t.hopSize).toBe(SAMPLE_RATE); // hopMultiplier 1.0
+    const t = cache.selectTier(DURATION, 1000);
     expect(t.colsPerSec).toBeCloseTo(SAMPLE_RATE / t.hopSize, 10);
-    expect(t.chunkDuration).toBe(TIER_CONFIGS[0].chunkDuration);
-    expect(t.maxChunks).toBe(TIER_CONFIGS[0].maxChunks);
+    expect(t.chunkDuration).toBeCloseTo((COLS_PER_CHUNK * t.hopSize) / SAMPLE_RATE, 10);
   });
 
-  it('first call (no prior activeTierIndex) picks the pure-best tier without hysteresis', () => {
+  it('first call (no prior activeTierIndex) picks the pure-best tier', () => {
     const cache = makeCache();
-    // At pixelsPerSec = 60, pure-best is tier 3. With no prior tier set
-    // (activeTierIndex = -1), hysteresis is bypassed and we go straight to 3.
-    expect(cache.selectTier(1000 / 60, 1000).tier).toBe(3);
+    // No hysteresis state yet, so this goes straight to the best fit.
+    expect(cache.selectTier(1000 / 20, 1000).tier).toBe(4);
   });
 });
 
