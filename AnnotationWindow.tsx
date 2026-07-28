@@ -381,6 +381,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     volume, setVolume,
     muted, setMuted,
     playheadLocked, setPlayheadLocked,
+    timeDisplayUnit, setTimeDisplayUnit,
     engineRef,
     currentTimeRef,
     currentTimeStoreRef,
@@ -817,10 +818,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectEnabled, setBuzzdetectEnabled,
     buzzdetectThresholds, setBuzzdetectThresholds,
     buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
+    buzzdetectNeuronColors, setBuzzdetectNeuronColors,
     buzzdetectPanelHeight, setBuzzdetectPanelHeight,
     buzzdetectData, setBuzzdetectData,
     handleBuzzdetectThresholdChange,
     handleBuzzdetectToggleNeuron,
+    handleBuzzdetectNeuronColorChange,
   } = useBuzzdetect({ project, ident, addLog });
 
   // Band-pass filter state machine (filter tool / band / strength + engine-push
@@ -865,10 +868,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectEnabled,
     buzzdetectThresholds,
     buzzdetectHiddenNeurons,
+    buzzdetectNeuronColors,
     videoMode,
     videoBrightness,
     videoContrast,
     playheadLocked,
+    timeDisplayUnit,
     filePanelCollapsed,
     videoCollapsed,
     splitRatio,
@@ -972,12 +977,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setBuzzdetectEnabled(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
     setBuzzdetectThresholds(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
+    setBuzzdetectNeuronColors(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
     setFilterToolActive(false);
     // Panel layout — restore persisted layout for this project.
     const savedUi = project.preferences.uiSettings;
     setPlayheadLocked(savedUi?.playheadLocked ?? false);
+    setTimeDisplayUnit(savedUi?.timeDisplayUnit ?? 'seconds');
     setFilePanelCollapsed(savedUi?.filePanelCollapsed ?? false);
     setVideoCollapsed(savedUi?.videoCollapsed ?? false);
     setSplitRatio(savedUi?.splitRatio ?? DEFAULT_SPLIT_RATIO);
@@ -1877,6 +1884,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  setPlayheadLocked(willLock);
                  if (willLock) spectrogramRef.current?.recenterPlayhead();
                }}
+               timeDisplayUnit={timeDisplayUnit}
+               onTimeDisplayUnitChange={setTimeDisplayUnit}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1935,11 +1944,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  duration={duration}
                  currentTimeStore={currentTimeStoreRef.current}
                  selection={selection}
+                 timeDisplayUnit={timeDisplayUnit}
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}
+                 neuronColors={buzzdetectNeuronColors}
                  height={buzzdetectPanelHeight}
                  onThresholdChange={handleBuzzdetectThresholdChange}
                  onToggleNeuron={handleBuzzdetectToggleNeuron}
+                 onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
                  onBoundAnnotationChange={setBoundAnnotationId}

@@ -1,13 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { annotationToolEditModal } from '../copy/ui';
-import { HexColorPicker } from 'react-colorful';
 import { AnnotationTool, Annotation } from '../types';
 import { HOTKEY_COLORS, SUPPORTED_AUDIO_EXTS } from '../constants';
 import { openFilesDialog } from '../utils/tauriCommands';
-
-// Rainbow gradient shared by the custom-color swatch fill and its active ring.
-const RAINBOW_GRADIENT = 'linear-gradient(to right, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7)';
+import ColorSwatchPicker from './ColorSwatchPicker';
 
 interface Props {
   tool: AnnotationTool;
@@ -35,8 +32,6 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   const [text, setText] = useState(tool.text);
   const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
-  const [showPicker, setShowPicker] = useState(false);
-  const pickerRef = useRef<HTMLDivElement>(null);
 
   const willRenameAnnotations = !isCreate && text.trim() !== tool.text;
   // Annotations already carrying this label that are Custom (white) will be
@@ -54,11 +49,6 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
     : [];
 
   const swatchColors = HOTKEY_COLORS.slice(1).filter(c => c !== '#64748b');
-
-  // Explicit custom-color mode. Initialized active if the tool's current color
-  // isn't one of the fixed swatches, so editing an existing custom color shows
-  // the rainbow swatch as selected on open.
-  const [customActive, setCustomActive] = useState(!swatchColors.includes(tool.color));
 
   // The original color, used to revert the live preview if the user cancels.
   const originalColorRef = useRef(tool.color);
@@ -87,17 +77,6 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
     ]);
     if (paths && paths.length > 0) await onImportExamples!(toolIndex, paths);
   };
-
-  useEffect(() => {
-    if (!showPicker) return;
-    const handler = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showPicker]);
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
@@ -142,43 +121,12 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
 
         <div>
           <label className="text-xs text-slate-400 mb-2 block">{annotationToolEditModal.colorField}</label>
-          <div className="flex gap-1">
-            {swatchColors.map(c => (
-              <button
-                key={c}
-                onClick={() => { setCustomActive(false); setColor(c); }}
-                className={`w-6 h-6 rounded cursor-pointer transition-all border-2 ${!customActive && color === c ? 'border-white scale-110' : 'border-transparent'}`}
-                style={{ backgroundColor: c }}
-              />
-            ))}
-            <div ref={pickerRef} className="relative">
-              {customActive ? (
-                // Active: solid selected color inside a rainbow ring (the gradient
-                // background shows through the padding around the inner swatch).
-                <button
-                  onClick={() => { setCustomActive(true); setShowPicker(v => !v); }}
-                  className="w-6 h-6 rounded cursor-pointer transition-all scale-110 p-[2px]"
-                  style={{ background: RAINBOW_GRADIENT }}
-                  title={annotationToolEditModal.customColorTitle}
-                >
-                  <span className="block w-full h-full rounded-sm" style={{ backgroundColor: color }} />
-                </button>
-              ) : (
-                // Inactive: plain rainbow fill, no outline.
-                <button
-                  onClick={() => { setCustomActive(true); setShowPicker(v => !v); }}
-                  className="w-6 h-6 rounded cursor-pointer transition-all border-2 border-transparent"
-                  style={{ background: RAINBOW_GRADIENT }}
-                  title={annotationToolEditModal.customColorTitle}
-                />
-              )}
-              {showPicker && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10 border border-white/50 rounded-lg overflow-hidden">
-                  <HexColorPicker color={color} onChange={setColor} />
-                </div>
-              )}
-            </div>
-          </div>
+          <ColorSwatchPicker
+            value={color}
+            swatchColors={swatchColors}
+            onChange={setColor}
+            customColorTitle={annotationToolEditModal.customColorTitle}
+          />
         </div>
 
         {canImport && (

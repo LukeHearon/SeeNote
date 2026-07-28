@@ -7,6 +7,7 @@ import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { parseHMS } from '../utils/timeAxis';
+import { formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { tooltips } from '../copy/tooltips';
 import { useAltHeld } from '../hooks/useAltHeld';
 
@@ -14,13 +15,13 @@ type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not the whole memoized Toolbar — re-renders per tick.
-function TimeDisplay({ currentTimeStore }: { currentTimeStore: CurrentTimeStore }) {
+function TimeDisplay({ currentTimeStore, unit }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit }) {
   const [t, setT] = useState(currentTimeStore.get());
   useEffect(() => {
     setT(currentTimeStore.get());
     return currentTimeStore.subscribe(() => setT(currentTimeStore.get()));
   }, [currentTimeStore]);
-  return <>{t.toFixed(2)}s</>;
+  return <>{formatTimeForUnit(t, unit)}</>;
 }
 
 interface ToolbarProps {
@@ -69,6 +70,8 @@ interface ToolbarProps {
   onRestartAudio?: () => void;
   playheadLocked?: boolean;
   onTogglePlayheadLock?: () => void;
+  timeDisplayUnit?: TimeDisplayUnit;
+  onTimeDisplayUnitChange?: (u: TimeDisplayUnit) => void;
 }
 
 // Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
@@ -124,6 +127,8 @@ function Toolbar({
   onRestartAudio,
   playheadLocked = false,
   onTogglePlayheadLock,
+  timeDisplayUnit = 'seconds',
+  onTimeDisplayUnitChange,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -134,8 +139,9 @@ function Toolbar({
   const altHeld = useAltHeld();
 
   // Current-time box grows to fit long durations (e.g. >100,000s) instead of
-  // truncating — width in ch matches the monospace "12345.67s" readout.
-  const timeBoxWidth = `${Math.max(Math.floor(duration || 0).toString().length + 7, 7)}ch`;
+  // truncating — width in ch matches the monospace readout, sized off the
+  // longest string the box will ever need to show (time at full duration).
+  const timeBoxWidth = `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit).length + 3, 7)}ch`;
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
@@ -381,7 +387,7 @@ function Toolbar({
 
       {/* Time display — current time + selection fields to the right */}
       <div className="flex items-center gap-2 ml-2 tabular-nums" data-help-target="time-display">
-        <div data-help-target="current-time">
+        <div className="flex flex-col items-center gap-1" data-help-target="current-time">
           {editingTimeField === 'time' ? (
             <input
               autoFocus
@@ -400,11 +406,29 @@ function Toolbar({
               className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
               style={{ width: timeBoxWidth }}
               data-tooltip={tooltips.jumpToTime}
-              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(currentTimeStore.get().toFixed(2)); }}
+              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit)); }}
             >
-              <TimeDisplay currentTimeStore={currentTimeStore} />
+              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} />
             </button>
           )}
+
+          {/* Unit toggle — Seconds vs HMS, minimal highlight on the active side */}
+          <div className="flex items-center gap-0.5" data-help-target="time-unit-toggle">
+            <button
+              className={`text-[9px] leading-none px-1.5 py-0.5 rounded transition-colors ${timeDisplayUnit === 'seconds' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              onClick={() => onTimeDisplayUnitChange?.('seconds')}
+              data-tooltip={tooltips.timeUnitSeconds}
+            >
+              Seconds
+            </button>
+            <button
+              className={`text-[9px] leading-none px-1.5 py-0.5 rounded transition-colors ${timeDisplayUnit === 'hms' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              onClick={() => onTimeDisplayUnitChange?.('hms')}
+              data-tooltip={tooltips.timeUnitHms}
+            >
+              HMS
+            </button>
+          </div>
         </div>
 
         <div className="w-px bg-slate-600/50 self-stretch my-0.5" />

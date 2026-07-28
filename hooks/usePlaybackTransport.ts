@@ -11,7 +11,7 @@ import type { useExamplePlayer } from './useExamplePlayer';
 import { useHotkeys } from './useHotkeys';
 
 interface UsePlaybackTransportArgs {
-  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number } } };
+  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: 'seconds' | 'hms' } } };
   // Track / mode / selection mirrors driving transport selection & playback.
   isAudioTrack: boolean;
   isAudioTrackRef: React.MutableRefObject<boolean>;
@@ -74,6 +74,12 @@ export function usePlaybackTransport({
   const [playheadLocked, setPlayheadLocked] = useState(false);
   const playheadLockedRef = useRef(false);
   useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
+
+  // Running-time readout format (see components/Toolbar.tsx). Persisted per-project;
+  // single-file mode passes no uiSettings, so it stays plain session state there.
+  const [timeDisplayUnit, setTimeDisplayUnit] = useState<'seconds' | 'hms'>(
+    project.preferences.uiSettings?.timeDisplayUnit ?? 'seconds'
+  );
 
   // Volume: 0 to 4 (400% or +12dB approx)
   const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
@@ -420,6 +426,7 @@ export function usePlaybackTransport({
     volume, setVolume,
     muted, setMuted,
     playheadLocked, setPlayheadLocked,
+    timeDisplayUnit, setTimeDisplayUnit,
     engineRef,
     videoEngineRef,
     seekRef,

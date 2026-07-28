@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatTime,
+  formatSeconds,
+  formatTimeForUnit,
   makeAnnotationFromTool,
   calculateAnnotationLayers,
   generateAudacityContent,
@@ -71,6 +73,28 @@ describe('formatTime', () => {
     const out = formatTime(-0.5);
     expect(typeof out).toBe('string');
     expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+describe('formatSeconds', () => {
+  it('formats with two decimal places and no thousands separator below 1000', () => {
+    expect(formatSeconds(83.4)).toBe('83.40s');
+    expect(formatSeconds(0)).toBe('0.00s');
+  });
+
+  it('inserts a comma thousands separator for values >= 1000', () => {
+    expect(formatSeconds(123456.789)).toBe('123,456.79s');
+    expect(formatSeconds(1000)).toBe('1,000.00s');
+  });
+});
+
+describe('formatTimeForUnit', () => {
+  it('uses formatSeconds for the "seconds" unit', () => {
+    expect(formatTimeForUnit(123456.78, 'seconds')).toBe('123,456.78s');
+  });
+
+  it('uses formatTime for the "hms" unit', () => {
+    expect(formatTimeForUnit(3661.5, 'hms')).toBe('1h1m1.50s');
   });
 });
 

@@ -5,16 +5,18 @@ import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import {
   buzzdetectNeuronColor,
+  BUZZDETECT_PALETTE,
   DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
 } from '../constants';
-import { clamp } from '../utils/helpers';
+import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
 import { binAtTime, visibleBinRange } from '../utils/binIndex';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import DraftNumberInput from './DraftNumberInput';
+import ColorSwatchPicker from './ColorSwatchPicker';
 
 // Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
 // same x and the two stay column-for-column aligned.
@@ -37,13 +39,19 @@ interface BuzzdetectPanelProps {
   // stays x-aligned with it. Subscribed below; read at draw time.
   currentTimeStore: CurrentTimeStore;
   selection: Selection | null;
+  // Toolbar's running-time display unit — the hover readout's time(s) follow it.
+  timeDisplayUnit: TimeDisplayUnit;
   // Persisted UI state.
   thresholds: Record<string, number>;
   hiddenNeurons: string[];
+  // Per-neuron color override, keyed by neuron label. Absent entries fall
+  // back to the palette-by-index default (buzzdetectNeuronColor).
+  neuronColors: Record<string, string>;
   height: number;
   // Callbacks.
   onThresholdChange: (neuron: string, value: number) => void;
   onToggleNeuron: (neuron: string, hidden: boolean) => void;
+  onNeuronColorChange: (neuron: string, color: string) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -57,11 +65,14 @@ export default function BuzzdetectPanel({
   duration,
   currentTimeStore,
   selection,
+  timeDisplayUnit,
   thresholds,
   hiddenNeurons,
+  neuronColors: neuronColorOverrides,
   height,
   onThresholdChange,
   onToggleNeuron,
+  onNeuronColorChange,
   onHeightChange,
   onSelectionChange,
   onBoundAnnotationChange,
@@ -73,7 +84,25 @@ export default function BuzzdetectPanel({
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
   const [showSettings, setShowSettings] = useState(false);
-  const [hoverFrame, setHoverFrame] = useState<number | null>(null);
+  // Hovered bin range (inclusive indices). A single bin when frames are
+  // individually visible; the whole group of bins being averaged into one
+  // polyline point when they're not (see groupSizeRef).
+  const [hoverRange, setHoverRange] = useState<{ start: number; end: number } | null>(null);
+
+  // Which neuron's color-swatch popover is open in the settings panel (null =
+  // none). Closed on outside click below.
+  const [openColorNeuron, setOpenColorNeuron] = useState<string | null>(null);
+  const colorPopoverRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openColorNeuron) return;
+    const handler = (e: MouseEvent) => {
+      if (colorPopoverRef.current && !colorPopoverRef.current.contains(e.target as Node)) {
+        setOpenColorNeuron(null);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openColorNeuron]);
 
   // Drag-to-select across bins. `dragging` gates the window listeners; the
   // anchor bin and latest interval live in refs so the listener effect attaches
@@ -99,14 +128,19 @@ export default function BuzzdetectPanel({
   // boundary grid drawn) — set at draw time, read by the click/hover handlers
   // below to decide whether picking out a single frame is meaningful.
   const framesVisibleRef = useRef(true);
+  // How many bins the polyline is currently averaging into one drawn point
+  // (1 = no grouping) — set at draw time, read by the hover handler so its
+  // readout covers the same span the line is actually averaging.
+  const groupSizeRef = useRef(1);
 
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
 
-  // Per-neuron color is keyed by position in the model's output order so a
-  // neuron keeps its color across files and toggles.
+  // Per-neuron color: the user's override (keyed by label, persisted across
+  // files) if set, else the palette-by-index default — so a neuron keeps its
+  // color across files and toggles even before it's ever been customized.
   const neuronColors = useMemo(
-    () => (data ? data.neurons.map((_, i) => buzzdetectNeuronColor(i)) : []),
-    [data],
+    () => (data ? data.neurons.map((n, i) => neuronColorOverrides[n] ?? buzzdetectNeuronColor(i)) : []),
+    [data, neuronColorOverrides],
   );
 
   const thresholdOf = useCallback(
@@ -244,6 +278,23 @@ export default function BuzzdetectPanel({
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
 
+    // Bin-grouping for the polyline (below) and for hover/click: above
+    // MAX_LINE_POINTS visible bins, group them so the drawn line stays near
+    // that point count instead of a scratchy per-bin path. Groups are
+    // anchored to the absolute bin index (floor(i / groupSize)), not to
+    // iLeft — otherwise a one-bin scroll shifts every bucket boundary and
+    // re-partitions which bins get averaged together, so the "smoothed" line
+    // (and the hover readout) would visibly writhe as you scrolled.
+    const binPx = binWidth * pixelsPerSecond;
+    const visibleCount = iRight - iLeft + 1;
+    const groupSize = visibleCount > MAX_LINE_POINTS ? Math.ceil(visibleCount / MAX_LINE_POINTS) : 1;
+    const drawDots = binPx >= 4 && groupSize === 1;
+    // Same visibility gate the click/hover handlers use to decide whether a
+    // single-frame selection is meaningful — individual frames read as
+    // distinguishable only while their dots and boundary grid are drawn.
+    framesVisibleRef.current = drawDots;
+    groupSizeRef.current = groupSize;
+
     // Frame bands: a faint wash over the time each frame actually covers, so
     // uncovered time (frame length overridden shorter than the frame spacing)
     // reads as bare background rather than an implied contiguous grid.
@@ -269,12 +320,13 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
-    // Hovered bin band — brighter than the resting frame wash so the click
-    // target still reads clearly on top of it.
-    if (hoverFrame !== null && hoverFrame >= iLeft && hoverFrame <= iRight) {
-      const hx = xOf(starts[hoverFrame]);
+    // Hovered bin (or bin-group) band — brighter than the resting frame wash
+    // so the click target still reads clearly on top of it.
+    if (hoverRange !== null && hoverRange.end >= iLeft && hoverRange.start <= iRight) {
+      const hx = xOf(starts[hoverRange.start]);
+      const hEndX = xOf(starts[hoverRange.end] + binWidth);
       ctx.fillStyle = 'rgba(255,255,255,0.14)';
-      ctx.fillRect(hx, 0, Math.max(1, binWidth * pixelsPerSecond), h);
+      ctx.fillRect(hx, 0, Math.max(1, hEndX - hx), h);
     }
 
     // Darken frames where no enabled neuron cleared its threshold, so detected
@@ -296,7 +348,6 @@ export default function BuzzdetectPanel({
     // Soft vertical hash marks at frame boundaries (skip when bins get tight).
     // Both edges of each frame are drawn from `starts`, so an overridden
     // binWidth reads as separated frames rather than a contiguous grid.
-    const binPx = binWidth * pixelsPerSecond;
     if (binPx >= 6) {
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
       ctx.lineWidth = 1;
@@ -323,17 +374,7 @@ export default function BuzzdetectPanel({
     }
     ctx.setLineDash([]);
 
-    // Polylines + dots, one neuron at a time. When more than MAX_LINE_POINTS
-    // bins are visible (e.g. zoomed out to an hour), the raw per-bin path
-    // reads as scratchy noise — group bins and average their time/value so
-    // the line stays near MAX_LINE_POINTS points regardless of zoom.
-    const visibleCount = iRight - iLeft + 1;
-    const groupSize = visibleCount > MAX_LINE_POINTS ? Math.ceil(visibleCount / MAX_LINE_POINTS) : 1;
-    const drawDots = binPx >= 4 && groupSize === 1;
-    // Same visibility gate the click/hover handlers use to decide whether a
-    // single-frame selection is meaningful — individual frames read as
-    // distinguishable only while their dots and boundary grid are drawn.
-    framesVisibleRef.current = drawDots;
+    // Polylines + dots, one neuron at a time.
     for (const n of enabled) {
       const color = neuronColors[n];
       const th = thresholdOf(neurons[n]);
@@ -348,13 +389,6 @@ export default function BuzzdetectPanel({
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       } else {
-        // Groups are anchored to the absolute bin index (floor(i / groupSize)),
-        // not to iLeft — otherwise a one-bin scroll shifts every bucket
-        // boundary and re-partitions which bins get averaged together, so the
-        // "smoothed" line's high-frequency wiggle changes on every scroll tick
-        // even though the visible content barely moved. Anchoring to the
-        // absolute index makes each group's membership (and so its averaged
-        // point) depend only on zoom level, not scroll position.
         const groupStart = Math.floor(iLeft / groupSize) * groupSize;
         const groupEndExclusive = Math.floor(iRight / groupSize) * groupSize + groupSize;
         for (let i = Math.max(groupStart, 0); i < groupEndExclusive; i += groupSize) {
@@ -426,7 +460,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, fileWideRange, yAxisOverride, viewportStore, selection, hoverFrame, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, fileWideRange, yAxisOverride, viewportStore, selection, hoverRange, hidden, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: just the playhead line, aligned to the same time→pixel
   // transform as the main canvas. Kept separate so playback ticks (~50/s)
@@ -618,13 +652,24 @@ export default function BuzzdetectPanel({
 
   const handleAreaMouseMove = (e: React.MouseEvent) => {
     if (dragging) return; // drag handled at window level
-    // Don't highlight/readout a single frame when clicking one isn't
-    // meaningful either — see handleAreaMouseDown.
-    setHoverFrame(framesVisibleRef.current ? binAtClientX(e.clientX) : null);
+    const i = binAtClientX(e.clientX);
+    if (i === null) { setHoverRange(null); return; }
+    const groupSize = groupSizeRef.current;
+    if (groupSize === 1) {
+      setHoverRange({ start: i, end: i });
+      return;
+    }
+    // Individual frames aren't distinguishable at this zoom (see
+    // handleAreaMouseDown) — cover the whole group of bins the polyline is
+    // averaging into the one point under the cursor, anchored the same way
+    // the draw-time grouping is (absolute index, not iLeft-relative).
+    const groupStart = Math.floor(i / groupSize) * groupSize;
+    const groupEnd = Math.min(groupStart + groupSize - 1, data!.starts.length - 1);
+    setHoverRange({ start: groupStart, end: groupEnd });
   };
 
-  // Drop a stale hovered frame when the track's data changes (indices differ).
-  useEffect(() => { setHoverFrame(null); }, [data]);
+  // Drop a stale hover range when the track's data changes (indices differ).
+  useEffect(() => { setHoverRange(null); }, [data]);
 
   // ── Resize via top-edge handle ──────────────────────────────────────────────
   const handleResizeDown = (e: React.MouseEvent) => {
@@ -668,7 +713,7 @@ export default function BuzzdetectPanel({
           style={{ cursor: 'crosshair' }}
           onMouseDown={handleAreaMouseDown}
           onMouseMove={handleAreaMouseMove}
-          onMouseLeave={() => setHoverFrame(null)}
+          onMouseLeave={() => setHoverRange(null)}
           onWheel={(e) => {
             if (e.ctrlKey || e.metaKey) e.preventDefault();
             onScrollWheel?.(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
@@ -683,19 +728,39 @@ export default function BuzzdetectPanel({
             </div>
           )}
 
-          {/* Hover readout — time + each enabled neuron's value, in color */}
-          {data && hoverFrame !== null && (
-            <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
-              <div className="text-slate-300">t={data.starts[hoverFrame].toFixed(2)}s</div>
-              <div className="flex flex-wrap gap-x-2">
-                {data.neurons.map((n, i) => hidden.has(n) ? null : (
-                  <span key={n} style={{ color: neuronColors[i] }}>
-                    {n} {data.values[i][hoverFrame].toFixed(2)}
-                  </span>
-                ))}
+          {/* Hover readout — the hovered bin (or bin-group)'s time range and
+              each enabled neuron's value (averaged across the group when
+              more than one bin is covered), in color. */}
+          {data && hoverRange !== null && (() => {
+            const { start, end } = hoverRange;
+            const isSingle = start === end;
+            const rangeEnd = duration > 0 ? Math.min(data.starts[end] + data.binWidth, duration) : data.starts[end] + data.binWidth;
+            return (
+              <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
+                <div className="text-slate-300">
+                  {isSingle
+                    ? `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}`
+                    : `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}–${formatTimeForUnit(rangeEnd, timeDisplayUnit)}`}
+                </div>
+                <div className="flex flex-wrap gap-x-2">
+                  {data.neurons.map((n, i) => {
+                    if (hidden.has(n)) return null;
+                    let value = data.values[i][start];
+                    if (!isSingle) {
+                      let sum = 0;
+                      for (let j = start; j <= end; j++) sum += data.values[i][j];
+                      value = sum / (end - start + 1);
+                    }
+                    return (
+                      <span key={n} style={{ color: neuronColors[i] }}>
+                        {n} {value.toFixed(2)}{!isSingle && ' avg'}
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Settings popover trigger */}
           <button
@@ -765,7 +830,29 @@ export default function BuzzdetectPanel({
                         onChange={() => onToggleNeuron(n, isOn)}
                         className="accent-[#e65161] flex-none"
                       />
-                      <span className="w-3 h-3 rounded-sm flex-none" style={{ background: neuronColors[i] }} />
+                      <div className="relative flex-none">
+                        <button
+                          onClick={() => setOpenColorNeuron(v => v === n ? null : n)}
+                          className="block w-3 h-3 rounded-sm ring-1 ring-white/20"
+                          style={{ background: neuronColors[i] }}
+                          data-tooltip={tooltips.buzzdetectNeuronColor}
+                        />
+                        {openColorNeuron === n && (
+                          <div
+                            ref={colorPopoverRef}
+                            className="absolute left-0 top-full mt-1.5 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-2 w-40"
+                          >
+                            <ColorSwatchPicker
+                              value={neuronColors[i]}
+                              swatchColors={BUZZDETECT_PALETTE}
+                              onChange={(c) => onNeuronColorChange(n, c)}
+                              customColorTitle={buzzdetectCopy.customColorTitle}
+                              size={14}
+                              popoverPosition="bottom"
+                            />
+                          </div>
+                        )}
+                      </div>
                       <span className="flex-1 text-xs text-slate-200 truncate" title={n}>{n}</span>
                       <DraftNumberInput
                         value={thresholdOf(n)}

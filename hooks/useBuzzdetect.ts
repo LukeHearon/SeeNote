@@ -10,12 +10,15 @@ export interface BuzzdetectApi {
   setBuzzdetectThresholds: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   buzzdetectHiddenNeurons: string[];
   setBuzzdetectHiddenNeurons: React.Dispatch<React.SetStateAction<string[]>>;
+  buzzdetectNeuronColors: Record<string, string>;
+  setBuzzdetectNeuronColors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   buzzdetectPanelHeight: number;
   setBuzzdetectPanelHeight: React.Dispatch<React.SetStateAction<number>>;
   buzzdetectData: BuzzdetectData | null;
   setBuzzdetectData: React.Dispatch<React.SetStateAction<BuzzdetectData | null>>;
   handleBuzzdetectThresholdChange: (neuron: string, value: number) => void;
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
+  handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
 }
 
 export interface BuzzdetectParams {
@@ -37,6 +40,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
   const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
   const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
+  const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
 
@@ -61,6 +65,9 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const handleBuzzdetectToggleNeuron = useCallback((neuron: string, wasEnabled: boolean) => {
     setBuzzdetectHiddenNeurons(prev => wasEnabled ? [...prev, neuron] : prev.filter(n => n !== neuron));
   }, []);
+  const handleBuzzdetectNeuronColorChange = useCallback((neuron: string, color: string) => {
+    setBuzzdetectNeuronColors(prev => ({ ...prev, [neuron]: color }));
+  }, []);
 
   return {
     buzzdetectEnabled,
@@ -69,11 +76,14 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectThresholds,
     buzzdetectHiddenNeurons,
     setBuzzdetectHiddenNeurons,
+    buzzdetectNeuronColors,
+    setBuzzdetectNeuronColors,
     buzzdetectPanelHeight,
     setBuzzdetectPanelHeight,
     buzzdetectData,
     setBuzzdetectData,
     handleBuzzdetectThresholdChange,
     handleBuzzdetectToggleNeuron,
+    handleBuzzdetectNeuronColorChange,
   };
 }

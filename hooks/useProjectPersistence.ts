@@ -18,11 +18,13 @@ interface UseProjectPersistenceArgs {
   buzzdetectEnabled: boolean;
   buzzdetectThresholds: Record<string, number>;
   buzzdetectHiddenNeurons: string[];
+  buzzdetectNeuronColors: Record<string, string>;
   videoMode: VideoMode;
   videoBrightness: number;
   videoContrast: number;
   // Panel layout.
   playheadLocked: boolean;
+  timeDisplayUnit: 'seconds' | 'hms';
   filePanelCollapsed: boolean;
   videoCollapsed: boolean;
   splitRatio: number;
@@ -50,10 +52,12 @@ export function useProjectPersistence({
   buzzdetectEnabled,
   buzzdetectThresholds,
   buzzdetectHiddenNeurons,
+  buzzdetectNeuronColors,
   videoMode,
   videoBrightness,
   videoContrast,
   playheadLocked,
+  timeDisplayUnit,
   filePanelCollapsed,
   videoCollapsed,
   splitRatio,
@@ -99,10 +103,12 @@ export function useProjectPersistence({
         buzzdetectEnabled,
         buzzdetectThresholds,
         buzzdetectHiddenNeurons,
+        buzzdetectNeuronColors,
         videoMode,
         videoBrightness,
         videoContrast,
         playheadLocked,
+        timeDisplayUnit,
         filePanelCollapsed,
         videoCollapsed,
         splitRatio,
@@ -114,5 +120,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }

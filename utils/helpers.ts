@@ -25,6 +25,17 @@ export const formatTime = (seconds: number): string => {
   return secStr;
 };
 
+export type TimeDisplayUnit = 'seconds' | 'hms';
+
+// Plain seconds with a thousands separator, e.g. "123,456.78s".
+export const formatSeconds = (seconds: number): string =>
+  `${seconds.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}s`;
+
+// Formats a running time in the user's chosen unit — plain seconds
+// ("123,456.78s") or hours/minutes/seconds ("1h15m00.00s", see formatTime).
+export const formatTimeForUnit = (seconds: number, unit: TimeDisplayUnit): string =>
+  unit === 'hms' ? formatTime(seconds) : formatSeconds(seconds);
+
 export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };

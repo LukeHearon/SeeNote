@@ -102,6 +102,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const {
     isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume, muted, setMuted, playheadLocked, setPlayheadLocked,
+    timeDisplayUnit, setTimeDisplayUnit,
     engineRef, currentTimeRef, currentTimeStoreRef,
     togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
   } = usePlaybackTransport({
@@ -424,6 +425,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               setPlayheadLocked(willLock);
               if (willLock) spectrogramRef.current?.recenterPlayhead();
             }}
+            timeDisplayUnit={timeDisplayUnit}
+            onTimeDisplayUnitChange={setTimeDisplayUnit}
           />
 
           <div className="flex-1 relative overflow-hidden">
