@@ -21,6 +21,9 @@ import DraftNumberInput from './DraftNumberInput';
 const Y_AXIS_WIDTH = 50;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
+// Above this many visible bins, average them into groups to keep the drawn
+// polyline near this point count instead of a scratchy per-bin path.
+const MAX_LINE_POINTS = 1000;
 
 interface BuzzdetectPanelProps {
   data: BuzzdetectData | null;
@@ -285,8 +288,13 @@ export default function BuzzdetectPanel({
     }
     ctx.setLineDash([]);
 
-    // Polylines + dots, one neuron at a time.
-    const drawDots = binPx >= 4;
+    // Polylines + dots, one neuron at a time. When more than MAX_LINE_POINTS
+    // bins are visible (e.g. zoomed out to an hour), the raw per-bin path
+    // reads as scratchy noise — group bins and average their time/value so
+    // the line stays near MAX_LINE_POINTS points regardless of zoom.
+    const visibleCount = iRight - iLeft + 1;
+    const groupSize = visibleCount > MAX_LINE_POINTS ? Math.ceil(visibleCount / MAX_LINE_POINTS) : 1;
+    const drawDots = binPx >= 4 && groupSize === 1;
     for (const n of enabled) {
       const color = neuronColors[n];
       const th = thresholdOf(neurons[n]);
@@ -294,10 +302,25 @@ export default function BuzzdetectPanel({
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       let started = false;
-      for (let i = iLeft; i <= iRight; i++) {
-        const cx = xOf(starts[i] + binWidth / 2);
-        const cy = yOf(values[n][i]);
-        if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+      if (groupSize === 1) {
+        for (let i = iLeft; i <= iRight; i++) {
+          const cx = xOf(starts[i] + binWidth / 2);
+          const cy = yOf(values[n][i]);
+          if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+        }
+      } else {
+        for (let i = iLeft; i <= iRight; i += groupSize) {
+          const end = Math.min(i + groupSize - 1, iRight);
+          let sumT = 0, sumV = 0, count = 0;
+          for (let j = i; j <= end; j++) {
+            sumT += starts[j] + binWidth / 2;
+            sumV += values[n][j];
+            count++;
+          }
+          const cx = xOf(sumT / count);
+          const cy = yOf(sumV / count);
+          if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+        }
       }
       ctx.stroke();
 
