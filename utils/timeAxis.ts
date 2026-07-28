@@ -2,20 +2,29 @@
 // scrolling Spectrogram and the static ExampleSpectrogram so tick spacing and
 // label formatting stay identical (no duplicated cascade).
 
+// Candidate tick spacings (seconds), ascending. Extends well past an hour
+// because labels now show hours (e.g. "35h36m00s") — a fixed viewSpan
+// threshold cascade doesn't account for how much wider that makes each
+// label, so ticks must be chosen by the actual pixel gap instead.
+const NICE_TIME_STEPS = [
+  0.25, 0.5, 1, 2, 5, 10, 15, 30,
+  60, 120, 300, 600, 900, 1800,
+  3600, 7200, 10800, 14400, 21600, 28800, 43200,
+  86400, 172800, 259200, 604800,
+];
+
+// Widest label we render is like "123h59m59s" in bold 12px sans-serif.
+const MIN_LABEL_SPACING_PX = 85;
+
 /**
- * Pick a "nice" tick spacing (seconds) for a visible span of `viewSpan`
- * seconds. Thresholds mirror the original inline cascade in Spectrogram.tsx.
+ * Pick a "nice" tick spacing (seconds) such that consecutive tick labels
+ * have enough pixel space between them not to overlap, given `pixelsPerSecond`.
  */
-export function chooseTimeStep(viewSpan: number): number {
-  if (viewSpan > 36000) return 3600;
-  if (viewSpan > 7200) return 600;
-  if (viewSpan > 1200) return 120;
-  if (viewSpan > 300) return 60;
-  if (viewSpan > 60) return 10;
-  if (viewSpan > 30) return 5;
-  if (viewSpan > 10) return 2;
-  if (viewSpan > 2) return 1;
-  return 0.25;
+export function chooseTimeStep(pixelsPerSecond: number): number {
+  for (const step of NICE_TIME_STEPS) {
+    if (step * pixelsPerSecond >= MIN_LABEL_SPACING_PX) return step;
+  }
+  return NICE_TIME_STEPS[NICE_TIME_STEPS.length - 1];
 }
 
 /**

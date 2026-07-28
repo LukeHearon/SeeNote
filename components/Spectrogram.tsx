@@ -426,16 +426,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     // 3. Draw Time Ruler
-    // Choose tick spacing from the stable configured span (zoomSec), NOT from
-    // endTime-startTime. The latter is derived from the live clientWidth, which
-    // fluctuates by sub-pixel amounts during playback/panning. At round zoom
-    // levels the visible span sits exactly on a timeStep threshold (e.g. 10s),
-    // so those tiny fluctuations flip timeStep between 1 and 2 — making the
-    // odd-second labels flicker in and out. zoomSec is the same value
-    // pixelsPerSecond is derived from (pixelsPerSecond = containerWidth/zoomSec),
-    // so the span across the container is exactly zoomSec.
+    // Choose tick spacing from the stable configured pixelsPerSecond (derived
+    // from zoomSec), NOT from the live clientWidth. The latter fluctuates by
+    // sub-pixel amounts during playback/panning, which at round zoom levels
+    // can flip the chosen step — making labels flicker in and out.
     const timeRange = zoomSec;
-    const timeStep = chooseTimeStep(timeRange);
+    const timeStep = chooseTimeStep(pixelsPerSecond);
 
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';

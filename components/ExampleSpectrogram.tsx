@@ -114,7 +114,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
 
     // Time ruler along the bottom (whole clip spans the canvas width).
     if (duration > 0) {
-      const timeStep = chooseTimeStep(duration);
+      const timeStep = chooseTimeStep(cssW / duration);
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';

@@ -25,6 +25,10 @@ For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.m
 
 `npm version <x.y.z>` then `git push --follow-tags`. This commits, tags, and syncs the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`. The GitHub Actions workflow picks up the tag and builds a draft release.
 
+## No visual verification
+
+Never launch the app or take screenshots to visually verify a UI change — too costly in tokens. Verify with types/tests/reasoning about the code, then let the user check it themselves.
+
 ## Commit workflow
 
 After completing any task that modifies files, create a git commit — but only after the user has verified the changes. **Workflow: edit → ask user to verify → wait for confirmation → commit.** Never commit proactively. The `local/` directory is gitignored; never stage files from it.
