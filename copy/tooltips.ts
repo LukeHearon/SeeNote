@@ -69,6 +69,7 @@ export const tooltips = {
   get syncWithMessage() { return getOverride('tooltips.syncWithMessage') ?? "Sync with a commit message…"; },
   get buzzdetectSettings() { return getOverride('tooltips.buzzdetectSettings') ?? "buzzdetect settings"; },
   get buzzdetectYAxisReset() { return getOverride('tooltips.buzzdetectYAxisReset') ?? "Reset to auto-calculated range"; },
+  get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
   get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
   get showAllFiles() { return getOverride('tooltips.showAllFiles') ?? "Showing: all files"; },

@@ -19,6 +19,8 @@ interface UseProjectPersistenceArgs {
   buzzdetectThresholds: Record<string, number>;
   buzzdetectHiddenNeurons: string[];
   buzzdetectNeuronColors: Record<string, string>;
+  buzzdetectSeriesMode: 'activation' | 'detectionRate';
+  buzzdetectBinWidthOverride: number | null;
   videoMode: VideoMode;
   videoBrightness: number;
   videoContrast: number;
@@ -53,6 +55,8 @@ export function useProjectPersistence({
   buzzdetectThresholds,
   buzzdetectHiddenNeurons,
   buzzdetectNeuronColors,
+  buzzdetectSeriesMode,
+  buzzdetectBinWidthOverride,
   videoMode,
   videoBrightness,
   videoContrast,
@@ -104,6 +108,8 @@ export function useProjectPersistence({
         buzzdetectThresholds,
         buzzdetectHiddenNeurons,
         buzzdetectNeuronColors,
+        buzzdetectSeriesMode,
+        buzzdetectBinWidthOverride,
         videoMode,
         videoBrightness,
         videoContrast,
@@ -120,5 +126,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }

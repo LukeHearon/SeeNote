@@ -285,6 +285,12 @@ export const buzzdetectPanel = {
   get noActivations() { return getOverride('ui.buzzdetectPanel.noActivations') ?? "No buzzdetect activations for this track"; },
   get yAxisHeader() { return getOverride('ui.buzzdetectPanel.yAxisHeader') ?? "Y-axis range"; },
   get customColorTitle() { return getOverride('ui.buzzdetectPanel.customColorTitle') ?? "Custom color"; },
+  get seriesHeader() { return getOverride('ui.buzzdetectPanel.seriesHeader') ?? "Series"; },
+  get seriesActivation() { return getOverride('ui.buzzdetectPanel.seriesActivation') ?? "Activation"; },
+  get seriesDetectionRate() { return getOverride('ui.buzzdetectPanel.seriesDetectionRate') ?? "Detection rate"; },
+  get binWidthHeader() { return getOverride('ui.buzzdetectPanel.binWidthHeader') ?? "Bin width (s)"; },
+  get detection() { return getOverride('ui.buzzdetectPanel.detection') ?? "Detection"; },
+  get noDetection() { return getOverride('ui.buzzdetectPanel.noDetection') ?? "No Detection"; },
 };
 
 export const debugConsole = {

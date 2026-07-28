@@ -48,11 +48,19 @@ interface BuzzdetectPanelProps {
   // Per-neuron color override, keyed by neuron label. Absent entries fall
   // back to the palette-by-index default (buzzdetectNeuronColor).
   neuronColors: Record<string, string>;
+  // Which series the panel plots.
+  seriesMode: 'activation' | 'detectionRate';
+  // User-pinned bin width (seconds); null = auto-calculated. Persisted, and
+  // deliberately NOT reset when the track changes — only when seriesMode
+  // flips (the two modes' natural auto bin widths aren't comparable).
+  binWidthOverride: number | null;
   height: number;
   // Callbacks.
   onThresholdChange: (neuron: string, value: number) => void;
   onToggleNeuron: (neuron: string, hidden: boolean) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
+  onSeriesModeChange: (mode: 'activation' | 'detectionRate') => void;
+  onBinWidthOverrideChange: (binWidth: number | null) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -70,10 +78,14 @@ export default function BuzzdetectPanel({
   thresholds,
   hiddenNeurons,
   neuronColors: neuronColorOverrides,
+  seriesMode,
+  binWidthOverride,
   height,
   onThresholdChange,
   onToggleNeuron,
   onNeuronColorChange,
+  onSeriesModeChange,
+  onBinWidthOverrideChange,
   onHeightChange,
   onSelectionChange,
   onBoundAnnotationChange,
@@ -86,8 +98,8 @@ export default function BuzzdetectPanel({
   const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
   const [showSettings, setShowSettings] = useState(false);
   // Hovered bin range (inclusive indices). A single bin when frames are
-  // individually visible; the whole group of bins being averaged into one
-  // polyline point when they're not (see groupSizeRef).
+  // individually visible; the whole time-bucket being aggregated into one
+  // polyline point when they're not (see groupedRef/effectiveBinWidthRef).
   const [hoverRange, setHoverRange] = useState<{ start: number; end: number } | null>(null);
 
   // Which neuron's color-swatch popover is open in the settings panel (null =
@@ -135,22 +147,46 @@ export default function BuzzdetectPanel({
     return () => window.removeEventListener('mouseup', onWindowMouseUp);
   }, []);
 
-  // User-editable Y-axis range. Null means "use the auto-calculated file-wide
-  // range" (fileWideRange, below); typing into either settings text box pins
-  // it. Reset to null whenever a new file's data loads, so each file starts
-  // from its own auto-calculated range rather than inheriting the last file's
-  // manual override.
+  // User-editable Y-axis range. Null means "use the auto-calculated range"
+  // (activeAutoYRange, below); typing into either settings text box pins it.
+  // Reset whenever a new file's data loads, so each file starts from its own
+  // auto-calculated range rather than inheriting a stale manual override.
   const [yAxisOverride, setYAxisOverride] = useState<{ min: number; max: number } | null>(null);
   useEffect(() => { setYAxisOverride(null); }, [data]);
+
+  // binWidthOverride is a persisted prop (deliberately NOT reset per track —
+  // see its prop doc), but a series-mode flip still needs to reset both it
+  // and the Y-axis override, since the two modes plot in entirely different
+  // units and their auto-calculated ranges/widths aren't comparable. Skips
+  // the reset on mount so loading a project with a persisted override doesn't
+  // immediately wipe it.
+  const seriesModeMountedRef = useRef(false);
+  useEffect(() => {
+    if (!seriesModeMountedRef.current) { seriesModeMountedRef.current = true; return; }
+    setYAxisOverride(null);
+    onBinWidthOverrideChange(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seriesMode]);
+
+  // Live-updated (only while the settings popover is open, to avoid
+  // re-rendering every draw tick for no visible benefit) auto-calculated bin
+  // width, so the settings text box shows "the current auto-binning
+  // binwidth" per the spec, even as it changes with zoom.
+  const [autoBinWidthDisplay, setAutoBinWidthDisplay] = useState(0);
 
   // Whether individual frames currently read as distinguishable (dots +
   // boundary grid drawn) — set at draw time, read by the click/hover handlers
   // below to decide whether picking out a single frame is meaningful.
   const framesVisibleRef = useRef(true);
-  // How many bins the polyline is currently averaging into one drawn point
-  // (1 = no grouping) — set at draw time, read by the hover handler so its
-  // readout covers the same span the line is actually averaging.
-  const groupSizeRef = useRef(1);
+  // Whether the polyline is currently grouping multiple frames into each
+  // drawn point (true) or plotting one point per native frame (false) — set
+  // at draw time, read by the hover handler so its readout covers the same
+  // span the line is actually aggregating.
+  const groupedRef = useRef(false);
+  // The bin width (seconds) currently in effect — auto or overridden — set at
+  // draw time, read by the hover handler to compute which time-bucket the
+  // cursor falls into.
+  const effectiveBinWidthRef = useRef(0);
 
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
 
@@ -198,20 +234,39 @@ export default function BuzzdetectPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, enabledKey]);
 
-  // Bin range covered by the current selection (inclusive indices), for the
-  // persistent selection readout below. Only bins that actually overlap
-  // [selection.start, selection.end) count — a selection can start or end
-  // mid-gap when binWidth is overridden shorter than the frame spacing.
-  const selectionBinRange = useMemo<{ start: number; end: number } | null>(() => {
-    if (!data || !selection || data.starts.length === 0) return null;
+  // Auto Y-range for detection-rate mode: it's a fraction of frames in the
+  // bin clearing the threshold, so always 0..1 — no data scan needed.
+  const fileWideDetectionRateRange = useMemo<{ min: number; max: number } | null>(
+    () => (data ? { min: 0, max: 1 } : null),
+    [data],
+  );
+
+  // Whichever range applies to the current series mode — the base (pre
+  // override, pre-threshold-widening) auto Y-range.
+  const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
+
+  // Inclusive bin-index range whose frames overlap [t0, t1). Shared by the
+  // selection readout (below) and the hover-bucket lookup in
+  // handleAreaMouseMove. Only bins that actually overlap count — a span can
+  // start or end mid-gap when binWidth is overridden shorter than the frame
+  // spacing.
+  const binRangeForTimeSpan = useCallback((t0: number, t1: number): { start: number; end: number } | null => {
+    if (!data || data.starts.length === 0) return null;
     const { starts, binWidth } = data;
-    let iLeft = lastStartAtOrBefore(starts, selection.start);
+    let iLeft = lastStartAtOrBefore(starts, t0);
     if (iLeft < 0) iLeft = 0;
-    else if (starts[iLeft] + binWidth <= selection.start) iLeft = Math.min(iLeft + 1, starts.length - 1);
-    const iRight = lastStartAtOrBefore(starts, selection.end);
+    else if (starts[iLeft] + binWidth <= t0) iLeft = Math.min(iLeft + 1, starts.length - 1);
+    const iRight = lastStartAtOrBefore(starts, t1);
     if (iRight < iLeft) return null;
     return { start: iLeft, end: iRight };
-  }, [data, selection]);
+  }, [data]);
+
+  // Bin range covered by the current selection (inclusive indices), for the
+  // persistent selection readout below.
+  const selectionBinRange = useMemo<{ start: number; end: number } | null>(() => {
+    if (!selection) return null;
+    return binRangeForTimeSpan(selection.start, selection.end);
+  }, [binRangeForTimeSpan, selection]);
 
   // Map a clientX to a track time using the SHARED transform (scrollLeft /
   // pps), so a click lands on exactly the point the user sees under the
@@ -284,17 +339,22 @@ export default function BuzzdetectPanel({
     const enabled: number[] = [];
     for (let n = 0; n < neurons.length; n++) if (!hidden.has(neurons[n])) enabled.push(n);
 
-    // Y-axis scale: the user's manual override if set, else the file-wide
-    // activation range (pre-memoised so scrolling/panning does NOT trigger a
-    // rescan). Thresholds are cheap and may change without touching data, so
-    // fold them in at draw time instead.
-    let yMin = yAxisOverride ? yAxisOverride.min : (fileWideRange ? fileWideRange.min : Infinity);
-    let yMax = yAxisOverride ? yAxisOverride.max : (fileWideRange ? fileWideRange.max : -Infinity);
+    // Y-axis scale: the user's manual override if set, else the mode's
+    // auto-calculated range (pre-memoised so scrolling/panning does NOT
+    // trigger a rescan). Thresholds are cheap and may change without
+    // touching data, so fold them in at draw time instead — and only in
+    // activation mode, where they're a value on this axis; a detection rate
+    // isn't measured in the same units as the logit threshold that produces it.
+    let yMin = yAxisOverride ? yAxisOverride.min : (activeAutoYRange ? activeAutoYRange.min : Infinity);
+    let yMax = yAxisOverride ? yAxisOverride.max : (activeAutoYRange ? activeAutoYRange.max : -Infinity);
     // A manual override is meant to be respected exactly — as typed — so skip
     // the auto-mode widening (folding in out-of-range thresholds, headroom
     // padding) that would otherwise push the drawn extent past what the user
     // set.
-    if (!yAxisOverride) {
+    if (!yAxisOverride && seriesMode === 'activation') {
+      // Always keep the zero baseline in view in auto mode, even if every
+      // activation value (and threshold) happens to be positive.
+      if (isFinite(yMin)) yMin = Math.min(yMin, 0);
       for (const n of enabled) {
         const th = thresholdOf(neurons[n]);
         if (th < yMin) yMin = th;
@@ -304,30 +364,44 @@ export default function BuzzdetectPanel({
     if (!isFinite(yMin) || !isFinite(yMax)) { yMin = -2; yMax = 1; }
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1; }
     if (!yAxisOverride) {
-      // 6% headroom so dots at the extremes aren't clipped.
-      const padFrac = (yMax - yMin) * 0.06;
-      yMin -= padFrac; yMax += padFrac;
+      if (seriesMode === 'activation') {
+        // 6% headroom so dots at the extremes aren't clipped.
+        const padFrac = (yMax - yMin) * 0.06;
+        yMin -= padFrac; yMax += padFrac;
+      } else {
+        // Detection rate is a fraction — 0%/100% are real, meaningful bounds,
+        // not values needing headroom to avoid clipping (unlike arbitrary
+        // activation values), so the axis shouldn't read past them.
+        yMin = 0; yMax = 1;
+      }
     }
 
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
 
-    // Bin-grouping for the polyline (below) and for hover/click: above
-    // MAX_LINE_POINTS visible bins, group them so the drawn line stays near
-    // that point count instead of a scratchy per-bin path. Groups are
-    // anchored to the absolute bin index (floor(i / groupSize)), not to
-    // iLeft — otherwise a one-bin scroll shifts every bucket boundary and
-    // re-partitions which bins get averaged together, so the "smoothed" line
-    // (and the hover readout) would visibly writhe as you scrolled.
+    // Bin width (seconds) for the polyline (below) and for hover/click: above
+    // MAX_LINE_POINTS visible bins, an auto width groups them so the drawn
+    // line stays near that point count instead of a scratchy per-bin path;
+    // the user's override, if set, replaces that auto width outright. Bucket
+    // boundaries are anchored to absolute time (floor(t / binWidthSec)), not
+    // to iLeft — otherwise a one-bin scroll shifts every bucket boundary and
+    // re-partitions which frames get grouped together, so the "smoothed"
+    // line (and the hover readout) would visibly writhe as you scrolled.
     const binPx = binWidth * pixelsPerSecond;
     const visibleCount = iRight - iLeft + 1;
-    const groupSize = visibleCount > MAX_LINE_POINTS ? Math.ceil(visibleCount / MAX_LINE_POINTS) : 1;
-    const drawDots = binPx >= 4 && groupSize === 1;
+    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : binWidth;
+    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, binWidth);
+    const grouped = effectiveBinWidthSec > binWidth * 1.0001;
+    const drawDots = binPx >= 4 && !grouped;
     // Same visibility gate the click/hover handlers use to decide whether a
     // single-frame selection is meaningful — individual frames read as
     // distinguishable only while their dots and boundary grid are drawn.
     framesVisibleRef.current = drawDots;
-    groupSizeRef.current = groupSize;
+    groupedRef.current = grouped;
+    effectiveBinWidthRef.current = effectiveBinWidthSec;
+    if (showSettings) {
+      setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
+    }
 
     // Frame bands: a faint wash over the time each frame actually covers, so
     // uncovered time (frame length overridden shorter than the frame spacing)
@@ -396,46 +470,55 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
-    // Per-neuron threshold lines (dashed, in the neuron's color).
-    ctx.setLineDash([4, 4]);
-    for (const n of enabled) {
-      const y = yOf(thresholdOf(neurons[n]));
-      ctx.strokeStyle = neuronColors[n] + '66';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y); ctx.lineTo(width, y);
-      ctx.stroke();
+    // Per-neuron threshold lines (dashed, in the neuron's color) — only in
+    // activation mode; a detection rate isn't in the threshold's units.
+    if (seriesMode === 'activation') {
+      ctx.setLineDash([4, 4]);
+      for (const n of enabled) {
+        const y = yOf(thresholdOf(neurons[n]));
+        ctx.strokeStyle = neuronColors[n] + '66';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y); ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
-    ctx.setLineDash([]);
 
-    // Polylines + dots, one neuron at a time.
+    // Polylines + dots, one neuron at a time. In activation mode each point
+    // is the mean activation over its bucket; in detection-rate mode it's
+    // the fraction of the bucket's frames clearing the threshold (both are
+    // just "average the per-frame value", differing only in what that
+    // per-frame value is).
     for (const n of enabled) {
       const color = neuronColors[n];
       const th = thresholdOf(neurons[n]);
+      const perFrameValue = (i: number) => seriesMode === 'activation' ? values[n][i] : (values[n][i] >= th ? 1 : 0);
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       let started = false;
-      if (groupSize === 1) {
+      if (!grouped) {
         for (let i = iLeft; i <= iRight; i++) {
           const cx = xOf(starts[i] + binWidth / 2);
-          const cy = yOf(values[n][i]);
+          const cy = yOf(perFrameValue(i));
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       } else {
-        const groupStart = Math.floor(iLeft / groupSize) * groupSize;
-        const groupEndExclusive = Math.floor(iRight / groupSize) * groupSize + groupSize;
-        for (let i = Math.max(groupStart, 0); i < groupEndExclusive; i += groupSize) {
-          const end = Math.min(i + groupSize - 1, starts.length - 1);
-          let sumT = 0, sumV = 0, count = 0;
-          for (let j = i; j <= end; j++) {
-            sumT += starts[j] + binWidth / 2;
-            sumV += values[n][j];
-            count++;
+        const firstBucket = Math.floor(starts[iLeft] / effectiveBinWidthSec);
+        const lastBucket = Math.floor(starts[iRight] / effectiveBinWidthSec);
+        let j = iLeft;
+        for (let b = firstBucket; b <= lastBucket; b++) {
+          const bStart = b * effectiveBinWidthSec;
+          const bEnd = bStart + effectiveBinWidthSec;
+          let sum = 0, count = 0;
+          while (j <= iRight && starts[j] < bEnd) {
+            if (starts[j] >= bStart) { sum += perFrameValue(j); count++; }
+            j++;
           }
           if (count === 0) continue;
-          const cx = xOf(sumT / count);
-          const cy = yOf(sumV / count);
+          const cx = xOf(bStart + effectiveBinWidthSec / 2);
+          const cy = yOf(sum / count);
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       }
@@ -445,8 +528,8 @@ export default function BuzzdetectPanel({
         for (let i = iLeft; i <= iRight; i++) {
           const cx = xOf(starts[i] + binWidth / 2);
           if (cx < -4 || cx > width + 4) continue;
-          const cy = yOf(values[n][i]);
           const isPositive = values[n][i] >= th;
+          const cy = yOf(perFrameValue(i));
           ctx.beginPath();
           ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
           if (isPositive) {
@@ -489,12 +572,12 @@ export default function BuzzdetectPanel({
           const v = yMin + (k / TICKS) * (yMax - yMin);
           const y = yOf(v);
           if (y < 8 || y > h - 6) continue;
-          yctx.fillText(v.toFixed(1), Y_AXIS_WIDTH - 6, y);
+          yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
         }
         yctx.restore();
       }
     }
-  }, [data, fileWideRange, yAxisOverride, viewportStore, selection, hoverRange, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, showSettings, viewportStore, selection, hoverRange, hidden, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: just the playhead line, aligned to the same time→pixel
   // transform as the main canvas. Kept separate so playback ticks (~50/s)
@@ -727,20 +810,21 @@ export default function BuzzdetectPanel({
       return;
     }
     if (dragging) return; // drag handled at window level
-    const i = binAtClientX(e.clientX);
-    if (i === null) { setHoverRange(null); return; }
-    const groupSize = groupSizeRef.current;
-    if (groupSize === 1) {
-      setHoverRange({ start: i, end: i });
+    if (!groupedRef.current) {
+      const i = binAtClientX(e.clientX);
+      setHoverRange(i === null ? null : { start: i, end: i });
       return;
     }
     // Individual frames aren't distinguishable at this zoom (see
-    // handleAreaMouseDown) — cover the whole group of bins the polyline is
-    // averaging into the one point under the cursor, anchored the same way
-    // the draw-time grouping is (absolute index, not iLeft-relative).
-    const groupStart = Math.floor(i / groupSize) * groupSize;
-    const groupEnd = Math.min(groupStart + groupSize - 1, data!.starts.length - 1);
-    setHoverRange({ start: groupStart, end: groupEnd });
+    // handleAreaMouseDown) — cover the whole time-bucket the polyline is
+    // aggregating into the one point under the cursor, anchored the same way
+    // the draw-time bucketing is (absolute time, not iLeft-relative).
+    const t = timeAtClientX(e.clientX);
+    if (t === null) { setHoverRange(null); return; }
+    const bucketWidth = effectiveBinWidthRef.current;
+    if (!(bucketWidth > 0)) { setHoverRange(null); return; }
+    const b = Math.floor(t / bucketWidth);
+    setHoverRange(binRangeForTimeSpan(b * bucketWidth, (b + 1) * bucketWidth));
   };
 
   // Drop a stale hover range when the track's data changes (indices differ).
@@ -767,9 +851,15 @@ export default function BuzzdetectPanel({
   const enabledNeurons = data ? data.neurons.filter(n => !hidden.has(n)) : [];
 
   // Renders a small readout for a bin range: its time span, and each enabled
-  // neuron's value — averaged across the range when it covers more than one
-  // bin. Shared by the hover readout (top-left, disappears on mouse-out) and
-  // the selection readout (bottom-left, stays as long as a selection exists).
+  // neuron's value. Shared by the hover readout (top-left, disappears on
+  // mouse-out) and the selection readout (bottom-left, stays as long as a
+  // selection exists).
+  //
+  // In activation mode: the raw value for a single frame, averaged across
+  // the range otherwise. In detection-rate mode: just Detection/No Detection
+  // for a single frame (a rate over one frame isn't meaningful — it's the
+  // frame's own dot, drawn at 1 or 0), else the fraction of the range's
+  // frames clearing the threshold.
   const renderBinRangeReadout = (range: { start: number; end: number }, positionClassName: string) => {
     if (!data) return null;
     const { start, end } = range;
@@ -785,6 +875,25 @@ export default function BuzzdetectPanel({
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {
             if (hidden.has(n)) return null;
+            if (seriesMode === 'detectionRate') {
+              const th = thresholdOf(n);
+              if (isSingle) {
+                const detected = data.values[i][start] >= th;
+                return (
+                  <span key={n} style={{ color: neuronColors[i] }}>
+                    {n} {detected ? buzzdetectCopy.detection : buzzdetectCopy.noDetection}
+                  </span>
+                );
+              }
+              let count = 0;
+              for (let j = start; j <= end; j++) if (data.values[i][j] >= th) count++;
+              const rate = count / (end - start + 1);
+              return (
+                <span key={n} style={{ color: neuronColors[i] }}>
+                  {n} {(rate * 100).toFixed(0)}%
+                </span>
+              );
+            }
             let value = data.values[i][start];
             if (!isSingle) {
               let sum = 0;
@@ -865,11 +974,54 @@ export default function BuzzdetectPanel({
               onWheel={(e) => e.stopPropagation()}
             >
               <div className="p-3 space-y-2">
-                {data && fileWideRange && (
+                {data && (
+                  <div className="pb-2 border-b border-slate-700 space-y-1">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                      {buzzdetectCopy.seriesHeader}
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => onSeriesModeChange('activation')}
+                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'activation' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                      >
+                        {buzzdetectCopy.seriesActivation}
+                      </button>
+                      <button
+                        onClick={() => onSeriesModeChange('detectionRate')}
+                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'detectionRate' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                      >
+                        {buzzdetectCopy.seriesDetectionRate}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {data && (
+                  <div className="pb-2 border-b border-slate-700 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
+                      <span>{buzzdetectCopy.binWidthHeader}</span>
+                      {binWidthOverride !== null && (
+                        <button
+                          onClick={() => onBinWidthOverrideChange(null)}
+                          className="text-slate-400 hover:text-[#e65161]"
+                          data-tooltip={tooltips.buzzdetectBinWidthReset}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      )}
+                    </div>
+                    <DraftNumberInput
+                      value={binWidthOverride ?? autoBinWidthDisplay}
+                      onCommit={(v) => { if (v === null) return; onBinWidthOverrideChange(v); }}
+                      min={data.binWidth}
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
+                    />
+                  </div>
+                )}
+                {data && activeAutoYRange && (
                   <div className="pb-2 border-b border-slate-700 space-y-1">
                     <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
                       <span>{buzzdetectCopy.yAxisHeader}</span>
-                      {yAxisOverride && (yAxisOverride.min !== fileWideRange.min || yAxisOverride.max !== fileWideRange.max) && (
+                      {yAxisOverride && (yAxisOverride.min !== activeAutoYRange.min || yAxisOverride.max !== activeAutoYRange.max) && (
                         <button
                           onClick={() => setYAxisOverride(null)}
                           className="text-slate-400 hover:text-[#e65161]"
@@ -881,19 +1033,19 @@ export default function BuzzdetectPanel({
                     </div>
                     <div className="flex items-center gap-2">
                       <DraftNumberInput
-                        value={yAxisOverride?.min ?? fileWideRange.min}
+                        value={yAxisOverride?.min ?? activeAutoYRange.min}
                         onCommit={(v) => {
                           if (v === null) return;
-                          setYAxisOverride({ min: v, max: yAxisOverride?.max ?? fileWideRange.max });
+                          setYAxisOverride({ min: v, max: yAxisOverride?.max ?? activeAutoYRange.max });
                         }}
                         className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
                       />
                       <span className="text-slate-500 text-xs flex-none">–</span>
                       <DraftNumberInput
-                        value={yAxisOverride?.max ?? fileWideRange.max}
+                        value={yAxisOverride?.max ?? activeAutoYRange.max}
                         onCommit={(v) => {
                           if (v === null) return;
-                          setYAxisOverride({ min: yAxisOverride?.min ?? fileWideRange.min, max: v });
+                          setYAxisOverride({ min: yAxisOverride?.min ?? activeAutoYRange.min, max: v });
                         }}
                         className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
                       />

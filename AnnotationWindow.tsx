@@ -819,6 +819,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectThresholds, setBuzzdetectThresholds,
     buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
     buzzdetectNeuronColors, setBuzzdetectNeuronColors,
+    buzzdetectSeriesMode, setBuzzdetectSeriesMode,
+    buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
     buzzdetectPanelHeight, setBuzzdetectPanelHeight,
     buzzdetectData, setBuzzdetectData,
     handleBuzzdetectThresholdChange,
@@ -869,6 +871,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectThresholds,
     buzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
+    buzzdetectSeriesMode,
+    buzzdetectBinWidthOverride,
     videoMode,
     videoBrightness,
     videoContrast,
@@ -978,6 +982,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setBuzzdetectThresholds(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
     setBuzzdetectNeuronColors(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
+    setBuzzdetectSeriesMode(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
+    setBuzzdetectBinWidthOverride(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
     setFilterToolActive(false);
@@ -1948,10 +1954,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}
                  neuronColors={buzzdetectNeuronColors}
+                 seriesMode={buzzdetectSeriesMode}
+                 binWidthOverride={buzzdetectBinWidthOverride}
                  height={buzzdetectPanelHeight}
                  onThresholdChange={handleBuzzdetectThresholdChange}
                  onToggleNeuron={handleBuzzdetectToggleNeuron}
                  onNeuronColorChange={handleBuzzdetectNeuronColorChange}
+                 onSeriesModeChange={setBuzzdetectSeriesMode}
+                 onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
                  onBoundAnnotationChange={setBoundAnnotationId}

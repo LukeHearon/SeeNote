@@ -78,7 +78,7 @@ export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // file-tree vs tool-palette split
 
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
-  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' |
+  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
   'splitRatio' | 'leftPanelRatio' | 'leftPanelWidthRatio' | 'timeDisplayUnit'>> = {
   volume: 1,

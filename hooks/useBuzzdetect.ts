@@ -12,6 +12,10 @@ export interface BuzzdetectApi {
   setBuzzdetectHiddenNeurons: React.Dispatch<React.SetStateAction<string[]>>;
   buzzdetectNeuronColors: Record<string, string>;
   setBuzzdetectNeuronColors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  buzzdetectSeriesMode: 'activation' | 'detectionRate';
+  setBuzzdetectSeriesMode: React.Dispatch<React.SetStateAction<'activation' | 'detectionRate'>>;
+  buzzdetectBinWidthOverride: number | null;
+  setBuzzdetectBinWidthOverride: React.Dispatch<React.SetStateAction<number | null>>;
   buzzdetectPanelHeight: number;
   setBuzzdetectPanelHeight: React.Dispatch<React.SetStateAction<number>>;
   buzzdetectData: BuzzdetectData | null;
@@ -41,6 +45,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
   const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
   const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
+  const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<'activation' | 'detectionRate'>(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
+  const [buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride] = useState<number | null>(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
 
@@ -78,6 +84,10 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
     setBuzzdetectNeuronColors,
+    buzzdetectSeriesMode,
+    setBuzzdetectSeriesMode,
+    buzzdetectBinWidthOverride,
+    setBuzzdetectBinWidthOverride,
     buzzdetectPanelHeight,
     setBuzzdetectPanelHeight,
     buzzdetectData,

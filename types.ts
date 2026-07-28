@@ -116,6 +116,8 @@ export interface ProjectUiSettings {
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
+  buzzdetectSeriesMode?: 'activation' | 'detectionRate'; // which series the panel plots
+  buzzdetectBinWidthOverride?: number | null; // user-pinned bin width (seconds); null/absent = auto-calculated
 
   // Panel layout (see hooks/usePanelLayout.ts).
   playheadLocked?: boolean;
