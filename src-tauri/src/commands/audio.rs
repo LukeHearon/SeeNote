@@ -94,21 +94,12 @@ pub async fn audio_peak(path: String) -> Result<f32, String> {
 
 // ── Spectrogram chunk ─────────────────────────────────────────────────────────
 
-/// How much audio each column of a coarse (sampled) spectrogram tier summarizes.
-///
-/// The column keeps the per-bin max over the windows in this span, so the value
-/// trades transient sensitivity against work: too short and brief events fall
-/// between columns, too long and every column decodes audio the view can't
-/// resolve. 0.3s is ~7 windows at fft_size 2048 / 48 kHz, and costs well under a
-/// millisecond per column against a ~3ms seek.
-const COARSE_POOL_SEC: f64 = 0.3;
-
 /// Seek margin for the coarse column walk (see PcmStream::seek_to).
 ///
 /// The margin is decoded and thrown away at every column, so at the default
-/// 0.5s each column decoded 0.8s of audio to keep 0.3s — more than half the
-/// decode wasted, on the hottest path for long files. 50ms still comfortably
-/// covers a container seek landing late (an MP3 packet is ~26ms).
+/// 0.5s each column decoded far more audio than it keeps — on the hottest path
+/// for long files. 50ms still comfortably covers a container seek landing late
+/// (an MP3 packet is ~26ms).
 const COARSE_SEEK_MARGIN_SEC: f64 = 0.05;
 
 #[derive(Deserialize)]
@@ -199,14 +190,17 @@ fn coarse_geometry(
 /// of the bytes decoding would. Taking `stream` by reference is what lets
 /// `compute_spectrogram_range` extend one walk across many chunks.
 ///
-/// ── Why pool several windows per column ─────────────────────────────────────
-/// One fft_size window per column is 43ms of audio out of a hop that may be
-/// minutes long, so a brief call between windows is simply invisible — useless
-/// for spotting activity across a night. Instead each column covers a short
-/// contiguous span and keeps the per-bin MAXIMUM across the windows in it, the
-/// spectral analogue of a peak-preserving waveform overview: a transient
-/// anywhere in the span lights its column up. compute_stft's u16 encoding is
-/// monotonic in magnitude, so the max can be taken directly on encoded values.
+/// ── Why exactly one window per column ───────────────────────────────────────
+/// Each column is a single fft_size window sampled at the column's centre —
+/// the same estimator the fine tiers use, so a coarse view has the same
+/// contrast and noise texture as a zoomed-in one, just sampled more sparsely.
+///
+/// This previously pooled ~0.3s per column and kept the per-bin MAXIMUM across
+/// the windows in it, to catch transients falling between columns. The max of
+/// several noisy spectra estimates their upper envelope rather than their
+/// level, so it lifted the noise floor by several dB and washed out the whole
+/// image — coarse views looked horizontally smeared next to fine ones. The
+/// sparse sampling it was compensating for is an accepted trade-off.
 #[allow(clippy::too_many_arguments)]
 fn coarse_columns(
     stream: &mut decoder::PcmStream,
@@ -220,10 +214,8 @@ fn coarse_columns(
     seek_first: bool,
 ) {
     let ch = stream.channels().max(1) as usize;
-    // Audio each column summarizes. Clamped to the hop so columns never overlap,
-    // and to at least one window so a column is always emittable.
-    let pool_frames = ((COARSE_POOL_SEC * sample_rate as f64) as usize)
-        .clamp(fft_size, hop_size.max(fft_size));
+    // Audio each column summarizes: exactly one FFT window.
+    let pool_frames = fft_size;
     let mut mono = vec![0.0f32; pool_frames];
 
     for col in 0..n_cols {
@@ -255,21 +247,14 @@ fn coarse_columns(
             filled += frames_read;
         }
 
-        // A column needs at least one full window; a shorter tail stays 0.
+        // A column needs a full window; a shorter tail stays 0.
         if filled < fft_size {
             continue;
         }
 
-        // Non-overlapping windows across the span, reduced by per-bin max.
-        let windows = fft::compute_stft(&mono[..filled], fft_size, fft_size);
+        let window = fft::compute_stft(&mono[..fft_size], fft_size, fft_size);
         let dst = &mut output[col * n_freq_bins..(col + 1) * n_freq_bins];
-        for window in windows.chunks_exact(n_freq_bins) {
-            for (d, &s) in dst.iter_mut().zip(window) {
-                if s > *d {
-                    *d = s;
-                }
-            }
-        }
+        dst.copy_from_slice(&window[..n_freq_bins]);
     }
 }
 
