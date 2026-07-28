@@ -5,7 +5,7 @@ use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::units::{Time, Timestamp};
+use symphonia::core::units::{Time, TimeBase, Timestamp};
 use std::fs::File;
 use std::sync::OnceLock;
 
@@ -184,6 +184,9 @@ pub struct PcmStream {
     /// padding and must be skipped so that audible-frame 0 lines up with the
     /// first real sample. Audible-frame N <-> container-frame N + delay_frames.
     delay_frames: u64,
+    /// Track time base, kept so `seek_to` can convert a packet's pts to seconds
+    /// the same way `open` does.
+    time_base: Option<TimeBase>,
     /// `desired_start_frame` is stored in *container* frame coords (i.e.
     /// includes `delay_frames`) so the existing alignment logic that compares
     /// against `abs_frame` (also container-frame) works unchanged.
@@ -212,7 +215,7 @@ impl PcmStream {
             hint.with_extension(ext);
         }
 
-        let mut format = symphonia::default::get_probe()
+        let format = symphonia::default::get_probe()
             .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
             .context("Unsupported format")?;
 
@@ -233,7 +236,7 @@ impl PcmStream {
             )
         };
 
-        let mut decoder = {
+        let decoder = {
             let track = format
                 .tracks()
                 .iter()
@@ -248,97 +251,6 @@ impl PcmStream {
                 .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
                 .context("Failed to create decoder")?
         };
-
-        // Seek using the *base* sample rate; symphonia's seek is in seconds,
-        // so SBR doesn't affect the seek target calculation.
-        //
-        // Note on encoder delay: symphonia's seek interprets time in container
-        // frames (gapless mode is off). The delay is small relative to the
-        // 0.5s seek margin (typical MP3 LAME delay ≈ 26ms at 44.1 kHz), so
-        // seeking to (start_sec - 0.5) container-seconds reliably lands before
-        // the desired audible position. The alignment phase below skips the
-        // remaining frames, including any encoder padding when start_sec is 0.
-        let seek_margin_sec = 0.5;
-        let seek_target = (start_sec - seek_margin_sec).max(0.0);
-
-        if seek_target > 0.0 {
-            let _ = format.seek(
-                SeekMode::Accurate,
-                SeekTo::Time {
-                    time: Time::try_from_secs_f64(seek_target).unwrap_or(Time::ZERO),
-                    track_id: Some(track_id),
-                },
-            );
-        }
-
-        // ── Eager first-packet decode to discover the real post-SBR spec ────
-        // See get_file_info for the full SBR rationale. We need the actual
-        // decoded sample rate BEFORE returning so the caller reports the
-        // correct rate to the frontend. We also need it so abs_frame /
-        // desired_start_frame math is in the same frame-rate as the samples
-        // we'll emit.
-        let mut pending: Vec<f32> = Vec::new();
-        let mut first_abs_frame: u64 = 0;
-        let mut sample_rate = initial_sr;
-        let mut channels = initial_channels;
-        let mut eof = true; // flipped to false once we decode a packet
-
-        for _ in 0..16 {
-            let packet = match format.next_packet() {
-                Ok(Some(p)) => p,
-                Ok(None) | Err(_) => break,
-            };
-            if packet.track_id != track_id {
-                continue;
-            }
-            let decoded = match decoder.decode(&packet) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let spec = decoded.spec().clone();
-            sample_rate = spec.rate();
-            channels = spec.channels().count() as u16;
-
-            // Packet pts is in base units (time_base is based on the container's
-            // timescale, pre-SBR). Convert to seconds, then to frames at the
-            // real (post-SBR) sample_rate. Fall back to the seek target if the
-            // conversion overflows (implausible in practice, but calc_time can
-            // return None).
-            first_abs_frame = time_base
-                .and_then(|tb| tb.calc_time(packet.pts))
-                .map(|t| (t.as_secs_f64() * sample_rate as f64).round() as u64)
-                .unwrap_or_else(|| (seek_target * sample_rate as f64).round() as u64);
-
-            decoded.copy_to_vec_interleaved::<f32>(&mut pending);
-            eof = false;
-            break;
-        }
-
-        if eof {
-            return Err(anyhow::anyhow!("No decodable audio packets found in first 16 packets"));
-        }
-
-        // Validate start_sec before casting to u64 — a NaN, Infinity, or
-        // negative value would silently wrap to a garbage frame index.
-        if !start_sec.is_finite() || start_sec < 0.0 {
-            return Err(anyhow::anyhow!(
-                "start_sec must be a finite non-negative number, got {start_sec}"
-            ));
-        }
-        let start_sec_frames = start_sec * sample_rate as f64;
-        if start_sec_frames >= u64::MAX as f64 {
-            return Err(anyhow::anyhow!(
-                "start_sec {start_sec} is too large to represent as a frame index"
-            ));
-        }
-
-        // desired_start_frame is in container-frame coords (audible + delay)
-        // so the alignment phase in read() skips both the seek-overshoot and
-        // any encoder delay padding when start_sec falls in or near the delay
-        // region. start_frame_audible is the same position expressed in
-        // audible-frame coords, which is what we report to the frontend.
-        let start_frame_audible = start_sec_frames.round() as u64;
-        let desired_start_frame = start_frame_audible + delay;
 
         // Sanity-check the encoder delay. Values above ~4096 frames are
         // implausible (the largest known LAME delay is ~2257 at 44.1 kHz; AAC
@@ -357,22 +269,157 @@ impl PcmStream {
             "encoder delay {delay} frames is implausibly large"
         );
 
-        Ok(PcmStream {
+        // Alignment state is set by seek_to below; these are placeholders that
+        // are never observable (seek_to overwrites all of them, or errors).
+        let mut stream = PcmStream {
             format,
             decoder,
             track_id,
-            sample_rate,
-            channels,
+            sample_rate: initial_sr,
+            channels: initial_channels,
             delay_frames: delay,
-            desired_start_frame,
-            abs_frame: first_abs_frame,
-            pending,
+            time_base,
+            desired_start_frame: 0,
+            abs_frame: 0,
+            pending: Vec::new(),
             pending_pos: 0,
-            eof,
-            // next_output_frame tracks position in *audible* frames (what the
-            // frontend treats as time = frame / sample_rate).
-            next_output_frame: start_frame_audible,
-        })
+            eof: true,
+            next_output_frame: 0,
+        };
+        // reader_is_fresh: nothing has been read from `format` yet, so it is
+        // already positioned at the start of the stream.
+        stream.reposition(start_sec, true)?;
+        Ok(stream)
+    }
+
+    /// Reposition an already-open stream to `start_sec`, restoring the same
+    /// sample-accuracy contract `open` establishes: the next `read()` returns
+    /// the frame at exactly `floor(start_sec * sample_rate)`.
+    ///
+    /// This is the whole reason the seek/align phase is factored out of `open`.
+    /// Sampling a file at scattered positions — which is what building a coarse
+    /// overview column-by-column does — otherwise had to re-`open` per position,
+    /// paying a full symphonia probe (and, for the alternative of reading
+    /// forward, decoding every intervening sample just to throw it away).
+    /// Reusing the format reader and decoder makes repositioning cost a seek.
+    pub fn seek_to(&mut self, start_sec: f64) -> Result<()> {
+        self.reposition(start_sec, false)
+    }
+
+    /// Shared seek + realignment. `reader_is_fresh` says the format reader has
+    /// not yet yielded a packet, which is only true on the initial `open`.
+    ///
+    /// It matters because the seek below is skipped when the target rounds down
+    /// to 0 (start_sec within the seek margin of the file start): a fresh reader
+    /// is already there, but a reused one is wherever the last read left it, and
+    /// skipping the seek would realign against a packet from the middle of the
+    /// file — read() then sees the packet start as a huge overshoot and pads the
+    /// result with silence.
+    fn reposition(&mut self, start_sec: f64, reader_is_fresh: bool) -> Result<()> {
+        // Validate before casting to u64 — a NaN, Infinity, or negative value
+        // would silently wrap to a garbage frame index.
+        if !start_sec.is_finite() || start_sec < 0.0 {
+            return Err(anyhow::anyhow!(
+                "start_sec must be a finite non-negative number, got {start_sec}"
+            ));
+        }
+
+        // Seek using the *base* sample rate; symphonia's seek is in seconds,
+        // so SBR doesn't affect the seek target calculation.
+        //
+        // Note on encoder delay: symphonia's seek interprets time in container
+        // frames (gapless mode is off). The delay is small relative to the
+        // 0.5s seek margin (typical MP3 LAME delay ≈ 26ms at 44.1 kHz), so
+        // seeking to (start_sec - 0.5) container-seconds reliably lands before
+        // the desired audible position. The alignment phase in read() skips the
+        // remaining frames, including any encoder padding when start_sec is 0.
+        let seek_margin_sec = 0.5;
+        let seek_target = (start_sec - seek_margin_sec).max(0.0);
+
+        if seek_target > 0.0 || !reader_is_fresh {
+            let _ = self.format.seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time: Time::try_from_secs_f64(seek_target).unwrap_or(Time::ZERO),
+                    track_id: Some(self.track_id),
+                },
+            );
+        }
+        // The next packet is discontinuous with the last one decoded, so the
+        // decoder's inter-packet state (e.g. MP3's bit reservoir / overlap-add
+        // tail) must be dropped or the first columns after a seek decode from
+        // stale history.
+        self.decoder.reset();
+
+        // ── Eager first-packet decode to discover the real post-SBR spec ────
+        // See get_file_info for the full SBR rationale. We need the actual
+        // decoded sample rate before returning so the caller reports the
+        // correct rate to the frontend. We also need it so abs_frame /
+        // desired_start_frame math is in the same frame-rate as the samples
+        // we'll emit.
+        self.pending.clear();
+        self.pending_pos = 0;
+        let mut first_abs_frame: u64 = 0;
+        let mut eof = true; // flipped to false once we decode a packet
+
+        for _ in 0..16 {
+            let packet = match self.format.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) | Err(_) => break,
+            };
+            if packet.track_id != self.track_id {
+                continue;
+            }
+            let decoded = match self.decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let spec = decoded.spec().clone();
+            self.sample_rate = spec.rate();
+            self.channels = spec.channels().count() as u16;
+
+            // Packet pts is in base units (time_base is based on the container's
+            // timescale, pre-SBR). Convert to seconds, then to frames at the
+            // real (post-SBR) sample_rate. Fall back to the seek target if the
+            // conversion overflows (implausible in practice, but calc_time can
+            // return None).
+            first_abs_frame = self
+                .time_base
+                .and_then(|tb| tb.calc_time(packet.pts))
+                .map(|t| (t.as_secs_f64() * self.sample_rate as f64).round() as u64)
+                .unwrap_or_else(|| (seek_target * self.sample_rate as f64).round() as u64);
+
+            decoded.copy_to_vec_interleaved::<f32>(&mut self.pending);
+            eof = false;
+            break;
+        }
+
+        if eof {
+            return Err(anyhow::anyhow!(
+                "No decodable audio packets found within 16 packets of {start_sec}s"
+            ));
+        }
+
+        let start_sec_frames = start_sec * self.sample_rate as f64;
+        if start_sec_frames >= u64::MAX as f64 {
+            return Err(anyhow::anyhow!(
+                "start_sec {start_sec} is too large to represent as a frame index"
+            ));
+        }
+
+        // desired_start_frame is in container-frame coords (audible + delay)
+        // so the alignment phase in read() skips both the seek-overshoot and
+        // any encoder delay padding when start_sec falls in or near the delay
+        // region. start_frame_audible is the same position expressed in
+        // audible-frame coords, which is what we report to the frontend.
+        let start_frame_audible = start_sec_frames.round() as u64;
+        self.desired_start_frame = start_frame_audible + self.delay_frames;
+        self.abs_frame = first_abs_frame;
+        self.eof = false;
+        // next_output_frame tracks position in *audible* frames (what the
+        // frontend treats as time = frame / sample_rate).
+        self.next_output_frame = start_frame_audible;
+        Ok(())
     }
 
     pub fn sample_rate(&self) -> u32 { self.sample_rate }
@@ -682,6 +729,7 @@ mod tests {
             sample_rate,
             channels,
             delay_frames,
+            time_base: None,
             desired_start_frame,
             abs_frame: abs_frame_start,
             pending,
@@ -689,6 +737,98 @@ mod tests {
             eof: true, // pre-filled; fill_next_packet will see eof and stop
             next_output_frame,
         }
+    }
+
+    // ── seek_to: the sample-accuracy contract survives repositioning ─────────
+    //
+    // These use a real WAV on disk rather than the in-memory PcmStream builder
+    // above, because seek_to's whole job is the format-reader seek + realignment
+    // that the synthetic stream skips. A 16-bit ramp makes every frame
+    // self-identifying: frame i holds i, so a misaligned seek is visible in the
+    // first sample read.
+
+    /// Write a mono 16-bit WAV whose frame i holds sample value i, and return
+    /// its path. Values wrap at 30000 to stay inside i16.
+    fn write_ramp_wav(name: &str, sample_rate: u32, n_frames: usize) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        let data_bytes = (n_frames * 2) as u32;
+        let byte_rate = sample_rate * 2;
+        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());   // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes());   // mono
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());   // block align
+        wav.extend_from_slice(&16u16.to_le_bytes());  // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for i in 0..n_frames {
+            wav.extend_from_slice(&((i % 30000) as i16).to_le_bytes());
+        }
+        std::fs::write(&path, wav).expect("write ramp wav");
+        path
+    }
+
+    /// f32 value symphonia yields for ramp frame `i`.
+    fn ramp_value(i: usize) -> f32 {
+        (i % 30000) as f32 / 32768.0
+    }
+
+    #[test]
+    fn seek_to_lands_on_the_exact_frame() {
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_seek_to_exact.wav", sr, 40_000);
+        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
+
+        // Forward, backward, and back to the start: every reposition must land
+        // on floor(start_sec * sample_rate), the same guarantee open() gives.
+        for start_sec in [0.0, 2.5, 1.0, 4.999, 0.0, 3.25] {
+            stream.seek_to(start_sec).expect("seek_to");
+            let expected_frame = (start_sec * sr as f64) as usize;
+            assert_eq!(
+                stream.position_frames(),
+                expected_frame as u64,
+                "position after seek to {start_sec}s"
+            );
+            let (samples, frames_read) = stream.read(4).expect("read");
+            assert_eq!(frames_read, 4, "short read after seek to {start_sec}s");
+            for (i, &s) in samples.iter().enumerate() {
+                assert!(
+                    (s - ramp_value(expected_frame + i)).abs() < 1e-6,
+                    "seek to {start_sec}s, frame +{i}: got {s}, want {}",
+                    ramp_value(expected_frame + i)
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn seek_to_matches_a_fresh_open_at_the_same_position() {
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_seek_to_vs_open.wav", sr, 40_000);
+        let p = path.to_str().unwrap();
+
+        // The coarse spectrogram path replaced per-column re-opens with seek_to
+        // on one stream; the two must produce identical audio or coarse tiers
+        // would disagree with fine tiers about what is at a given time.
+        let mut walked = PcmStream::open(p, 0.0).expect("open");
+        for col in 0..8 {
+            let t = col as f64 * 0.6;
+            walked.seek_to(t).expect("seek_to");
+            let (from_walk, n_walk) = walked.read(64).expect("read");
+
+            let mut fresh = PcmStream::open(p, t).expect("open");
+            let (from_open, n_open) = fresh.read(64).expect("read");
+
+            assert_eq!(n_walk, n_open, "frame count at {t}s");
+            assert_eq!(from_walk, from_open, "samples at {t}s");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     /// delay=0, seek overshoot of 10 frames:
@@ -771,5 +911,57 @@ mod tests {
             assert_eq!(samples[i], expected, "frame {i}: expected {expected}");
         }
         assert_eq!(frames_read, gap + n_frames);
+    }
+}
+
+#[cfg(test)]
+mod seek_bench {
+    use super::*;
+    use std::time::Instant;
+
+    /// Records the seek characteristic the coarse spectrogram path is built on:
+    /// walking a single stream FORWARD is cheap and its total cost is roughly
+    /// flat in the number of stops (the container scan resumes where it left
+    /// off), whereas re-opening per position restarts the scan from byte 0 and
+    /// costs time proportional to the depth of each seek.
+    ///
+    /// Not a unit test — it needs a long real file, so it is #[ignore]d:
+    ///   SEEK_BENCH_FILE=/path/to/long.mp3 \
+    ///     cargo test --release seek_bench -- --ignored --nocapture
+    ///
+    /// Measured on a 1GB / 49.7h MP3 (Apple silicon, local SSD):
+    ///   re-open + read, 20 scattered positions   122 ms/column
+    ///   forward seek_to, 20 positions            249 ms TOTAL
+    ///   forward seek_to, 100 positions           283 ms TOTAL
+    ///   sequential decode of the whole file      ~48 s
+    #[test]
+    #[ignore]
+    fn forward_seek_is_cheaper_than_reopen() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = get_file_info(&path).expect("info");
+        println!("file: dur={:.0}s sr={}", info.duration_secs, info.sample_rate);
+
+        let n = 20;
+        let t = Instant::now();
+        for i in 0..n {
+            let target = info.duration_secs * (i as f64 / n as f64);
+            let mut s = PcmStream::open(&path, target).expect("open");
+            let _ = s.read(2048).expect("read");
+        }
+        let reopen = t.elapsed();
+        println!("{n} re-open+read: {reopen:?} total, {:?}/column", reopen / n as u32);
+
+        for n in [20usize, 100] {
+            let mut s = PcmStream::open(&path, 0.0).expect("open");
+            let t = Instant::now();
+            for i in 0..n {
+                let target = info.duration_secs * (i as f64 / n as f64);
+                s.seek_to(target).expect("seek_to");
+                let _ = s.read(2048).expect("read");
+            }
+            let total = t.elapsed();
+            println!("{n} forward seek_to on one stream: {total:?} total, {:?}/column",
+                     total / n as u32);
+        }
     }
 }

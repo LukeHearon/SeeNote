@@ -94,6 +94,15 @@ pub async fn audio_peak(path: String) -> Result<f32, String> {
 
 // ── Spectrogram chunk ─────────────────────────────────────────────────────────
 
+/// How much audio each column of a coarse (sampled) spectrogram tier summarizes.
+///
+/// The column keeps the per-bin max over the windows in this span, so the value
+/// trades transient sensitivity against work: too short and brief events fall
+/// between columns, too long and every column decodes audio the view can't
+/// resolve. 0.3s is ~7 windows at fft_size 2048 / 48 kHz, and costs well under a
+/// millisecond per column against a ~3ms seek.
+const COARSE_POOL_SEC: f64 = 0.3;
+
 #[derive(Deserialize)]
 pub struct SpectrogramChunkRequest {
     pub path: String,
@@ -155,63 +164,87 @@ fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, S
 
         let mut output = vec![0u16; n_cols * n_freq_bins];
 
-        // Walk a SINGLE PcmStream forward instead of re-opening the file (full
-        // symphonia probe + seek) once per column — that was O(n_cols) decoder
-        // opens and the reason coarse overviews of long files crawled. Reusing
-        // PcmStream is also CLAUDE.md's canonical sample-accurate decode path.
+        // Walk a SINGLE PcmStream forward, seeking from column to column.
         //
-        // Per column: read exactly fft_size mono frames (this column's window),
-        // run a 1-column STFT, then skip hop_size - fft_size frames to land on
-        // the next column centre. Column k therefore starts at frame k*hop_size
-        // → start_sec + k*hop/sample_rate, identical to the old per-column seek.
+        // ── Why seek instead of read-through ────────────────────────────────
+        // This path used to advance between columns by *reading and discarding*
+        // the hop, which meant fully decoding the chunk's entire span to emit a
+        // handful of columns — for the coarsest tier of a 50h file, decoding the
+        // whole file. Measured on a 1GB / 49.7h MP3 (see decoder::seek_bench):
+        //
+        //   sequential decode of the whole file    ~48 s
+        //   100 forward seek_to calls across it    ~0.28 s total
+        //
+        // Forward seeks on a reused stream resume the container scan from the
+        // current position, so a full column walk costs roughly ONE pass over
+        // the frame headers no matter how many columns it emits — the totals for
+        // 20 and 100 columns were within 15% of each other. Only backward seeks
+        // and re-opens restart the scan from byte 0 (~122 ms each at depth),
+        // which a monotonically forward walk never does. The gap widens on slow
+        // disks, since scanning touches a small fraction of the bytes decoding
+        // would.
+        //
+        // ── Why pool several windows per column ─────────────────────────────
+        // One fft_size window per column is 43ms of audio out of a hop that may
+        // be minutes long, so a brief call between windows is simply invisible —
+        // useless for spotting activity across a night. Instead each column
+        // covers a short contiguous span and keeps the per-bin MAXIMUM across
+        // the windows in it, the spectral analogue of a peak-preserving waveform
+        // overview: a transient anywhere in the span lights its column up.
+        // compute_stft's u16 encoding is monotonic in magnitude, so the max can
+        // be taken directly on the encoded values.
         if let Ok(mut stream) = decoder::PcmStream::open(&req.path, req.start_sec) {
             let ch = stream.channels().max(1) as usize;
-            let skip_frames = req.hop_size.saturating_sub(req.fft_size);
-            let mut window_mono = vec![0.0f32; req.fft_size];
+            // Audio each column summarizes. Clamped to the hop so columns never
+            // overlap, and to at least one window so a column is always emittable.
+            let pool_frames = ((COARSE_POOL_SEC * sample_rate as f64) as usize)
+                .clamp(req.fft_size, req.hop_size.max(req.fft_size));
+            let mut mono = vec![0.0f32; pool_frames];
 
-            'cols: for col in 0..n_cols {
-                // Read this column's fft_size-frame window, mixing down to mono.
+            for col in 0..n_cols {
+                // Column k is centred at start_sec + k*hop/sample_rate. Column 0
+                // needs no seek: open() already positioned the stream there.
+                if col > 0 {
+                    let t = req.start_sec
+                        + (col * req.hop_size) as f64 / sample_rate as f64;
+                    if stream.seek_to(t).is_err() {
+                        break; // past EOF or unreadable — remaining columns stay 0
+                    }
+                }
+
+                // Read this column's span, mixing down to mono.
                 let mut filled = 0usize;
-                while filled < req.fft_size {
-                    let (interleaved, frames_read) = match stream.read(req.fft_size - filled) {
+                while filled < pool_frames {
+                    let (interleaved, frames_read) = match stream.read(pool_frames - filled) {
                         Ok(r) => r,
-                        Err(_) => break 'cols,
+                        Err(_) => break,
                     };
                     if frames_read == 0 {
-                        break; // EOF — partial window left; skipped by the guard below
+                        break; // EOF — partial span; the guard below handles it
                     }
                     for frame in 0..frames_read {
                         let mut sum = 0.0f32;
                         for c in 0..ch {
                             sum += interleaved[frame * ch + c];
                         }
-                        window_mono[filled + frame] = sum / ch as f32;
+                        mono[filled + frame] = sum / ch as f32;
                     }
                     filled += frames_read;
                 }
 
-                // Only emit a column when the full window was filled (matches the
-                // old `samples.len() >= fft_size` guard; partial tail stays 0).
-                if filled >= req.fft_size {
-                    let col_data = fft::compute_stft(&window_mono, req.fft_size, req.fft_size);
-                    if col_data.len() >= n_freq_bins {
-                        output[col * n_freq_bins..(col + 1) * n_freq_bins]
-                            .copy_from_slice(&col_data[..n_freq_bins]);
-                    }
+                // A column needs at least one full window; a shorter tail stays 0.
+                if filled < req.fft_size {
+                    continue;
                 }
 
-                // Advance to the next column centre.
-                if col + 1 < n_cols {
-                    let mut to_skip = skip_frames;
-                    while to_skip > 0 {
-                        let (_, frames_read) = match stream.read(to_skip) {
-                            Ok(r) => r,
-                            Err(_) => break 'cols,
-                        };
-                        if frames_read == 0 {
-                            break 'cols; // EOF — remaining columns stay 0
+                // Non-overlapping windows across the span, reduced by per-bin max.
+                let windows = fft::compute_stft(&mono[..filled], req.fft_size, req.fft_size);
+                let dst = &mut output[col * n_freq_bins..(col + 1) * n_freq_bins];
+                for window in windows.chunks_exact(n_freq_bins) {
+                    for (d, &s) in dst.iter_mut().zip(window) {
+                        if s > *d {
+                            *d = s;
                         }
-                        to_skip -= frames_read;
                     }
                 }
             }
@@ -414,4 +447,41 @@ pub async fn close_pcm_stream(
         .map_err(|e| e.to_string())?
         .remove(&stream_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod coarse_bench {
+    use super::*;
+    use std::time::Instant;
+
+    /// Wall-clock cost of the coarse (sampled) spectrogram path on a real long
+    /// file. #[ignore]d — needs a fixture:
+    ///   SEEK_BENCH_FILE=/path/to/long.mp3 \
+    ///     cargo test --release coarse_bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn coarse_chunk_cost() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = decoder::get_file_info(&path).expect("info");
+        let sr = info.sample_rate as usize;
+
+        for (label, hop, dur) in [
+            ("tier0 hop=1s  chunk=600s", sr, 600.0),
+            ("hop=44s       chunk=512col", sr * 44, 512.0 * 44.0),
+        ] {
+            for start in [0.0, info.duration_secs * 0.5] {
+                let req = SpectrogramChunkRequest {
+                    path: path.clone(),
+                    start_sec: start,
+                    duration_sec: dur,
+                    fft_size: 2048,
+                    hop_size: hop,
+                };
+                let t = Instant::now();
+                let bytes = compute_spectrogram_chunk(&req).expect("chunk");
+                let n_cols = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+                println!("{label} @ {start:.0}s: {:?} ({n_cols} cols)", t.elapsed());
+            }
+        }
+    }
 }
