@@ -12,7 +12,7 @@ import {
 } from '../constants';
 import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
-import { binAtTime, visibleBinRange } from '../utils/binIndex';
+import { binAtTime, lastStartAtOrBefore, visibleBinRange } from '../utils/binIndex';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import DraftNumberInput from './DraftNumberInput';
@@ -178,6 +178,21 @@ export default function BuzzdetectPanel({
     return { min: lo, max: hi };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, enabledKey]);
+
+  // Bin range covered by the current selection (inclusive indices), for the
+  // persistent selection readout below. Only bins that actually overlap
+  // [selection.start, selection.end) count — a selection can start or end
+  // mid-gap when binWidth is overridden shorter than the frame spacing.
+  const selectionBinRange = useMemo<{ start: number; end: number } | null>(() => {
+    if (!data || !selection || data.starts.length === 0) return null;
+    const { starts, binWidth } = data;
+    let iLeft = lastStartAtOrBefore(starts, selection.start);
+    if (iLeft < 0) iLeft = 0;
+    else if (starts[iLeft] + binWidth <= selection.start) iLeft = Math.min(iLeft + 1, starts.length - 1);
+    const iRight = lastStartAtOrBefore(starts, selection.end);
+    if (iRight < iLeft) return null;
+    return { start: iLeft, end: iRight };
+  }, [data, selection]);
 
   // Map a clientX to a track time using the SHARED transform (scrollLeft /
   // pps), so a click lands on exactly the point the user sees under the
@@ -691,6 +706,42 @@ export default function BuzzdetectPanel({
 
   const enabledNeurons = data ? data.neurons.filter(n => !hidden.has(n)) : [];
 
+  // Renders a small readout for a bin range: its time span, and each enabled
+  // neuron's value — averaged across the range when it covers more than one
+  // bin. Shared by the hover readout (top-left, disappears on mouse-out) and
+  // the selection readout (bottom-left, stays as long as a selection exists).
+  const renderBinRangeReadout = (range: { start: number; end: number }, positionClassName: string) => {
+    if (!data) return null;
+    const { start, end } = range;
+    const isSingle = start === end;
+    const rangeEnd = duration > 0 ? Math.min(data.starts[end] + data.binWidth, duration) : data.starts[end] + data.binWidth;
+    return (
+      <div className={`absolute pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%] ${positionClassName}`}>
+        <div className="text-slate-300">
+          {isSingle
+            ? `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}`
+            : `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}–${formatTimeForUnit(rangeEnd, timeDisplayUnit)}`}
+        </div>
+        <div className="flex flex-wrap gap-x-2">
+          {data.neurons.map((n, i) => {
+            if (hidden.has(n)) return null;
+            let value = data.values[i][start];
+            if (!isSingle) {
+              let sum = 0;
+              for (let j = start; j <= end; j++) sum += data.values[i][j];
+              value = sum / (end - start + 1);
+            }
+            return (
+              <span key={n} style={{ color: neuronColors[i] }}>
+                {n} {value.toFixed(2)}{!isSingle && ' avg'}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex-none bg-[#0b1220] border-t border-slate-700 flex flex-col relative" style={{ height }}>
       {/* Top-edge resize handle */}
@@ -728,39 +779,13 @@ export default function BuzzdetectPanel({
             </div>
           )}
 
-          {/* Hover readout — the hovered bin (or bin-group)'s time range and
-              each enabled neuron's value (averaged across the group when
-              more than one bin is covered), in color. */}
-          {data && hoverRange !== null && (() => {
-            const { start, end } = hoverRange;
-            const isSingle = start === end;
-            const rangeEnd = duration > 0 ? Math.min(data.starts[end] + data.binWidth, duration) : data.starts[end] + data.binWidth;
-            return (
-              <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
-                <div className="text-slate-300">
-                  {isSingle
-                    ? `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}`
-                    : `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}–${formatTimeForUnit(rangeEnd, timeDisplayUnit)}`}
-                </div>
-                <div className="flex flex-wrap gap-x-2">
-                  {data.neurons.map((n, i) => {
-                    if (hidden.has(n)) return null;
-                    let value = data.values[i][start];
-                    if (!isSingle) {
-                      let sum = 0;
-                      for (let j = start; j <= end; j++) sum += data.values[i][j];
-                      value = sum / (end - start + 1);
-                    }
-                    return (
-                      <span key={n} style={{ color: neuronColors[i] }}>
-                        {n} {value.toFixed(2)}{!isSingle && ' avg'}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
+          {/* Readout — time range + each enabled neuron's value, in color.
+              The current selection takes priority and stays put regardless
+              of the cursor once one exists (so it can't be "stomped" by
+              moving the mouse over the panel); only without a selection does
+              it track the hovered bin (or bin-group). */}
+          {data && (selectionBinRange ?? hoverRange) !== null &&
+            renderBinRangeReadout((selectionBinRange ?? hoverRange)!, 'top-1 left-2')}
 
           {/* Settings popover trigger */}
           <button
