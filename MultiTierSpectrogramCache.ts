@@ -1,4 +1,4 @@
-import { getSpectrogramChunk } from './utils/tauriCommands';
+import { getSpectrogramChunkRange } from './utils/tauriCommands';
 import { buildTierLadder, TierConfig } from './constants';
 
 export interface CachedChunk {
@@ -32,6 +32,42 @@ export function swapChunkCache(
   ref.current = next;
 }
 
+/**
+ * Pull the longest contiguous run of chunk indices containing the queue head
+ * (same tier, at most `maxLen` chunks) out of `queue`, mutating it.
+ *
+ * Chunks are queued centre-out, so the head is the highest-priority chunk and
+ * the run grows around it — forward first, since a range is walked forward and
+ * the forward neighbour is the next-highest priority. Returns null for an empty
+ * queue.
+ */
+export function takeContiguousRun(
+  queue: Array<{ tier: number; chunkIndex: number }>,
+  maxLen: number,
+): { tier: number; firstIndex: number; count: number } | null {
+  if (queue.length === 0) return null;
+  const { tier, chunkIndex: head } = queue[0];
+
+  const queued = new Set<number>();
+  for (const item of queue) if (item.tier === tier) queued.add(item.chunkIndex);
+
+  let lo = head;
+  let hi = head;
+  while (hi - lo + 1 < maxLen) {
+    if (queued.has(hi + 1)) hi++;
+    else if (queued.has(lo - 1)) lo--;
+    else break;
+  }
+
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const item = queue[i];
+    if (item.tier === tier && item.chunkIndex >= lo && item.chunkIndex <= hi) {
+      queue.splice(i, 1);
+    }
+  }
+  return { tier, firstIndex: lo, count: hi - lo + 1 };
+}
+
 export class MultiTierSpectrogramCache {
   private tiers: TierConfig[];
   private tierByNumber: Map<number, TierConfig>; // tier number -> tier config
@@ -40,6 +76,9 @@ export class MultiTierSpectrogramCache {
   // quickly rather than all chunks competing for CPU simultaneously.
   private static readonly MAX_CONCURRENT = 4;
   private inFlight = new Set<string>(); // "tier:chunkIdx" currently being fetched
+  // MAX_CONCURRENT limits REQUESTS, not chunks: one request may cover a
+  // contiguous run of chunks (see drainQueue).
+  private activeRequests = 0;
   private fetchQueue: Array<{ tier: number; chunkIndex: number }> = [];
   private activeTierIndex: number = -1; // for hysteresis
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
@@ -217,43 +256,49 @@ export class MultiTierSpectrogramCache {
 
   private drainQueue(): void {
     while (
-      this.inFlight.size < MultiTierSpectrogramCache.MAX_CONCURRENT &&
+      this.activeRequests < MultiTierSpectrogramCache.MAX_CONCURRENT &&
       this.fetchQueue.length > 0
     ) {
-      const next = this.fetchQueue.shift()!;
-      const key = `${next.tier}:${next.chunkIndex}`;
-      const cache = this.caches.get(next.tier);
-      // Re-check: may have been cached by a concurrent in-flight fetch.
-      if (cache?.has(next.chunkIndex) || this.inFlight.has(key)) continue;
-      this.dispatchFetch(next.tier, next.chunkIndex);
+      const freeSlots = MultiTierSpectrogramCache.MAX_CONCURRENT - this.activeRequests;
+      // Spread the queued chunks over the free slots. With few chunks each slot
+      // takes one, which is the fastest arrangement when cores are free: the
+      // backend computes them in parallel. With many, each slot instead walks a
+      // contiguous run in ONE pass, because every separate chunk request re-opens
+      // the file and a container open scans from byte 0 to the chunk's start —
+      // twelve chunks deep in a 50h file re-scan gigabytes between them.
+      //
+      // Measured on a 49.7h MP3 (see coarse_bench::range_walk_vs_parallel_chunks),
+      // 4 chunks: 4 parallel requests 0.57s, one 4-chunk walk 1.37s. Batching
+      // only pays once there are more chunks than slots, so the split keeps
+      // parallelism maxed first and batches only the excess.
+      const maxRunLength = Math.max(1, Math.ceil(this.fetchQueue.length / freeSlots));
+      const run = takeContiguousRun(this.fetchQueue, maxRunLength);
+      if (!run) break;
+      this.dispatchRange(run.tier, run.firstIndex, run.count);
     }
   }
 
-  private dispatchFetch(tier: number, chunkIndex: number): void {
-    const key = `${tier}:${chunkIndex}`;
+  private dispatchRange(tier: number, firstIndex: number, count: number): void {
     const cache = this.caches.get(tier);
-    if (!cache || cache.has(chunkIndex) || this.inFlight.has(key)) return;
-
     const tierConfig = this.tierByNumber.get(tier);
-    if (!tierConfig) return;
+    if (!cache || !tierConfig) return;
 
-    const startSec = chunkIndex * tierConfig.chunkDuration;
-    if (startSec >= this.duration) return;
-
-    this.inFlight.add(key);
+    const keys: string[] = [];
+    for (let i = 0; i < count; i++) keys.push(`${tier}:${firstIndex + i}`);
+    for (const key of keys) this.inFlight.add(key);
+    this.activeRequests += 1;
     const generation = this.generationId;
 
-    getSpectrogramChunk(
+    getSpectrogramChunkRange(
       this.filePath,
-      startSec,
+      firstIndex,
+      count,
       tierConfig.chunkDuration,
       this.fftSize,
       tierConfig.hopSize,
-    )
-      .then(result => {
-        // Discard result if invalidate() was called while this fetch was in flight.
+      result => {
+        // Discard if invalidate() was called while this request was in flight.
         if (this.generationId !== generation) return;
-
         const chunk: CachedChunk = {
           data: result.data,
           nCols: result.n_cols,
@@ -263,16 +308,22 @@ export class MultiTierSpectrogramCache {
           sampleRate: result.sample_rate,
           lastAccessed: Date.now(),
         };
-
         this.evictLRU(tier);
-        cache.set(chunkIndex, chunk);
+        cache.set(result.chunk_index, chunk);
+        // Fires per chunk, not per request, so the view fills in progressively
+        // while a multi-chunk walk is still running.
         this.onChunkLoaded();
-      })
+      },
+    )
       .catch(err => {
-        console.error(`MultiTierCache: failed to fetch tier ${tier} chunk ${chunkIndex}:`, err);
+        console.error(
+          `MultiTierCache: failed to fetch tier ${tier} chunks ${firstIndex}..${firstIndex + count - 1}:`,
+          err,
+        );
       })
       .finally(() => {
-        this.inFlight.delete(key);
+        for (const key of keys) this.inFlight.delete(key);
+        this.activeRequests -= 1;
         this.drainQueue();
       });
   }
@@ -296,6 +347,7 @@ export class MultiTierSpectrogramCache {
       cache.clear();
     }
     this.inFlight.clear();
+    this.activeRequests = 0;
     this.fetchQueue = [];
     this.activeTierIndex = -1;
   }

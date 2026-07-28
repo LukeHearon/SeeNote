@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
+import { MultiTierSpectrogramCache, swapChunkCache, takeContiguousRun } from '../MultiTierSpectrogramCache';
 import {
   buildTierLadder,
   COLS_PER_CHUNK,
@@ -213,5 +213,65 @@ describe('swapChunkCache', () => {
     const ref: { current: MultiTierSpectrogramCache | null } = { current: cache };
     swapChunkCache(ref, cache);
     expect(ref.current).toBe(cache);
+  });
+});
+
+describe('takeContiguousRun', () => {
+  const q = (tier: number, ...indices: number[]) =>
+    indices.map(chunkIndex => ({ tier, chunkIndex }));
+
+  it('returns null for an empty queue', () => {
+    expect(takeContiguousRun([], 4)).toBeNull();
+  });
+
+  it('takes just the head when the run is capped at one', () => {
+    const queue = q(2, 5, 6, 7);
+    expect(takeContiguousRun(queue, 1)).toEqual({ tier: 2, firstIndex: 5, count: 1 });
+    // The rest stays queued, in order.
+    expect(queue).toEqual(q(2, 6, 7));
+  });
+
+  it('grows forward from the head before backward', () => {
+    // Centre-out queueing puts the forward neighbour ahead of the backward one,
+    // and a range is walked forward, so forward growth is preferred.
+    const queue = q(1, 10, 11, 9);
+    expect(takeContiguousRun(queue, 2)).toEqual({ tier: 1, firstIndex: 10, count: 2 });
+    expect(queue).toEqual(q(1, 9));
+  });
+
+  it('spans both directions when the cap allows', () => {
+    const queue = q(1, 10, 11, 9, 12, 8);
+    expect(takeContiguousRun(queue, 5)).toEqual({ tier: 1, firstIndex: 8, count: 5 });
+    expect(queue).toEqual([]);
+  });
+
+  it('stops at a gap rather than covering chunks that were not queued', () => {
+    // 12 is missing: including it would compute a chunk nobody asked for and,
+    // worse, report it as part of a contiguous walk.
+    const queue = q(0, 10, 11, 13, 14);
+    expect(takeContiguousRun(queue, 4)).toEqual({ tier: 0, firstIndex: 10, count: 2 });
+    expect(queue).toEqual(q(0, 13, 14));
+  });
+
+  it('never mixes tiers into one run', () => {
+    const queue = [
+      { tier: 1, chunkIndex: 5 },
+      { tier: 2, chunkIndex: 6 },
+      { tier: 1, chunkIndex: 6 },
+    ];
+    expect(takeContiguousRun(queue, 4)).toEqual({ tier: 1, firstIndex: 5, count: 2 });
+    expect(queue).toEqual([{ tier: 2, chunkIndex: 6 }]);
+  });
+
+  it('drains a queue completely across repeated calls', () => {
+    const queue = q(3, 4, 5, 6, 7, 8);
+    const runs: Array<{ firstIndex: number; count: number }> = [];
+    let guard = 0;
+    while (queue.length > 0 && guard++ < 10) {
+      const run = takeContiguousRun(queue, 2)!;
+      runs.push({ firstIndex: run.firstIndex, count: run.count });
+    }
+    expect(queue).toEqual([]);
+    expect(runs.reduce((n, r) => n + r.count, 0)).toBe(5);
   });
 });

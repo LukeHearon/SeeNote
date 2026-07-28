@@ -1,4 +1,4 @@
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc, Channel } from '@tauri-apps/api/core';
 import { BuzzdetectData } from '../types';
 
 // ── Types returned by Rust ────────────────────────────────────────────────────
@@ -56,23 +56,46 @@ function parseSpectrogramBuffer(buffer: ArrayBuffer): SpectrogramChunkResult {
   return { data, n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate };
 }
 
-export const getSpectrogramChunk = async (
+/** One chunk of a range response: the chunk's grid index plus its contents. */
+export interface SpectrogramRangeChunk extends SpectrogramChunkResult {
+  chunk_index: number;
+}
+
+/**
+ * Compute a contiguous run of chunks in one backend pass, invoking `onChunk` as
+ * each completes rather than waiting for the whole range.
+ *
+ * Chunks in a range are computed by walking a single decoder forward, which for
+ * coarse tiers avoids re-scanning the container from the start of the file once
+ * per chunk. `onChunk` may be called after the promise's work begins and before
+ * it resolves; the promise settles when the last chunk has been sent.
+ */
+export const getSpectrogramChunkRange = async (
   path: string,
-  startSec: number,
-  durationSec: number,
+  firstChunkIndex: number,
+  nChunks: number,
+  chunkDuration: number,
   fftSize: number,
   hopSize: number,
-): Promise<SpectrogramChunkResult> => {
-  const buffer = await invoke<ArrayBuffer>('get_spectrogram_chunk', {
+  onChunk: (chunk: SpectrogramRangeChunk) => void,
+): Promise<void> => {
+  const channel = new Channel<ArrayBuffer>();
+  channel.onmessage = (message) => {
+    // Rust prefixes each blob with a u32 grid index (build_range_message).
+    const chunk_index = new DataView(message).getUint32(0, true);
+    onChunk({ chunk_index, ...parseSpectrogramBuffer(message.slice(4)) });
+  };
+  await invoke('get_spectrogram_chunk_range', {
     req: {
       path,
-      start_sec: startSec,
-      duration_sec: durationSec,
+      first_chunk_index: firstChunkIndex,
+      n_chunks: nChunks,
+      chunk_duration: chunkDuration,
       fft_size: fftSize,
       hop_size: hopSize,
     },
+    onChunk: channel,
   });
-  return parseSpectrogramBuffer(buffer);
 };
 
 

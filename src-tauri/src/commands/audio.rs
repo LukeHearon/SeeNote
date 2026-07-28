@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use crate::audio::{decoder, fft};
-use tauri::ipc::Response;
+use tauri::ipc::{Channel, InvokeResponseBody};
 
 // ── PCM stream state ──────────────────────────────────────────────────────────
 
@@ -149,113 +149,153 @@ fn build_spectrogram_response(
     bytes
 }
 
-/// Decode + STFT a chunk, returning the encoded IPC blob.
+/// True when a tier's hop is coarse enough that sampling beats decoding through.
+///
+/// Below this the chunk's whole span is decoded sequentially anyway, so the
+/// sampled path's per-column seek would cost more than it saves.
+fn is_coarse_hop(hop_size: usize, sample_rate: u32) -> bool {
+    hop_size >= (sample_rate as usize) / 2
+}
+
+/// Column count and reported extent for a coarse chunk starting at `start_sec`.
+///
+/// Same invariant as the standard STFT path: n_cols / actual_duration_sec must
+/// equal the true cps (= sample_rate / hop_size) so the renderer places columns
+/// at their real centres. Since n_cols is integer-truncated, the only way to
+/// keep the ratio exact is to derive the duration back from n_cols.
+fn coarse_geometry(
+    start_sec: f64,
+    duration_sec: f64,
+    file_duration_sec: f64,
+    hop_size: usize,
+    sample_rate: u32,
+) -> (usize, f64) {
+    let actual_end = (start_sec + duration_sec).min(file_duration_sec);
+    let span = (actual_end - start_sec).max(0.0);
+    let n_cols = ((span * sample_rate as f64) / hop_size as f64).floor() as usize + 1;
+    (n_cols, n_cols as f64 * hop_size as f64 / sample_rate as f64)
+}
+
+/// Fill `output` with `n_cols` coarse spectrogram columns starting at
+/// `start_sec`, walking `stream` FORWARD. `seek_first` seeks before the first
+/// column; pass false when the stream is already positioned there (a fresh
+/// open), true when continuing from a previous chunk.
+///
+/// ── Why seek instead of read-through ────────────────────────────────────────
+/// This path used to advance between columns by *reading and discarding* the
+/// hop, which meant fully decoding the chunk's entire span to emit a handful of
+/// columns — for the coarsest tier of a 50h file, decoding the whole file.
+/// Measured on a 1GB / 49.7h MP3 (see decoder::seek_bench):
+///
+///   sequential decode of the whole file    ~48 s
+///   100 forward seek_to calls across it    ~0.28 s total
+///
+/// Forward seeks on a reused stream resume the container scan from the current
+/// position, so a column walk costs roughly ONE pass over the frame headers no
+/// matter how many columns it emits — the totals for 20 and 100 columns were
+/// within 15% of each other. Only backward seeks and re-opens restart the scan
+/// from byte 0 (~122 ms each at depth), which a monotonically forward walk never
+/// does. The gap widens on slow disks, since scanning touches a small fraction
+/// of the bytes decoding would. Taking `stream` by reference is what lets
+/// `compute_spectrogram_range` extend one walk across many chunks.
+///
+/// ── Why pool several windows per column ─────────────────────────────────────
+/// One fft_size window per column is 43ms of audio out of a hop that may be
+/// minutes long, so a brief call between windows is simply invisible — useless
+/// for spotting activity across a night. Instead each column covers a short
+/// contiguous span and keeps the per-bin MAXIMUM across the windows in it, the
+/// spectral analogue of a peak-preserving waveform overview: a transient
+/// anywhere in the span lights its column up. compute_stft's u16 encoding is
+/// monotonic in magnitude, so the max can be taken directly on encoded values.
+#[allow(clippy::too_many_arguments)]
+fn coarse_columns(
+    stream: &mut decoder::PcmStream,
+    output: &mut [u16],
+    n_cols: usize,
+    n_freq_bins: usize,
+    start_sec: f64,
+    hop_size: usize,
+    fft_size: usize,
+    sample_rate: u32,
+    seek_first: bool,
+) {
+    let ch = stream.channels().max(1) as usize;
+    // Audio each column summarizes. Clamped to the hop so columns never overlap,
+    // and to at least one window so a column is always emittable.
+    let pool_frames = ((COARSE_POOL_SEC * sample_rate as f64) as usize)
+        .clamp(fft_size, hop_size.max(fft_size));
+    let mut mono = vec![0.0f32; pool_frames];
+
+    for col in 0..n_cols {
+        // Column k is centred at start_sec + k*hop/sample_rate.
+        if col > 0 || seek_first {
+            let t = start_sec + (col * hop_size) as f64 / sample_rate as f64;
+            if stream.seek_to(t, COARSE_SEEK_MARGIN_SEC).is_err() {
+                break; // past EOF or unreadable — remaining columns stay 0
+            }
+        }
+
+        // Read this column's span, mixing down to mono.
+        let mut filled = 0usize;
+        while filled < pool_frames {
+            let (interleaved, frames_read) = match stream.read(pool_frames - filled) {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            if frames_read == 0 {
+                break; // EOF — partial span; the guard below handles it
+            }
+            for frame in 0..frames_read {
+                let mut sum = 0.0f32;
+                for c in 0..ch {
+                    sum += interleaved[frame * ch + c];
+                }
+                mono[filled + frame] = sum / ch as f32;
+            }
+            filled += frames_read;
+        }
+
+        // A column needs at least one full window; a shorter tail stays 0.
+        if filled < fft_size {
+            continue;
+        }
+
+        // Non-overlapping windows across the span, reduced by per-bin max.
+        let windows = fft::compute_stft(&mono[..filled], fft_size, fft_size);
+        let dst = &mut output[col * n_freq_bins..(col + 1) * n_freq_bins];
+        for window in windows.chunks_exact(n_freq_bins) {
+            for (d, &s) in dst.iter_mut().zip(window) {
+                if s > *d {
+                    *d = s;
+                }
+            }
+        }
+    }
+}
+
+/// Decode + STFT one chunk, returning the encoded IPC blob.
 ///
 /// Deliberately synchronous: it is pure CPU work (decode, FFT) with no await
-/// points, and it runs on a blocking thread — see `get_spectrogram_chunk`.
+/// points, and it runs on a blocking thread — see `get_spectrogram_chunk_range`,
+/// the single command that reaches it.
 fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, String> {
     let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
     let sample_rate = info.sample_rate;
     let n_freq_bins = req.fft_size / 2;
 
     // For very large hop sizes (coarse overview tiers), use a sampled approach:
-    // seek to each column position and decode one FFT window instead of
-    // decoding the entire range and running a full STFT.
-    if req.hop_size >= (sample_rate as usize) / 2 {
-        let actual_end = (req.start_sec + req.duration_sec).min(info.duration_secs);
-        let chunk_duration = actual_end - req.start_sec;
-        let n_cols = ((chunk_duration * sample_rate as f64) / req.hop_size as f64).floor() as usize + 1;
-        // Same invariant as the standard STFT path: nCols / actualDurationSec
-        // must equal the true cps (= sample_rate / hop_size) so the renderer
-        // places cols at their real centres. See the long comment below.
-        let actual_duration_sec = n_cols as f64 * req.hop_size as f64 / sample_rate as f64;
-
+    // seek to each column position and pool a short span there instead of
+    // decoding the entire range and running a full STFT. See coarse_columns.
+    if is_coarse_hop(req.hop_size, sample_rate) {
+        let (n_cols, actual_duration_sec) =
+            coarse_geometry(req.start_sec, req.duration_sec, info.duration_secs, req.hop_size, sample_rate);
         let mut output = vec![0u16; n_cols * n_freq_bins];
 
-        // Walk a SINGLE PcmStream forward, seeking from column to column.
-        //
-        // ── Why seek instead of read-through ────────────────────────────────
-        // This path used to advance between columns by *reading and discarding*
-        // the hop, which meant fully decoding the chunk's entire span to emit a
-        // handful of columns — for the coarsest tier of a 50h file, decoding the
-        // whole file. Measured on a 1GB / 49.7h MP3 (see decoder::seek_bench):
-        //
-        //   sequential decode of the whole file    ~48 s
-        //   100 forward seek_to calls across it    ~0.28 s total
-        //
-        // Forward seeks on a reused stream resume the container scan from the
-        // current position, so a full column walk costs roughly ONE pass over
-        // the frame headers no matter how many columns it emits — the totals for
-        // 20 and 100 columns were within 15% of each other. Only backward seeks
-        // and re-opens restart the scan from byte 0 (~122 ms each at depth),
-        // which a monotonically forward walk never does. The gap widens on slow
-        // disks, since scanning touches a small fraction of the bytes decoding
-        // would.
-        //
-        // ── Why pool several windows per column ─────────────────────────────
-        // One fft_size window per column is 43ms of audio out of a hop that may
-        // be minutes long, so a brief call between windows is simply invisible —
-        // useless for spotting activity across a night. Instead each column
-        // covers a short contiguous span and keeps the per-bin MAXIMUM across
-        // the windows in it, the spectral analogue of a peak-preserving waveform
-        // overview: a transient anywhere in the span lights its column up.
-        // compute_stft's u16 encoding is monotonic in magnitude, so the max can
-        // be taken directly on the encoded values.
         if let Ok(mut stream) = decoder::PcmStream::open(&req.path, req.start_sec) {
-            let ch = stream.channels().max(1) as usize;
-            // Audio each column summarizes. Clamped to the hop so columns never
-            // overlap, and to at least one window so a column is always emittable.
-            let pool_frames = ((COARSE_POOL_SEC * sample_rate as f64) as usize)
-                .clamp(req.fft_size, req.hop_size.max(req.fft_size));
-            let mut mono = vec![0.0f32; pool_frames];
-
-            for col in 0..n_cols {
-                // Column k is centred at start_sec + k*hop/sample_rate. Column 0
-                // needs no seek: open() already positioned the stream there.
-                if col > 0 {
-                    let t = req.start_sec
-                        + (col * req.hop_size) as f64 / sample_rate as f64;
-                    if stream.seek_to(t, COARSE_SEEK_MARGIN_SEC).is_err() {
-                        break; // past EOF or unreadable — remaining columns stay 0
-                    }
-                }
-
-                // Read this column's span, mixing down to mono.
-                let mut filled = 0usize;
-                while filled < pool_frames {
-                    let (interleaved, frames_read) = match stream.read(pool_frames - filled) {
-                        Ok(r) => r,
-                        Err(_) => break,
-                    };
-                    if frames_read == 0 {
-                        break; // EOF — partial span; the guard below handles it
-                    }
-                    for frame in 0..frames_read {
-                        let mut sum = 0.0f32;
-                        for c in 0..ch {
-                            sum += interleaved[frame * ch + c];
-                        }
-                        mono[filled + frame] = sum / ch as f32;
-                    }
-                    filled += frames_read;
-                }
-
-                // A column needs at least one full window; a shorter tail stays 0.
-                if filled < req.fft_size {
-                    continue;
-                }
-
-                // Non-overlapping windows across the span, reduced by per-bin max.
-                let windows = fft::compute_stft(&mono[..filled], req.fft_size, req.fft_size);
-                let dst = &mut output[col * n_freq_bins..(col + 1) * n_freq_bins];
-                for window in windows.chunks_exact(n_freq_bins) {
-                    for (d, &s) in dst.iter_mut().zip(window) {
-                        if s > *d {
-                            *d = s;
-                        }
-                    }
-                }
-            }
+            coarse_columns(
+                &mut stream, &mut output, n_cols, n_freq_bins,
+                req.start_sec, req.hop_size, req.fft_size, sample_rate, false,
+            );
         }
 
         return Ok(build_spectrogram_response(
@@ -334,23 +374,120 @@ fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, S
     ))
 }
 
-/// Compute one spectrogram chunk, off the async runtime's worker threads.
+
+
+// ── Spectrogram chunk range (one forward pass) ────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SpectrogramRangeRequest {
+    pub path: String,
+    /// Index of the first chunk on the tier's grid; chunk k starts at
+    /// k * chunk_duration seconds.
+    pub first_chunk_index: u32,
+    pub n_chunks: u32,
+    pub chunk_duration: f64,
+    pub fft_size: usize,
+    pub hop_size: usize,
+}
+
+/// Prefix a chunk blob with its grid index so the receiver can place it without
+/// relying on arrival order.
+fn build_range_message(chunk_index: u32, mut chunk: Vec<u8>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + chunk.len());
+    bytes.extend_from_slice(&chunk_index.to_le_bytes());
+    bytes.append(&mut chunk);
+    bytes
+}
+
+fn compute_spectrogram_range(
+    req: &SpectrogramRangeRequest,
+    on_chunk: &Channel<InvokeResponseBody>,
+) -> Result<(), String> {
+    let info = decoder::get_file_info(&req.path).map_err(|e| e.to_string())?;
+    let sample_rate = info.sample_rate;
+    let n_freq_bins = req.fft_size / 2;
+
+    let chunk_start = |i: u32| (req.first_chunk_index + i) as f64 * req.chunk_duration;
+
+    // Fine tiers decode their span sequentially anyway, so there is no shared
+    // walk to exploit; compute them one at a time. They still arrive over the
+    // channel as they finish, so the caller's handling is uniform.
+    if !is_coarse_hop(req.hop_size, sample_rate) {
+        for i in 0..req.n_chunks {
+            let start_sec = chunk_start(i);
+            if start_sec >= info.duration_secs {
+                break;
+            }
+            let bytes = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                path: req.path.clone(),
+                start_sec,
+                duration_sec: req.chunk_duration,
+                fft_size: req.fft_size,
+                hop_size: req.hop_size,
+            })?;
+            on_chunk
+                .send(InvokeResponseBody::Raw(build_range_message(
+                    req.first_chunk_index + i,
+                    bytes,
+                )))
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    // Coarse tiers: ONE stream walked forward across every chunk in the range.
+    //
+    // Each chunk otherwise opens its own PcmStream, and an open scans the
+    // container from byte 0 to the chunk's start — ~230ms at 25h into a 50h MP3.
+    // Four chunks covering that file re-scan 0h, 12h, 25h and 37h of it, ~2.5x
+    // the bytes a single pass touches, as four concurrent readers. Extending one
+    // forward walk across the range collapses that to a single pass, which
+    // matters most on the slow disks and external drives this is worst on.
+    let mut stream = decoder::PcmStream::open(&req.path, chunk_start(0))
+        .map_err(|e| e.to_string())?;
+
+    for i in 0..req.n_chunks {
+        let start_sec = chunk_start(i);
+        if start_sec >= info.duration_secs {
+            break;
+        }
+        let (n_cols, actual_duration_sec) = coarse_geometry(
+            start_sec, req.chunk_duration, info.duration_secs, req.hop_size, sample_rate,
+        );
+        let mut output = vec![0u16; n_cols * n_freq_bins];
+        // seek_first only for chunks after the first: open() already positioned
+        // the stream at chunk 0's start.
+        coarse_columns(
+            &mut stream, &mut output, n_cols, n_freq_bins,
+            start_sec, req.hop_size, req.fft_size, sample_rate, i > 0,
+        );
+        let bytes = build_spectrogram_response(
+            n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate, &output,
+        );
+        on_chunk
+            .send(InvokeResponseBody::Raw(build_range_message(
+                req.first_chunk_index + i,
+                bytes,
+            )))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Compute a contiguous run of spectrogram chunks in one forward pass, streaming
+/// each to the frontend over `on_chunk` as it completes.
 ///
-/// The work is entirely blocking CPU (symphonia decode + FFT) and can run for
-/// seconds on a coarse chunk of a long file. Run directly in the async command,
-/// it occupies a tokio worker for that whole time; with several chunks in flight
-/// that starves every other command — including `read_pcm_chunk`, which playback
-/// depends on — so the app stalls rather than just the spectrogram filling in
-/// slowly. `spawn_blocking` moves it to the blocking pool, which exists for
-/// exactly this and grows to fit.
+/// Progressive delivery is the point as much as the shared walk: a coarse range
+/// covering hours of audio takes long enough on a slow machine that returning
+/// only at the end would leave the view blank throughout.
 #[tauri::command]
-pub async fn get_spectrogram_chunk(
-    req: SpectrogramChunkRequest,
-) -> Result<Response, String> {
-    let bytes = tokio::task::spawn_blocking(move || compute_spectrogram_chunk(&req))
+pub async fn get_spectrogram_chunk_range(
+    req: SpectrogramRangeRequest,
+    on_chunk: Channel<InvokeResponseBody>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || compute_spectrogram_range(&req, &on_chunk))
         .await
-        .map_err(|e| format!("spectrogram task failed: {e}"))??;
-    Ok(Response::new(bytes))
+        .map_err(|e| format!("spectrogram range task failed: {e}"))?
 }
 
 // ── PCM streaming commands ────────────────────────────────────────────────────
@@ -466,6 +603,84 @@ mod coarse_bench {
     /// file. #[ignore]d — needs a fixture:
     ///   SEEK_BENCH_FILE=/path/to/long.mp3 \
     ///     cargo test --release coarse_bench -- --ignored --nocapture
+    /// Does batching a contiguous run into one forward walk beat fetching the
+    /// chunks in parallel, each on its own stream? Batching does strictly less
+    /// I/O (one container pass instead of one per chunk, each from byte 0) but
+    /// serializes CPU that would otherwise run on several cores.
+    #[test]
+    #[ignore]
+    fn range_walk_vs_parallel_chunks() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = decoder::get_file_info(&path).expect("info");
+        let sr = info.sample_rate as usize;
+        // The whole-file view of this file: 4 chunks of 1024 columns.
+        let hop = 2_097_152usize;
+        let chunk_duration = 1024.0 * hop as f64 / sr as f64;
+        let n_chunks = 4u32;
+
+        // A: four independent chunk computations, in parallel.
+        let t = Instant::now();
+        std::thread::scope(|scope| {
+            for i in 0..n_chunks {
+                let path = path.clone();
+                scope.spawn(move || {
+                    let _ = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                        path,
+                        start_sec: i as f64 * chunk_duration,
+                        duration_sec: chunk_duration,
+                        fft_size: 2048,
+                        hop_size: hop,
+                    });
+                });
+            }
+        });
+        println!("parallel per-chunk ({n_chunks} chunks): {:?}", t.elapsed());
+
+        // B: one forward walk covering the same range.
+        let t = Instant::now();
+        let n_freq_bins = 1024usize;
+        let mut stream = decoder::PcmStream::open(&path, 0.0).expect("open");
+        for i in 0..n_chunks {
+            let start_sec = i as f64 * chunk_duration;
+            let (n_cols, _) = coarse_geometry(
+                start_sec, chunk_duration, info.duration_secs, hop, info.sample_rate,
+            );
+            let mut output = vec![0u16; n_cols * n_freq_bins];
+            coarse_columns(
+                &mut stream, &mut output, n_cols, n_freq_bins,
+                start_sec, hop, 2048, info.sample_rate, i > 0,
+            );
+        }
+        println!("single forward walk ({n_chunks} chunks): {:?}", t.elapsed());
+
+        // C: split into parallel walks of `per` chunks each.
+        for per in [2u32, 1] {
+            let t = Instant::now();
+            std::thread::scope(|scope| {
+                for w in 0..(n_chunks / per) {
+                    let path = path.clone();
+                    scope.spawn(move || {
+                        let first = w * per;
+                        let mut stream =
+                            decoder::PcmStream::open(&path, first as f64 * chunk_duration).unwrap();
+                        for i in 0..per {
+                            let start_sec = (first + i) as f64 * chunk_duration;
+                            let (n_cols, _) = coarse_geometry(
+                                start_sec, chunk_duration, info.duration_secs, hop, info.sample_rate,
+                            );
+                            let mut output = vec![0u16; n_cols * 1024];
+                            coarse_columns(
+                                &mut stream, &mut output, n_cols, 1024,
+                                start_sec, hop, 2048, info.sample_rate, i > 0,
+                            );
+                        }
+                    });
+                }
+            });
+            println!("{} parallel walks of {per} chunks: {:?}", n_chunks / per, t.elapsed());
+        }
+    }
+
     /// Phase breakdown for one coarse chunk: seek vs decode vs FFT.
     #[test]
     #[ignore]
@@ -539,5 +754,123 @@ mod coarse_bench {
                 println!("{label} @ {start:.0}s: {:?} ({n_cols} cols)", t.elapsed());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    /// Write a mono 16-bit WAV whose content varies over time, so a column
+    /// computed at the wrong position is detectable.
+    fn write_test_wav(name: &str, sample_rate: u32, secs: f64) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        let n_frames = (sample_rate as f64 * secs) as usize;
+        let data_bytes = (n_frames * 2) as u32;
+        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        // A tone whose frequency rises over the file: every position in time has
+        // a distinct spectrum, so a misplaced column shows up as a mismatch.
+        for i in 0..n_frames {
+            let t = i as f64 / sample_rate as f64;
+            let freq = 200.0 + 60.0 * t;
+            let v = (2.0 * std::f64::consts::PI * freq * t).sin() * 20000.0;
+            wav.extend_from_slice(&(v as i16).to_le_bytes());
+        }
+        std::fs::write(&path, wav).expect("write test wav");
+        path
+    }
+
+    /// The shared forward walk must produce byte-identical chunks to computing
+    /// each one on its own stream — otherwise coarse tiers would disagree with
+    /// themselves depending on how the renderer happened to batch requests.
+    #[test]
+    fn range_walk_matches_per_chunk_computation() {
+        let sr = 8000u32;
+        let path = write_test_wav("seenote_range_walk.wav", sr, 40.0);
+        let p = path.to_str().unwrap().to_string();
+        let fft_size = 256usize;
+        let hop_size = 8000usize; // 1s hop: comfortably in the coarse path
+        let chunk_duration = 8.0;
+        let n_chunks = 4u32;
+
+        // Per-chunk reference: a fresh stream for each chunk.
+        let mut expected: Vec<Vec<u8>> = Vec::new();
+        for i in 0..n_chunks {
+            expected.push(
+                compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                    path: p.clone(),
+                    start_sec: i as f64 * chunk_duration,
+                    duration_sec: chunk_duration,
+                    fft_size,
+                    hop_size,
+                })
+                .expect("chunk"),
+            );
+        }
+
+        // The range walk reuses one stream across all four.
+        let range = SpectrogramRangeRequest {
+            path: p.clone(),
+            first_chunk_index: 0,
+            n_chunks,
+            chunk_duration,
+            fft_size,
+            hop_size,
+        };
+        let info = decoder::get_file_info(&p).expect("info");
+        let sample_rate = info.sample_rate;
+        let n_freq_bins = fft_size / 2;
+        let mut stream = decoder::PcmStream::open(&p, 0.0).expect("open");
+        for i in 0..n_chunks {
+            let start_sec = i as f64 * chunk_duration;
+            let (n_cols, actual_duration_sec) = coarse_geometry(
+                start_sec, chunk_duration, info.duration_secs, hop_size, sample_rate,
+            );
+            let mut output = vec![0u16; n_cols * n_freq_bins];
+            coarse_columns(
+                &mut stream, &mut output, n_cols, n_freq_bins,
+                start_sec, hop_size, fft_size, sample_rate, i > 0,
+            );
+            let got = build_spectrogram_response(
+                n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate, &output,
+            );
+            assert_eq!(
+                got, expected[i as usize],
+                "chunk {i} from the shared walk differs from its standalone computation"
+            );
+        }
+        let _ = range.n_chunks; // request shape is exercised by the command itself
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn range_message_carries_its_grid_index() {
+        let msg = build_range_message(7, vec![1, 2, 3]);
+        assert_eq!(u32::from_le_bytes(msg[0..4].try_into().unwrap()), 7);
+        assert_eq!(&msg[4..], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn coarse_geometry_keeps_the_column_rate_exact() {
+        let sr = 48000u32;
+        let hop = 96000usize; // 2s
+        let (n_cols, dur) = coarse_geometry(0.0, 60.0, 600.0, hop, sr);
+        // n_cols / dur must equal the true cps so columns land on real centres.
+        assert!(((n_cols as f64 / dur) - (sr as f64 / hop as f64)).abs() < 1e-9);
+        // A chunk running past EOF is truncated to what the file holds.
+        let (n_cols_eof, _) = coarse_geometry(590.0, 60.0, 600.0, hop, sr);
+        assert!(n_cols_eof < n_cols);
     }
 }
