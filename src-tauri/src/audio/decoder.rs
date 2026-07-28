@@ -171,6 +171,12 @@ fn probe_decoded_spec(
 // for stereo). No mixdown is performed here; callers that need mono (e.g. the
 // spectrogram pipeline) average the channels themselves.
 
+/// Seek slack used by `open` and `seek_to`: the container seek aims this far
+/// before the requested position so it reliably lands *before* it, and the
+/// alignment phase in `read()` skips the remainder. Big enough to cover any
+/// realistic seek imprecision plus encoder delay.
+pub const DEFAULT_SEEK_MARGIN_SEC: f64 = 0.5;
+
 /// Streaming PCM reader. Yields interleaved f32 samples at the file's native
 /// sample rate and channel count, starting from an exact sample position.
 pub struct PcmStream {
@@ -288,7 +294,7 @@ impl PcmStream {
         };
         // reader_is_fresh: nothing has been read from `format` yet, so it is
         // already positioned at the start of the stream.
-        stream.reposition(start_sec, true)?;
+        stream.reposition(start_sec, true, DEFAULT_SEEK_MARGIN_SEC)?;
         Ok(stream)
     }
 
@@ -302,8 +308,18 @@ impl PcmStream {
     /// paying a full symphonia probe (and, for the alternative of reading
     /// forward, decoding every intervening sample just to throw it away).
     /// Reusing the format reader and decoder makes repositioning cost a seek.
-    pub fn seek_to(&mut self, start_sec: f64) -> Result<()> {
-        self.reposition(start_sec, false)
+    /// `margin_sec` is decoded and discarded on the way to `start_sec`, so it is
+    /// pure overhead — it exists only to absorb a container seek that lands
+    /// later than asked. DEFAULT_SEEK_MARGIN_SEC is the safe default; callers
+    /// that sample many positions and read a short span at each (the coarse
+    /// spectrogram walk reads 0.3s per column) otherwise spend more time on the
+    /// margin than on the audio they keep, and can trade slack for throughput.
+    ///
+    /// A smaller margin does NOT relax the sample-accuracy contract: alignment
+    /// is unchanged, and a seek that overshoots anyway is still handled (read()
+    /// pads the gap with silence) rather than returning misaligned audio.
+    pub fn seek_to(&mut self, start_sec: f64, margin_sec: f64) -> Result<()> {
+        self.reposition(start_sec, false, margin_sec.max(0.0))
     }
 
     /// Shared seek + realignment. `reader_is_fresh` says the format reader has
@@ -315,7 +331,12 @@ impl PcmStream {
     /// skipping the seek would realign against a packet from the middle of the
     /// file — read() then sees the packet start as a huge overshoot and pads the
     /// result with silence.
-    fn reposition(&mut self, start_sec: f64, reader_is_fresh: bool) -> Result<()> {
+    fn reposition(
+        &mut self,
+        start_sec: f64,
+        reader_is_fresh: bool,
+        seek_margin_sec: f64,
+    ) -> Result<()> {
         // Validate before casting to u64 — a NaN, Infinity, or negative value
         // would silently wrap to a garbage frame index.
         if !start_sec.is_finite() || start_sec < 0.0 {
@@ -329,11 +350,10 @@ impl PcmStream {
         //
         // Note on encoder delay: symphonia's seek interprets time in container
         // frames (gapless mode is off). The delay is small relative to the
-        // 0.5s seek margin (typical MP3 LAME delay ≈ 26ms at 44.1 kHz), so
+        // default seek margin (typical MP3 LAME delay ≈ 26ms at 44.1 kHz), so
         // seeking to (start_sec - 0.5) container-seconds reliably lands before
         // the desired audible position. The alignment phase in read() skips the
         // remaining frames, including any encoder padding when start_sec is 0.
-        let seek_margin_sec = 0.5;
         let seek_target = (start_sec - seek_margin_sec).max(0.0);
 
         if seek_target > 0.0 || !reader_is_fresh {
@@ -787,7 +807,7 @@ mod tests {
         // Forward, backward, and back to the start: every reposition must land
         // on floor(start_sec * sample_rate), the same guarantee open() gives.
         for start_sec in [0.0, 2.5, 1.0, 4.999, 0.0, 3.25] {
-            stream.seek_to(start_sec).expect("seek_to");
+            stream.seek_to(start_sec, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
             let expected_frame = (start_sec * sr as f64) as usize;
             assert_eq!(
                 stream.position_frames(),
@@ -808,6 +828,30 @@ mod tests {
     }
 
     #[test]
+    fn seek_to_with_a_small_margin_still_lands_exactly() {
+        // The coarse spectrogram walk trades margin for throughput; the landing
+        // position must stay exact regardless of how much slack it asks for.
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_seek_to_margin.wav", sr, 40_000);
+        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
+
+        for margin in [0.0, 0.01, 0.05, 0.5] {
+            for start_sec in [0.0, 1.234, 3.75] {
+                stream.seek_to(start_sec, margin).expect("seek");
+                let expected_frame = (start_sec * sr as f64) as usize;
+                let (samples, _) = stream.read(4).expect("read");
+                for (i, &v) in samples.iter().enumerate() {
+                    assert!(
+                        (v - ramp_value(expected_frame + i)).abs() < 1e-6,
+                        "margin {margin}, seek {start_sec}s, frame +{i}: got {v}"
+                    );
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn seek_to_matches_a_fresh_open_at_the_same_position() {
         let sr = 8000u32;
         let path = write_ramp_wav("seenote_seek_to_vs_open.wav", sr, 40_000);
@@ -819,7 +863,7 @@ mod tests {
         let mut walked = PcmStream::open(p, 0.0).expect("open");
         for col in 0..8 {
             let t = col as f64 * 0.6;
-            walked.seek_to(t).expect("seek_to");
+            walked.seek_to(t, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
             let (from_walk, n_walk) = walked.read(64).expect("read");
 
             let mut fresh = PcmStream::open(p, t).expect("open");
@@ -956,7 +1000,7 @@ mod seek_bench {
             let t = Instant::now();
             for i in 0..n {
                 let target = info.duration_secs * (i as f64 / n as f64);
-                s.seek_to(target).expect("seek_to");
+                s.seek_to(target, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
                 let _ = s.read(2048).expect("read");
             }
             let total = t.elapsed();

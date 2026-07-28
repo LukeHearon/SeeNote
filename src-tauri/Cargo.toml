@@ -53,3 +53,22 @@ tiny_http = "0.12"
 http-range = "0.1"
 percent-encoding = "2"
 mime_guess = "2"
+
+# Build dependencies optimized even in dev builds.
+#
+# Audio decoding and FFT live entirely in dependencies (symphonia, rustfft), and
+# unoptimized they are catastrophically slower — measured on a 49.7h MP3, decode
+# throughput was 12x realtime in a debug build against 3740x in release, ~300x.
+# That made `tauri dev` look like the spectrogram pipeline was broken (a coarse
+# chunk took ~27s instead of ~0.6s) while release builds, which is what users
+# actually get, were fine.
+#
+# Our own crate gets a light opt-level: the spectrogram hot loops (STFT
+# magnitude/log conversion, channel mixdown) live here too, and at opt-level 0
+# they cost more than the optimized FFT they wrap. 1 keeps full debug info and
+# readable backtraces.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

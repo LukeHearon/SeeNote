@@ -103,6 +103,14 @@ pub async fn audio_peak(path: String) -> Result<f32, String> {
 /// millisecond per column against a ~3ms seek.
 const COARSE_POOL_SEC: f64 = 0.3;
 
+/// Seek margin for the coarse column walk (see PcmStream::seek_to).
+///
+/// The margin is decoded and thrown away at every column, so at the default
+/// 0.5s each column decoded 0.8s of audio to keep 0.3s — more than half the
+/// decode wasted, on the hottest path for long files. 50ms still comfortably
+/// covers a container seek landing late (an MP3 packet is ~26ms).
+const COARSE_SEEK_MARGIN_SEC: f64 = 0.05;
+
 #[derive(Deserialize)]
 pub struct SpectrogramChunkRequest {
     pub path: String,
@@ -207,7 +215,7 @@ fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, S
                 if col > 0 {
                     let t = req.start_sec
                         + (col * req.hop_size) as f64 / sample_rate as f64;
-                    if stream.seek_to(t).is_err() {
+                    if stream.seek_to(t, COARSE_SEEK_MARGIN_SEC).is_err() {
                         break; // past EOF or unreadable — remaining columns stay 0
                     }
                 }
@@ -458,6 +466,54 @@ mod coarse_bench {
     /// file. #[ignore]d — needs a fixture:
     ///   SEEK_BENCH_FILE=/path/to/long.mp3 \
     ///     cargo test --release coarse_bench -- --ignored --nocapture
+    /// Phase breakdown for one coarse chunk: seek vs decode vs FFT.
+    #[test]
+    #[ignore]
+    fn coarse_phase_breakdown() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = decoder::get_file_info(&path).expect("info");
+        let sr = info.sample_rate as usize;
+        let fft_size = 2048usize;
+        let hop = 2_097_152usize; // coarsest selected tier for a 50h file
+        let n_cols = 64usize;     // sample of a 1024-col chunk
+        let pool_frames = ((COARSE_POOL_SEC * sr as f64) as usize).clamp(fft_size, hop);
+        println!("sr={sr} pool_frames={pool_frames} hop={hop}");
+
+        let mut stream = decoder::PcmStream::open(&path, 0.0).expect("open");
+        let ch = stream.channels().max(1) as usize;
+        let mut mono = vec![0.0f32; pool_frames];
+        let (mut t_seek, mut t_read, mut t_fft) = (
+            std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
+
+        for col in 0..n_cols {
+            let t = (col * hop) as f64 / sr as f64;
+            let t0 = Instant::now();
+            if col > 0 && stream.seek_to(t, COARSE_SEEK_MARGIN_SEC).is_err() { break; }
+            t_seek += t0.elapsed();
+
+            let t0 = Instant::now();
+            let mut filled = 0usize;
+            while filled < pool_frames {
+                let (inter, n) = match stream.read(pool_frames - filled) { Ok(r) => r, Err(_) => break };
+                if n == 0 { break; }
+                for f in 0..n {
+                    let mut sum = 0.0f32;
+                    for c in 0..ch { sum += inter[f * ch + c]; }
+                    mono[filled + f] = sum / ch as f32;
+                }
+                filled += n;
+            }
+            t_read += t0.elapsed();
+
+            let t0 = Instant::now();
+            let _ = fft::compute_stft(&mono[..filled], fft_size, fft_size);
+            t_fft += t0.elapsed();
+        }
+        println!("{n_cols} cols: seek {t_seek:?}, read+mixdown {t_read:?}, fft {t_fft:?}");
+        println!("=> per 1024-col chunk: seek {:?}, read {:?}, fft {:?}",
+                 t_seek * 16, t_read * 16, t_fft * 16);
+    }
+
     #[test]
     #[ignore]
     fn coarse_chunk_cost() {
