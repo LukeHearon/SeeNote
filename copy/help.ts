@@ -91,8 +91,8 @@ export const helpPanel = {
       get p5() { return getOverride('helpPanel.guide.bandPassFilter.p5') ?? "**Persistence:** the band cutoffs and strength are saved into the project file. The source audio is never modified and the spectrogram is not recomputed."; },
     },
     timeDisplay: {
-      get p1() { return getOverride('helpPanel.guide.timeDisplay.p1') ?? "The [running time](current-time) shows the playhead position in seconds. Click it to type a timestamp and jump directly to that position."; },
-      get p2() { return getOverride('helpPanel.guide.timeDisplay.p2') ?? "The [selection fields](selection-time) show the active selection's start (`from`), end (`to`), and duration (`dur`) in seconds. Click any field to edit it and nudge the selection boundaries precisely."; },
+      get p1() { return getOverride('helpPanel.guide.timeDisplay.p1') ?? "The [running time](current-time) shows the playhead position in seconds. Click it to type a timestamp and jump directly to that position — enter it as plain seconds (`83.45`), `mm:ss`/`hh:mm:ss`, or hours/minutes/seconds shorthand (`1h10m`, `0h3m01s`)."; },
+      get p2() { return getOverride('helpPanel.guide.timeDisplay.p2') ?? "The [selection fields](selection-time) show the active selection's start (`from`), end (`to`), and duration (`dur`) in seconds. Click any field to edit it and nudge the selection boundaries precisely; all the same formats as the running time are accepted, and `dur` also allows a leading `-`."; },
     },
     autoSave: {
       get p1() { return getOverride('helpPanel.guide.autoSave.p1') ?? "Annotations save automatically every time you make a change. The file structure mirrors the audio directory. Clearing all annotations removes the annotation file."; },

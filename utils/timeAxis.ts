@@ -50,3 +50,20 @@ export function formatRulerTime(s: number, timeStep: number, viewSpan: number): 
     return `${sec}s`;
   }
 }
+
+/**
+ * Inverse of formatRulerTime's "1h15m00s" style labels. Accepts any subset of
+ * the h/m/s components ("1h10m", "1h10s", "0h3m01s", "45s"), each optional but
+ * at least one required, with an optional leading "-" (for selDur, which can
+ * be negative). Returns null if `raw` isn't in this form — callers fall back
+ * to plain-seconds/colon parsing for those.
+ */
+export function parseHMS(raw: string): number | null {
+  const s = raw.trim();
+  const m = s.match(/^(-)?(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/i);
+  if (!m) return null;
+  const [, neg, h, mi, sec] = m;
+  if (h === undefined && mi === undefined && sec === undefined) return null;
+  const total = parseFloat(h ?? '0') * 3600 + parseFloat(mi ?? '0') * 60 + parseFloat(sec ?? '0');
+  return neg ? -total : total;
+}

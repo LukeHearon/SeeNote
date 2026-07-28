@@ -6,6 +6,7 @@ import { clamp } from '../utils/helpers';
 import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
+import { parseHMS } from '../utils/timeAxis';
 import { tooltips } from '../copy/tooltips';
 import { useAltHeld } from '../hooks/useAltHeld';
 
@@ -222,7 +223,8 @@ function Toolbar({
     setBandPassFilter({ ...bandPassFilter, strength: v });
   };
 
-  // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45", "1:23:45"
+  // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45",
+  // "1:23:45", and HMS shorthand ("1h10m", "1h10s", "0h3m01s" — see parseHMS).
   const parseTimestamp = (raw: string): number | null => {
     const s = raw.trim();
     // hh:mm:ss or hh:mm:ss.ff
@@ -231,6 +233,9 @@ function Toolbar({
     // mm:ss or mm:ss.ff
     const ms = s.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
     if (ms) return parseInt(ms[1]) * 60 + parseFloat(ms[2]);
+    // "1h10m", "1h10s", "0h3m01s", etc.
+    const hmsShorthand = parseHMS(s);
+    if (hmsShorthand !== null && hmsShorthand >= 0) return hmsShorthand;
     // plain seconds
     const plain = parseFloat(s);
     if (!isNaN(plain) && plain >= 0) return plain;
@@ -246,9 +251,10 @@ function Toolbar({
     };
 
     // selDur accepts negative values (anchor is always selection.start / currentTime),
-    // so handle it with parseFloat before parseTimestamp (which rejects negatives).
+    // so handle it separately from parseTimestamp (which rejects negatives).
     if (editingTimeField === 'selDur') {
-      const dur = parseFloat(raw.trim());
+      const trimmed = raw.trim();
+      const dur = parseHMS(trimmed) ?? parseFloat(trimmed);
       if (!isNaN(dur)) {
         const anchor = selection ? selection.start : (!isPlaying ? currentTimeStore.get() : null);
         if (anchor !== null) {
