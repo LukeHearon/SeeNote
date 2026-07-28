@@ -77,9 +77,14 @@ export default function BuzzdetectPanel({
 
   // Drag-to-select across bins. `dragging` gates the window listeners; the
   // anchor bin and latest interval live in refs so the listener effect attaches
-  // once per drag rather than re-running as the selection updates.
+  // once per drag rather than re-running as the selection updates. When
+  // individual frames aren't visible (see framesVisibleRef below), dragging
+  // switches to raw time instead of bin snapping — dragAnchorTimeRef holds
+  // that anchor and dragModeRef says which one is live.
   const [dragging, setDragging] = useState(false);
+  const dragModeRef = useRef<'bin' | 'time'>('bin');
   const dragAnchorRef = useRef<number | null>(null);
+  const dragAnchorTimeRef = useRef<number | null>(null);
   const dragSelRef = useRef<Selection | null>(null);
 
   // User-editable Y-axis range. Null means "use the auto-calculated file-wide
@@ -89,6 +94,11 @@ export default function BuzzdetectPanel({
   // manual override.
   const [yAxisOverride, setYAxisOverride] = useState<{ min: number; max: number } | null>(null);
   useEffect(() => { setYAxisOverride(null); }, [data]);
+
+  // Whether individual frames currently read as distinguishable (dots +
+  // boundary grid drawn) — set at draw time, read by the click/hover handlers
+  // below to decide whether picking out a single frame is meaningful.
+  const framesVisibleRef = useRef(true);
 
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
 
@@ -135,18 +145,26 @@ export default function BuzzdetectPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, enabledKey]);
 
-  // Map a clientX to a bin index using the SHARED transform (scrollLeft / pps),
-  // so a click lands on exactly the column the user sees under the cursor.
-  const binAtClientX = useCallback((clientX: number): number | null => {
-    if (!data || data.starts.length === 0) return null;
+  // Map a clientX to a track time using the SHARED transform (scrollLeft /
+  // pps), so a click lands on exactly the point the user sees under the
+  // cursor. Used directly for time-based (frames-not-visible) selection, and
+  // as the basis for binAtClientX below.
+  const timeAtClientX = useCallback((clientX: number): number | null => {
     const rect = areaRef.current?.getBoundingClientRect();
     if (!rect) return null;
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
-    const t = xToTime(clientX - rect.left, scrollLeft, pixelsPerSecond);
+    return xToTime(clientX - rect.left, scrollLeft, pixelsPerSecond);
+  }, [viewportStore]);
+
+  // Map a clientX to a bin index.
+  const binAtClientX = useCallback((clientX: number): number | null => {
+    if (!data || data.starts.length === 0) return null;
+    const t = timeAtClientX(clientX);
+    if (t === null) return null;
     // Null in the gaps between frames when binWidth is overridden shorter than
     // the frame spacing — there is genuinely no frame under the cursor there.
     return binAtTime(data.starts, data.binWidth, t);
-  }, [data, viewportStore]);
+  }, [data, timeAtClientX]);
 
   // The half-open interval [start, start+binWidth) for a bin, end clamped to EOF.
   const binInterval = useCallback((i: number): Selection => {
@@ -312,6 +330,10 @@ export default function BuzzdetectPanel({
     const visibleCount = iRight - iLeft + 1;
     const groupSize = visibleCount > MAX_LINE_POINTS ? Math.ceil(visibleCount / MAX_LINE_POINTS) : 1;
     const drawDots = binPx >= 4 && groupSize === 1;
+    // Same visibility gate the click/hover handlers use to decide whether a
+    // single-frame selection is meaningful — individual frames read as
+    // distinguishable only while their dots and boundary grid are drawn.
+    framesVisibleRef.current = drawDots;
     for (const n of enabled) {
       const color = neuronColors[n];
       const th = thresholdOf(neurons[n]);
@@ -511,6 +533,15 @@ export default function BuzzdetectPanel({
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: MouseEvent) => {
+      if (dragModeRef.current === 'time') {
+        const t = timeAtClientX(e.clientX);
+        const anchor = dragAnchorTimeRef.current;
+        if (t === null || anchor === null) return;
+        const sel = { start: Math.min(anchor, t), end: Math.max(anchor, t) };
+        dragSelRef.current = sel;
+        onSelectionChange(sel);
+        return;
+      }
       const j = binAtClientX(e.clientX);
       const anchor = dragAnchorRef.current;
       if (j === null || anchor === null) return;
@@ -527,11 +558,38 @@ export default function BuzzdetectPanel({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging, binAtClientX, binInterval, onSelectionChange]);
+  }, [dragging, binAtClientX, binInterval, timeAtClientX, onSelectionChange]);
 
   const handleAreaMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-buzz-ui]')) return;
     if (e.button !== 0) return;
+    // At this zoom, dozens/hundreds of frames sit under one pixel column — a
+    // click can't pick out a single one meaningfully. Still select and drag,
+    // just anchored to raw time instead of a bin.
+    if (!framesVisibleRef.current) {
+      const t = timeAtClientX(e.clientX);
+      if (t === null) return;
+
+      if (e.shiftKey && selection) {
+        const merged: Selection = {
+          start: Math.min(selection.start, t),
+          end: Math.max(selection.end, t),
+        };
+        dragSelRef.current = merged;
+        onSelectionChange(merged);
+        return;
+      }
+
+      dragModeRef.current = 'time';
+      dragAnchorTimeRef.current = t;
+      dragSelRef.current = { start: t, end: t };
+      setDragging(true);
+      onBoundAnnotationChange(null);
+      onSelectionChange({ start: t, end: t });
+      onSeek(t);
+      return;
+    }
+    dragModeRef.current = 'bin';
     const i = binAtClientX(e.clientX);
     if (i === null) return;
     const interval = binInterval(i);
@@ -560,7 +618,9 @@ export default function BuzzdetectPanel({
 
   const handleAreaMouseMove = (e: React.MouseEvent) => {
     if (dragging) return; // drag handled at window level
-    setHoverFrame(binAtClientX(e.clientX));
+    // Don't highlight/readout a single frame when clicking one isn't
+    // meaningful either — see handleAreaMouseDown.
+    setHoverFrame(framesVisibleRef.current ? binAtClientX(e.clientX) : null);
   };
 
   // Drop a stale hovered frame when the track's data changes (indices differ).
