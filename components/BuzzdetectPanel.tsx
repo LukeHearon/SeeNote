@@ -9,6 +9,7 @@ import {
   DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
+  DRAG_INTENT_HOLD_MS,
 } from '../constants';
 import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
@@ -115,6 +116,24 @@ export default function BuzzdetectPanel({
   const dragAnchorRef = useRef<number | null>(null);
   const dragAnchorTimeRef = useRef<number | null>(null);
   const dragSelRef = useRef<Selection | null>(null);
+
+  // Drag-intent guard, mirroring the spectrogram's (see DRAG_INTENT_HOLD_MS /
+  // useSpectrogramInteraction.ts): a mousedown doesn't create a selection
+  // outright, only a "pending" intent. It's promoted to a real drag-selection
+  // once the pointer moves far enough or is held long enough — otherwise a
+  // very short click leaves no selection behind, just the seek.
+  const pendingRef = useRef<
+    | { mode: 'bin'; anchorBin: number; startX: number; startTime: number }
+    | { mode: 'time'; anchorTime: number; startX: number; startTime: number }
+    | null
+  >(null);
+  // Discard any pending (never-promoted) click intent on release, wherever it
+  // happens — this is what makes a short click leave no selection.
+  useEffect(() => {
+    const onWindowMouseUp = () => { pendingRef.current = null; };
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  }, []);
 
   // User-editable Y-axis range. Null means "use the auto-calculated file-wide
   // range" (fileWideRange, below); typing into either settings text box pins
@@ -609,6 +628,34 @@ export default function BuzzdetectPanel({
     };
   }, [dragging, binAtClientX, binInterval, timeAtClientX, onSelectionChange]);
 
+  // Promotes a pending click intent into a real drag-selection once the
+  // pointer has moved far enough or been held long enough (checked by the
+  // caller). `clientX` is the triggering move's position, so the initial
+  // drag-selection reflects it immediately rather than waiting a tick.
+  const promotePending = useCallback((clientX: number) => {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    pendingRef.current = null;
+    dragModeRef.current = pending.mode;
+    onBoundAnnotationChange(null);
+    if (pending.mode === 'time') {
+      dragAnchorTimeRef.current = pending.anchorTime;
+      const t = timeAtClientX(clientX) ?? pending.anchorTime;
+      const sel = { start: Math.min(pending.anchorTime, t), end: Math.max(pending.anchorTime, t) };
+      dragSelRef.current = sel;
+      onSelectionChange(sel);
+    } else {
+      dragAnchorRef.current = pending.anchorBin;
+      const j = binAtClientX(clientX);
+      const sel = j === null
+        ? binInterval(pending.anchorBin)
+        : { start: binInterval(Math.min(pending.anchorBin, j)).start, end: binInterval(Math.max(pending.anchorBin, j)).end };
+      dragSelRef.current = sel;
+      onSelectionChange(sel);
+    }
+    setDragging(true);
+  }, [onBoundAnnotationChange, onSelectionChange, timeAtClientX, binAtClientX, binInterval]);
+
   const handleAreaMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-buzz-ui]')) return;
     if (e.button !== 0) return;
@@ -629,16 +676,20 @@ export default function BuzzdetectPanel({
         return;
       }
 
-      dragModeRef.current = 'time';
-      dragAnchorTimeRef.current = t;
-      dragSelRef.current = { start: t, end: t };
-      setDragging(true);
-      onBoundAnnotationChange(null);
-      onSelectionChange({ start: t, end: t });
       onSeek(t);
+      // Same drag-intent guard as the spectrogram (DRAG_INTENT_HOLD_MS): don't
+      // commit to a selection yet — a very short click should leave the seek
+      // as its only effect. Clicking outside the current selection clears it
+      // immediately (matching the spectrogram), same as a real click would;
+      // clicking inside it is left alone in case this turns out to be a plain
+      // seek-and-release.
+      if (!selection || t < selection.start || t > selection.end) {
+        onBoundAnnotationChange(null);
+        onSelectionChange(null);
+      }
+      pendingRef.current = { mode: 'time', anchorTime: t, startX: e.clientX, startTime: Date.now() };
       return;
     }
-    dragModeRef.current = 'bin';
     const i = binAtClientX(e.clientX);
     if (i === null) return;
     const interval = binInterval(i);
@@ -657,15 +708,24 @@ export default function BuzzdetectPanel({
       return;
     }
 
-    dragAnchorRef.current = i;
-    dragSelRef.current = interval;
-    setDragging(true);
-    onBoundAnnotationChange(null);
-    onSelectionChange(interval);
     onSeek(interval.start);
+    if (!selection || interval.start < selection.start || interval.start > selection.end) {
+      onBoundAnnotationChange(null);
+      onSelectionChange(null);
+    }
+    pendingRef.current = { mode: 'bin', anchorBin: i, startX: e.clientX, startTime: Date.now() };
   };
 
   const handleAreaMouseMove = (e: React.MouseEvent) => {
+    const pending = pendingRef.current;
+    if (pending) {
+      const containerWidth = areaRef.current?.clientWidth || 0;
+      const thresholdPx = containerWidth * 0.01;
+      const dx = Math.abs(e.clientX - pending.startX);
+      const heldMs = Date.now() - pending.startTime;
+      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) promotePending(e.clientX);
+      return;
+    }
     if (dragging) return; // drag handled at window level
     const i = binAtClientX(e.clientX);
     if (i === null) { setHoverRange(null); return; }
