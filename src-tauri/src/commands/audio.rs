@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::audio::{decoder, fft};
+use crate::audio::{decoder, fft, stream_pool};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 // ── PCM stream state ──────────────────────────────────────────────────────────
@@ -291,7 +291,10 @@ fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, S
             coarse_geometry(req.start_sec, req.duration_sec, info.duration_secs, req.hop_size, sample_rate);
         let mut output = vec![0u16; n_cols * n_freq_bins];
 
-        if let Ok(mut stream) = decoder::PcmStream::open(&req.path, req.start_sec) {
+        // A pooled stream skips the container re-scan when one is already
+        // positioned before this chunk (see audio::stream_pool). acquire() has
+        // seeked it to start_sec, so the walk does not seek again for column 0.
+        if let Ok(mut stream) = stream_pool::acquire(&req.path, req.start_sec, COARSE_SEEK_MARGIN_SEC) {
             coarse_columns(
                 &mut stream, &mut output, n_cols, n_freq_bins,
                 req.start_sec, req.hop_size, req.fft_size, sample_rate, false,
@@ -346,9 +349,17 @@ fn compute_spectrogram_chunk(req: &SpectrogramChunkRequest) -> Result<Vec<u8>, S
     let decode_start = req.start_sec - pre_sec;
     let decode_duration = pre_sec + req.duration_sec + half_window_sec;
 
-    let (raw_samples, _) =
-        decoder::decode_audio_range(&req.path, decode_start, decode_duration)
-            .map_err(|e| e.to_string())?;
+    // Pooled + forward-seeked when possible, so consecutive chunks (panning,
+    // playback, a viewport's chunks arriving one after another) do not each
+    // re-scan the container from byte 0. The default margin keeps the
+    // sample-accuracy contract this path depends on.
+    let raw_samples = {
+        let mut stream =
+            stream_pool::acquire(&req.path, decode_start, decoder::DEFAULT_SEEK_MARGIN_SEC)
+                .map_err(|e| e.to_string())?;
+        let (samples, _) = decoder::read_mono_range(&mut stream, decode_duration);
+        samples
+    };
 
     let pre_samples_decoded = (pre_sec * sample_rate as f64).round() as usize;
     let zero_pad = half_window.saturating_sub(pre_samples_decoded);
@@ -443,7 +454,7 @@ fn compute_spectrogram_range(
     // the bytes a single pass touches, as four concurrent readers. Extending one
     // forward walk across the range collapses that to a single pass, which
     // matters most on the slow disks and external drives this is worst on.
-    let mut stream = decoder::PcmStream::open(&req.path, chunk_start(0))
+    let mut stream = stream_pool::acquire(&req.path, chunk_start(0), COARSE_SEEK_MARGIN_SEC)
         .map_err(|e| e.to_string())?;
 
     for i in 0..req.n_chunks {
@@ -679,6 +690,74 @@ mod coarse_bench {
             });
             println!("{} parallel walks of {per} chunks: {:?}", n_chunks / per, t.elapsed());
         }
+    }
+
+    /// Fine-tier chunk cost at increasing depth into a long file. Each chunk
+    /// opens its own decoder, and the container open scans from byte 0.
+    #[test]
+    #[ignore]
+    fn fine_chunk_cost_by_depth() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = decoder::get_file_info(&path).expect("info");
+        let sr = info.sample_rate as usize;
+        let hop = 512usize;
+        let chunk_duration = 1024.0 * hop as f64 / sr as f64;
+        println!("fine chunk = {chunk_duration:.1}s");
+
+        for frac in [0.0, 0.1, 0.5, 0.9] {
+            let start = info.duration_secs * frac;
+            let t = Instant::now();
+            let _ = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                path: path.clone(),
+                start_sec: start,
+                duration_sec: chunk_duration,
+                fft_size: 2048,
+                hop_size: hop,
+            }).expect("chunk");
+            println!("  fine chunk @ {start:8.0}s: {:?}", t.elapsed());
+        }
+
+        // Panning deep in the file: consecutive chunks, one after another.
+        // Without stream reuse each pays its own full container scan.
+        let base = info.duration_secs * 0.9;
+        for reuse in [false, true] {
+            let label = if reuse { "with stream reuse" } else { "no reuse" };
+            stream_pool::clear();
+            let t = Instant::now();
+            for i in 0..6 {
+                if !reuse {
+                    stream_pool::clear(); // force a fresh open per chunk
+                }
+                let _ = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                    path: path.clone(),
+                    start_sec: base + i as f64 * chunk_duration,
+                    duration_sec: chunk_duration,
+                    fft_size: 2048,
+                    hop_size: hop,
+                }).expect("chunk");
+            }
+            let el = t.elapsed();
+            println!("  6 sequential fine chunks @ {base:.0}s ({label}): {el:?} total, {:?}/chunk", el / 6);
+        }
+
+        // Four such chunks (a typical zoomed-in viewport) in parallel, deep in.
+        let base = info.duration_secs * 0.9;
+        let t = Instant::now();
+        std::thread::scope(|scope| {
+            for i in 0..4 {
+                let path = path.clone();
+                scope.spawn(move || {
+                    let _ = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+                        path,
+                        start_sec: base + i as f64 * chunk_duration,
+                        duration_sec: chunk_duration,
+                        fft_size: 2048,
+                        hop_size: hop,
+                    });
+                });
+            }
+        });
+        println!("  4 parallel fine chunks @ {base:.0}s: {:?}", t.elapsed());
     }
 
     /// Phase breakdown for one coarse chunk: seek vs decode vs FFT.

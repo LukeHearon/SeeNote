@@ -298,6 +298,43 @@ impl PcmStream {
         Ok(stream)
     }
 
+    /// Advance to `start_sec` by reading and discarding, without seeking.
+    ///
+    /// `seek_to` aims `margin_sec` BEFORE its target, so asking it for a
+    /// position only slightly ahead of where the stream already sits actually
+    /// seeks backwards — and a backward seek restarts the container scan from
+    /// byte 0 (~230ms at depth in a 49.7h MP3, measured at every distance from
+    /// 50ms to 60s). Skipping forward instead costs one decode of the gap, which
+    /// is bounded by the margin and takes microseconds.
+    ///
+    /// Errors if `start_sec` is behind the current position, which callers must
+    /// treat as "not reachable from here". Landing is sample-exact: the next
+    /// `read()` returns the frame at floor(start_sec * sample_rate), the same
+    /// guarantee `seek_to` gives.
+    pub fn skip_to(&mut self, start_sec: f64) -> Result<()> {
+        if !start_sec.is_finite() || start_sec < 0.0 {
+            return Err(anyhow::anyhow!(
+                "start_sec must be a finite non-negative number, got {start_sec}"
+            ));
+        }
+        let target_frame = (start_sec * self.sample_rate as f64).round() as u64;
+        if target_frame < self.next_output_frame {
+            return Err(anyhow::anyhow!(
+                "skip_to cannot move backwards ({start_sec}s is behind the current position)"
+            ));
+        }
+
+        let mut remaining = (target_frame - self.next_output_frame) as usize;
+        while remaining > 0 {
+            let (_, frames_read) = self.read(remaining)?;
+            if frames_read == 0 {
+                return Err(anyhow::anyhow!("EOF before reaching {start_sec}s"));
+            }
+            remaining -= frames_read;
+        }
+        Ok(())
+    }
+
     /// Reposition an already-open stream to `start_sec`, restoring the same
     /// sample-accuracy contract `open` establishes: the next `read()` returns
     /// the frame at exactly `floor(start_sec * sample_rate)`.
@@ -448,6 +485,12 @@ impl PcmStream {
     /// Absolute frame index of the first frame the next `read()` call will return.
     pub fn position_frames(&self) -> u64 { self.next_output_frame }
 
+    /// Playback position in seconds — where a `read()` would resume. The stream
+    /// pool uses it to pick a stream that can reach a target by seeking FORWARD.
+    pub fn position_secs(&self) -> f64 {
+        self.next_output_frame as f64 / self.sample_rate.max(1) as f64
+    }
+
     /// Decode and buffer the next packet. Updates `abs_frame` to the packet's
     /// starting position. Returns `false` on EOF or unrecoverable read error.
     fn fill_next_packet(&mut self) -> Result<bool> {
@@ -588,14 +631,28 @@ pub fn decode_audio_range(
         ));
     }
     let mut stream = PcmStream::open(path, start_sec)?;
+    Ok(read_mono_range(&mut stream, duration_sec))
+}
+
+/// Read `duration_sec` of mono (channel-averaged) samples from wherever
+/// `stream` is currently positioned. Returns the samples and the stream's
+/// sample rate; a short result means EOF, matching decode_audio_range.
+///
+/// Split out of `decode_audio_range` so callers holding a stream already
+/// positioned at the range start — a pooled stream that forward-seeked instead
+/// of re-opening the file — read through the same code path.
+pub fn read_mono_range(stream: &mut PcmStream, duration_sec: f64) -> (Vec<f32>, u32) {
     let sample_rate = stream.sample_rate();
-    let ch = stream.channels() as usize;
+    let ch = stream.channels().max(1) as usize;
     let target_frames = (duration_sec * sample_rate as f64).ceil() as usize;
     let mut output: Vec<f32> = Vec::with_capacity(target_frames);
 
     while output.len() < target_frames {
         let want = target_frames - output.len();
-        let (interleaved, frames_read) = stream.read(want)?;
+        let (interleaved, frames_read) = match stream.read(want) {
+            Ok(r) => r,
+            Err(_) => break,
+        };
         if frames_read == 0 {
             break;
         }
@@ -609,7 +666,7 @@ pub fn decode_audio_range(
         }
     }
 
-    Ok((output, sample_rate))
+    (output, sample_rate)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -852,6 +909,31 @@ mod tests {
     }
 
     #[test]
+    fn skip_to_lands_exactly_and_refuses_to_go_backwards() {
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_skip_to.wav", sr, 40_000);
+        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
+
+        // Forward skips of the size the stream pool uses (sub-margin gaps).
+        for start_sec in [0.05, 0.2, 0.75, 3.0] {
+            stream.skip_to(start_sec).expect("skip_to");
+            let expected_frame = (start_sec * sr as f64).round() as usize;
+            assert_eq!(stream.position_frames(), expected_frame as u64);
+            let (samples, _) = stream.read(4).expect("read");
+            for (i, &v) in samples.iter().enumerate() {
+                assert!(
+                    (v - ramp_value(expected_frame + i)).abs() < 1e-6,
+                    "skip to {start_sec}s frame +{i}: got {v}"
+                );
+            }
+        }
+
+        // Backwards is not reachable by reading; the caller must open or seek.
+        assert!(stream.skip_to(0.1).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn seek_to_matches_a_fresh_open_at_the_same_position() {
         let sr = 8000u32;
         let path = write_ramp_wav("seenote_seek_to_vs_open.wav", sr, 40_000);
@@ -978,6 +1060,41 @@ mod seek_bench {
     ///   forward seek_to, 20 positions            249 ms TOTAL
     ///   forward seek_to, 100 positions           283 ms TOTAL
     ///   sequential decode of the whole file      ~48 s
+    /// How expensive is a SMALL BACKWARD seek? The stream pool can only reuse a
+    /// stream positioned at or before the target, and readers routinely
+    /// overshoot the next request's start by a few tens of milliseconds, so the
+    /// answer decides whether those streams are reusable.
+    #[test]
+    #[ignore]
+    fn backward_seek_cost() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = get_file_info(&path).expect("info");
+        let deep = info.duration_secs * 0.9;
+
+        let mut s = PcmStream::open(&path, deep).expect("open");
+        let _ = s.read(2048).expect("read");
+
+        for back in [0.05f64, 0.5, 5.0, 60.0] {
+            // Re-establish a known position, then step back by `back`.
+            s.seek_to(deep, DEFAULT_SEEK_MARGIN_SEC).expect("fwd");
+            let _ = s.read(2048).expect("read");
+            let t = Instant::now();
+            s.seek_to(deep - back, DEFAULT_SEEK_MARGIN_SEC).expect("back");
+            let _ = s.read(2048).expect("read");
+            println!("backward {back:>6}s from {deep:.0}s: {:?}", t.elapsed());
+        }
+
+        // Reference: a forward seek of the same magnitudes.
+        for fwd in [0.05f64, 0.5, 5.0, 60.0] {
+            s.seek_to(deep, DEFAULT_SEEK_MARGIN_SEC).expect("reset");
+            let _ = s.read(2048).expect("read");
+            let t = Instant::now();
+            s.seek_to(deep + fwd, DEFAULT_SEEK_MARGIN_SEC).expect("fwd");
+            let _ = s.read(2048).expect("read");
+            println!("forward  {fwd:>6}s from {deep:.0}s: {:?}", t.elapsed());
+        }
+    }
+
     #[test]
     #[ignore]
     fn forward_seek_is_cheaper_than_reopen() {
