@@ -13,7 +13,7 @@ import {
 } from '../constants';
 import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
-import { binAtTime, lastStartAtOrBefore, visibleBinRange } from '../utils/binIndex';
+import { binAtTime, firstStartAtOrAfter, lastStartAtOrBefore, visibleBinRange } from '../utils/binIndex';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import DraftNumberInput from './DraftNumberInput';
@@ -513,14 +513,25 @@ export default function BuzzdetectPanel({
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       } else {
-        const firstBucket = Math.floor(starts[iLeft] / effectiveBinWidthSec);
-        const lastBucket = Math.floor(starts[iRight] / effectiveBinWidthSec);
-        let j = iLeft;
+        // Bucket range comes from the VIEWPORT, not from iLeft/iRight: buckets
+        // are anchored to absolute time, so the bucket containing the left edge
+        // can begin long before the first visible frame, and with a wide
+        // override the whole viewport can sit inside a single bucket — deriving
+        // the range from visible frames then yields one point, and a lone
+        // moveTo strokes nothing (the line vanishes, and flickers back as a
+        // scroll happens to straddle a boundary). One bucket of margin each
+        // side so the polyline connects off-screen.
+        const firstBucket = Math.floor(startTime / effectiveBinWidthSec) - 1;
+        const lastBucket = Math.floor(endTime / effectiveBinWidthSec) + 1;
+        // Frames are taken from the whole bucket span, not clipped to the
+        // visible range, so edge buckets average over all their frames and
+        // don't shift value as you scroll.
+        let j = firstStartAtOrAfter(starts, firstBucket * effectiveBinWidthSec);
         for (let b = firstBucket; b <= lastBucket; b++) {
           const bStart = b * effectiveBinWidthSec;
           const bEnd = bStart + effectiveBinWidthSec;
           let sum = 0, count = 0;
-          while (j <= iRight && starts[j] < bEnd) {
+          while (j < starts.length && starts[j] < bEnd) {
             if (starts[j] >= bStart) { sum += perFrameValue(j); count++; }
             j++;
           }

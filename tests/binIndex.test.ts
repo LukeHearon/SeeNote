@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { lastStartAtOrBefore, binAtTime, visibleBinRange } from '../utils/binIndex';
+import { lastStartAtOrBefore, firstStartAtOrAfter, binAtTime, visibleBinRange } from '../utils/binIndex';
 
 // Native 0.96s frames with the extent overridden to 0.4s: frames cover
 // [0,0.4), [0.96,1.36), [1.92,2.32)… leaving 0.56s gaps between them.
@@ -16,6 +16,21 @@ describe('lastStartAtOrBefore', () => {
   });
   it('returns the last index past the end', () => {
     expect(lastStartAtOrBefore(starts, 99)).toBe(4);
+  });
+});
+
+describe('firstStartAtOrAfter', () => {
+  it('returns 0 before the first start', () => {
+    expect(firstStartAtOrAfter(starts, -1)).toBe(0);
+  });
+  it('is inclusive of an exact start', () => {
+    expect(firstStartAtOrAfter(starts, 1.92)).toBe(2);
+  });
+  it('rounds up between starts', () => {
+    expect(firstStartAtOrAfter(starts, 1.0)).toBe(2);
+  });
+  it('returns length past the end', () => {
+    expect(firstStartAtOrAfter(starts, 99)).toBe(starts.length);
   });
 });
 

@@ -21,6 +21,13 @@ export function lastStartAtOrBefore(starts: number[], t: number): number {
   return ans;
 }
 
+/** Index of the first start >= t, or starts.length if every start precedes t. */
+export function firstStartAtOrAfter(starts: number[], t: number): number {
+  const i = lastStartAtOrBefore(starts, t);
+  if (i < 0) return 0;
+  return starts[i] >= t ? i : i + 1;
+}
+
 /**
  * The frame covering time `t`, or null when `t` falls in a gap between frames
  * (or outside the data). Half-open: [start, start + binWidth).
