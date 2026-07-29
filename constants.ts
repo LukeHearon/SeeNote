@@ -149,6 +149,14 @@ export const buzzdetectNeuronColor = (neuronIndex: number): string =>
 export const DEFAULT_BAND_PASS_FILTER = { low: 500, high: 4000, strength: 0.5 };
 // Minimum hold duration (ms) that counts as an intentional drag even if the pointer barely moved
 export const DRAG_INTENT_HOLD_MS = 250;
+// Horizontal travel that counts as an intentional drag, as a fraction of the
+// container width (see utils/dragIntent.ts).
+export const DRAG_INTENT_MOVE_FRACTION = 0.01;
+
+// Width (px) of the spectrogram's y-axis gutter. The buzzdetect panel matches
+// it so the two drawing areas start at the same x and stay column-for-column
+// aligned — change it in one place only.
+export const Y_AXIS_WIDTH = 50;
 
 // ── Multi-resolution spectrogram tier ladder ─────────────────────────────────
 //

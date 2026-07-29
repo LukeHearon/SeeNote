@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Project, ProjectPreferences, SpectrogramSettings, ProjectUiSettings, VideoMode } from '../types';
+import { Project, ProjectPreferences, SpectrogramSettings, ProjectUiSettings, VideoMode, BuzzdetectSeriesMode } from '../types';
 
 interface UseProjectPersistenceArgs {
   project: Project;
@@ -19,7 +19,7 @@ interface UseProjectPersistenceArgs {
   buzzdetectThresholds: Record<string, number>;
   buzzdetectHiddenNeurons: string[];
   buzzdetectNeuronColors: Record<string, string>;
-  buzzdetectSeriesMode: 'activation' | 'detectionRate';
+  buzzdetectSeriesMode: BuzzdetectSeriesMode;
   buzzdetectBinWidthOverride: number | null;
   videoMode: VideoMode;
   videoBrightness: number;

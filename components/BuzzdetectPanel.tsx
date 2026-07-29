@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
-import { BuzzdetectData, Selection } from '../types';
+import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import {
@@ -9,24 +9,33 @@ import {
   DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
-  DRAG_INTENT_HOLD_MS,
+  Y_AXIS_WIDTH,
 } from '../constants';
 import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
-import { binAtTime, firstStartAtOrAfter, lastStartAtOrBefore, visibleBinRange } from '../utils/binIndex';
+import { binAtTime, bucketFrameRange, frameRangeForTimeSpan, visibleBinRange } from '../utils/binIndex';
+import {
+  buildPrefixSum,
+  buildThresholdCountPrefix,
+  buildAnyOverThresholdPrefix,
+  rangeSum,
+  rangeMean,
+} from '../utils/prefixSums';
+import { coalesceColumnRuns } from '../utils/columnRuns';
+import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import DraftNumberInput from './DraftNumberInput';
 import ColorSwatchPicker from './ColorSwatchPicker';
 
-// Match the spectrogram's 50px y-axis gutter so the drawing area starts at the
-// same x and the two stay column-for-column aligned.
-const Y_AXIS_WIDTH = 50;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
 // Above this many visible bins, average them into groups to keep the drawn
 // polyline near this point count instead of a scratchy per-bin path.
 const MAX_LINE_POINTS = 1000;
+// Auto Y-range for detection-rate mode: it's a fraction of the frames in a bin
+// clearing the threshold, so always 0..1 — no data scan needed.
+const DETECTION_RATE_Y_RANGE = { min: 0, max: 1 };
 
 interface BuzzdetectPanelProps {
   data: BuzzdetectData | null;
@@ -49,7 +58,7 @@ interface BuzzdetectPanelProps {
   // back to the palette-by-index default (buzzdetectNeuronColor).
   neuronColors: Record<string, string>;
   // Which series the panel plots.
-  seriesMode: 'activation' | 'detectionRate';
+  seriesMode: BuzzdetectSeriesMode;
   // User-pinned bin width (seconds); null = auto-calculated. Persisted, and
   // deliberately NOT reset when the track changes — only when seriesMode
   // flips (the two modes' natural auto bin widths aren't comparable).
@@ -59,7 +68,7 @@ interface BuzzdetectPanelProps {
   onThresholdChange: (neuron: string, value: number) => void;
   onToggleNeuron: (neuron: string, hidden: boolean) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
-  onSeriesModeChange: (mode: 'activation' | 'detectionRate') => void;
+  onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
@@ -99,7 +108,12 @@ export default function BuzzdetectPanel({
   const [showSettings, setShowSettings] = useState(false);
   // Hovered bin range (inclusive indices). A single bin when frames are
   // individually visible; the whole time-bucket being aggregated into one
-  // polyline point when they're not (see groupedRef/effectiveBinWidthRef).
+  // polyline point when they're not (see framesVisibleRef/effectiveBinWidthRef).
+  // Lives in a ref as well as state: the ref is what the overlay canvas paints
+  // from (so a mousemove costs one cheap overlay repaint, not a React render
+  // plus a full data-canvas redraw), and the state exists only to drive the DOM
+  // readout — updated through `setHover` below, which drops no-op moves.
+  const hoverRangeRef = useRef<{ start: number; end: number } | null>(null);
   const [hoverRange, setHoverRange] = useState<{ start: number; end: number } | null>(null);
 
   // Which neuron's color-swatch popover is open in the settings panel (null =
@@ -127,10 +141,9 @@ export default function BuzzdetectPanel({
   const dragModeRef = useRef<'bin' | 'time'>('bin');
   const dragAnchorRef = useRef<number | null>(null);
   const dragAnchorTimeRef = useRef<number | null>(null);
-  const dragSelRef = useRef<Selection | null>(null);
 
-  // Drag-intent guard, mirroring the spectrogram's (see DRAG_INTENT_HOLD_MS /
-  // useSpectrogramInteraction.ts): a mousedown doesn't create a selection
+  // Drag-intent guard, shared with the spectrogram (see
+  // utils/dragIntent.ts): a mousedown doesn't create a selection
   // outright, only a "pending" intent. It's promoted to a real drag-selection
   // once the pointer moves far enough or is held long enough — otherwise a
   // very short click leaves no selection behind, just the seek.
@@ -174,15 +187,11 @@ export default function BuzzdetectPanel({
   // binwidth" per the spec, even as it changes with zoom.
   const [autoBinWidthDisplay, setAutoBinWidthDisplay] = useState(0);
 
-  // Whether individual frames currently read as distinguishable (dots +
-  // boundary grid drawn) — set at draw time, read by the click/hover handlers
-  // below to decide whether picking out a single frame is meaningful.
+  // Whether individual frames currently read as distinguishable (dots drawn,
+  // one polyline point per native frame) — set at draw time, read by BOTH the
+  // mousedown and the hover handler, which must agree: whatever a drag would
+  // select is what the readout has to describe.
   const framesVisibleRef = useRef(true);
-  // Whether the polyline is currently grouping multiple frames into each
-  // drawn point (true) or plotting one point per native frame (false) — set
-  // at draw time, read by the hover handler so its readout covers the same
-  // span the line is actually aggregating.
-  const groupedRef = useRef(false);
   // The bin width (seconds) currently in effect — auto or overridden — set at
   // draw time, read by the hover handler to compute which time-bucket the
   // cursor falls into.
@@ -213,6 +222,51 @@ export default function BuzzdetectPanel({
       .join(',');
   }, [data, hidden]);
 
+  // Indices of the currently enabled neurons, in index order.
+  const enabled = useMemo(() => {
+    if (!data) return [];
+    const out: number[] = [];
+    for (let n = 0; n < data.neurons.length; n++) if (!hidden.has(data.neurons[n])) out.push(n);
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, enabledKey]);
+
+  // Stable string key over the thresholds actually in play, so the
+  // threshold-dependent prefix sums below rebuild on a threshold edit (a rare
+  // user action) but not on every render that happens to pass a new
+  // `thresholds` object identity.
+  const thresholdKey = useMemo(
+    () => (data ? data.neurons.map(n => thresholdOf(n)).join(',') : ''),
+    [data, thresholdOf],
+  );
+
+  // Prefix sums over the per-frame series (see utils/prefixSums.ts). These turn
+  // every range aggregate the panel needs — a polyline bucket's mean, the
+  // selection readout's average, the darken pass's "any detection in this pixel
+  // column" — from an O(range) scan into a subtraction. Built once per data /
+  // threshold / enabled-set change rather than per redraw.
+  const activationPrefix = useMemo(
+    () => (data ? data.values.map(v => buildPrefixSum(v)) : null),
+    [data],
+  );
+  const detectionPrefix = useMemo(
+    () => (data ? data.values.map((v, i) => buildThresholdCountPrefix(v, thresholdOf(data.neurons[i]))) : null),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, thresholdKey],
+  );
+  // Per-frame OR across the enabled neurons — an OR isn't a sum, so it can't be
+  // recovered from the per-neuron counts above and needs its own prefix.
+  const anyDetectedPrefix = useMemo(
+    () => (data
+      ? buildAnyOverThresholdPrefix(
+          enabled.map(n => ({ values: data.values[n], threshold: thresholdOf(data.neurons[n]) })),
+          data.starts.length,
+        )
+      : null),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, thresholdKey, enabled],
+  );
+
   // File-wide activation range across ALL bins for the currently enabled neurons.
   // Memoised so scrolling/panning never triggers a rescan of the full data arrays.
   const fileWideRange = useMemo<{ min: number; max: number } | null>(() => {
@@ -234,39 +288,20 @@ export default function BuzzdetectPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, enabledKey]);
 
-  // Auto Y-range for detection-rate mode: it's a fraction of frames in the
-  // bin clearing the threshold, so always 0..1 — no data scan needed.
-  const fileWideDetectionRateRange = useMemo<{ min: number; max: number } | null>(
-    () => (data ? { min: 0, max: 1 } : null),
-    [data],
-  );
+  const fileWideDetectionRateRange = data ? DETECTION_RATE_Y_RANGE : null;
 
   // Whichever range applies to the current series mode — the base (pre
   // override, pre-threshold-widening) auto Y-range.
   const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
 
-  // Inclusive bin-index range whose frames overlap [t0, t1). Shared by the
-  // selection readout (below) and the hover-bucket lookup in
-  // handleAreaMouseMove. Only bins that actually overlap count — a span can
-  // start or end mid-gap when binWidth is overridden shorter than the frame
-  // spacing.
-  const binRangeForTimeSpan = useCallback((t0: number, t1: number): { start: number; end: number } | null => {
-    if (!data || data.starts.length === 0) return null;
-    const { starts, binWidth } = data;
-    let iLeft = lastStartAtOrBefore(starts, t0);
-    if (iLeft < 0) iLeft = 0;
-    else if (starts[iLeft] + binWidth <= t0) iLeft = Math.min(iLeft + 1, starts.length - 1);
-    const iRight = lastStartAtOrBefore(starts, t1);
-    if (iRight < iLeft) return null;
-    return { start: iLeft, end: iRight };
-  }, [data]);
-
   // Bin range covered by the current selection (inclusive indices), for the
-  // persistent selection readout below.
+  // persistent selection readout below. Half-open on the right, so selecting
+  // exactly one frame reads as one frame rather than spilling into its
+  // neighbour.
   const selectionBinRange = useMemo<{ start: number; end: number } | null>(() => {
-    if (!selection) return null;
-    return binRangeForTimeSpan(selection.start, selection.end);
-  }, [binRangeForTimeSpan, selection]);
+    if (!selection || !data) return null;
+    return frameRangeForTimeSpan(data.starts, data.binWidth, selection.start, selection.end);
+  }, [data, selection]);
 
   // Map a clientX to a track time using the SHARED transform (scrollLeft /
   // pps), so a click lands on exactly the point the user sees under the
@@ -315,11 +350,18 @@ export default function BuzzdetectPanel({
     ctx.fillStyle = '#0b1220';
     ctx.fillRect(0, 0, width, h);
 
-    if (!data || data.starts.length === 0) {
-      ctx.restore();
+    // Tick labels describe an axis that isn't being drawn, so any early return
+    // below has to wipe the gutter too — otherwise scrolling past the last
+    // frame leaves stale numbers next to an empty panel.
+    const clearYAxis = () => {
       const yc = yAxisCanvasRef.current;
       const yx = yc?.getContext('2d');
       if (yc && yx) yx.clearRect(0, 0, yc.width, yc.height);
+    };
+
+    if (!data || data.starts.length === 0) {
+      ctx.restore();
+      clearYAxis();
       return;
     }
 
@@ -333,11 +375,8 @@ export default function BuzzdetectPanel({
     // Searched over `starts` rather than derived arithmetically: frames may be
     // non-contiguous when binWidth is overridden shorter than the frame spacing.
     const visible = visibleBinRange(starts, binWidth, startTime, endTime);
-    if (!visible) { ctx.restore(); return; }
+    if (!visible) { ctx.restore(); clearYAxis(); return; }
     const { iLeft, iRight } = visible;
-
-    const enabled: number[] = [];
-    for (let n = 0; n < neurons.length; n++) if (!hidden.has(neurons[n])) enabled.push(n);
 
     // Bin width (seconds) for the polyline (below) and for hover/click: above
     // MAX_LINE_POINTS visible bins, an auto width groups them so the drawn
@@ -357,7 +396,6 @@ export default function BuzzdetectPanel({
     // single-frame selection is meaningful — individual frames read as
     // distinguishable only while their dots and boundary grid are drawn.
     framesVisibleRef.current = drawDots;
-    groupedRef.current = grouped;
     effectiveBinWidthRef.current = effectiveBinWidthSec;
     if (showSettings) {
       setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
@@ -392,6 +430,8 @@ export default function BuzzdetectPanel({
       }
     }
     if (!isFinite(yMin) || !isFinite(yMax)) { yMin = -2; yMax = 1; }
+    // A min typed above the max would otherwise plot silently upside-down.
+    if (yMax < yMin) { const t = yMin; yMin = yMax; yMax = t; }
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1; }
     if (binaryDetection) {
       yMin = 0; yMax = 1;
@@ -411,15 +451,40 @@ export default function BuzzdetectPanel({
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
 
+    // Below one pixel per frame, the two full-height wash passes below would
+    // issue a rect per visible frame — tens of thousands of them on a long
+    // recording, hundreds of which land in the same pixel column. Resolve each
+    // column's frames once instead, and let the passes paint at most one merged
+    // rect per column (see utils/columnRuns.ts). At or above a pixel per frame
+    // the original per-frame rects are kept, so that path is unchanged.
+    const subPixelFrames = binPx < 1;
+    const columnFrames: ({ start: number; end: number } | null)[] = [];
+    if (subPixelFrames) {
+      const cols = Math.ceil(width);
+      for (let c = 0; c < cols; c++) {
+        columnFrames.push(frameRangeForTimeSpan(
+          starts,
+          binWidth,
+          xToTime(c, scrollLeft, pixelsPerSecond),
+          xToTime(c + 1, scrollLeft, pixelsPerSecond),
+        ));
+      }
+    }
+
     // Frame bands: a faint wash over the time each frame actually covers, so
     // uncovered time (frame length overridden shorter than the frame spacing)
     // reads as bare background rather than an implied contiguous grid.
     ctx.fillStyle = 'rgba(226, 232, 240, 0.045)';
-    for (let i = iLeft; i <= iRight; i++) {
-      const bx = xOf(starts[i]);
-      const bw = binWidth * pixelsPerSecond;
-      if (bx > width || bx + bw < 0) continue;
-      ctx.fillRect(bx, 0, Math.max(1, bw), h);
+    if (subPixelFrames) {
+      for (const run of coalesceColumnRuns(width, c => columnFrames[c] !== null)) {
+        ctx.fillRect(run.x, 0, run.w, h);
+      }
+    } else {
+      for (let i = iLeft; i <= iRight; i++) {
+        const bx = xOf(starts[i]);
+        if (bx > width || bx + binPx < 0) continue;
+        ctx.fillRect(bx, 0, Math.max(1, binPx), h);
+      }
     }
 
     // Selection highlight (mirrors the spectrogram's selected region).
@@ -436,28 +501,30 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
-    // Hovered bin (or bin-group) band — brighter than the resting frame wash
-    // so the click target still reads clearly on top of it.
-    if (hoverRange !== null && hoverRange.end >= iLeft && hoverRange.start <= iRight) {
-      const hx = xOf(starts[hoverRange.start]);
-      const hEndX = xOf(starts[hoverRange.end] + binWidth);
-      ctx.fillStyle = 'rgba(255,255,255,0.14)';
-      ctx.fillRect(hx, 0, Math.max(1, hEndX - hx), h);
-    }
+    // (The hovered bin/bin-group band lives on the overlay canvas — see
+    // drawOverlay — so moving the cursor doesn't repaint this canvas.)
 
     // Darken frames where no enabled neuron cleared its threshold, so detected
-    // frames pop by contrast against a dimmed background.
-    if (enabled.length > 0) {
+    // frames pop by contrast against a dimmed background. The per-frame "any
+    // enabled neuron over threshold" test is a prefix-sum lookup rather than a
+    // scan across neurons.
+    if (enabled.length > 0 && anyDetectedPrefix) {
+      const undetectedIn = (r: { start: number; end: number }) =>
+        rangeSum(anyDetectedPrefix, r.start, r.end) < r.end - r.start + 1;
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      for (let i = iLeft; i <= iRight; i++) {
-        const bx = xOf(starts[i]);
-        const bw = binWidth * pixelsPerSecond;
-        if (bx > width || bx + bw < 0) continue;
-        let detected = false;
-        for (const n of enabled) {
-          if (values[n][i] >= thresholdOf(neurons[n])) { detected = true; break; }
+      if (subPixelFrames) {
+        for (const run of coalesceColumnRuns(width, c => {
+          const r = columnFrames[c];
+          return r !== null && undetectedIn(r);
+        })) {
+          ctx.fillRect(run.x, 0, run.w, h);
         }
-        if (!detected) ctx.fillRect(bx, 0, Math.max(1, bw), h);
+      } else {
+        for (let i = iLeft; i <= iRight; i++) {
+          const bx = xOf(starts[i]);
+          if (bx > width || bx + binPx < 0) continue;
+          if (undetectedIn({ start: i, end: i })) ctx.fillRect(bx, 0, Math.max(1, binPx), h);
+        }
       }
     }
 
@@ -493,6 +560,33 @@ export default function BuzzdetectPanel({
       ctx.setLineDash([]);
     }
 
+    // Bucket partition for the grouped polyline, computed once for all neurons
+    // (they all average over the same frames). Bucket range comes from the
+    // VIEWPORT, not from iLeft/iRight: buckets are anchored to absolute time,
+    // so the bucket containing the left edge can begin long before the first
+    // visible frame, and with a wide override the whole viewport can sit inside
+    // a single bucket — deriving the range from visible frames then yields one
+    // point. One bucket of margin each side so the polyline connects off-screen.
+    // Frames are taken from the whole bucket span, not clipped to the visible
+    // range, so edge buckets average over all their frames and don't shift
+    // value as you scroll.
+    const buckets: { start: number; end: number; xMid: number; xStart: number; xEnd: number }[] = [];
+    if (grouped) {
+      const firstBucket = Math.floor(startTime / effectiveBinWidthSec) - 1;
+      const lastBucket = Math.floor(endTime / effectiveBinWidthSec) + 1;
+      for (let b = firstBucket; b <= lastBucket; b++) {
+        const r = bucketFrameRange(starts, effectiveBinWidthSec, b);
+        if (!r) continue;
+        const bStart = b * effectiveBinWidthSec;
+        buckets.push({
+          ...r,
+          xMid: xOf(bStart + effectiveBinWidthSec / 2),
+          xStart: xOf(bStart),
+          xEnd: xOf(bStart + effectiveBinWidthSec),
+        });
+      }
+    }
+
     // Polylines + dots, one neuron at a time. In activation mode each point
     // is the mean activation over its bucket; in detection-rate mode it's
     // the fraction of the bucket's frames clearing the threshold (both are
@@ -513,32 +607,27 @@ export default function BuzzdetectPanel({
           if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       } else {
-        // Bucket range comes from the VIEWPORT, not from iLeft/iRight: buckets
-        // are anchored to absolute time, so the bucket containing the left edge
-        // can begin long before the first visible frame, and with a wide
-        // override the whole viewport can sit inside a single bucket — deriving
-        // the range from visible frames then yields one point, and a lone
-        // moveTo strokes nothing (the line vanishes, and flickers back as a
-        // scroll happens to straddle a boundary). One bucket of margin each
-        // side so the polyline connects off-screen.
-        const firstBucket = Math.floor(startTime / effectiveBinWidthSec) - 1;
-        const lastBucket = Math.floor(endTime / effectiveBinWidthSec) + 1;
-        // Frames are taken from the whole bucket span, not clipped to the
-        // visible range, so edge buckets average over all their frames and
-        // don't shift value as you scroll.
-        let j = firstStartAtOrAfter(starts, firstBucket * effectiveBinWidthSec);
-        for (let b = firstBucket; b <= lastBucket; b++) {
-          const bStart = b * effectiveBinWidthSec;
-          const bEnd = bStart + effectiveBinWidthSec;
-          let sum = 0, count = 0;
-          while (j < starts.length && starts[j] < bEnd) {
-            if (starts[j] >= bStart) { sum += perFrameValue(j); count++; }
-            j++;
+        // Prefix-sum lookup, not a scan: a bucket can span hours of frames
+        // when the user pins a wide bin width, and the buckets are recomputed
+        // on every redraw (they're time-anchored, so they're stable, but the
+        // draw path doesn't cache them).
+        const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
+        const bucketMean = (bk: { start: number; end: number }) => (
+          prefix ? rangeMean(prefix, bk.start, bk.end) : 0
+        );
+        if (buckets.length === 1) {
+          // Every frame in view falls in one bucket (a wide override on a short
+          // file): a lone moveTo strokes nothing and grouped mode draws no dots,
+          // so the neuron would vanish. Stroke the bucket's value flat across
+          // its own x-extent instead.
+          const cy = yOf(bucketMean(buckets[0]));
+          ctx.moveTo(buckets[0].xStart, cy);
+          ctx.lineTo(buckets[0].xEnd, cy);
+        } else {
+          for (const bk of buckets) {
+            const cy = yOf(bucketMean(bk));
+            if (!started) { ctx.moveTo(bk.xMid, cy); started = true; } else ctx.lineTo(bk.xMid, cy);
           }
-          if (count === 0) continue;
-          const cx = xOf(bStart + effectiveBinWidthSec / 2);
-          const cy = yOf(sum / count);
-          if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
         }
       }
       ctx.stroke();
@@ -601,12 +690,13 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, showSettings, viewportStore, selection, hoverRange, hidden, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
-  // Overlay canvas: just the playhead line, aligned to the same time→pixel
-  // transform as the main canvas. Kept separate so playback ticks (~50/s)
-  // repaint only this cheap line instead of the whole data-driven canvas above
-  // (which was causing visible flicker/jank during playback).
+  // Overlay canvas: the playhead line and the hover band, aligned to the same
+  // time→pixel transform as the main canvas. Kept separate so playback ticks
+  // (~50/s) and mouse moves repaint only these cheap shapes instead of the
+  // whole data-driven canvas above (which was causing visible flicker/jank
+  // during playback, and made merely moving the cursor cost as much as a pan).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawOverlay = useCallback(() => {
     const canvas = overlayCanvasRef.current;
@@ -622,6 +712,21 @@ export default function BuzzdetectPanel({
     ctx.scale(dpr, dpr);
 
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
+
+    // Hovered bin (or bin-group) band — brighter than the resting frame wash
+    // so the click target still reads clearly on top of it. Read from a ref
+    // rather than state so a mousemove never re-renders the component or
+    // dirties the main canvas.
+    const hr = hoverRangeRef.current;
+    if (data && hr && hr.start >= 0 && hr.end < data.starts.length) {
+      const hx = timeToX(data.starts[hr.start], scrollLeft, pixelsPerSecond);
+      const hEndX = timeToX(data.starts[hr.end] + data.binWidth, scrollLeft, pixelsPerSecond);
+      if (hEndX >= 0 && hx <= width) {
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(hx, 0, Math.max(1, hEndX - hx), h);
+      }
+    }
+
     const px = timeToX(currentTimeStore.get(), scrollLeft, pixelsPerSecond);
     if (px >= 0 && px <= width) {
       ctx.strokeStyle = 'rgba(255,255,255,0.45)';
@@ -631,7 +736,7 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
     ctx.restore();
-  }, [viewportStore, currentTimeStore, areaSize]);
+  }, [data, viewportStore, currentTimeStore, areaSize]);
 
   // Self-scheduling rAF loop, split into two dirty flags — matches the
   // spectrogram's draw/overlay split: `drawDirty` covers the expensive
@@ -653,6 +758,19 @@ export default function BuzzdetectPanel({
     drawOverlayRef.current = drawOverlay;
     overlayDirtyRef.current = true;
   }, [drawOverlay]);
+
+  // Single entry point for hover changes: repaint the overlay, and update the
+  // readout's state only when the range actually moved (compared by value —
+  // every mousemove produces a fresh object, so identity would never match and
+  // React would never bail out of the render).
+  const setHover = useCallback((r: { start: number; end: number } | null) => {
+    const prev = hoverRangeRef.current;
+    if (prev === r) return;
+    if (prev && r && prev.start === r.start && prev.end === r.end) return;
+    hoverRangeRef.current = r;
+    overlayDirtyRef.current = true;
+    setHoverRange(r);
+  }, []);
 
   // Redraw on spectrogram pan/zoom/resize without any React render: the store
   // notifies, we read the new viewport at draw time. This is what keeps panning
@@ -713,7 +831,6 @@ export default function BuzzdetectPanel({
         const anchor = dragAnchorTimeRef.current;
         if (t === null || anchor === null) return;
         const sel = { start: Math.min(anchor, t), end: Math.max(anchor, t) };
-        dragSelRef.current = sel;
         onSelectionChange(sel);
         return;
       }
@@ -721,7 +838,6 @@ export default function BuzzdetectPanel({
       const anchor = dragAnchorRef.current;
       if (j === null || anchor === null) return;
       const sel = { start: binInterval(Math.min(anchor, j)).start, end: binInterval(Math.max(anchor, j)).end };
-      dragSelRef.current = sel;
       onSelectionChange(sel);
     };
     const onUp = () => {
@@ -749,7 +865,6 @@ export default function BuzzdetectPanel({
       dragAnchorTimeRef.current = pending.anchorTime;
       const t = timeAtClientX(clientX) ?? pending.anchorTime;
       const sel = { start: Math.min(pending.anchorTime, t), end: Math.max(pending.anchorTime, t) };
-      dragSelRef.current = sel;
       onSelectionChange(sel);
     } else {
       dragAnchorRef.current = pending.anchorBin;
@@ -757,7 +872,6 @@ export default function BuzzdetectPanel({
       const sel = j === null
         ? binInterval(pending.anchorBin)
         : { start: binInterval(Math.min(pending.anchorBin, j)).start, end: binInterval(Math.max(pending.anchorBin, j)).end };
-      dragSelRef.current = sel;
       onSelectionChange(sel);
     }
     setDragging(true);
@@ -778,13 +892,12 @@ export default function BuzzdetectPanel({
           start: Math.min(selection.start, t),
           end: Math.max(selection.end, t),
         };
-        dragSelRef.current = merged;
         onSelectionChange(merged);
         return;
       }
 
       onSeek(t);
-      // Same drag-intent guard as the spectrogram (DRAG_INTENT_HOLD_MS): don't
+      // Same drag-intent guard as the spectrogram (shouldPromoteDragIntent): don't
       // commit to a selection yet — a very short click should leave the seek
       // as its only effect. Clicking outside the current selection clears it
       // immediately (matching the spectrogram), same as a real click would;
@@ -810,7 +923,6 @@ export default function BuzzdetectPanel({
         start: Math.min(selection.start, interval.start),
         end: Math.max(selection.end, interval.end),
       };
-      dragSelRef.current = merged;
       onSelectionChange(merged);
       return;
     }
@@ -826,33 +938,38 @@ export default function BuzzdetectPanel({
   const handleAreaMouseMove = (e: React.MouseEvent) => {
     const pending = pendingRef.current;
     if (pending) {
-      const containerWidth = areaRef.current?.clientWidth || 0;
-      const thresholdPx = containerWidth * 0.01;
-      const dx = Math.abs(e.clientX - pending.startX);
-      const heldMs = Date.now() - pending.startTime;
-      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) promotePending(e.clientX);
+      const promote = shouldPromoteDragIntent({
+        containerWidth: areaRef.current?.clientWidth || 0,
+        startX: pending.startX,
+        currentX: e.clientX,
+        startTime: pending.startTime,
+        now: Date.now(),
+      });
+      if (promote) promotePending(e.clientX);
       return;
     }
     if (dragging) return; // drag handled at window level
-    if (!groupedRef.current) {
+    if (framesVisibleRef.current) {
       const i = binAtClientX(e.clientX);
-      setHoverRange(i === null ? null : { start: i, end: i });
+      setHover(i === null ? null : { start: i, end: i });
       return;
     }
-    // Individual frames aren't distinguishable at this zoom (see
-    // handleAreaMouseDown) — cover the whole time-bucket the polyline is
-    // aggregating into the one point under the cursor, anchored the same way
-    // the draw-time bucketing is (absolute time, not iLeft-relative).
+    // Individual frames aren't distinguishable at this zoom, so mousedown drags
+    // a free time range (see handleAreaMouseDown) — the readout has to match, so
+    // cover the whole time-bucket the polyline aggregates into the one point
+    // under the cursor, anchored the same way the draw-time bucketing is
+    // (absolute time, not iLeft-relative).
     const t = timeAtClientX(e.clientX);
-    if (t === null) { setHoverRange(null); return; }
+    if (t === null || !data) { setHover(null); return; }
     const bucketWidth = effectiveBinWidthRef.current;
-    if (!(bucketWidth > 0)) { setHoverRange(null); return; }
-    const b = Math.floor(t / bucketWidth);
-    setHoverRange(binRangeForTimeSpan(b * bucketWidth, (b + 1) * bucketWidth));
+    if (!(bucketWidth > 0)) { setHover(null); return; }
+    // Same partition function the draw loop buckets with, so the readout can't
+    // disagree with the point under the cursor.
+    setHover(bucketFrameRange(data.starts, bucketWidth, Math.floor(t / bucketWidth)));
   };
 
   // Drop a stale hover range when the track's data changes (indices differ).
-  useEffect(() => { setHoverRange(null); }, [data]);
+  useEffect(() => { setHover(null); }, [data, setHover]);
 
   // ── Resize via top-edge handle ──────────────────────────────────────────────
   const handleResizeDown = (e: React.MouseEvent) => {
@@ -874,23 +991,26 @@ export default function BuzzdetectPanel({
 
   const enabledNeurons = data ? data.neurons.filter(n => !hidden.has(n)) : [];
 
-  // Renders a small readout for a bin range: its time span, and each enabled
-  // neuron's value. Shared by the hover readout (top-left, disappears on
-  // mouse-out) and the selection readout (bottom-left, stays as long as a
-  // selection exists).
+  // Renders the small top-left readout for a bin range: its time span, and each
+  // enabled neuron's value. One call site — it shows the selection's range when
+  // there is a selection, else the hovered bin (or bin-group).
   //
   // In activation mode: the raw value for a single frame, averaged across
   // the range otherwise. In detection-rate mode: just Detection/No Detection
   // for a single frame (a rate over one frame isn't meaningful — it's the
   // frame's own dot, drawn at 1 or 0), else the fraction of the range's
   // frames clearing the threshold.
-  const renderBinRangeReadout = (range: { start: number; end: number }, positionClassName: string) => {
+  const renderBinRangeReadout = (range: { start: number; end: number }) => {
     if (!data) return null;
     const { start, end } = range;
+    // A hover range from the previous track outlives the render that swapped
+    // `data` in (it's only cleared in an effect), so bail on out-of-range
+    // indices here rather than reading past the new arrays.
+    if (start < 0 || end < start || end >= data.starts.length) return null;
     const isSingle = start === end;
     const rangeEnd = duration > 0 ? Math.min(data.starts[end] + data.binWidth, duration) : data.starts[end] + data.binWidth;
     return (
-      <div className={`absolute pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%] ${positionClassName}`}>
+      <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
         <div className="text-slate-300">
           {isSingle
             ? `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}`
@@ -909,21 +1029,18 @@ export default function BuzzdetectPanel({
                   </span>
                 );
               }
-              let count = 0;
-              for (let j = start; j <= end; j++) if (data.values[i][j] >= th) count++;
-              const rate = count / (end - start + 1);
+              // Prefix-sum lookup: the selection readout is persistent and
+              // re-renders freely, and a selection can span the whole file.
+              const rate = detectionPrefix ? rangeMean(detectionPrefix[i], start, end) : 0;
               return (
                 <span key={n} style={{ color: neuronColors[i] }}>
                   {n} {(rate * 100).toFixed(0)}%
                 </span>
               );
             }
-            let value = data.values[i][start];
-            if (!isSingle) {
-              let sum = 0;
-              for (let j = start; j <= end; j++) sum += data.values[i][j];
-              value = sum / (end - start + 1);
-            }
+            const value = isSingle
+              ? data.values[i][start]
+              : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
             return (
               <span key={n} style={{ color: neuronColors[i] }}>
                 {n} {value.toFixed(2)}{!isSingle && ' avg'}
@@ -957,7 +1074,7 @@ export default function BuzzdetectPanel({
           style={{ cursor: 'crosshair' }}
           onMouseDown={handleAreaMouseDown}
           onMouseMove={handleAreaMouseMove}
-          onMouseLeave={() => setHoverRange(null)}
+          onMouseLeave={() => setHover(null)}
           onWheel={(e) => {
             if (e.ctrlKey || e.metaKey) e.preventDefault();
             onScrollWheel?.(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
@@ -978,7 +1095,7 @@ export default function BuzzdetectPanel({
               moving the mouse over the panel); only without a selection does
               it track the hovered bin (or bin-group). */}
           {data && (selectionBinRange ?? hoverRange) !== null &&
-            renderBinRangeReadout((selectionBinRange ?? hoverRange)!, 'top-1 left-2')}
+            renderBinRangeReadout((selectionBinRange ?? hoverRange)!)}
 
           {/* Settings popover trigger */}
           <button

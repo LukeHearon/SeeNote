@@ -3,7 +3,7 @@ import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFil
 import { yToFreq } from '../utils/audioProcessing';
 import { makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
 import { xToTime, maxScroll as computeMaxScroll } from '../utils/viewportTransform';
-import { DRAG_INTENT_HOLD_MS } from '../constants';
+import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
 export interface SpectrogramInteractionParams {
@@ -133,7 +133,7 @@ export function useSpectrogramInteraction({
   const clickDownRef = useRef<{ x: number; y: number; annotationId: string; pointerTime: number } | null>(null);
 
   // Pending drag intent: recorded at mousedown but not promoted to visible state until
-  // the pointer has moved ≥1% of the canvas width OR been held ≥DRAG_INTENT_HOLD_MS.
+  // shouldPromoteDragIntent says the pointer has moved far enough or been held long enough.
   // Using refs (not state) so no re-render/gray-out happens until the threshold is crossed.
   const pendingSelectionRef = useRef<{ start: number; startX: number; startTime: number } | null>(null);
   const pendingAnnotationRef = useRef<{ start: number; startX: number; startTime: number; quiet: boolean } | null>(null);
@@ -580,12 +580,16 @@ export function useSpectrogramInteraction({
 
     // Promote pending drag intents once the pointer has moved far enough or been held long enough
     const containerWidth = containerRef.current?.clientWidth || 0;
-    const thresholdPx = containerWidth * 0.01;
+    const promote = (pending: { startX: number; startTime: number }) => shouldPromoteDragIntent({
+      containerWidth,
+      startX: pending.startX,
+      currentX: e.clientX,
+      startTime: pending.startTime,
+      now: Date.now(),
+    });
 
     if (pendingAnnotationRef.current) {
-      const dx = Math.abs(e.clientX - pendingAnnotationRef.current.startX);
-      const heldMs = Date.now() - pendingAnnotationRef.current.startTime;
-      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+      if (promote(pendingAnnotationRef.current)) {
         if (!pendingAnnotationRef.current.quiet) {
           onSelectAnnotation(null);
           onBoundAnnotationChange(null);
@@ -598,9 +602,7 @@ export function useSpectrogramInteraction({
     }
 
     if (pendingSelectionRef.current) {
-      const dx = Math.abs(e.clientX - pendingSelectionRef.current.startX);
-      const heldMs = Date.now() - pendingSelectionRef.current.startTime;
-      if (dx >= thresholdPx || heldMs >= DRAG_INTENT_HOLD_MS) {
+      if (promote(pendingSelectionRef.current)) {
         onSelectAnnotation(null);
         onBoundAnnotationChange(null);
         onSelectionChange(null);

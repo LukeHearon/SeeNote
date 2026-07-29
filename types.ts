@@ -116,7 +116,7 @@ export interface ProjectUiSettings {
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
-  buzzdetectSeriesMode?: 'activation' | 'detectionRate'; // which series the panel plots
+  buzzdetectSeriesMode?: BuzzdetectSeriesMode; // which series the panel plots
   buzzdetectBinWidthOverride?: number | null; // user-pinned bin width (seconds); null/absent = auto-calculated
 
   // Panel layout (see hooks/usePanelLayout.ts).
@@ -136,6 +136,12 @@ export interface ProjectUiSettings {
  * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
  * `activation_` prefix already stripped. `binWidth` is inferred from `starts`.
  */
+/**
+ * Which series the buzzdetect panel plots: the raw per-frame activation, or
+ * the fraction of each bin's frames clearing the neuron's threshold.
+ */
+export type BuzzdetectSeriesMode = 'activation' | 'detectionRate';
+
 export interface BuzzdetectData {
   binWidth: number;
   neurons: string[];

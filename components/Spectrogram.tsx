@@ -5,7 +5,7 @@ import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC } from '../constants';
+import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import FilterHandles from './spectrogram/FilterHandles';
@@ -741,7 +741,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           filterOverlayCanvasRef.current.height = height * dpr;
         }
         if (yAxisCanvasRef.current) {
-          yAxisCanvasRef.current.width = 50 * dpr;
+          yAxisCanvasRef.current.width = Y_AXIS_WIDTH * dpr;
           yAxisCanvasRef.current.height = height * dpr;
         }
         draw();
@@ -958,7 +958,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   return (
     <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
       {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
-      <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: 50 }} />
+      <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: Y_AXIS_WIDTH }} />
 
       {/* Spectrogram area — all interactive content lives here */}
       <div
