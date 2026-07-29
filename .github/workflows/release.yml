@@ -175,7 +175,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Rename release assets to user-friendly names
+      # latest.json points updater clients at the original raw-named
+      # installers for Linux and Windows (there's no separate updater
+      # artifact for those platforms, unlike macOS's .app.tar.gz). Renaming
+      # those files would 404 the updater, so we publish friendly-named
+      # copies alongside the originals instead of renaming in place.
+      - name: Publish user-friendly copies of release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -185,22 +190,23 @@ jobs:
           RELEASE_ID=$(gh api "repos/${REPO}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"$TAG\") | .id")
 
-          rename_asset() {
+          copy_asset() {
             local from="$1"
             local to="$2"
-            local asset_id
-            asset_id=$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
-              --jq ".[] | select(.name == \"$from\") | .id")
-            if [ -n "$asset_id" ]; then
-              gh api -X PATCH "repos/${REPO}/releases/assets/${asset_id}" -f name="$to" >/dev/null
-              echo "Renamed: $from -> $to"
+            local url
+            url=$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
+              --jq ".[] | select(.name == \"$from\") | .browser_download_url")
+            if [ -n "$url" ]; then
+              curl -sL "$url" -o "$to"
+              gh release upload "$TAG" "$to" -R "$REPO" --clobber
+              echo "Published: $from -> $to"
             else
               echo "Skipped (not found): $from"
             fi
           }
 
-          rename_asset "SeeNote_${VERSION}_universal.dmg"    "SeeNote-macOS.dmg"
-          rename_asset "SeeNote_${VERSION}_amd64.AppImage"   "SeeNote-Linux.AppImage"
-          rename_asset "SeeNote_${VERSION}_amd64.deb"        "SeeNote-Linux.deb"
-          rename_asset "SeeNote_${VERSION}_x64-setup.exe"    "SeeNote-Windows.exe"
+          copy_asset "SeeNote_${VERSION}_universal.dmg"    "SeeNote-macOS.dmg"
+          copy_asset "SeeNote_${VERSION}_amd64.AppImage"   "SeeNote-Linux.AppImage"
+          copy_asset "SeeNote_${VERSION}_amd64.deb"        "SeeNote-Linux.deb"
+          copy_asset "SeeNote_${VERSION}_x64-setup.exe"    "SeeNote-Windows.exe"
 
