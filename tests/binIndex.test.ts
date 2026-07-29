@@ -7,6 +7,10 @@ import {
   firstFrameOverlapping,
   frameRangeForTimeSpan,
   bucketFrameRange,
+  isGroupedUnitWidth,
+  unitAtTime,
+  forEachUnitInSpan,
+  FrameUnit,
 } from '../utils/binIndex';
 
 // Native 0.96s frames with the extent overridden to 0.4s: frames cover
@@ -167,5 +171,100 @@ describe('bucketFrameRange', () => {
       }
       expect(viaLookup).toEqual(sweep(w, first, last));
     }
+  });
+});
+
+describe('isGroupedUnitWidth', () => {
+  it('reads a unit width at the frame length as ungrouped, round-off included', () => {
+    expect(isGroupedUnitWidth(FULL, FULL)).toBe(false);
+    expect(isGroupedUnitWidth(FULL, FULL * 1.00005)).toBe(false);
+    expect(isGroupedUnitWidth(FULL, FULL * 1.001)).toBe(true);
+    expect(isGroupedUnitWidth(FULL, 5)).toBe(true);
+  });
+});
+
+describe('unitAtTime', () => {
+  it('resolves single frames when ungrouped, and nothing in the gaps', () => {
+    // A frame's unit spans the frame's own extent, not the gap to the next one.
+    expect(unitAtTime(starts, NARROW, NARROW, 0.1)).toEqual({ start: 0, end: 0, tStart: 0, tEnd: NARROW });
+    expect(unitAtTime(starts, NARROW, NARROW, 0.5)).toBeNull();
+    expect(unitAtTime(starts, NARROW, NARROW, 1.0)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + NARROW });
+  });
+
+  it('resolves the whole bucket when grouped', () => {
+    // 2s buckets: [0,2) holds frames 0–2, [2,4) holds 3–4. The unit's extent is
+    // the bucket's, not the frames' — that's the span the panel washes.
+    expect(unitAtTime(starts, FULL, 2, 0.5)).toEqual({ start: 0, end: 2, tStart: 0, tEnd: 2 });
+    expect(unitAtTime(starts, FULL, 2, 3.9)).toEqual({ start: 3, end: 4, tStart: 2, tEnd: 4 });
+  });
+
+  it('returns null for a bucket holding no frames', () => {
+    expect(unitAtTime(starts, FULL, 2, 100)).toBeNull();
+  });
+
+  // The whole point of the unit abstraction: the panel draws units and hit-tests
+  // units, so a lookup at any time inside a drawn unit must return that unit.
+  it('agrees with the units the draw loop enumerates', () => {
+    for (const unitWidth of [NARROW, FULL, 1.3, 2, 5]) {
+      const binWidth = unitWidth === NARROW ? NARROW : FULL;
+      const drawn: FrameUnit[] = [];
+      forEachUnitInSpan(starts, binWidth, unitWidth, 0, 4, u => drawn.push(u));
+      expect(drawn.length).toBeGreaterThan(0);
+      for (const u of drawn) {
+        for (const frac of [0.01, 0.5, 0.99]) {
+          const t = u.tStart + (u.tEnd - u.tStart) * frac;
+          if (t < 0 || t > 4) continue;
+          expect(unitAtTime(starts, binWidth, unitWidth, t)).toEqual(u);
+        }
+      }
+    }
+  });
+});
+
+describe('forEachUnitInSpan', () => {
+  it('emits one unit per frame when ungrouped', () => {
+    const out: FrameUnit[] = [];
+    forEachUnitInSpan(starts, FULL, FULL, 1.0, 2.0, u => out.push(u));
+    // visibleBinRange widens by one frame each side.
+    expect(out.map(u => u.start)).toEqual([0, 1, 2, 3]);
+    expect(out.every(u => u.start === u.end)).toBe(true);
+    expect(out[1].tStart).toBe(starts[1]);
+    expect(out[1].tEnd).toBeCloseTo(starts[1] + FULL);
+  });
+
+  it('emits time-anchored buckets that do not re-partition as the span scrolls', () => {
+    const bucketsFor = (t0: number, t1: number) => {
+      const out: FrameUnit[] = [];
+      forEachUnitInSpan(starts, FULL, 2, t0, t1, u => out.push(u));
+      return out;
+    };
+    const a = bucketsFor(0, 4);
+    const b = bucketsFor(0.3, 4.3);
+    for (const u of b) {
+      const match = a.find(v => v.tStart === u.tStart);
+      if (match) expect([match.start, match.end]).toEqual([u.start, u.end]);
+    }
+  });
+
+  it('skips buckets with no frames rather than emitting empty ones', () => {
+    const out: FrameUnit[] = [];
+    forEachUnitInSpan([0, 100], 1, 1, 40, 60, u => out.push(u));
+    expect(out.every(u => u.end >= u.start)).toBe(true);
+  });
+
+  it('emits nothing without data', () => {
+    const out: FrameUnit[] = [];
+    forEachUnitInSpan([], 1, 1, 0, 10, u => out.push(u));
+    expect(out).toEqual([]);
+  });
+
+  // The panel's unit width is published by the draw loop, so it reads as 0
+  // until the first frame is drawn — that has to fall back to frames, not to
+  // a division by zero.
+  it('falls back to per-frame units for a zero unit width', () => {
+    const out: FrameUnit[] = [];
+    forEachUnitInSpan(starts, FULL, 0, 0, 4, u => out.push(u));
+    expect(out.every(u => u.start === u.end)).toBe(true);
+    expect(unitAtTime(starts, FULL, 0, 1.5)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + FULL });
   });
 });

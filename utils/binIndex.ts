@@ -118,3 +118,83 @@ export function bucketFrameRange(
   if (end < start) return null;
   return { start, end };
 }
+
+// ── Units ───────────────────────────────────────────────────────────────────
+// A "unit" is what the buzzdetect panel treats as one indivisible thing: the
+// band it washes, the region it highlights on hover, and the span a click
+// selects. It's a single frame when the panel resolves frames individually,
+// and the whole bucket frames are grouped into otherwise. The three functions
+// below are the only place that choice is made — the draw loop enumerates
+// units over the viewport, hit-testing looks one up by time, and because both
+// go through here they can't disagree about where a unit begins or ends.
+
+/** A unit: the frames it covers (inclusive indices) and its own time extent. */
+export interface FrameUnit {
+  start: number;
+  end: number;
+  tStart: number;
+  tEnd: number;
+}
+
+/**
+ * Whether `unitWidth` groups several frames into one unit rather than
+ * resolving them individually. The tolerance keeps a unit width pinned at the
+ * file's own frame length reading as ungrouped despite float round-off.
+ */
+export function isGroupedUnitWidth(binWidth: number, unitWidth: number): boolean {
+  return unitWidth > binWidth * 1.0001;
+}
+
+/**
+ * The unit containing time `t`, or null where it holds no frame — a gap
+ * between frames (frame length overridden shorter than the frame spacing), a
+ * bucket with no frames in it, or a time outside the data.
+ */
+export function unitAtTime(
+  starts: number[],
+  binWidth: number,
+  unitWidth: number,
+  t: number,
+): FrameUnit | null {
+  if (!isGroupedUnitWidth(binWidth, unitWidth)) {
+    const i = binAtTime(starts, binWidth, t);
+    return i === null ? null : { start: i, end: i, tStart: starts[i], tEnd: starts[i] + binWidth };
+  }
+  const b = Math.floor(t / unitWidth);
+  const r = bucketFrameRange(starts, unitWidth, b);
+  return r === null ? null : { ...r, tStart: b * unitWidth, tEnd: (b + 1) * unitWidth };
+}
+
+/**
+ * Enumerates, in time order, the units covering [t0, t1] — widened by one unit
+ * each side so a polyline connects to its off-screen neighbours. Empty units
+ * are skipped, so uncovered time is simply never visited.
+ */
+export function forEachUnitInSpan(
+  starts: number[],
+  binWidth: number,
+  unitWidth: number,
+  t0: number,
+  t1: number,
+  fn: (u: FrameUnit) => void,
+): void {
+  if (starts.length === 0) return;
+  if (!isGroupedUnitWidth(binWidth, unitWidth)) {
+    const r = visibleBinRange(starts, binWidth, t0, t1);
+    if (!r) return;
+    for (let i = r.iLeft; i <= r.iRight; i++) {
+      fn({ start: i, end: i, tStart: starts[i], tEnd: starts[i] + binWidth });
+    }
+    return;
+  }
+  if (!(unitWidth > 0)) return;
+  // Buckets are anchored to absolute time, not to the first visible frame, so
+  // scrolling can't re-partition which frames group together.
+  const firstBucket = Math.floor(t0 / unitWidth) - 1;
+  const lastBucket = Math.floor(t1 / unitWidth) + 1;
+  for (let b = firstBucket; b <= lastBucket; b++) {
+    const r = bucketFrameRange(starts, unitWidth, b);
+    if (!r) continue;
+    fn({ start: r.start, end: r.end, tStart: b * unitWidth, tEnd: (b + 1) * unitWidth });
+  }
+}
