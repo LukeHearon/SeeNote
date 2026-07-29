@@ -11,7 +11,7 @@ import {
   MAX_BUZZDETECT_PANEL_HEIGHT,
   Y_AXIS_WIDTH,
 } from '../constants';
-import { clamp, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
+import { clamp, decimalsForTimes, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, xToTime } from '../utils/viewportTransform';
 import type { FrameUnit } from '../utils/binIndex';
 import {
@@ -47,6 +47,9 @@ const MAX_LINE_POINTS = 1000;
 const MIN_UNIT_BOUNDARY_PX = 6;
 // Narrower than this, a per-frame dot is no longer legible as its own marker.
 const MIN_DOT_PX = 4;
+// Most decimal places the hover/selection readout ever shows a time to. Times
+// carrying less precision than this are shown to less (see decimalsForTimes).
+const READOUT_MAX_DECIMALS = 2;
 // Auto Y-range for detection-rate mode: it's a fraction of the frames in a bin
 // clearing the threshold, so always 0..1 — no data scan needed.
 const DETECTION_RATE_Y_RANGE = { min: 0, max: 1 };
@@ -954,16 +957,20 @@ export default function BuzzdetectPanel({
     if (start < 0 || end < start || end >= data.starts.length) return null;
     const isSingle = start === end;
     const { start: tStart, end: tEnd } = unitInterval(unit);
-    // One frame shown at its own extent is a point in time, so it reads as one
-    // — but one frame inside a wider bin, or inside a free-hand spectrogram
-    // selection, still has to show the span it was picked out by.
-    const isPoint = isSingle && Math.abs((tEnd - tStart) - data.binWidth) <= data.binWidth * 1e-3;
+    // Always a span, one frame included — a frame covers time like anything
+    // else here, and collapsing it to its start time hides how much.
+    //
+    // Only as precise as the times being shown: whole-second bin edges read as
+    // "4s", and one edge needing a decimal gives both of them one. Snapped to
+    // the readout's own precision first, because the formatters truncate — an
+    // edge that drifted to 101.9996 reads as 102s, and flooring the unsnapped
+    // value would say 101s instead.
+    const shown = [tStart, tEnd].map(t => Number(t.toFixed(READOUT_MAX_DECIMALS)));
+    const dp = decimalsForTimes(shown, READOUT_MAX_DECIMALS);
     return (
       <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
         <div className="text-slate-300">
-          {isPoint
-            ? `t=${formatTimeForUnit(tStart, timeDisplayUnit)}`
-            : `t=${formatTimeForUnit(tStart, timeDisplayUnit)}–${formatTimeForUnit(tEnd, timeDisplayUnit)}`}
+          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp)}`}
         </div>
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {

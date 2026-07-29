@@ -13,13 +13,13 @@ export const updateAnnotation = (
   updater: (a: Annotation) => Annotation,
 ): Annotation[] => annotations.map(a => (a.id === id ? updater(a) : a));
 
-export const formatTime = (seconds: number): string => {
+export const formatTime = (seconds: number, decimals: number = 2): string => {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-  const cs = Math.floor((seconds % 1) * 100);
-  const csStr = cs.toString().padStart(2, '0');
-  const secStr = `${s}.${csStr}s`;
+  const scale = 10 ** decimals;
+  const frac = Math.floor((seconds % 1) * scale).toString().padStart(decimals, '0');
+  const secStr = decimals > 0 ? `${s}.${frac}s` : `${s}s`;
   if (h > 0) return `${h}h${m}m${secStr}`;
   if (m > 0) return `${m}m${secStr}`;
   return secStr;
@@ -28,13 +28,38 @@ export const formatTime = (seconds: number): string => {
 export type TimeDisplayUnit = 'seconds' | 'hms';
 
 // Plain seconds with a thousands separator, e.g. "123,456.78s".
-export const formatSeconds = (seconds: number): string =>
-  `${seconds.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}s`;
+export const formatSeconds = (seconds: number, decimals: number = 2): string =>
+  `${seconds.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}s`;
 
 // Formats a running time in the user's chosen unit — plain seconds
 // ("123,456.78s") or hours/minutes/seconds ("1h15m00.00s", see formatTime).
-export const formatTimeForUnit = (seconds: number, unit: TimeDisplayUnit): string =>
-  unit === 'hms' ? formatTime(seconds) : formatSeconds(seconds);
+export const formatTimeForUnit = (seconds: number, unit: TimeDisplayUnit, decimals: number = 2): string =>
+  unit === 'hms' ? formatTime(seconds, decimals) : formatSeconds(seconds, decimals);
+
+/**
+ * Fewest decimal places that show every one of `values` exactly, up to
+ * `maxDecimals`. For a readout over a set of times this keeps the precision
+ * the values themselves carry — whole-second bin edges read as "4s", and a
+ * 4.3s edge pushes the whole readout to "4.3s"–"10.0s" rather than showing one
+ * value more precisely than its neighbour. Beyond maxDecimals it gives up and
+ * rounds, exactly as a fixed-precision format would.
+ */
+export const decimalsForTimes = (values: number[], maxDecimals: number = 2): number => {
+  const decimalsFor = (v: number): number => {
+    // The question is never "is this exactly round?" — it's "would the decimals
+    // I'd otherwise print be anything but zeros?". So snap to the most this can
+    // ever show, then drop the places that came out zero. That absorbs f32
+    // round-off (a 0.4s frame arrives as 0.4000000059604645) and the drift in a
+    // bin edge computed as b * binWidth, both of which are invisible at
+    // maxDecimals anyway — a value displaying as "100.00" reads as "100".
+    const shown = Number(v.toFixed(maxDecimals));
+    for (let d = 0; d < maxDecimals; d++) {
+      if (Number(shown.toFixed(d)) === shown) return d;
+    }
+    return maxDecimals;
+  };
+  return values.reduce((d, v) => Math.max(d, decimalsFor(v)), 0);
+};
 
 export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);

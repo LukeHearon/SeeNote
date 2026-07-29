@@ -3,6 +3,7 @@ import {
   formatTime,
   formatSeconds,
   formatTimeForUnit,
+  decimalsForTimes,
   makeAnnotationFromTool,
   calculateAnnotationLayers,
   generateAudacityContent,
@@ -95,6 +96,64 @@ describe('formatTimeForUnit', () => {
 
   it('uses formatTime for the "hms" unit', () => {
     expect(formatTimeForUnit(3661.5, 'hms')).toBe('1h1m1.50s');
+  });
+
+  it('passes a precision through to either unit', () => {
+    expect(formatTimeForUnit(4, 'seconds', 0)).toBe('4s');
+    expect(formatTimeForUnit(4.3, 'seconds', 1)).toBe('4.3s');
+    expect(formatTimeForUnit(3661.5, 'hms', 0)).toBe('1h1m1s');
+    expect(formatTimeForUnit(3661.5, 'hms', 1)).toBe('1h1m1.5s');
+  });
+});
+
+describe('decimalsForTimes', () => {
+  it('uses no decimals for whole seconds', () => {
+    expect(decimalsForTimes([0, 4])).toBe(0);
+    expect(decimalsForTimes([120])).toBe(0);
+    // A 2s bin dragged out at 100s: the readout reads "1m40s–1m42s".
+    expect(decimalsForTimes([100, 102])).toBe(0);
+    expect(formatTimeForUnit(100, 'hms', decimalsForTimes([100, 102]))).toBe('1m40s');
+  });
+
+  // The buzzdetect readout formats both ends of a span together, so the one
+  // needing more precision decides for both — otherwise 4.3–10 reads as if the
+  // two ends were measured differently.
+  it('takes the most precise value in the set', () => {
+    expect(decimalsForTimes([4.3, 10])).toBe(1);
+    expect(decimalsForTimes([0, 0.96])).toBe(2);
+    expect(decimalsForTimes([1.92, 4])).toBe(2);
+  });
+
+  it('gives up at maxDecimals rather than showing spurious precision', () => {
+    expect(decimalsForTimes([0.048])).toBe(2);
+    expect(decimalsForTimes([1 / 3])).toBe(2);
+    expect(decimalsForTimes([0.048], 3)).toBe(3);
+  });
+
+  // Bin edges are products (b * binWidth), so they land off a round number
+  // rather than on it — by a few ulps, or by far more when the width itself is
+  // an auto-calculated float. Anything that disappears at maxDecimals is not a
+  // reason to print two zeros: 100.004 shows as "100.00", so it reads "100".
+  it('ignores drift too small to show at maxDecimals', () => {
+    expect(decimalsForTimes([4.3 * 10])).toBe(0);
+    expect(decimalsForTimes([0.1 + 0.2])).toBe(1);
+    expect(decimalsForTimes([3600 * 1.0000000000001])).toBe(0);
+    expect(decimalsForTimes([100.004, 102.004])).toBe(0);
+    expect(decimalsForTimes([4.3004])).toBe(1);
+    // Drift big enough to show is shown — this is not a rounding-away licence.
+    expect(decimalsForTimes([100.02])).toBe(2);
+    expect(decimalsForTimes([100.2])).toBe(1);
+  });
+
+  // Buzzdetect frame starts and bin widths are f32 on the Rust side, so they
+  // arrive as the nearest f32 rather than the value the CSV names — a 0.4s
+  // frame is 0.4000000059604645 here, and still reads as one decimal.
+  it('sees through f32 round-off in times crossing from Rust', () => {
+    expect(decimalsForTimes([0, Math.fround(0.4)])).toBe(1);
+    expect(decimalsForTimes([Math.fround(0.96)])).toBe(2);
+    expect(decimalsForTimes([Math.fround(4), Math.fround(8)])).toBe(0);
+    // Still not a round number at any precision it could be shown to.
+    expect(decimalsForTimes([Math.fround(0.048)])).toBe(2);
   });
 });
 
