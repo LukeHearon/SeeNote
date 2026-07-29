@@ -11,7 +11,46 @@ on:
         required: true
 
 jobs:
+  # tauri-action seeds latest.json from the copy already attached to the release
+  # and then refuses to replace existing darwin-* entries (the "Don't overwrite
+  # native builds" guard in its upload-version-json.ts). On a workflow_dispatch
+  # rebuild of an existing tag, the macOS job therefore re-signs a brand new
+  # SeeNote_universal.app.tar.gz while latest.json keeps the signature from the
+  # *previous* build — every macOS client then fails with "signature
+  # verification failed". Upstream fixed this in tauri-apps/tauri-action#1186,
+  # but only on `dev`; the released v0 line (v0.6.2) still has the bug. Deleting
+  # the stale manifest before the matrix starts forces the darwin entries to be
+  # written from this run's signatures.
+  reset-updater-manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete any stale latest.json from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          REPO="${{ github.repository }}"
+          RELEASE_ID=$(gh api "repos/${REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          if [ -z "$RELEASE_ID" ]; then
+            echo "No release for $TAG yet — nothing to clean."
+            exit 0
+          fi
+          ASSET_IDS=$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" --paginate \
+            --jq '.[] | select(.name == "latest.json") | .id')
+          if [ -z "$ASSET_IDS" ]; then
+            echo "No existing latest.json — nothing to clean."
+            exit 0
+          fi
+          for id in $ASSET_IDS; do
+            gh api -X DELETE "repos/${REPO}/releases/assets/${id}"
+            echo "Deleted stale latest.json asset $id"
+          done
+
   build:
+    needs: reset-updater-manifest
     permissions:
       contents: write
     strategy:
@@ -168,6 +207,45 @@ jobs:
             echo "No designated requirement — bundle is effectively unsigned." >&2
             exit 1
           fi
+
+  # The failure mode this catches: latest.json advertising a minisign signature
+  # that doesn't belong to the artifact it points at, which makes the in-app
+  # updater fail with "signature verification failed" for every user. Each
+  # platform entry's signature must be byte-identical to the sidecar .sig
+  # published next to the artifact named in its URL.
+  verify-updater-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # write, not read: draft releases are only visible to tokens with push access
+      contents: write
+    steps:
+      - name: Verify latest.json signatures match the published artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+            -p latest.json -p '*.sig' -D . --clobber
+          python3 - <<'PY'
+          import json, os, sys
+
+          manifest = json.load(open('latest.json'))
+          failed = False
+          for name, platform in manifest['platforms'].items():
+              sidecar = os.path.basename(platform['url']) + '.sig'
+              if not os.path.exists(sidecar):
+                  print(f'FAIL {name}: no {sidecar} published alongside the artifact')
+                  failed = True
+                  continue
+              expected = open(sidecar).read().strip()
+              if platform['signature'].strip() != expected:
+                  print(f'FAIL {name}: latest.json signature does not match {sidecar}')
+                  failed = True
+              else:
+                  print(f'ok   {name} -> {sidecar}')
+          sys.exit(1 if failed else 0)
+          PY
 
   rename-assets:
     needs: build
