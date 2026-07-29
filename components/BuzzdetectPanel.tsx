@@ -296,13 +296,16 @@ export default function BuzzdetectPanel({
   // override, pre-threshold-widening) auto Y-range.
   const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
 
-  // Bin range covered by the current selection (inclusive indices), for the
-  // persistent selection readout below. Half-open on the right, so selecting
-  // exactly one frame reads as one frame rather than spilling into its
-  // neighbour.
-  const selectionBinRange = useMemo<{ start: number; end: number } | null>(() => {
+  // The current selection as a unit, for the persistent selection readout
+  // below: the frames it covers (half-open on the right, so selecting exactly
+  // one frame reads as one frame rather than spilling into its neighbour) and
+  // its own time span. The span is the selection's, NOT the frames' — a 4s bin
+  // over 0.96s frames holds five of them, whose extents reach to 4.8s, but the
+  // bin is 4s and that's what was selected.
+  const selectionUnit = useMemo<FrameUnit | null>(() => {
     if (!selection || !data) return null;
-    return frameRangeForTimeSpan(data.starts, data.binWidth, selection.start, selection.end);
+    const r = frameRangeForTimeSpan(data.starts, data.binWidth, selection.start, selection.end);
+    return r && { ...r, tStart: selection.start, tEnd: selection.end };
   }, [data, selection]);
 
   // Map a clientX to a track time using the SHARED transform (scrollLeft /
@@ -928,30 +931,39 @@ export default function BuzzdetectPanel({
 
   const enabledNeurons = data ? data.neurons.filter(n => !hidden.has(n)) : [];
 
-  // Renders the small top-left readout for a bin range: its time span, and each
-  // enabled neuron's value. One call site — it shows the selection's range when
-  // there is a selection, else the hovered bin (or bin-group).
+  // Renders the small top-left readout for a unit: its time span, and each
+  // enabled neuron's value. One call site — it shows the selection's span when
+  // there is a selection, else the hovered unit's.
+  //
+  // The span shown is the unit's own (tStart/tEnd), never the union of its
+  // frames' extents: a bin is a span of time that some number of frames start
+  // inside, and the last of those frames can end past it. The frames only say
+  // what the values are averaged from.
   //
   // In activation mode: the raw value for a single frame, averaged across
   // the range otherwise. In detection-rate mode: just Detection/No Detection
   // for a single frame (a rate over one frame isn't meaningful — it's the
   // frame's own dot, drawn at 1 or 0), else the fraction of the range's
   // frames clearing the threshold.
-  const renderBinRangeReadout = (range: { start: number; end: number }) => {
+  const renderBinRangeReadout = (unit: FrameUnit) => {
     if (!data) return null;
-    const { start, end } = range;
+    const { start, end } = unit;
     // A hover range from the previous track outlives the render that swapped
     // `data` in (it's only cleared in an effect), so bail on out-of-range
     // indices here rather than reading past the new arrays.
     if (start < 0 || end < start || end >= data.starts.length) return null;
     const isSingle = start === end;
-    const rangeEnd = duration > 0 ? Math.min(data.starts[end] + data.binWidth, duration) : data.starts[end] + data.binWidth;
+    const { start: tStart, end: tEnd } = unitInterval(unit);
+    // One frame shown at its own extent is a point in time, so it reads as one
+    // — but one frame inside a wider bin, or inside a free-hand spectrogram
+    // selection, still has to show the span it was picked out by.
+    const isPoint = isSingle && Math.abs((tEnd - tStart) - data.binWidth) <= data.binWidth * 1e-3;
     return (
       <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
         <div className="text-slate-300">
-          {isSingle
-            ? `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}`
-            : `t=${formatTimeForUnit(data.starts[start], timeDisplayUnit)}–${formatTimeForUnit(rangeEnd, timeDisplayUnit)}`}
+          {isPoint
+            ? `t=${formatTimeForUnit(tStart, timeDisplayUnit)}`
+            : `t=${formatTimeForUnit(tStart, timeDisplayUnit)}–${formatTimeForUnit(tEnd, timeDisplayUnit)}`}
         </div>
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {
@@ -1031,8 +1043,8 @@ export default function BuzzdetectPanel({
               of the cursor once one exists (so it can't be "stomped" by
               moving the mouse over the panel); only without a selection does
               it track the hovered bin (or bin-group). */}
-          {data && (selectionBinRange ?? hoverRange) !== null &&
-            renderBinRangeReadout((selectionBinRange ?? hoverRange)!)}
+          {data && (selectionUnit ?? hoverRange) !== null &&
+            renderBinRangeReadout((selectionUnit ?? hoverRange)!)}
 
           {/* Settings popover trigger */}
           <button
