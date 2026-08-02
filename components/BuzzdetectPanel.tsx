@@ -80,6 +80,20 @@ interface BuzzdetectPanelProps {
   // deliberately NOT reset when the track changes — only when seriesMode
   // flips (the two modes' natural auto bin widths aren't comparable).
   binWidthOverride: number | null;
+  // ── Subset ────────────────────────────────────────────────────────────────
+  // Whether the track is currently subset to these neurons' detections. When it
+  // is, `data` has ALREADY been re-expressed on the subset's display axis by the
+  // caller — this component never sees the hidden frames and needs no notion of
+  // them. The flag is only used for drawing: with cuts in the axis, a line
+  // between neighbouring points would imply continuity across a join that isn't
+  // there, so the series is drawn as bare points.
+  subsetActive: boolean;
+  // Neuron labels the subset is keyed to (OR'd). Independent of `hiddenNeurons`:
+  // a neuron can drive the subset while another is merely plotted alongside it.
+  subsetNeurons: string[];
+  // Minimum fraction of a bin's frames that must fire for the bin to be kept.
+  // detection-rate mode only.
+  minDetectionRate: number;
   height: number;
   // Callbacks.
   onThresholdChange: (neuron: string, value: number) => void;
@@ -87,6 +101,8 @@ interface BuzzdetectPanelProps {
   onNeuronColorChange: (neuron: string, color: string) => void;
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
+  onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
+  onMinDetectionRateChange: (rate: number) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -106,12 +122,17 @@ export default function BuzzdetectPanel({
   neuronColors: neuronColorOverrides,
   seriesMode,
   binWidthOverride,
+  subsetActive,
+  subsetNeurons,
+  minDetectionRate,
   height,
   onThresholdChange,
   onToggleNeuron,
   onNeuronColorChange,
   onSeriesModeChange,
   onBinWidthOverrideChange,
+  onToggleSubsetNeuron,
+  onMinDetectionRateChange,
   onHeightChange,
   onSelectionChange,
   onBoundAnnotationChange,
@@ -600,41 +621,48 @@ export default function BuzzdetectPanel({
       const color = neuronColors[n];
       const th = thresholdOf(neurons[n]);
       const perFrameValue = (i: number) => seriesMode === 'activation' ? values[n][i] : (values[n][i] >= th ? 1 : 0);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      let started = false;
-      if (!grouped) {
-        for (let i = iLeft; i <= iRight; i++) {
-          const cx = xOf(starts[i] + binWidth / 2);
-          const cy = yOf(perFrameValue(i));
-          if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
-        }
-      } else {
-        // One point per unit, at its midpoint. Prefix-sum lookup, not a scan: a
-        // unit can span hours of frames when the user pins a wide bin width,
-        // and units are recomputed on every redraw (they're time-anchored, so
-        // they're stable, but the draw path doesn't cache them).
-        const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
-        const unitMean = (u: { start: number; end: number }) => (
-          prefix ? rangeMean(prefix, u.start, u.end) : 0
-        );
-        if (units.length === 1) {
-          // Every frame in view falls in one unit (a wide override on a short
-          // file): a lone moveTo strokes nothing and grouped mode draws no dots,
-          // so the neuron would vanish. Stroke the unit's value flat across
-          // its own x-extent instead.
-          const cy = yOf(unitMean(units[0]));
-          ctx.moveTo(units[0].xStart, cy);
-          ctx.lineTo(units[0].xEnd, cy);
+      // Bucket aggregate, hoisted: the grouped polyline and the grouped dots
+      // (drawn under a subset, where there is no polyline) both need it.
+      const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
+      const unitMean = (u: { start: number; end: number }) => (prefix ? rangeMean(prefix, u.start, u.end) : 0);
+
+      // Under a subset the x-axis has cuts in it: consecutive points can be
+      // minutes apart in the file even though they abut on screen, and a line
+      // joining them would draw a trend across time that was removed. Points
+      // only — each one still says exactly what its own frames did.
+      if (!subsetActive) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        let started = false;
+        if (!grouped) {
+          for (let i = iLeft; i <= iRight; i++) {
+            const cx = xOf(starts[i] + binWidth / 2);
+            const cy = yOf(perFrameValue(i));
+            if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
+          }
         } else {
-          for (const u of units) {
-            const cy = yOf(unitMean(u));
-            if (!started) { ctx.moveTo(u.xMid, cy); started = true; } else ctx.lineTo(u.xMid, cy);
+          // One point per unit, at its midpoint. Prefix-sum lookup, not a scan: a
+          // unit can span hours of frames when the user pins a wide bin width,
+          // and units are recomputed on every redraw (they're time-anchored, so
+          // they're stable, but the draw path doesn't cache them).
+          if (units.length === 1) {
+            // Every frame in view falls in one unit (a wide override on a short
+            // file): a lone moveTo strokes nothing and grouped mode draws no dots,
+            // so the neuron would vanish. Stroke the unit's value flat across
+            // its own x-extent instead.
+            const cy = yOf(unitMean(units[0]));
+            ctx.moveTo(units[0].xStart, cy);
+            ctx.lineTo(units[0].xEnd, cy);
+          } else {
+            for (const u of units) {
+              const cy = yOf(unitMean(u));
+              if (!started) { ctx.moveTo(u.xMid, cy); started = true; } else ctx.lineTo(u.xMid, cy);
+            }
           }
         }
+        ctx.stroke();
       }
-      ctx.stroke();
 
       if (drawDots) {
         for (let i = iLeft; i <= iRight; i++) {
@@ -654,6 +682,16 @@ export default function BuzzdetectPanel({
             ctx.lineWidth = 1;
             ctx.stroke();
           }
+        }
+      } else if (subsetActive) {
+        // Grouped and no polyline to fall back on — draw the bucket means as
+        // points so the neuron doesn't vanish when zoomed out under a subset.
+        ctx.fillStyle = color;
+        for (const u of units) {
+          if (u.xMid < -3 || u.xMid > width + 3) continue;
+          ctx.beginPath();
+          ctx.arc(u.xMid, yOf(unitMean(u)), 2.5, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
     }
@@ -694,7 +732,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1045,6 +1083,15 @@ export default function BuzzdetectPanel({
             </div>
           )}
 
+          {/* A subset that kept nothing. Distinct from "no activations": the
+              file has results, they just don't meet the criteria — so the fix
+              is a lower threshold or rate, not a missing CSV. */}
+          {data && data.starts.length === 0 && subsetActive && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="text-slate-600 text-xs">{buzzdetectCopy.subsetEmpty}</span>
+            </div>
+          )}
+
           {/* Readout — time range + each enabled neuron's value, in color.
               The current selection takes priority and stays put regardless
               of the cursor once one exists (so it can't be "stomped" by
@@ -1149,9 +1196,40 @@ export default function BuzzdetectPanel({
                     </div>
                   </div>
                 )}
+                {data && (
+                  <div className="pb-2 border-b border-slate-700 space-y-1">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                      {buzzdetectCopy.subsetHeader}
+                    </div>
+                    {subsetNeurons.length === 0 ? (
+                      <p className="text-slate-500 text-[11px]">{buzzdetectCopy.subsetNoNeurons}</p>
+                    ) : seriesMode === 'detectionRate' ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 text-[11px] text-slate-300">{buzzdetectCopy.subsetMinRateLabel}</span>
+                          <DraftNumberInput
+                            value={minDetectionRate}
+                            onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
+                            min={0}
+                            className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right text-slate-200 outline-none focus:border-[#e65161]"
+                          />
+                        </div>
+                        {/* The auto bin width changes with zoom, so subsetting by
+                            it would silently redefine the subset every time the
+                            view moved. The rate is measured over the pinned
+                            width instead (the file's frame length until one is
+                            pinned, where a rate is just the frame's own 0 or 1). */}
+                        <p className="text-slate-500 text-[10px]">{buzzdetectCopy.subsetPinBinWidth}</p>
+                      </>
+                    ) : null}
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
                   <span>{buzzdetectCopy.neuronHeader}</span>
-                  <span>{buzzdetectCopy.thresholdHeader}</span>
+                  <span className="flex items-center gap-2">
+                    <span>{buzzdetectCopy.subsetColumnHeader}</span>
+                    <span>{buzzdetectCopy.thresholdHeader}</span>
+                  </span>
                 </div>
                 {!data && <p className="text-slate-500 text-xs py-2">{buzzdetectCopy.noDataLoaded}</p>}
                 {data && data.neurons.map((n, i) => {
@@ -1188,6 +1266,18 @@ export default function BuzzdetectPanel({
                         )}
                       </div>
                       <span className="flex-1 text-xs text-slate-200 truncate" title={n}>{n}</span>
+                      {/* Subsetting is deliberately independent of the plot
+                          checkbox on the left: a neuron can define which frames
+                          are kept while another is merely plotted alongside it
+                          to see what it did there. Several ticked here are
+                          OR'd — a frame survives if any of them fired. */}
+                      <input
+                        type="checkbox"
+                        checked={subsetNeurons.includes(n)}
+                        onChange={() => onToggleSubsetNeuron(n, !subsetNeurons.includes(n))}
+                        className="accent-[#e65161] flex-none"
+                        data-tooltip={tooltips.buzzdetectSubsetNeuron}
+                      />
                       <DraftNumberInput
                         value={thresholdOf(n)}
                         onCommit={(v) => onThresholdChange(n, v)}

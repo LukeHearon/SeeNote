@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Project } from '../types';
-import { DEFAULT_BUZZDETECT_PANEL_HEIGHT } from '../constants';
+import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE } from '../constants';
 import { readBuzzdetect } from '../utils/tauriCommands';
 
 export interface BuzzdetectApi {
@@ -16,6 +16,12 @@ export interface BuzzdetectApi {
   setBuzzdetectSeriesMode: React.Dispatch<React.SetStateAction<BuzzdetectSeriesMode>>;
   buzzdetectBinWidthOverride: number | null;
   setBuzzdetectBinWidthOverride: React.Dispatch<React.SetStateAction<number | null>>;
+  buzzdetectSubsetEnabled: boolean;
+  setBuzzdetectSubsetEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  buzzdetectSubsetNeurons: string[];
+  setBuzzdetectSubsetNeurons: React.Dispatch<React.SetStateAction<string[]>>;
+  buzzdetectMinDetectionRate: number;
+  setBuzzdetectMinDetectionRate: React.Dispatch<React.SetStateAction<number>>;
   buzzdetectPanelHeight: number;
   setBuzzdetectPanelHeight: React.Dispatch<React.SetStateAction<number>>;
   buzzdetectData: BuzzdetectData | null;
@@ -23,6 +29,9 @@ export interface BuzzdetectApi {
   handleBuzzdetectThresholdChange: (neuron: string, value: number) => void;
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
+  handleBuzzdetectToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
+  /** Toggle subset mode. No-op when no neuron is picked — there'd be nothing to subset by. */
+  toggleBuzzdetectSubset: () => void;
 }
 
 export interface BuzzdetectParams {
@@ -47,6 +56,11 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
   const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<BuzzdetectSeriesMode>(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
   const [buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride] = useState<number | null>(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
+  // Subset mode. The neuron picks are kept separately from the master toggle so
+  // flipping the subset off and on again doesn't cost the user their selection.
+  const [buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled] = useState(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
+  const [buzzdetectSubsetNeurons, setBuzzdetectSubsetNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectSubsetNeurons ?? []);
+  const [buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate] = useState<number>(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
 
@@ -74,6 +88,22 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const handleBuzzdetectNeuronColorChange = useCallback((neuron: string, color: string) => {
     setBuzzdetectNeuronColors(prev => ({ ...prev, [neuron]: color }));
   }, []);
+  // Ticking the first neuron engages the subset outright: picking one is the
+  // user saying what they want to see, and making them then find a second
+  // switch would be a step with no decision in it.
+  const handleBuzzdetectToggleSubsetNeuron = useCallback((neuron: string, willSubset: boolean) => {
+    setBuzzdetectSubsetNeurons(prev => {
+      const next = willSubset ? [...prev, neuron] : prev.filter(n => n !== neuron);
+      if (next.length > 0) setBuzzdetectSubsetEnabled(true);
+      return next;
+    });
+  }, []);
+  const toggleBuzzdetectSubset = useCallback(() => {
+    setBuzzdetectSubsetEnabled(prev => {
+      if (!prev && buzzdetectSubsetNeurons.length === 0) return false;
+      return !prev;
+    });
+  }, [buzzdetectSubsetNeurons.length]);
 
   return {
     buzzdetectEnabled,
@@ -88,6 +118,12 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectSeriesMode,
     buzzdetectBinWidthOverride,
     setBuzzdetectBinWidthOverride,
+    buzzdetectSubsetEnabled,
+    setBuzzdetectSubsetEnabled,
+    buzzdetectSubsetNeurons,
+    setBuzzdetectSubsetNeurons,
+    buzzdetectMinDetectionRate,
+    setBuzzdetectMinDetectionRate,
     buzzdetectPanelHeight,
     setBuzzdetectPanelHeight,
     buzzdetectData,
@@ -95,5 +131,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     handleBuzzdetectThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
+    handleBuzzdetectToggleSubsetNeuron,
+    toggleBuzzdetectSubset,
   };
 }

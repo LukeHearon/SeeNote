@@ -71,6 +71,8 @@ export const tooltips = {
   get buzzdetectYAxisReset() { return getOverride('tooltips.buzzdetectYAxisReset') ?? "Reset to auto-calculated range"; },
   get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
+  get buzzdetectSubsetNeuron() { return getOverride('tooltips.buzzdetectSubsetNeuron') ?? "Subset the track to this neuron's detections"; },
+  get buzzdetectSubset() { return getOverride('tooltips.buzzdetectSubset') ?? "Subset track to detections (Shift+S)"; },
   get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
   get showAllFiles() { return getOverride('tooltips.showAllFiles') ?? "Showing: all files"; },
   get showingUnannotated() { return getOverride('tooltips.showingUnannotated') ?? "Showing: unannotated only"; },

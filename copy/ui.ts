@@ -289,6 +289,12 @@ export const buzzdetectPanel = {
   get seriesActivation() { return getOverride('ui.buzzdetectPanel.seriesActivation') ?? "Activation"; },
   get seriesDetectionRate() { return getOverride('ui.buzzdetectPanel.seriesDetectionRate') ?? "Detection rate"; },
   get binWidthHeader() { return getOverride('ui.buzzdetectPanel.binWidthHeader') ?? "Bin width (s)"; },
+  get subsetHeader() { return getOverride('ui.buzzdetectPanel.subsetHeader') ?? "Subset to detections"; },
+  get subsetColumnHeader() { return getOverride('ui.buzzdetectPanel.subsetColumnHeader') ?? "Sub"; },
+  get subsetMinRateLabel() { return getOverride('ui.buzzdetectPanel.subsetMinRateLabel') ?? "Min detection rate"; },
+  get subsetNoNeurons() { return getOverride('ui.buzzdetectPanel.subsetNoNeurons') ?? "Tick a neuron below to subset by it."; },
+  get subsetPinBinWidth() { return getOverride('ui.buzzdetectPanel.subsetPinBinWidth') ?? "Measured over the bin width above."; },
+  get subsetEmpty() { return getOverride('ui.buzzdetectPanel.subsetEmpty') ?? "No frames meet the subset criteria"; },
   get detection() { return getOverride('ui.buzzdetectPanel.detection') ?? "Detection"; },
   get noDetection() { return getOverride('ui.buzzdetectPanel.noDetection') ?? "No Detection"; },
 };

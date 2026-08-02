@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2, Settings, Gauge, Filter, Activity, LocateFixed } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2, Settings, Gauge, Filter, Activity, LocateFixed, Scissors } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp } from '../utils/helpers';
@@ -66,6 +66,14 @@ interface ToolbarProps {
   /** Whether a buzzdetect directory is configured (gates the toggle button). */
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
+  /**
+   * Subset mode (utils/subsetTimeline.ts). `subsetAvailable` is whether any
+   * neuron has been ticked to subset by — without one there's nothing the
+   * button could do, so it isn't shown rather than shown-and-inert.
+   */
+  subsetAvailable?: boolean;
+  subsetActive?: boolean;
+  onToggleSubset?: () => void;
   onToggleBuzzdetect?: () => void;
   onRestartAudio?: () => void;
   playheadLocked?: boolean;
@@ -123,6 +131,9 @@ function Toolbar({
   isAudioTrack,
   buzzdetectAvailable,
   buzzdetectEnabled,
+  subsetAvailable,
+  subsetActive,
+  onToggleSubset,
   onToggleBuzzdetect,
   onRestartAudio,
   playheadLocked = false,
@@ -559,8 +570,18 @@ function Toolbar({
       </div>
 
       {/* Right-aligned controls: buzzdetect toggle + spectrogram settings */}
-      {(onToggleSettings !== undefined || buzzdetectAvailable) && (
+      {(onToggleSettings !== undefined || buzzdetectAvailable || subsetAvailable) && (
         <div className="ml-auto flex items-center gap-1">
+          {subsetAvailable && (
+            <button
+              onClick={onToggleSubset}
+              className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${subsetActive ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+              data-tooltip={tooltips.buzzdetectSubset}
+              data-help-target="buzzdetect-subset-toggle"
+            >
+              <Scissors size={16} />
+            </button>
+          )}
           {buzzdetectAvailable && (
             <button
               onClick={onToggleBuzzdetect}
