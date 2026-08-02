@@ -134,6 +134,10 @@ const SLEEP_MS = 250;
  *    so we never block on a fixed IPC budget — we start as soon as samples are
  *    ready, with just enough lead time to schedule precisely. */
 const START_MARGIN_SEC = 0.005;
+/** Longest gap between two subset spans that's cheaper to decode past than to
+ *  seek over. A seek reopens the container; a couple of seconds of throwaway
+ *  decode does not. See the span-advance in _prefetchLoop. */
+const GAP_READ_THROUGH_SEC = 2.0;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
@@ -299,6 +303,9 @@ export class AudioEngine implements PlaybackTransport {
    */
   play(startSec: number, endSec?: number): void {
     if (!this.filePath) return;
+    // A subset that kept nothing has no spans and so no audio to play. Bail
+    // before the prefetch loop tries to resolve a position on an empty axis.
+    if (this.timeline.spans.length === 0) return;
 
     this._cancelPlayback();
 
@@ -853,11 +860,38 @@ export class AudioEngine implements PlaybackTransport {
         // immediately after this one's last. The swap happens HORIZON_SEC ahead
         // of the playhead, so its latency is never heard.
         if (spanIdx + 1 < spans.length) {
+          const gapSec = spans[spanIdx + 1].srcStart - spans[spanIdx].srcEnd;
+          spanIdx++;
+          this.schedCursor = spans[spanIdx].dispStart;
+
+          // Short gap: read past it on the stream we already have and throw the
+          // samples away. Reopening means a container seek, which on a long
+          // compressed file costs far more than decoding a second or two — and
+          // a dense subset can put a join every frame, so paying a seek at each
+          // one is what would make playback stutter.
+          if (gapSec <= GAP_READ_THROUGH_SEC) {
+            let framesToSkip = Math.round(gapSec * sr);
+            let readThrough = true;
+            while (framesToSkip > 0) {
+              let skipped;
+              try {
+                skipped = await readPcmChunk(handle.stream_id, Math.min(chunkFrames, framesToSkip));
+              } catch {
+                readThrough = false;
+                break;
+              }
+              if (this.playId !== myPlayId) return;
+              if (skipped.frames_read === 0) { readThrough = false; break; }
+              framesToSkip -= skipped.frames_read;
+            }
+            // The stream now sits at the next span's start — same generation,
+            // nothing to reopen.
+            if (readThrough) continue;
+          }
+
           const prevStreamId = handle.stream_id;
           this.streamId = null;
           closePcmStream(prevStreamId).catch(() => {});
-          spanIdx++;
-          this.schedCursor = spans[spanIdx].dispStart;
           const next = await openStreamAt(spans[spanIdx].srcStart);
           if (!next) {
             // Can't reach the next span. Let the scheduled audio drain and stop

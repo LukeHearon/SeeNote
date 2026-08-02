@@ -1520,12 +1520,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // audio by where it sat, and the cuts have moved), the playhead only where it
   // now points past the end. Skipped on the first run, which is just the empty
   // initial state.
+  //
+  // Everything here is gated on the timeline object actually changing, not just
+  // on the effect running: `seek` and `handleSelectionChange` are callbacks whose
+  // identity turns over on unrelated renders, and setTimeline stops playback —
+  // so an ungated call would cut the audio at arbitrary moments mid-play.
   const prevTimelineRef = useRef(timeline);
   useEffect(() => {
-    engineRef.current?.setTimeline(timeline);
     const changed = prevTimelineRef.current !== timeline;
     prevTimelineRef.current = timeline;
     if (!changed) return;
+    engineRef.current?.setTimeline(timeline);
     handleSelectionChange(null);
     if (currentTimeRef.current > displayDuration) seek(displayDuration);
     // A subset can be a few seconds of a multi-hour file. Fit the window to it
