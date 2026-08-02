@@ -220,6 +220,9 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
                 <p>{md(helpPanel.guide.buzzdetect.p3)}</p>
                 <p>{md(helpPanel.guide.buzzdetect.p4)}</p>
                 <p>{md(helpPanel.guide.buzzdetect.p5)}</p>
+                <p>{md(helpPanel.guide.buzzdetect.p6)}</p>
+                <p>{md(helpPanel.guide.buzzdetect.p7)}</p>
+                <p>{md(helpPanel.guide.buzzdetect.p8)}</p>
               </Section>
             </>
           )}

@@ -367,6 +367,37 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const displayDurationRef = useRef(displayDuration);
   displayDurationRef.current = displayDuration;
 
+  // ── Subset seam ────────────────────────────────────────────────────────────
+  // Annotations are stored in source time (they name audio in the file, and
+  // must keep naming it whatever the view is showing) but drawn and dragged in
+  // display time. See utils/annotationProjection.ts for why the return trip
+  // isn't simply the inverse.
+  const { shown: displayAnnotations, hidden: hiddenAnnotations } = useMemo(
+    () => projectAnnotations(annotations, timeline),
+    [annotations, timeline],
+  );
+  // The activations, re-expressed on the display axis. The panel is handed only
+  // the frames the subset kept, so it plots the subset without knowing one
+  // exists (see utils/buzzdetectSubset.ts).
+  const displayBuzzdetectData = useMemo(
+    () => subsetBuzzdetectData(buzzdetectData, timeline),
+    [buzzdetectData, timeline],
+  );
+
+  const toSourceAnnotations = useCallback(
+    (displayed: Annotation[]) => reconcileAnnotations(displayed, annotations, hiddenAnnotations, timeline),
+    [annotations, hiddenAnnotations, timeline],
+  );
+  const handleDisplayAnnotationsChange = useCallback(
+    (displayed: Annotation[]) => setAnnotations(toSourceAnnotations(displayed)),
+    [toSourceAnnotations, setAnnotations],
+  );
+  const handleDisplayAnnotationsCommit = useCallback(
+    (displayed: Annotation[]) => handleAnnotationsCommit(toSourceAnnotations(displayed)),
+    [toSourceAnnotations, handleAnnotationsCommit],
+  );
+
+
   // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
   // persistence effect, and every tool CRUD/import handler. See
   // hooks/useAnnotationTools.ts. Instantiated here (before useVideoFrameSource/
@@ -830,6 +861,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // current list without re-subscribing on every annotation change.
   const sortedAnnotationsRef = useRef(sortedAnnotations);
   useEffect(() => { sortedAnnotationsRef.current = sortedAnnotations; }, [sortedAnnotations]);
+  // The same list on the display axis, for the prev/next-annotation enablement
+  // below: that's a question about what the user can navigate to on screen, and
+  // the playhead it's compared against is a display position. (The source-time
+  // ref above stays as-is — persistence and sync must see real file times.)
+  const sortedDisplayAnnotations = useMemo(
+    () => [...displayAnnotations].sort((a, b) => a.start - b.start),
+    [displayAnnotations],
+  );
+  const sortedDisplayAnnotationsRef = useRef(sortedDisplayAnnotations);
+  useEffect(() => { sortedDisplayAnnotationsRef.current = sortedDisplayAnnotations; }, [sortedDisplayAnnotations]);
 
   // Prev/next-annotation button enablement. These depend on playback time, which
   // updates ~50/sec via the currentTime store. Recomputing them through a memo
@@ -844,7 +885,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const canGoNextRef = useRef(false);
   const recomputeCanGo = useCallback(() => {
     const t = currentTimeStoreRef.current.get();
-    const anns = sortedAnnotationsRef.current;
+    const anns = sortedDisplayAnnotationsRef.current;
     const prev = anns.some(a => a.start < t - 0.05);
     const next = anns.some(a => a.start > t + 0.05);
     if (prev !== canGoPrevRef.current) { canGoPrevRef.current = prev; setCanGoPrevAnnotation(prev); }
@@ -855,7 +896,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => currentTimeStoreRef.current.subscribe(recomputeCanGo), [recomputeCanGo]);
   // Also recompute when the annotation set changes (a new/removed annotation can
   // flip enablement without the playhead moving).
-  useEffect(() => { recomputeCanGo(); }, [sortedAnnotations, recomputeCanGo]);
+  useEffect(() => { recomputeCanGo(); }, [sortedDisplayAnnotations, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
 
@@ -1469,42 +1510,31 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [activationStack, clearSelectionEnd]);
 
-  // ── Subset seam ────────────────────────────────────────────────────────────
-  // Annotations are stored in source time (they name audio in the file, and
-  // must keep naming it whatever the view is showing) but drawn and dragged in
-  // display time. See utils/annotationProjection.ts for why the return trip
-  // isn't simply the inverse.
-  const { shown: displayAnnotations, hidden: hiddenAnnotations } = useMemo(
-    () => projectAnnotations(annotations, timeline),
-    [annotations, timeline],
-  );
-  // The activations, re-expressed on the display axis. The panel is handed only
-  // the frames the subset kept, so it plots the subset without knowing one
-  // exists (see utils/buzzdetectSubset.ts).
-  const displayBuzzdetectData = useMemo(
-    () => subsetBuzzdetectData(buzzdetectData, timeline),
-    [buzzdetectData, timeline],
-  );
-
-  const toSourceAnnotations = useCallback(
-    (displayed: Annotation[]) => reconcileAnnotations(displayed, annotations, hiddenAnnotations, timeline),
-    [annotations, hiddenAnnotations, timeline],
-  );
-  const handleDisplayAnnotationsChange = useCallback(
-    (displayed: Annotation[]) => setAnnotations(toSourceAnnotations(displayed)),
-    [toSourceAnnotations, setAnnotations],
-  );
-  const handleDisplayAnnotationsCommit = useCallback(
-    (displayed: Annotation[]) => handleAnnotationsCommit(toSourceAnnotations(displayed)),
-    [toSourceAnnotations, handleAnnotationsCommit],
-  );
-
-  // Hand the engine the axis it should play. Fires on every timeline change
-  // (subset toggled, threshold edited, track swapped); AudioEngine stops
-  // playback rather than remapping audio already scheduled against the old one.
+  // Hand the engine the axis it should play, and bring the rest of the view
+  // onto it. Fires on every timeline change (subset toggled, threshold edited,
+  // track swapped). AudioEngine stops playback rather than remapping audio
+  // already scheduled against the old axis.
+  //
+  // The playhead and any selection are positions on an axis that no longer
+  // exists, so both are reset: the selection outright (its endpoints named
+  // audio by where it sat, and the cuts have moved), the playhead only where it
+  // now points past the end. Skipped on the first run, which is just the empty
+  // initial state.
+  const prevTimelineRef = useRef(timeline);
   useEffect(() => {
     engineRef.current?.setTimeline(timeline);
-  }, [timeline, engineRef]);
+    const changed = prevTimelineRef.current !== timeline;
+    prevTimelineRef.current = timeline;
+    if (!changed) return;
+    handleSelectionChange(null);
+    if (currentTimeRef.current > displayDuration) seek(displayDuration);
+    // A subset can be a few seconds of a multi-hour file. Fit the window to it
+    // rather than leaving the user staring at one narrow band of content in a
+    // screen of blank — the same courtesy handleOpenTrack does for short files.
+    if (displayDuration > 0 && zoomSecRef.current > displayDuration) {
+      setZoomSec(Math.max(MIN_ZOOM_SEC, displayDuration));
+    }
+  }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef]);
 
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {

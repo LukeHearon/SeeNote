@@ -71,6 +71,21 @@ Display settings for the spectrogram: frequency range, intensity, FFT size, and 
 ### buzzdetect panel
 An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below). Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the toolbar. Implemented by `BuzzdetectPanel`.
 
+---
+
+# Subset Mode
+
+Showing only the time where chosen buzzdetect **neurons** fired, with everything else removed from the time axis rather than merely dimmed. The kept stretches are butted together, so they play back end to end with no gap — as if the detections had been extracted into a new file. Toggled from the toolbar's scissors button or `Shift+S`; keyed to whichever neurons are ticked in the buzzdetect panel's settings popover (several are OR'd). Implemented by `utils/subsetTimeline.ts` and `utils/buzzdetectSubset.ts`.
+
+## Source Time
+A position in the media file on disk. What Rust decodes, what **Annotations** are stored and exported in, what buzzdetect frame starts mean.
+
+## Display Time
+A position on the timeline the user sees. What the viewport, **Playhead**, **Selection**, spectrogram x-axis, and the whole playback transport are measured in. Identical to source time unless a subset is active.
+
+## Segment (Span)
+One kept run of source time, placed contiguously on the display axis. Contiguous detections merge into a single segment. A **Selection** or **Annotation** may not cross a segment boundary — two segments that abut on screen are not adjacent in the file.
+
 ## Video Panel (top right)
 Shows video frames when the current track is a video file. Implemented by `VideoPane`.
 
