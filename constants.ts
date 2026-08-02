@@ -80,7 +80,7 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
-  'splitRatio' | 'leftPanelRatio' | 'leftPanelWidthRatio' | 'timeDisplayUnit'>> = {
+  'splitRatio' | 'leftPanelRatio' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,

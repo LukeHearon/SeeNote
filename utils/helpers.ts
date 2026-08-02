@@ -1,5 +1,6 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
+import { formatDateTime } from './datetimeDisplay';
 
 // Clamp `v` into the inclusive range [lo, hi]. Assumes lo <= hi.
 export const clamp = (v: number, lo: number, hi: number): number =>
@@ -25,16 +26,42 @@ export const formatTime = (seconds: number, decimals: number = 2): string => {
   return secStr;
 };
 
-export type TimeDisplayUnit = 'seconds' | 'hms';
+export type TimeDisplayUnit = 'seconds' | 'hms' | 'datetime';
+
+/** The units that are always available — 'datetime' needs a parsed track start. */
+export type ElapsedTimeDisplayUnit = 'seconds' | 'hms';
 
 // Plain seconds with a thousands separator, e.g. "123,456.78s".
 export const formatSeconds = (seconds: number, decimals: number = 2): string =>
   `${seconds.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}s`;
 
+/**
+ * The unit actually used for display. 'datetime' is only honoured when the
+ * track's start time is known (its filename parsed against the project's
+ * timestamp format); otherwise readouts fall back to `fallback`, the last
+ * elapsed-time unit the user chose.
+ */
+export const effectiveTimeUnit = (
+  unit: TimeDisplayUnit,
+  trackStartDate: Date | null,
+  fallback: ElapsedTimeDisplayUnit,
+): TimeDisplayUnit => (unit === 'datetime' && !trackStartDate ? fallback : unit);
+
 // Formats a running time in the user's chosen unit — plain seconds
-// ("123,456.78s") or hours/minutes/seconds ("1h15m00.00s", see formatTime).
-export const formatTimeForUnit = (seconds: number, unit: TimeDisplayUnit, decimals: number = 2): string =>
-  unit === 'hms' ? formatTime(seconds, decimals) : formatSeconds(seconds, decimals);
+// ("123,456.78s"), hours/minutes/seconds ("1h15m00.00s", see formatTime), or a
+// wall-clock datetime ("2026-07-31 16:56:04.25") when the track's start time is
+// known. Without a start time 'datetime' degrades to plain seconds; callers
+// that have a user fallback should resolve it with effectiveTimeUnit first.
+export const formatTimeForUnit = (
+  seconds: number,
+  unit: TimeDisplayUnit,
+  decimals: number = 2,
+  trackStartDate: Date | null = null,
+): string => {
+  if (unit === 'datetime' && trackStartDate) return formatDateTime(trackStartDate, seconds, decimals);
+  if (unit === 'hms') return formatTime(seconds, decimals);
+  return formatSeconds(seconds, decimals);
+};
 
 /**
  * Fewest decimal places that show every one of `values` exactly, up to

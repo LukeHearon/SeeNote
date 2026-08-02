@@ -128,7 +128,12 @@ export interface ProjectUiSettings {
   leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
 
   // Running-time readout format in the toolbar (see components/Toolbar.tsx).
-  timeDisplayUnit?: 'seconds' | 'hms';
+  // 'datetime' needs the track's start time (parsed from its filename via
+  // ProjectSettings.filenameTimeFormat); on a track whose name doesn't parse,
+  // readouts fall back to `fallbackTimeDisplayUnit`.
+  timeDisplayUnit?: 'seconds' | 'hms' | 'datetime';
+  /** Last elapsed-time unit the user picked; the fallback for 'datetime'. */
+  fallbackTimeDisplayUnit?: 'seconds' | 'hms';
 }
 
 /**
@@ -183,6 +188,12 @@ export interface ProjectSettings {
   projectName: string;
   mediaDirectory: ProjectPath;
   annotationDirectory: ProjectPath;
+  /**
+   * Optional pattern describing the timestamp embedded in media filenames
+   * (e.g. "YYMMDD_HHMM"). When a track's name matches, its times can be shown
+   * as wall-clock datetimes. See utils/filenameTime.ts for the token set.
+   */
+  filenameTimeFormat?: string;
   /** Optional directory of buzzdetect `{ident}_buzzdetect.csv` files. */
   buzzdetectDirectory?: ProjectPath;
   /** Frame length in seconds, used as a fallback bin width when it can't be

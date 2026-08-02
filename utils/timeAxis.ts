@@ -16,13 +16,18 @@ const NICE_TIME_STEPS = [
 // Widest label we render is like "123h59m59s" in bold 12px sans-serif.
 const MIN_LABEL_SPACING_PX = 85;
 
+// Datetime labels are wider — the leftmost one spells out a full date
+// ("2026-01-01 23:00"), so ticks have to be spread further apart.
+export const DATETIME_LABEL_SPACING_PX = 145;
+
 /**
  * Pick a "nice" tick spacing (seconds) such that consecutive tick labels
  * have enough pixel space between them not to overlap, given `pixelsPerSecond`.
+ * `minSpacingPx` sizes that gap to how wide the labels actually are.
  */
-export function chooseTimeStep(pixelsPerSecond: number): number {
+export function chooseTimeStep(pixelsPerSecond: number, minSpacingPx: number = MIN_LABEL_SPACING_PX): number {
   for (const step of NICE_TIME_STEPS) {
-    if (step * pixelsPerSecond >= MIN_LABEL_SPACING_PX) return step;
+    if (step * pixelsPerSecond >= minSpacingPx) return step;
   }
   return NICE_TIME_STEPS[NICE_TIME_STEPS.length - 1];
 }

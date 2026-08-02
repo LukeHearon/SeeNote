@@ -8,7 +8,8 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpPanel } from './components/HelpPanel';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
+import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
+import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
 import { isLinux } from './utils/platform';
@@ -381,7 +382,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     volume, setVolume,
     muted, setMuted,
     playheadLocked, setPlayheadLocked,
-    timeDisplayUnit, setTimeDisplayUnit,
+    timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,
     currentTimeRef,
     currentTimeStoreRef,
@@ -772,6 +773,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Toggle shuffle: randomise current allTracks order
   const ident = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
 
+  // Wall-clock start of the open track, read out of its filename with the
+  // project's timestamp pattern. Null (so time readouts stay elapsed) when the
+  // project defines no pattern or this particular name doesn't match it.
+  const trackStartDate = useMemo(() => {
+    const pattern = project.settings.filenameTimeFormat;
+    if (!pattern || !trackPath) return null;
+    return parseFilenameTime(basename(trackPath), pattern);
+  }, [project.settings.filenameTimeFormat, trackPath]);
+
+  // 'datetime' only applies where a start time is known; elsewhere readouts
+  // fall back to the last elapsed unit the user chose.
+  const shownTimeUnit = effectiveTimeUnit(timeDisplayUnit, trackStartDate, fallbackTimeDisplayUnit);
+
   // Find Label "Go": target ident + the match (start/end/label) on a track
   // that isn't currently open. Set right before handleOpenTrack fires;
   // consumed by the effect below once that track's annotations finish loading.
@@ -878,6 +892,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoContrast,
     playheadLocked,
     timeDisplayUnit,
+    fallbackTimeDisplayUnit,
     filePanelCollapsed,
     videoCollapsed,
     splitRatio,
@@ -991,6 +1006,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const savedUi = project.preferences.uiSettings;
     setPlayheadLocked(savedUi?.playheadLocked ?? false);
     setTimeDisplayUnit(savedUi?.timeDisplayUnit ?? 'seconds');
+    setFallbackTimeDisplayUnit(savedUi?.fallbackTimeDisplayUnit ?? (savedUi?.timeDisplayUnit === 'hms' ? 'hms' : 'seconds'));
     setFilePanelCollapsed(savedUi?.filePanelCollapsed ?? false);
     setVideoCollapsed(savedUi?.videoCollapsed ?? false);
     setSplitRatio(savedUi?.splitRatio ?? DEFAULT_SPLIT_RATIO);
@@ -1890,8 +1906,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  setPlayheadLocked(willLock);
                  if (willLock) spectrogramRef.current?.recenterPlayhead();
                }}
-               timeDisplayUnit={timeDisplayUnit}
-               onTimeDisplayUnitChange={setTimeDisplayUnit}
+               timeDisplayUnit={shownTimeUnit}
+               selectedTimeDisplayUnit={timeDisplayUnit}
+               onTimeDisplayUnitChange={chooseTimeDisplayUnit}
+               trackStartDate={trackStartDate}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1930,6 +1948,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 isAudioTrack={isAudioTrack}
                 playheadLocked={playheadLocked}
                 hideLabels={hideLabels}
+                trackStartDate={trackStartDate}
+                timeDisplayUnit={shownTimeUnit}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown
@@ -1950,7 +1970,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  duration={duration}
                  currentTimeStore={currentTimeStoreRef.current}
                  selection={selection}
-                 timeDisplayUnit={timeDisplayUnit}
+                 timeDisplayUnit={shownTimeUnit}
+                 trackStartDate={trackStartDate}
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}
                  neuronColors={buzzdetectNeuronColors}

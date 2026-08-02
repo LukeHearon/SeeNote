@@ -2,7 +2,9 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
-import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
+import { chooseTimeStep, formatRulerTime, DATETIME_LABEL_SPACING_PX } from '../utils/timeAxis';
+import { datetimeTicks, formatDatetimeRulerLabel } from '../utils/datetimeDisplay';
+import type { TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
@@ -61,6 +63,13 @@ interface SpectrogramProps {
   isAudioTrack?: boolean;
   playheadLocked?: boolean;
   hideLabels?: boolean;
+  /**
+   * Wall-clock start of the track, parsed from its filename (null when the
+   * project defines no timestamp format or the name doesn't match). With
+   * `timeDisplayUnit === 'datetime'` the ruler shows real datetimes.
+   */
+  trackStartDate?: Date | null;
+  timeDisplayUnit?: TimeDisplayUnit;
 }
 
 export interface SpectrogramHandle {
@@ -116,6 +125,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   isAudioTrack = false,
   playheadLocked = false,
   hideLabels = false,
+  trackStartDate = null,
+  timeDisplayUnit = 'seconds',
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -452,32 +463,52 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // sub-pixel amounts during playback/panning, which at round zoom levels
     // can flip the chosen step — making labels flicker in and out.
     const timeRange = zoomSec;
-    const timeStep = chooseTimeStep(pixelsPerSecond);
+    // Datetime ticks land on wall-clock boundaries (the hour, the minute) and
+    // carry wider labels, so both the spacing and the tick positions differ
+    // from the elapsed-time ruler's multiples-of-step-from-zero.
+    const datetimeRuler = timeDisplayUnit === 'datetime' && trackStartDate !== null;
+    const timeStep = chooseTimeStep(pixelsPerSecond, datetimeRuler ? DATETIME_LABEL_SPACING_PX : undefined);
 
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
     const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
-    const firstTimeTick = Math.floor(startTime / timeStep) * timeStep;
-    for (let s = firstTimeTick; s <= tickEndTime; s += timeStep) {
-        if (s <= 0) continue;
-        const x = timeToX(s, scrollLeft_live, pixelsPerSecond_live);
-        if (x >= 0 && x <= width) {
-            ctx.beginPath();
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.moveTo(x, height);
-            ctx.lineTo(x, height - 8);
-            ctx.stroke();
+    const ticks = datetimeRuler
+      ? datetimeTicks(trackStartDate, Math.max(startTime, 0), tickEndTime, timeStep)
+      : (() => {
+          const out: number[] = [];
+          const first = Math.floor(startTime / timeStep) * timeStep;
+          for (let s = first; s <= tickEndTime; s += timeStep) if (s > 0) out.push(s);
+          return out;
+        })();
 
-            const timeStr = formatRulerTime(s, timeStep, timeRange);
-            ctx.strokeStyle = 'black';
-            ctx.lineWidth = 3;
-            ctx.strokeText(timeStr, x, height - 10);
-            ctx.fillStyle = 'white';
-            ctx.fillText(timeStr, x, height - 10);
-        }
+    // Only labels actually drawn feed the "what changed since the last label"
+    // logic, so scrolling never leaves a view whose first label lacks its date.
+    let prevLabelled: number | null = null;
+    for (const s of ticks) {
+        const x = timeToX(s, scrollLeft_live, pixelsPerSecond_live);
+        if (x < 0 || x > width) continue;
+        ctx.beginPath();
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.moveTo(x, height);
+        ctx.lineTo(x, height - 8);
+        ctx.stroke();
+
+        const timeStr = datetimeRuler
+          ? formatDatetimeRulerLabel(trackStartDate, s, prevLabelled, timeStep)
+          : formatRulerTime(s, timeStep, timeRange);
+        prevLabelled = s;
+        // The leading full-date label is wide enough to hang off the left edge;
+        // nudge it back on-canvas rather than letting it clip.
+        const half = ctx.measureText(timeStr).width / 2;
+        const labelX = datetimeRuler ? Math.max(x, half + 2) : x;
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 3;
+        ctx.strokeText(timeStr, labelX, height - 10);
+        ctx.fillStyle = 'white';
+        ctx.fillText(timeStr, labelX, height - 10);
     }
 
     // 5. Draw ident text at top of spectrogram
@@ -490,7 +521,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, trackStartDate, timeDisplayUnit]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation

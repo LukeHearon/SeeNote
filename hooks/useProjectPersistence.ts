@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Project, ProjectPreferences, SpectrogramSettings, ProjectUiSettings, VideoMode, BuzzdetectSeriesMode } from '../types';
+import type { TimeDisplayUnit, ElapsedTimeDisplayUnit } from '../utils/helpers';
 
 interface UseProjectPersistenceArgs {
   project: Project;
@@ -26,7 +27,8 @@ interface UseProjectPersistenceArgs {
   videoContrast: number;
   // Panel layout.
   playheadLocked: boolean;
-  timeDisplayUnit: 'seconds' | 'hms';
+  timeDisplayUnit: TimeDisplayUnit;
+  fallbackTimeDisplayUnit: ElapsedTimeDisplayUnit;
   filePanelCollapsed: boolean;
   videoCollapsed: boolean;
   splitRatio: number;
@@ -62,6 +64,7 @@ export function useProjectPersistence({
   videoContrast,
   playheadLocked,
   timeDisplayUnit,
+  fallbackTimeDisplayUnit,
   filePanelCollapsed,
   videoCollapsed,
   splitRatio,
@@ -115,6 +118,7 @@ export function useProjectPersistence({
         videoContrast,
         playheadLocked,
         timeDisplayUnit,
+        fallbackTimeDisplayUnit,
         filePanelCollapsed,
         videoCollapsed,
         splitRatio,
@@ -126,5 +130,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }

@@ -9,6 +9,13 @@ import CollapsibleSection from './CollapsibleSection';
 import DraftNumberInput from './DraftNumberInput';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
 import { normalizeGitRemoteUrl } from '../utils/gitSync';
+import { formatFilenameTime, isUsableFilenameTimePattern } from '../utils/filenameTime';
+
+// A fixed, arbitrary moment used to show what the pattern produces. Its parts
+// are all distinct and unambiguous (month 7 vs day 31, hour 16 vs minute 56),
+// so a mistyped pattern is visible in the preview.
+const PREVIEW_DATE = new Date(2026, 6, 31, 16, 56, 12);
+const PREVIEW_DATE_LABEL = '2026-07-31 4:56 PM';
 
 interface Props {
   projectDir: string;
@@ -26,6 +33,9 @@ interface Props {
   onAnnotationDirChange: (v: string) => void;
   annotationDirPlaceholder?: string;
   annotationDirNotExistMessage: string;
+  // Filename timestamp
+  filenameTimeFormat: string;
+  onFilenameTimeFormatChange: (v: string) => void;
   // Output
   outputRoundingDecimals: number;
   onOutputRoundingDecimalsChange: (n: number) => void;
@@ -57,6 +67,8 @@ export default function ProjectBaseFields({
   onAnnotationDirChange,
   annotationDirPlaceholder,
   annotationDirNotExistMessage,
+  filenameTimeFormat,
+  onFilenameTimeFormatChange,
   outputRoundingDecimals,
   onOutputRoundingDecimalsChange,
   buzzdetectDir,
@@ -131,6 +143,28 @@ export default function ProjectBaseFields({
         placeholder={annotationDirPlaceholder}
         notExistMessage={annotationDirNotExistMessage}
       />
+
+      <div>
+        <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.filenameTimeLabel}</label>
+        <input
+          type="text"
+          value={filenameTimeFormat}
+          onChange={e => onFilenameTimeFormatChange(e.target.value)}
+          placeholder={projectBaseFields.filenameTimePlaceholder}
+          spellCheck={false}
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
+        />
+        <p className="text-gray-600 text-xs mt-1">{projectBaseFields.filenameTimeHelp}</p>
+        {filenameTimeFormat.trim() !== '' && (
+          isUsableFilenameTimePattern(filenameTimeFormat) ? (
+            <p className="text-gray-500 text-xs mt-1 font-mono">
+              E.g. {PREVIEW_DATE_LABEL} → <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}.mp3</span>
+            </p>
+          ) : (
+            <p className="text-amber-500/80 text-xs mt-1">{projectBaseFields.filenameTimeIncomplete}</p>
+          )
+        )}
+      </div>
 
       <div>
         <div className="flex items-center justify-between">

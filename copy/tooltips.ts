@@ -10,6 +10,8 @@ export const tooltips = {
   get jumpToTime() { return getOverride('tooltips.jumpToTime') ?? "Jump to time"; },
   get timeUnitSeconds() { return getOverride('tooltips.timeUnitSeconds') ?? "Show running time in seconds"; },
   get timeUnitHms() { return getOverride('tooltips.timeUnitHms') ?? "Show running time as hours/minutes/seconds"; },
+  get timeUnitDatetime() { return getOverride('tooltips.timeUnitDatetime') ?? "Show times as wall-clock datetimes, from the timestamp in the filename"; },
+  get timeUnitDatetimeUnavailable() { return getOverride('tooltips.timeUnitDatetimeUnavailable') ?? "This filename carries no timestamp SeeNote can read — set a Filename Timestamp format in project settings"; },
   editSelection: (label: string) => `Edit selection ${label}`,
   setSelection: (label: string) => `Set selection ${label}`,
   get filterDisabledByMode() { return getOverride('tooltips.filterDisabledByMode') ?? "Audio filters not available in Fast mode"; },

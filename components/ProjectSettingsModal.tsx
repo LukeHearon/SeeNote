@@ -27,6 +27,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
     project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
+  const [filenameTimeFormat, setFilenameTimeFormat] = useState(project.settings.filenameTimeFormat ?? '');
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
     project.settings.buzzdetectFrameLength ?? null,
   );
@@ -144,6 +145,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
+      filenameTimeFormat: filenameTimeFormat.trim() || undefined,
       outputRoundingDecimals,
       nameGradientColors: gradientColors,
       gitSync: newUrl ? { remoteUrl: newUrl } : undefined,
@@ -339,7 +341,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 annotationDir={annotationDir}
                 onAnnotationDirChange={setAnnotationDir}
                 annotationDirNotExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
-                outputRoundingDecimals={outputRoundingDecimals}
+                filenameTimeFormat={filenameTimeFormat}
+              onFilenameTimeFormatChange={setFilenameTimeFormat}
+              outputRoundingDecimals={outputRoundingDecimals}
                 onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
                 buzzdetectDir={buzzdetectDir}
                 onBuzzdetectDirChange={setBuzzdetectDir}

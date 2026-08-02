@@ -90,3 +90,8 @@ Quick reference for agents. One phrase per file.
 ## Shared types & constants
 - `types.ts` — all shared TypeScript types (Project, Annotation, AnnotationTool, etc.)
 - `constants.ts` — supported file extensions, default values, keybinding constants
+
+## Time display
+- `utils/timeAxis.ts` — tick-spacing cascade and elapsed-time ruler label formatting/parsing
+- `utils/filenameTime.ts` — parses/renders the timestamp embedded in media filenames from a project pattern like `YYMMDD_HHMM`
+- `utils/datetimeDisplay.ts` — wall-clock rendering of track times: readouts, ruler tick alignment and labels, datetime input parsing

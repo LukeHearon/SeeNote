@@ -200,6 +200,7 @@ export function HelpPanel({ open, tab, onTabChange, onClose }: HelpPanelProps) {
               <Section title={helpPanel.guideSections.timeDisplay} target="time-display">
                 <p>{md(helpPanel.guide.timeDisplay.p1)}</p>
                 <p>{md(helpPanel.guide.timeDisplay.p2)}</p>
+                <p>{md(helpPanel.guide.timeDisplay.p3)}</p>
               </Section>
 
               <Section title={helpPanel.guideSections.autoSave}>

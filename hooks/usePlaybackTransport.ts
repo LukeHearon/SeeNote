@@ -7,11 +7,12 @@ import { createCurrentTimeStore } from '../utils/currentTimeStore';
 import { SpectrogramHandle } from '../components/Spectrogram';
 import { Selection, VideoMode, PlaybackTransport } from '../types';
 import { DEFAULT_UI_SETTINGS } from '../constants';
+import type { TimeDisplayUnit, ElapsedTimeDisplayUnit } from '../utils/helpers';
 import type { useExamplePlayer } from './useExamplePlayer';
 import { useHotkeys } from './useHotkeys';
 
 interface UsePlaybackTransportArgs {
-  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: 'seconds' | 'hms' } } };
+  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: TimeDisplayUnit; fallbackTimeDisplayUnit?: ElapsedTimeDisplayUnit } } };
   // Track / mode / selection mirrors driving transport selection & playback.
   isAudioTrack: boolean;
   isAudioTrackRef: React.MutableRefObject<boolean>;
@@ -77,9 +78,19 @@ export function usePlaybackTransport({
 
   // Running-time readout format (see components/Toolbar.tsx). Persisted per-project;
   // single-file mode passes no uiSettings, so it stays plain session state there.
-  const [timeDisplayUnit, setTimeDisplayUnit] = useState<'seconds' | 'hms'>(
+  const [timeDisplayUnit, setTimeDisplayUnit] = useState<TimeDisplayUnit>(
     project.preferences.uiSettings?.timeDisplayUnit ?? 'seconds'
   );
+  // The elapsed-time unit 'datetime' falls back to on a track whose filename
+  // carries no parseable timestamp. Kept in step with every non-datetime pick.
+  const [fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit] = useState<ElapsedTimeDisplayUnit>(
+    project.preferences.uiSettings?.fallbackTimeDisplayUnit
+      ?? (project.preferences.uiSettings?.timeDisplayUnit === 'hms' ? 'hms' : 'seconds')
+  );
+  const chooseTimeDisplayUnit = useCallback((u: TimeDisplayUnit) => {
+    setTimeDisplayUnit(u);
+    if (u !== 'datetime') setFallbackTimeDisplayUnit(u);
+  }, []);
 
   // Volume: 0 to 4 (400% or +12dB approx)
   const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
@@ -426,7 +437,7 @@ export function usePlaybackTransport({
     volume, setVolume,
     muted, setMuted,
     playheadLocked, setPlayheadLocked,
-    timeDisplayUnit, setTimeDisplayUnit,
+    timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,
     videoEngineRef,
     seekRef,

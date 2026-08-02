@@ -8,6 +8,7 @@ import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { parseHMS } from '../utils/timeAxis';
 import { formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
+import { formatTimeOfDay, parseDatetimeInput } from '../utils/datetimeDisplay';
 import { tooltips } from '../copy/tooltips';
 import { useAltHeld } from '../hooks/useAltHeld';
 
@@ -15,13 +16,13 @@ type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not the whole memoized Toolbar — re-renders per tick.
-function TimeDisplay({ currentTimeStore, unit }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit }) {
+function TimeDisplay({ currentTimeStore, unit, trackStartDate }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit; trackStartDate: Date | null }) {
   const [t, setT] = useState(currentTimeStore.get());
   useEffect(() => {
     setT(currentTimeStore.get());
     return currentTimeStore.subscribe(() => setT(currentTimeStore.get()));
   }, [currentTimeStore]);
-  return <>{formatTimeForUnit(t, unit)}</>;
+  return <>{formatTimeForUnit(t, unit, 2, trackStartDate)}</>;
 }
 
 interface ToolbarProps {
@@ -70,8 +71,13 @@ interface ToolbarProps {
   onRestartAudio?: () => void;
   playheadLocked?: boolean;
   onTogglePlayheadLock?: () => void;
+  /** The unit actually in force — already resolved through effectiveTimeUnit. */
   timeDisplayUnit?: TimeDisplayUnit;
+  /** The unit the user picked, which may be 'datetime' on a track that can't show it. */
+  selectedTimeDisplayUnit?: TimeDisplayUnit;
   onTimeDisplayUnitChange?: (u: TimeDisplayUnit) => void;
+  /** Wall-clock start of the track; null when its filename carries no parseable timestamp. */
+  trackStartDate?: Date | null;
 }
 
 // Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
@@ -128,7 +134,9 @@ function Toolbar({
   playheadLocked = false,
   onTogglePlayheadLock,
   timeDisplayUnit = 'seconds',
+  selectedTimeDisplayUnit = timeDisplayUnit,
   onTimeDisplayUnitChange,
+  trackStartDate = null,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -141,7 +149,16 @@ function Toolbar({
   // Current-time box grows to fit long durations (e.g. >100,000s) instead of
   // truncating — width in ch matches the monospace readout, sized off the
   // longest string the box will ever need to show (time at full duration).
-  const timeBoxWidth = `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit).length + 3, 7)}ch`;
+  const timeBoxWidth = `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit, 2, trackStartDate).length + 3, 7)}ch`;
+
+  // Datetime mode shows selection bounds as clock times ("23:00:04.25"), which
+  // need more room than the elapsed-seconds readout the fields were sized for.
+  const datetimeMode = timeDisplayUnit === 'datetime' && trackStartDate !== null;
+  const selFieldWidth = datetimeMode ? 'w-[6.2rem]' : 'w-[3.8rem]';
+  const selInputWidth = datetimeMode ? 'w-[6.9rem]' : 'w-[4.5rem]';
+  // Selection bounds follow the display unit; duration is an interval, so it
+  // stays elapsed time regardless.
+  const formatBound = (t: number): string => datetimeMode ? formatTimeOfDay(trackStartDate!, t, 2) : t.toFixed(2);
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
@@ -231,8 +248,14 @@ function Toolbar({
 
   // Parse a timestamp string into seconds. Accepts: "83.45", "1:23", "1:23.45",
   // "1:23:45", and HMS shorthand ("1h10m", "1h10s", "0h3m01s" — see parseHMS).
+  // In datetime mode a wall-clock time ("23:00", "2026-01-02 01:00:30") is
+  // tried first — there "1:23" means twenty-three past one, not 83 seconds in.
   const parseTimestamp = (raw: string): number | null => {
     const s = raw.trim();
+    if (datetimeMode) {
+      const asDatetime = parseDatetimeInput(s, trackStartDate!, duration);
+      if (asDatetime !== null) return asDatetime;
+    }
     // hh:mm:ss or hh:mm:ss.ff
     const hms = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
     if (hms) return parseInt(hms[1]) * 3600 + parseInt(hms[2]) * 60 + parseFloat(hms[3]);
@@ -406,13 +429,17 @@ function Toolbar({
               className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
               style={{ width: timeBoxWidth }}
               data-tooltip={tooltips.jumpToTime}
-              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit)); }}
+              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit, 2, trackStartDate)); }}
             >
-              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} />
+              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} trackStartDate={trackStartDate} />
             </button>
           )}
 
-          {/* Unit toggle — Seconds vs HMS, minimal highlight on the active side */}
+          {/* Unit toggle — Seconds / HMS / Date, minimal highlight on the active
+              side. Date is only selectable on a track whose filename yielded a
+              start time, so it's disabled rather than silently inert elsewhere.
+              Seconds/HMS highlight off the unit actually in force, so with Date
+              picked on a track that can't show it, the fallback lights up. */}
           <div className="flex items-center gap-0.5" data-help-target="time-unit-toggle">
             <button
               className={`text-[9px] leading-none px-1.5 py-0.5 rounded transition-colors ${timeDisplayUnit === 'seconds' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
@@ -428,6 +455,14 @@ function Toolbar({
             >
               HMS
             </button>
+            <button
+              disabled={!trackStartDate}
+              className={`text-[9px] leading-none px-1.5 py-0.5 rounded transition-colors ${!trackStartDate ? 'text-slate-700 cursor-default' : selectedTimeDisplayUnit === 'datetime' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              onClick={() => onTimeDisplayUnitChange?.('datetime')}
+              data-tooltip={trackStartDate ? tooltips.timeUnitDatetime : tooltips.timeUnitDatetimeUnavailable}
+            >
+              Date
+            </button>
           </div>
         </div>
 
@@ -442,7 +477,7 @@ function Toolbar({
           const fieldInput = (
             <input
               autoFocus
-              className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-[4.5rem] outline-none text-right"
+              className={`text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 ${selInputWidth} outline-none text-right`}
               value={editingTimeRaw}
               onChange={e => setEditingTimeRaw(e.target.value)}
               onKeyDown={e => {
@@ -456,7 +491,7 @@ function Toolbar({
             <div key={field} className="flex items-center gap-1.5">
               {editingTimeField === field ? fieldInput : (
                 <button
-                  className={`text-xs font-mono px-1.5 h-5 w-[3.8rem] bg-slate-700/50 rounded text-center transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
+                  className={`text-xs font-mono px-1.5 h-5 ${selFieldWidth} bg-slate-700/50 rounded text-center transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
                   onClick={() => {
                     if (has) { setEditingTimeField(field); setEditingTimeRaw(editVal); }
                     else if (canCreate) { setEditingTimeField(field); setEditingTimeRaw(''); }
@@ -471,8 +506,8 @@ function Toolbar({
           );
           return (
             <div className="flex flex-col justify-center gap-0.5" data-help-target="selection-time">
-              {renderField('selStart', region.start.toFixed(2), 'from', region.start.toFixed(2))}
-              {renderField('selEnd', region.end.toFixed(2), 'to', region.end.toFixed(2))}
+              {renderField('selStart', formatBound(region.start), 'from', formatBound(region.start))}
+              {renderField('selEnd', formatBound(region.end), 'to', formatBound(region.end))}
               {renderField('selDur', (region.end - region.start).toFixed(2), 'dur', (region.end - region.start).toFixed(2))}
             </div>
           );

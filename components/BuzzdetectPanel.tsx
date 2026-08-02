@@ -68,6 +68,8 @@ interface BuzzdetectPanelProps {
   selection: Selection | null;
   // Toolbar's running-time display unit — the hover readout's time(s) follow it.
   timeDisplayUnit: TimeDisplayUnit;
+  /** Wall-clock start of the track (null when unknown) — see Toolbar. */
+  trackStartDate?: Date | null;
   // Persisted UI state.
   thresholds: Record<string, number>;
   hiddenNeurons: string[];
@@ -101,6 +103,7 @@ export default function BuzzdetectPanel({
   currentTimeStore,
   selection,
   timeDisplayUnit,
+  trackStartDate = null,
   thresholds,
   hiddenNeurons,
   neuronColors: neuronColorOverrides,
@@ -970,7 +973,7 @@ export default function BuzzdetectPanel({
     return (
       <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
         <div className="text-slate-300">
-          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp)}`}
+          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp, trackStartDate)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp, trackStartDate)}`}
         </div>
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {
