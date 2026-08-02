@@ -10,7 +10,7 @@ Quick reference for agents. One phrase per file.
 ## Toolbar & panels
 - `components/Toolbar.tsx` — top toolbar: playback controls, export, zoom, tool selection
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
-- `components/HelpPanel.tsx` — keyboard shortcut reference panel (keep in sync with behavior changes)
+- `components/HelpHighlightHost.tsx` — draws the ghost highlight over a real control when the guide window asks for it
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
@@ -18,6 +18,16 @@ Quick reference for agents. One phrase per file.
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
+
+## Help guide (its own window — `index.html?window=help`)
+- `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/TOC/search derivations (keep in sync with behavior changes)
+- `components/help/HelpWindow.tsx` — three-column shell: nav, page body, table of contents
+- `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
+- `components/help/HelpToc.tsx` — "on this page" rail with scroll-spy
+- `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
+- `components/HelpAnchor.tsx` — a term that ghosts a real control in the main window on hover
+- `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
+- `copy/help.ts` — all guide prose, keyed `help.<page>.<block>`
 
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer
@@ -62,7 +72,7 @@ Quick reference for agents. One phrase per file.
 - `src-tauri/src/commands/git_sync/merge.rs` — three-way merge of the remote tracking branch into HEAD with conflict resolution
 - `src-tauri/src/commands/git_sync/annotate.rs` — annotation set-merge (conflict-free model) and tree-diff change summaries
 - `src-tauri/src/commands/git_sync/repo.rs` — repo setup (open/init, branch, gitignore), staging/commit, and local/remote status checks
-- `src-tauri/src/commands/window.rs` — window bounds and secondary-window (sync guide, copy editor) commands; also `PendingOpenFile` state for OS "Open With" launches
+- `src-tauri/src/commands/window.rs` — window bounds and secondary-window (help guide, sync guide, copy editor) commands; also `PendingOpenFile` state for OS "Open With" launches
 - `src-tauri/src/lib.rs` — registers all commands in `invoke_handler!`; handles OS file-association launches (single-instance relaunch forwarding, `RunEvent::Opened` on macOS, cold-start argv on Windows/Linux)
 
 ## Hooks

@@ -80,7 +80,7 @@ const GROUPS: Group[] = [
     name: 'App',
     bg: 'bg-slate-500', ring: 'ring-slate-300', dot: 'bg-slate-400', text: 'text-slate-300',
     shortcuts: [
-      { codes: ['F1'], display: 'F1', label: 'Toggle help panel' },
+      { codes: ['F1'], display: 'F1', label: 'Open the help guide' },
       { codes: ['Slash'], display: '? (hold)', label: 'Quick tooltips on hover' },
     ],
   },

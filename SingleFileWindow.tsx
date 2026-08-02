@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Bug, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Bug, ChevronDown, HelpCircle } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
+import { HelpHighlightHost } from './components/HelpHighlightHost';
 import Toolbar from './components/Toolbar';
 import LevelRangeSlider from './components/LevelRangeSlider';
 import TooltipLayer from './components/TooltipLayer';
@@ -11,6 +12,7 @@ import { FrequencyScale, Selection, SpectrogramSettings, VideoMode } from './typ
 import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
 import { getFileInfo, toAssetUrl } from './utils/tauriCommands';
+import { showHelpPage } from './utils/helpChannel';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useActivationStack } from './hooks/useActivationStack';
 import { usePanelLayout } from './hooks/usePanelLayout';
@@ -223,6 +225,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // state/handlers — see usePlaybackTransport, useSpectrogramZoomHotkeys, and
   // useBandPassFilter above. What's left here is specific to this window.
   useHotkeys([
+    // Help guide — also fires inside text inputs, since help is universal.
+    { key: 'F1', allowInInput: true, handler: () => showHelpPage('single-file') },
     { key: 'a', mods: ['mod'], handler: () => { if (duration > 0) handleSelectionChange({ start: 0, end: duration }); } },
     { key: 'Escape', allowInInput: true, handler: () => {
         const top = activationStack.popTop();
@@ -264,6 +268,13 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
             className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
           >
             <Bug size={18} />
+          </button>
+          <button
+            onClick={() => showHelpPage('single-file')}
+            className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+            data-tooltip={tooltips.helpGuide}
+          >
+            <HelpCircle size={18} />
           </button>
         </div>
       </header>
@@ -477,6 +488,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         </div>
       </div>
       <TooltipLayer />
+      <HelpHighlightHost />
     </div>
   );
 }

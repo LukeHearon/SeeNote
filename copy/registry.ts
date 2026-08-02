@@ -1,6 +1,6 @@
 import { tooltips } from './tooltips';
 import * as uiExports from './ui';
-import { helpPanel } from './help';
+import { help } from './help';
 import { withoutRecording, withoutOverrides } from './overrideStore';
 
 export function buildRegistry(): Record<string, string> {
@@ -21,7 +21,7 @@ export function buildRegistry(): Record<string, string> {
   withoutRecording(() => withoutOverrides(() => {
     flatten(tooltips, 'tooltips');
     flatten(uiExports, 'ui');
-    flatten({ helpPanel }, '');
+    flatten({ help }, '');
   }));
 
   return out;

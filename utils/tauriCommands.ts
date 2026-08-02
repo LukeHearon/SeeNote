@@ -446,6 +446,18 @@ export function openCopyEditorWindow(): void {
   invoke('open_copy_editor_window').catch(console.error);
 }
 
+/** Open (or focus) the help guide in a separate native window, optionally on a
+ *  specific page. Navigating an already-open window is handled frontend-side
+ *  over the help channel — see utils/helpChannel.ts. */
+export function openHelpWindow(page?: string): void {
+  invoke('open_help_window', { page: page ?? null }).catch(console.error);
+}
+
+/** Close the help guide window (called from inside the window itself). */
+export function closeHelpWindow(): void {
+  invoke('close_help_window').catch(console.error);
+}
+
 /** Open the sync setup guide in a separate native window. */
 export function openSyncGuideWindow(): void {
   invoke('open_sync_guide_window').catch(console.error);
