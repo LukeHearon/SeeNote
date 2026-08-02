@@ -1,0 +1,240 @@
+// Display time ↔ source time.
+//
+// Subset mode ("show only the frames where a neuron fired") hides stretches of
+// the track. Rather than mask them in place, the hidden stretches are removed
+// from the time axis entirely: what's left is butted together into one shorter,
+// contiguous timeline, exactly as if the kept audio had been concatenated into a
+// new file. That's what makes playback and navigation seamless — there is no gap
+// to skip over, because the gap isn't on the axis.
+//
+// Two coordinate systems result:
+//
+//   source time   position in the media file on disk. What Rust decodes, what
+//                 annotations are stored in, what buzzdetect frame starts mean.
+//   display time  position on the timeline the user sees. What the viewport,
+//                 the playhead, the selection, and the spectrogram's x-axis are
+//                 all in.
+//
+// A `Timeline` is the piecewise map between them. Each `Span` is one kept run of
+// source time, placed at `dispStart` on the display axis; within a span the map
+// is a pure offset (slope 1), so nothing is stretched or resampled — a second of
+// audio is a second wide at every zoom, in both systems.
+//
+// The identity timeline (subset off) is a single span covering the whole file,
+// so `toDisplay`/`toSource` are the identity function and every caller can run
+// the same code path whether or not subset mode is on. That's deliberate: there
+// is no "if subsetting" branch scattered through the render and transport code.
+//
+// Spans are sorted, non-overlapping, and non-empty, so every lookup here is a
+// binary search.
+
+export interface Span {
+  /** Start of the kept run, in source time (seconds). */
+  srcStart: number;
+  /** End of the kept run, in source time (seconds), exclusive. */
+  srcEnd: number;
+  /** Where this run begins on the display axis (seconds). */
+  dispStart: number;
+}
+
+export interface Timeline {
+  /** True when display time and source time are the same thing (subset off). */
+  readonly identity: boolean;
+  readonly spans: readonly Span[];
+  /** Length of the display axis: the total kept duration. */
+  readonly duration: number;
+  /** Length of the underlying media file. */
+  readonly sourceDuration: number;
+
+  /**
+   * Source → display. Times inside a hidden stretch have no display position of
+   * their own, so they clamp to the end of the preceding span (or 0 before the
+   * first). Callers that care about the difference test `isKept` first.
+   */
+  toDisplay(src: number): number;
+  /** Display → source. Clamped to [0, sourceDuration]. */
+  toSource(disp: number): number;
+  /** Whether `src` falls inside a kept span (always true for the identity timeline). */
+  isKept(src: number): boolean;
+
+  /** Index of the span containing `disp`, clamped to a real span. */
+  spanIndexAtDisplay(disp: number): number;
+  /**
+   * The spans overlapping the display range [d0, d1), in display order. Empty
+   * only when the range lies entirely outside the timeline.
+   */
+  spansForDisplayRange(d0: number, d1: number): Span[];
+  /**
+   * `disp`, clamped to the span containing `anchor`. This is what keeps a drag
+   * from crossing a cut: two runs that are adjacent on screen are not adjacent
+   * in the file, so a selection spanning them would name audio the user never
+   * saw. Selections and annotations stay inside one span.
+   */
+  clampToSpanOfDisplay(anchor: number, disp: number): number;
+}
+
+/** Index of the last span whose `key` is <= `t`, or 0 when `t` precedes all. */
+function lastSpanAtOrBefore(spans: readonly Span[], t: number, key: (s: Span) => number): number {
+  let lo = 0;
+  let hi = spans.length - 1;
+  let ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (key(spans[mid]) <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
+}
+
+class SpanTimeline implements Timeline {
+  readonly identity: boolean;
+  readonly spans: readonly Span[];
+  readonly duration: number;
+  readonly sourceDuration: number;
+
+  constructor(spans: Span[], sourceDuration: number, identity: boolean) {
+    this.spans = spans;
+    this.sourceDuration = sourceDuration;
+    this.identity = identity;
+    const last = spans[spans.length - 1];
+    this.duration = last ? last.dispStart + (last.srcEnd - last.srcStart) : 0;
+  }
+
+  toDisplay(src: number): number {
+    if (this.identity) return Math.max(0, Math.min(src, this.sourceDuration));
+    if (this.spans.length === 0) return 0;
+    if (src <= this.spans[0].srcStart) return 0;
+    const i = lastSpanAtOrBefore(this.spans, src, s => s.srcStart);
+    const s = this.spans[i];
+    // Past this span's end means `src` is in the hidden stretch that follows it
+    // (or past the last span): clamp to where that span ends on screen.
+    if (src >= s.srcEnd) return s.dispStart + (s.srcEnd - s.srcStart);
+    return s.dispStart + (src - s.srcStart);
+  }
+
+  toSource(disp: number): number {
+    if (this.identity) return Math.max(0, Math.min(disp, this.sourceDuration));
+    if (this.spans.length === 0) return 0;
+    const i = this.spanIndexAtDisplay(disp);
+    const s = this.spans[i];
+    const within = disp - s.dispStart;
+    return Math.max(s.srcStart, Math.min(s.srcStart + within, s.srcEnd));
+  }
+
+  isKept(src: number): boolean {
+    if (this.identity) return src >= 0 && src <= this.sourceDuration;
+    if (this.spans.length === 0) return false;
+    const i = lastSpanAtOrBefore(this.spans, src, s => s.srcStart);
+    const s = this.spans[i];
+    return src >= s.srcStart && src < s.srcEnd;
+  }
+
+  spanIndexAtDisplay(disp: number): number {
+    if (this.spans.length === 0) return 0;
+    if (disp <= 0) return 0;
+    return lastSpanAtOrBefore(this.spans, disp, s => s.dispStart);
+  }
+
+  spansForDisplayRange(d0: number, d1: number): Span[] {
+    if (this.spans.length === 0) return [];
+    const out: Span[] = [];
+    for (let i = this.spanIndexAtDisplay(d0); i < this.spans.length; i++) {
+      const s = this.spans[i];
+      if (s.dispStart >= d1) break;
+      out.push(s);
+    }
+    return out;
+  }
+
+  clampToSpanOfDisplay(anchor: number, disp: number): number {
+    if (this.identity) return disp;
+    if (this.spans.length === 0) return disp;
+    const s = this.spans[this.spanIndexAtDisplay(anchor)];
+    const lo = s.dispStart;
+    const hi = s.dispStart + (s.srcEnd - s.srcStart);
+    return Math.max(lo, Math.min(disp, hi));
+  }
+}
+
+/** The no-subset timeline: display time and source time are the same. */
+export function identityTimeline(sourceDuration: number): Timeline {
+  const dur = Math.max(0, sourceDuration);
+  return new SpanTimeline([{ srcStart: 0, srcEnd: dur, dispStart: 0 }], dur, true);
+}
+
+/**
+ * Build a subset timeline from kept source ranges. Ranges are sorted, clamped to
+ * the file, and merged where they touch or overlap (`mergeTolerance` absorbs the
+ * float round-off between one frame's end and the next one's start, so a run of
+ * back-to-back detections becomes ONE span rather than a chain of abutting ones
+ * — which is what makes a drag across a run of detections legal).
+ *
+ * Returns the identity timeline when the ranges cover everything or there's
+ * nothing to subset by, so callers never have to special-case "subset on but
+ * nothing hidden".
+ */
+export function buildSubsetTimeline(
+  ranges: readonly { start: number; end: number }[],
+  sourceDuration: number,
+  mergeTolerance = 1e-6,
+): Timeline {
+  const dur = Math.max(0, sourceDuration);
+  const clamped = ranges
+    .map(r => ({ start: Math.max(0, Math.min(r.start, dur)), end: Math.max(0, Math.min(r.end, dur)) }))
+    .filter(r => r.end > r.start)
+    .sort((a, b) => a.start - b.start);
+  if (clamped.length === 0) return new SpanTimeline([], dur, false);
+
+  const spans: Span[] = [];
+  let curStart = clamped[0].start;
+  let curEnd = clamped[0].end;
+  let disp = 0;
+  const push = () => {
+    spans.push({ srcStart: curStart, srcEnd: curEnd, dispStart: disp });
+    disp += curEnd - curStart;
+  };
+  for (let i = 1; i < clamped.length; i++) {
+    const r = clamped[i];
+    if (r.start <= curEnd + mergeTolerance) {
+      curEnd = Math.max(curEnd, r.end);
+    } else {
+      push();
+      curStart = r.start;
+      curEnd = r.end;
+    }
+  }
+  push();
+
+  if (spans.length === 1 && spans[0].srcStart <= mergeTolerance && spans[0].srcEnd >= dur - mergeTolerance) {
+    return identityTimeline(dur);
+  }
+  return new SpanTimeline(spans, dur, false);
+}
+
+/**
+ * Project a source-time interval onto the display axis, or null when it lands
+ * entirely in hidden time. Used for annotations and selections: both are stored
+ * in source time and drawn in display time.
+ *
+ * The result is clipped to the span the interval starts in — an interval that
+ * runs past a cut would otherwise appear to cover the run on the far side, which
+ * it doesn't.
+ */
+export function projectIntervalToDisplay(
+  timeline: Timeline,
+  start: number,
+  end: number,
+): { start: number; end: number } | null {
+  if (timeline.identity) return { start, end };
+  if (!timeline.isKept(start) && !timeline.isKept(Math.max(start, end - 1e-9))) {
+    // Neither edge is visible. It still shows if it straddles a whole kept span.
+    const covered = timeline.spans.find(s => s.srcStart >= start && s.srcEnd <= end);
+    if (!covered) return null;
+    const d = covered.dispStart;
+    return { start: d, end: d + (covered.srcEnd - covered.srcStart) };
+  }
+  const dStart = timeline.toDisplay(start);
+  const dEnd = timeline.toDisplay(end);
+  const clippedEnd = timeline.clampToSpanOfDisplay(dStart, dEnd);
+  if (clippedEnd <= dStart) return null;
+  return { start: dStart, end: clippedEnd };
+}
