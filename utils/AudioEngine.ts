@@ -4,12 +4,20 @@
  * ── Time model ────────────────────────────────────────────────────────────────
  *   ctxTime        = audioCtx.currentTime          (monotonic real-audio clock)
  *   playStartCtx   = ctxTime when .start(when) was called for the first sample
- *   playStartMedia = file position (seconds) of that first sample
+ *   playStartMedia = DISPLAY position (seconds) of that first sample
  *   speed          = playbackSpeed (1.0 = normal, 2.0 = twice as fast, etc.)
  *   mediaTime(now) = playStartMedia + (ctxTime - playStartCtx) * speed
  *
  * While paused, getMediaTime() returns the last known position. While buffering
  * before the scheduled start, the playhead is parked at playStartMedia.
+ *
+ * Every time on this engine's public surface — play/seek/getMediaTime/endSec —
+ * is DISPLAY time (see utils/subsetTimeline.ts). With no subset that is the same
+ * thing as a position in the file. With a subset it is a position on the shorter
+ * timeline made of only the kept spans, and the linear relation above still
+ * holds exactly: the display axis is what plays back continuously. Source
+ * positions are derived from it only where the file is actually read
+ * (_prefetchLoop opening streams, the PCM cache).
  *
  * ── Priority invariants ───────────────────────────────────────────────────────
  * 1. Audio heard = samples under the playhead, bit-exactly.
@@ -26,6 +34,15 @@
  *
  * play(startSec, endSec) schedules source.stop() at the exact context time
  * corresponding to endSec, enabling sample-accurate selection playback.
+ *
+ * ── Subset playback (spans) ───────────────────────────────────────────────────
+ * Under a subset timeline the loop reads only within the current span, then
+ * closes that stream, opens one at the next span's source start, and keeps
+ * scheduling against the SAME running `expectedNextCtxStart`. Because chunks are
+ * butted together on the context clock rather than triggered when they arrive,
+ * the join is sample-contiguous — there is no gap to hear. The stream swap is
+ * covered by the HORIZON_SEC of audio already scheduled, so the open latency
+ * never reaches the speakers.
  *
  * ── Time-stretch (pitch-preserving) ───────────────────────────────────────────
  * When playbackSpeed != 1, each PCM chunk is processed through one of two
@@ -65,6 +82,7 @@ import { clamp } from './helpers';
 import { TimeStretchEngine } from './TimeStretchEngine';
 import { PcmCache, PcmCacheSlice } from './PcmCache';
 import { BandPassFilterGraph } from './BandPassFilterGraph';
+import { Timeline, identityTimeline } from './subsetTimeline';
 
 export interface AudioEngineCallbacks {
   /** Called on every animation frame during playback with the current media time. */
@@ -147,7 +165,12 @@ export class AudioEngine implements PlaybackTransport {
   private filePath: string | null = null;
   private fileSampleRate = 44100;
   private fileChannels = 1;
-  private fileDurationSec = 0;
+
+  // ── Timeline ────────────────────────────────────────────────────────────────
+  // Maps the display axis this engine plays back to positions in the file. The
+  // identity timeline (subset off) makes the two the same, so every path below
+  // is written once and runs unchanged either way.
+  private timeline: Timeline = identityTimeline(0);
 
   // ── Playback state ──────────────────────────────────────────────────────────
   // `playId` is incremented on every play() / _cancelPlayback(). Async
@@ -231,7 +254,8 @@ export class AudioEngine implements PlaybackTransport {
     this.filePath = path;
     this.fileSampleRate = info.sample_rate;
     this.fileChannels = info.channels;
-    this.fileDurationSec = info.duration_secs;
+    // Source duration lives on the timeline (identity until a subset is set).
+    this.timeline = identityTimeline(info.duration_secs);
     this.pausedAt = 0;
 
     return {
@@ -240,6 +264,31 @@ export class AudioEngine implements PlaybackTransport {
       durationSec: info.duration_secs,
     };
   }
+
+  /**
+   * Swap the display↔source timeline (subset toggled, threshold changed, …).
+   *
+   * Playback stops rather than being remapped mid-flight: the audio already
+   * scheduled belongs to the old timeline, and everything downstream of the
+   * playhead — the spectrogram, the panel, the selection — is re-derived from
+   * the new one in the same commit. Resuming is one keypress; a playhead that
+   * kept running against a timeline nobody else was using any more would be a
+   * lie about what's being heard.
+   */
+  setTimeline(timeline: Timeline): void {
+    const wasPlaying = this.isPlayingState;
+    this.timeline = timeline;
+    this._cancelPlayback();
+    // Park the cursors at a position the new timeline can express.
+    const t = clamp(this.pausedAt, 0, timeline.duration);
+    this.pausedAt = t;
+    this.pausedAtSched = t;
+    this.pcmCache.cancelPreload();
+    if (wasPlaying) this.callbacks.onPaused();
+  }
+
+  /** The display duration currently in effect (the whole file when no subset). */
+  get displayDuration(): number { return this.timeline.duration; }
 
   /**
    * Start playback from startSec, optionally stopping at endSec.
@@ -326,14 +375,18 @@ export class AudioEngine implements PlaybackTransport {
     // Cache hits are only used at speed=1.0 — the cache stores raw PCM, and
     // re-stretching it through SoundTouch on every replay would defeat the
     // "instant repeat" purpose. Stretched plays go through the prefetch path.
-    if (this.endSec !== null && this.playbackSpeed === 1.0) {
-      const slice = this.pcmCache.find(this.fileSampleRate, startSec, this.endSec);
+    // Under a subset the cache is only consulted for a play that stays inside
+    // one span: the cache holds contiguous file PCM, which a play crossing a cut
+    // is not (see _sourceRangeWithinOneSpan).
+    const cacheSrc = this.endSec !== null ? this._sourceRangeWithinOneSpan(startSec, this.endSec) : null;
+    if (cacheSrc && this.playbackSpeed === 1.0) {
+      const slice = this.pcmCache.find(this.fileSampleRate, cacheSrc.start, cacheSrc.end);
       if (slice) {
         // PCM is already in memory — anchor immediately with minimum scheduling margin.
         this.playStartCtx = this.ctx.currentTime + START_MARGIN_SEC;
         this.playStartCtxSet = true;
-        this._log(`cache hit: ${startSec.toFixed(3)}s–${this.endSec.toFixed(3)}s (${slice.frameCount} frames)`);
-        this._playCached(slice, myPlayId);
+        this._log(`cache hit: ${startSec.toFixed(3)}s–${this.endSec!.toFixed(3)}s (${slice.frameCount} frames)`);
+        this._playCached(slice, startSec, this.endSec!, myPlayId);
         this._rafLoop(myPlayId);
         return;
       }
@@ -438,7 +491,7 @@ export class AudioEngine implements PlaybackTransport {
 
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
-    const target = clamp(sec, 0, this.fileDurationSec);
+    const target = clamp(sec, 0, this.timeline.duration);
     this._cancelPlayback();
     // After _cancelPlayback (which snapshots the pre-seek position), point both
     // cursors at the seek target: an explicit seek discards whatever is still
@@ -524,6 +577,40 @@ export class AudioEngine implements PlaybackTransport {
   // ── Private ─────────────────────────────────────────────────────────────────
 
   /**
+   * The source range a display range [d0, d1] corresponds to, or null when the
+   * range crosses a cut. Everything that treats audio as one contiguous run of
+   * file samples — the PCM cache, the preloader — is only valid within a single
+   * span, so both go through here rather than assuming the two axes agree.
+   */
+  private _sourceRangeWithinOneSpan(d0: number, d1: number): { start: number; end: number } | null {
+    if (this.timeline.identity) return { start: d0, end: d1 };
+    const spans = this.timeline.spans;
+    const i = this.timeline.spanIndexAtDisplay(d0);
+    const s = spans[i];
+    if (!s) return null;
+    const spanEndDisp = s.dispStart + (s.srcEnd - s.srcStart);
+    // A hair of slack: a selection snapped to a span's end can land a float
+    // ulp past it, and that shouldn't cost the cache path.
+    if (d1 > spanEndDisp + 1e-9) return null;
+    return {
+      start: s.srcStart + (d0 - s.dispStart),
+      end: s.srcStart + (d1 - s.dispStart),
+    };
+  }
+
+  /** Source position of a display time known to sit in span `i`. */
+  private _srcInSpan(i: number, disp: number): number {
+    const s = this.timeline.spans[i];
+    return s.srcStart + (disp - s.dispStart);
+  }
+
+  /** Display position of a source time known to sit in span `i`. */
+  private _dispInSpan(i: number, src: number): number {
+    const s = this.timeline.spans[i];
+    return s.dispStart + (src - s.srcStart);
+  }
+
+  /**
    * Output latency (seconds) between scheduling a sample at ctx.currentTime and
    * it actually reaching the speakers. `ctx.currentTime` advances the instant a
    * buffer is scheduled, but the audio subsystem buffers it for this long before
@@ -564,7 +651,7 @@ export class AudioEngine implements PlaybackTransport {
     const lagSec = compensated ? this.filterGraph.getDelaySec() + this._outputLatencySec() : 0;
     const elapsedCtx = this.ctx.currentTime - this.playStartCtx - lagSec;
     if (elapsedCtx < 0) return this.playStartMedia;
-    const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.fileDurationSec);
+    const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.timeline.duration);
     // Clamp to endSec so the playhead never visually overshoots the selection
     // end during the window between source.stop() and _cancelPlayback().
     if (this.endSec !== null && t >= this.endSec) return this.endSec;
@@ -654,22 +741,45 @@ export class AudioEngine implements PlaybackTransport {
     const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
 
     // Open the Rust PcmStream at the playback start position (or, for a
-    // continuation, at the point the in-flight audio runs out).
+    // continuation, at the point the in-flight audio runs out). The cursor is a
+    // DISPLAY position; the span it falls in says where in the file to open.
     const openAt = continueFromCtx !== undefined ? this.schedCursor : this.playStartMedia;
-    // A continuation whose resume point is already at/past EOF has nothing to
-    // schedule (the cleared selection ended at the end of the file) — let the
+    // A continuation whose resume point is already at/past the end has nothing to
+    // schedule (the cleared selection ended at the end of the timeline) — let the
     // audio still in flight play out and end naturally.
-    if (continueFromCtx !== undefined && openAt >= this.fileDurationSec) {
+    if (continueFromCtx !== undefined && openAt >= this.timeline.duration) {
       await this._endAfterQueueDrains(myPlayId, myEndBoundEpoch);
       return;
     }
-    let handle;
-    try {
-      handle = await startPcmStream(path, openAt);
-    } catch (err) {
+    const spans = this.timeline.spans;
+    let spanIdx = this.timeline.spanIndexAtDisplay(openAt);
+
+    // Opens a stream at a source position and installs it as the active one.
+    // Returns null on failure (callers below decide how fatal that is).
+    const openStreamAt = async (srcSec: number) => {
+      let h;
+      try {
+        h = await startPcmStream(path, srcSec);
+      } catch (err) {
+        if (this.playId !== myPlayId) return null;
+        console.error('AudioEngine: startPcmStream failed', err);
+        this._log(`startPcmStream failed: ${String(err)}`, 'error');
+        return null;
+      }
+      if (this.playId !== myPlayId) {
+        closePcmStream(h.stream_id).catch(() => {});
+        return null;
+      }
+      this._log(
+        `stream opened id=${h.stream_id} at ${srcSec.toFixed(3)}s sr=${h.sample_rate} ch=${h.channels} total_frames=${h.total_frames}`,
+      );
+      this.streamId = h.stream_id;
+      return h;
+    };
+
+    let handle = await openStreamAt(this._srcInSpan(spanIdx, openAt));
+    if (!handle) {
       if (this.playId !== myPlayId) return;
-      console.error('AudioEngine: startPcmStream failed', err);
-      this._log(`startPcmStream failed: ${String(err)}`, 'error');
       if (continueFromCtx !== undefined) {
         // The already-scheduled audio is fine; only the extension failed. Cutting
         // it off would be worse than the missing continuation.
@@ -683,19 +793,12 @@ export class AudioEngine implements PlaybackTransport {
       this.callbacks.onPaused();
       return;
     }
-    this._log(
-      `stream opened id=${handle.stream_id} sr=${handle.sample_rate} ch=${handle.channels} total_frames=${handle.total_frames}`,
-    );
-    if (this.playId !== myPlayId) {
-      closePcmStream(handle.stream_id).catch(() => {});
-      return;
-    }
-    this.streamId = handle.stream_id;
 
     // `expectedNextCtxStart` tracks where the next chunk should be scheduled.
     // It's anchored when the first chunk arrives (or, for a continuation, seeded
     // from the tail of the audio already scheduled) and advances by each chunk's
-    // duration.
+    // duration. It is NOT reset when a span boundary swaps the stream — that's
+    // exactly what makes the join inaudible.
     let expectedNextCtxStart = continueFromCtx ?? 0;
     let reachedEnd = false;
 
@@ -716,23 +819,56 @@ export class AudioEngine implements PlaybackTransport {
         continue;
       }
 
-      // Fetch the next chunk from Rust
-      let chunk;
-      try {
-        chunk = await readPcmChunk(handle.stream_id, chunkFrames);
-      } catch (err) {
-        if (this.playId !== myPlayId) break;
-        console.error('AudioEngine: readPcmChunk failed', err);
-        this._log(`readPcmChunk failed: ${String(err)}`, 'error');
-        // A mid-stream decode error would otherwise leave the engine "playing"
-        // silence with no way to recover the UI. Cancel cleanly and notify.
-        this._cancelPlayback();
-        this.callbacks.onPaused();
-        return;
-      }
-      if (this.playId !== myPlayId) break;
+      // Never read past the end of the current span — the samples after it
+      // belong to time this timeline doesn't show. Rounded (not floored) so a
+      // span whose length isn't a whole number of frames doesn't shed its last
+      // partial frame and leave a sub-millisecond hole at every join.
+      const span = spans[spanIdx];
+      const framesLeftInSpan = Math.round((span.srcEnd - this._srcInSpan(spanIdx, this.schedCursor)) * sr);
 
-      if (chunk.frames_read === 0) {
+      // Fetch the next chunk from Rust. A span with nothing left doesn't get a
+      // read at all — it goes straight to the advance below.
+      let chunk;
+      if (framesLeftInSpan > 0) {
+        try {
+          chunk = await readPcmChunk(handle.stream_id, Math.min(chunkFrames, framesLeftInSpan));
+        } catch (err) {
+          if (this.playId !== myPlayId) break;
+          console.error('AudioEngine: readPcmChunk failed', err);
+          this._log(`readPcmChunk failed: ${String(err)}`, 'error');
+          // A mid-stream decode error would otherwise leave the engine "playing"
+          // silence with no way to recover the UI. Cancel cleanly and notify.
+          this._cancelPlayback();
+          this.callbacks.onPaused();
+          return;
+        }
+        if (this.playId !== myPlayId) break;
+      } else {
+        chunk = null;
+      }
+
+      if (!chunk || chunk.frames_read === 0) {
+        // This span is spent. If another follows, swap streams and keep going:
+        // the ctx clock is untouched, so the next span's first sample lands
+        // immediately after this one's last. The swap happens HORIZON_SEC ahead
+        // of the playhead, so its latency is never heard.
+        if (spanIdx + 1 < spans.length) {
+          const prevStreamId = handle.stream_id;
+          this.streamId = null;
+          closePcmStream(prevStreamId).catch(() => {});
+          spanIdx++;
+          this.schedCursor = spans[spanIdx].dispStart;
+          const next = await openStreamAt(spans[spanIdx].srcStart);
+          if (!next) {
+            // Can't reach the next span. Let the scheduled audio drain and stop
+            // there rather than cutting it off mid-word.
+            reachedEnd = true;
+            break;
+          }
+          handle = next;
+          continue;
+        }
+
         // EOF — drain the phase vocoder tail (~fftSize/2 samples of unflushed
         // OLA buffer) so the trailing audio doesn't get cut off. Without this,
         // selection plays at slow speed lose noticeable audio at the end.
@@ -764,7 +900,14 @@ export class AudioEngine implements PlaybackTransport {
         break;
       }
 
-      const chunkMediaStart = chunk.start_frame / sr;
+      // Where this chunk sits on the DISPLAY axis. Rust reports its position in
+      // the file; the span it was read from converts that back. Clamped to the
+      // span's own start so a decoder that hands back a frame or two of seek
+      // margin can't place the chunk before the span begins.
+      const chunkMediaStart = Math.max(
+        spans[spanIdx].dispStart,
+        this._dispInSpan(spanIdx, chunk.start_frame / sr),
+      );
       const inputFrames = chunk.frames_read;
       const inputDurationSec = inputFrames / sr;
       const chunkMediaEnd = chunkMediaStart + inputDurationSec;
@@ -911,22 +1054,33 @@ export class AudioEngine implements PlaybackTransport {
   /**
    * Pre-decode and cache the PCM for [startSec, endSec] so subsequent plays in
    * that range start instantaneously. Delegates to PcmCache; see preloadRange there.
+   *
+   * Times are display positions. A range crossing a cut isn't one contiguous run
+   * of file samples, so there's nothing the cache could hold for it — those plays
+   * go through the streaming path, which handles the join.
    */
   async preloadRange(startSec: number, endSec: number): Promise<void> {
     if (!this.filePath) return;
-    await this.pcmCache.preloadRange(this.filePath, this.fileChannels, this.fileSampleRate, startSec, endSec);
+    const src = this._sourceRangeWithinOneSpan(startSec, endSec);
+    if (!src) return;
+    await this.pcmCache.preloadRange(this.filePath, this.fileChannels, this.fileSampleRate, src.start, src.end);
   }
 
   /**
    * Schedule a cached PCM slice directly, bypassing all Rust IPC.
    * Called from play() on a cache hit. Only used at speed=1.0 (see play()).
    * Does NOT start the rAF loop — caller does that.
+   *
+   * `dispStart`/`dispEnd` are the play's own display bounds. The slice's own
+   * startSec/endSec are file positions, which under a subset are a different
+   * number for the same audio — the queue and the scheduling cursor are in
+   * display time like everything else here.
    */
-  private _playCached(slice: PcmCacheSlice, myPlayId: number): void {
+  private _playCached(slice: PcmCacheSlice, dispStart: number, dispEnd: number, myPlayId: number): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const sr = this.fileSampleRate;
-    const { entry, startFrame, frameCount, startSec, endSec } = slice;
+    const { entry, startFrame, frameCount } = slice;
 
     const audioBuffer = ctx.createBuffer(entry.channels.length, frameCount, sr);
     for (let c = 0; c < entry.channels.length; c++) {
@@ -941,15 +1095,15 @@ export class AudioEngine implements PlaybackTransport {
     const ctxEnd = this.playStartCtx + frameCount / sr;
     this.queue.push({
       source,
-      mediaStart: startSec,
-      mediaEnd: endSec,
+      mediaStart: dispStart,
+      mediaEnd: dispEnd,
       ctxStart: this.playStartCtx,
       ctxEnd,
       // The slice IS the selection: nothing was truncated, so there's nothing for
       // clearEndSec() to reclaim here. Its cover is the rest of the slice.
       naturalCtxEnd: ctxEnd,
     });
-    this.schedCursor = endSec;
+    this.schedCursor = dispEnd;
     this.chunksScheduled = 1;
     // The cached slice covers exactly [startSec, endSec] and nothing follows it,
     // so the end bound is committed the moment it's scheduled.
