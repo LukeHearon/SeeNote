@@ -15,6 +15,12 @@ export const help = {
   get searchPlaceholder() { return getOverride('help.searchPlaceholder') ?? "Search the guide"; },
   get searchNoResults() { return getOverride('help.searchNoResults') ?? "No matching sections"; },
 
+  live: {
+    get connected() { return getOverride('help.live.connected') ?? "Live — this drives your project"; },
+    get demo() { return getOverride('help.live.demo') ?? "Demo — open a project to make this live"; },
+    connectedTo: (trackName: string) => `Live — driving ${trackName}`,
+  },
+
   parts: {
     get start() { return getOverride('help.parts.start') ?? "Getting started"; },
     get workspace() { return getOverride('help.parts.workspace') ?? "The workspace"; },

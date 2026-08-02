@@ -7,6 +7,7 @@ import { HelpToc } from './HelpToc';
 import { help } from '../../copy/help';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import { onHelpMessage, postHelpMessage } from '../../utils/helpChannel';
+import { useLiveClient } from '../../utils/liveBridge';
 import { closeHelpWindow } from '../../utils/tauriCommands';
 
 /**
@@ -23,6 +24,9 @@ export function HelpWindow() {
     return findPage(requested) ? requested! : DEFAULT_PAGE_ID;
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Mirrors the main window's toolbar state so the guide's embedded controls
+  // drive the open project — see utils/liveBridge.ts.
+  const liveClient = useLiveClient();
 
   useEffect(() => onHelpMessage(msg => {
     if (msg.type === 'navigate' && findPage(msg.page)) setPageId(msg.page);
@@ -64,7 +68,7 @@ export function HelpWindow() {
           <HelpNav activePageId={page.id} onSelect={setPageId} />
         </div>
         <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto px-8 py-6">
-          <HelpContent page={page} />
+          <HelpContent page={page} client={liveClient} />
         </div>
         <HelpToc page={page} scrollRef={scrollRef} />
       </div>

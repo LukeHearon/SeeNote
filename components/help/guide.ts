@@ -1,4 +1,5 @@
 import { help } from '../../copy/help';
+import type { LiveControlId } from './LiveControls';
 
 // The help guide's structure. Text lives in copy/help.ts (so the copy editor can
 // reach it); this file says what the pages are, what order they come in, and
@@ -18,6 +19,8 @@ export type Block =
   | { kind: 'ul'; items: string[] }
   /** Subsection heading. Also becomes a table-of-contents entry. */
   | { kind: 'h'; id: string; text: string }
+  /** A working copy of one of the app's controls, wired to the open project. */
+  | { kind: 'live'; control: LiveControlId }
   /** The interactive keyboard-shortcut map (components/KeyboardShortcutsView). */
   | { kind: 'shortcuts' };
 
@@ -273,10 +276,12 @@ export const GUIDE: Part[] = [
         target: 'transport-buttons',
         blocks: () => [
           { kind: 'p', text: help.transport.p1 },
+          { kind: 'live', control: 'transport' },
           { kind: 'h', id: 'lock', text: help.transport.h_lock },
           { kind: 'p', text: help.transport.p_lock },
           { kind: 'h', id: 'volume', text: help.transport.h_volume },
           { kind: 'p', text: help.transport.p_volume },
+          { kind: 'live', control: 'volume' },
         ],
       },
       {
@@ -285,8 +290,10 @@ export const GUIDE: Part[] = [
         target: 'time-display',
         blocks: () => [
           { kind: 'p', text: help.timeDisplay.p1 },
+          { kind: 'live', control: 'time' },
           { kind: 'h', id: 'selection', text: help.timeDisplay.h_selection },
           { kind: 'p', text: help.timeDisplay.p_selection },
+          { kind: 'live', control: 'selection' },
         ],
       },
       {
@@ -295,6 +302,7 @@ export const GUIDE: Part[] = [
         target: 'playback-speed',
         blocks: () => [
           { kind: 'p', text: help.speed.p1 },
+          { kind: 'live', control: 'speed' },
           { kind: 'note', text: help.speed.note1 },
         ],
       },
@@ -306,6 +314,7 @@ export const GUIDE: Part[] = [
           { kind: 'p', text: help.filter.p1 },
           { kind: 'h', id: 'tuning', text: help.filter.h_tuning },
           { kind: 'p', text: help.filter.p_tuning },
+          { kind: 'live', control: 'filter' },
           { kind: 'h', id: 'toggle', text: help.filter.h_toggle },
           { kind: 'p', text: help.filter.p_toggle },
           { kind: 'p', text: help.filter.p_esc },

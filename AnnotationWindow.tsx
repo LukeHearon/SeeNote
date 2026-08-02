@@ -12,6 +12,8 @@ import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basen
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
+import { useLiveHost } from './utils/liveBridge';
+import { isFilterAvailable } from './utils/videoPlaybackMode';
 import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -47,7 +49,7 @@ import FindLabelModal from './components/FindLabelModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
-import Toolbar from './components/Toolbar';
+import Toolbar, { speedRangeFor } from './components/Toolbar';
 import LevelRangeSlider from './components/LevelRangeSlider';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
 import { tooltips } from './copy/tooltips';
@@ -1386,6 +1388,68 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       a.id === boundAnnotationId ? { ...a, start, end } : a
     ));
   }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek]);
+
+  const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
+
+  // Mirror the toolbar's state into the help guide window and accept control
+  // input back from it, so the controls the guide documents are the live ones.
+  // Both sides here are the exact values the Toolbar below is given — the
+  // guide renders the same components against them.
+  useLiveHost(
+    {
+      trackName: trackName || null,
+      hasTrack: !!videoSrc,
+      duration,
+      isPlaying,
+      isBuffering: isBuffering || exampleAudioActive,
+      volume,
+      muted,
+      playbackSpeed,
+      lastDefinedSpeed,
+      speedMin: liveSpeedRange.min,
+      speedMax: liveSpeedRange.max,
+      selection,
+      timeDisplayUnit,
+      canGoPrevAnnotation,
+      canGoNextAnnotation,
+      playheadLocked,
+      filterToolActive,
+      filterUnavailable: !isFilterAvailable(isAudioTrack, videoMode),
+      filterEnabled: bandPassFilter !== null,
+      filterStrength,
+      bandPassFilter,
+      buzzdetectAvailable: project.buzzdetectDirectoryAbs !== null,
+      buzzdetectEnabled,
+    },
+    {
+      play: togglePlay,
+      seek: (t, scroll) => seek(t, scroll),
+      skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      skipToEnd: () => { seek(duration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      prevAnnotation: () => spectrogramRef.current?.goToPrevAnnotation(),
+      nextAnnotation: () => spectrogramRef.current?.goToNextAnnotation(),
+      togglePlayheadLock: () => {
+        const willLock = !playheadLocked;
+        setPlayheadLocked(willLock);
+        if (willLock) spectrogramRef.current?.recenterPlayhead();
+      },
+      setVolume,
+      setMuted,
+      setPlaybackSpeed,
+      setLastDefinedSpeed,
+      setTimeDisplayUnit,
+      setSelection: s => { handleSelectionChange(s); handleToolbarAnnotationBoundsChange(s.start, s.end); },
+      toggleFilterTool: handleToggleFilterTool,
+      setFilterStrength: s => {
+        setFilterStrength(s);
+        if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
+      },
+      enableFilter: handleEnableBandPassFilter,
+      disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
+      toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
+    },
+    currentTimeStoreRef.current,
+  );
 
 
   return (

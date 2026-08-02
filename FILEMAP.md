@@ -8,7 +8,7 @@ Quick reference for agents. One phrase per file.
 - `index.tsx` / `main.tsx` — Vite/React mount point
 
 ## Toolbar & panels
-- `components/Toolbar.tsx` — top toolbar: playback controls, export, zoom, tool selection
+- `components/Toolbar.tsx` — composes the shared controls below into the strip above the spectrogram
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
 - `components/HelpHighlightHost.tsx` — draws the ghost highlight over a real control when the guide window asks for it
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
@@ -25,9 +25,19 @@ Quick reference for agents. One phrase per file.
 - `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
 - `components/help/HelpToc.tsx` — "on this page" rail with scroll-spy
 - `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
+- `components/help/LiveControls.tsx` — embeds the real toolbar controls in the guide, driving the open project (or local demo state when none is open)
 - `components/HelpAnchor.tsx` — a term that ghosts a real control in the main window on hover
 - `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
+- `utils/liveBridge.ts` — BroadcastChannel mirroring toolbar state to the guide and control actions back (`useLiveHost` / `useLiveClient`)
 - `copy/help.ts` — all guide prose, keyed `help.<page>.<block>`
+
+## Toolbar controls (shared by the toolbar and the guide's live copies)
+- `components/controls/TransportButtons.tsx` — start/prev/play/next/end plus the playhead lock
+- `components/controls/TimeReadout.tsx` — running playhead time, click-to-type, Seconds/HMS toggle
+- `components/controls/SelectionTimeFields.tsx` — the from/to/dur trio
+- `components/controls/PlaybackSpeedControl.tsx` — speed readout, wheel-to-nudge, 1× toggle
+- `components/controls/FilterControls.tsx` — band-pass tool button and dry/wet strength slider
+- `components/VolumeControl.tsx` — volume slider with 2× gain boost and mute
 
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer

@@ -5,7 +5,7 @@ import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import Toolbar from './components/Toolbar';
+import Toolbar, { speedRangeFor } from './components/Toolbar';
 import LevelRangeSlider from './components/LevelRangeSlider';
 import TooltipLayer from './components/TooltipLayer';
 import { FrequencyScale, Selection, SpectrogramSettings, VideoMode } from './types';
@@ -13,6 +13,8 @@ import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_S
 import { basename } from './utils/helpers';
 import { getFileInfo, toAssetUrl } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
+import { useLiveHost } from './utils/liveBridge';
+import { isFilterAvailable } from './utils/videoPlaybackMode';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useActivationStack } from './hooks/useActivationStack';
 import { usePanelLayout } from './hooks/usePanelLayout';
@@ -248,6 +250,68 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         }
     }},
   ]);
+
+  const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
+
+  // Mirror the toolbar into the help guide window, same as AnnotationWindow —
+  // opening the guide from single-file mode gets live controls too. Only one of
+  // the two windows is ever mounted, so there's never a second host.
+  useLiveHost(
+    {
+      trackName: trackName || null,
+      hasTrack: !!videoSrc,
+      duration,
+      isPlaying,
+      isBuffering,
+      volume,
+      muted,
+      playbackSpeed,
+      lastDefinedSpeed,
+      speedMin: liveSpeedRange.min,
+      speedMax: liveSpeedRange.max,
+      selection,
+      timeDisplayUnit,
+      // Single-file mode has no annotations to step between.
+      canGoPrevAnnotation: false,
+      canGoNextAnnotation: false,
+      playheadLocked,
+      filterToolActive,
+      filterUnavailable: !isFilterAvailable(isAudioTrack, videoMode),
+      filterEnabled: bandPassFilter !== null,
+      filterStrength,
+      bandPassFilter,
+      buzzdetectAvailable: false,
+      buzzdetectEnabled: false,
+    },
+    {
+      play: togglePlay,
+      seek: (t, scroll) => seek(t, scroll),
+      skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      skipToEnd: () => { seek(duration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      prevAnnotation: () => {},
+      nextAnnotation: () => {},
+      togglePlayheadLock: () => {
+        const willLock = !playheadLocked;
+        setPlayheadLocked(willLock);
+        if (willLock) spectrogramRef.current?.recenterPlayhead();
+      },
+      setVolume,
+      setMuted,
+      setPlaybackSpeed,
+      setLastDefinedSpeed,
+      setTimeDisplayUnit,
+      setSelection: handleSelectionChange,
+      toggleFilterTool: handleToggleFilterTool,
+      setFilterStrength: s => {
+        setFilterStrength(s);
+        if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
+      },
+      enableFilter: handleEnableBandPassFilter,
+      disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
+      toggleBuzzdetect: () => {},
+    },
+    currentTimeStoreRef.current,
+  );
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">

@@ -2,7 +2,9 @@ import React from 'react';
 import { Block, Page } from './guide';
 import { HelpAnchor } from '../HelpAnchor';
 import { KeyboardShortcutsView } from '../KeyboardShortcutsView';
+import { LiveControl } from './LiveControls';
 import { renderInlineMarkdown } from '../../utils/renderInlineMarkdown';
+import type { LiveClient } from '../../utils/liveBridge';
 
 const kbdRenderer = (text: string, key: number) => (
   <kbd key={key} className="font-mono bg-slate-700 px-1 rounded text-slate-200">{text}</kbd>
@@ -16,8 +18,10 @@ export function md(text: string): React.ReactNode[] {
   return renderInlineMarkdown(text, { codeRenderer: kbdRenderer, anchorRenderer });
 }
 
-function renderBlock(block: Block, key: number): React.ReactNode {
+function renderBlock(block: Block, key: number, client: LiveClient): React.ReactNode {
   switch (block.kind) {
+    case 'live':
+      return <LiveControl key={key} id={block.control} client={client} />;
     case 'h':
       return (
         <h2
@@ -46,7 +50,7 @@ function renderBlock(block: Block, key: number): React.ReactNode {
   }
 }
 
-export function HelpContent({ page }: { page: Page }) {
+export function HelpContent({ page, client }: { page: Page; client: LiveClient }) {
   return (
     <article className={`space-y-3 text-sm text-slate-300 ${page.wide ? '' : 'max-w-3xl'}`}>
       <header className="pb-2">
@@ -58,7 +62,7 @@ export function HelpContent({ page }: { page: Page }) {
           <h1 className="text-2xl font-bold text-white">{page.title()}</h1>
         )}
       </header>
-      {page.blocks().map(renderBlock)}
+      {page.blocks().map((block, i) => renderBlock(block, i, client))}
     </article>
   );
 }
