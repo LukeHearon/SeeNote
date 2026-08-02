@@ -4,6 +4,7 @@ import { yToFreq } from '../utils/audioProcessing';
 import { makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helpers';
 import { xToTime, maxScroll as computeMaxScroll } from '../utils/viewportTransform';
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
+import type { Timeline } from '../utils/subsetTimeline';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
 export interface SpectrogramInteractionParams {
@@ -16,6 +17,12 @@ export interface SpectrogramInteractionParams {
   scrollLeft: number;
   pixelsPerSecond: number;
   duration: number;
+  // Display->source map, read live. Under a subset it says where the cuts are,
+  // which is what keeps a drag inside one span: two runs that are adjacent on
+  // screen aren't adjacent in the file, so a selection or annotation spanning
+  // them would name audio the user never saw. Identity when subset is off, and
+  // then every clamp below is a no-op.
+  timelineRef: React.MutableRefObject<Timeline>;
   // Props / callbacks the interaction needs.
   annotations: Annotation[];
   selection: Selection | null;
@@ -90,6 +97,7 @@ export function useSpectrogramInteraction({
   scrollLeft,
   pixelsPerSecond,
   duration,
+  timelineRef,
   annotations,
   selection,
   boundAnnotationId,
@@ -213,20 +221,25 @@ export function useSpectrogramInteraction({
   const processDragAtClientX = useCallback((clientX: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const t = clamp(
+    const rawT = clamp(
       xToTime(clientX - rect.left, scrollLeftRef.current, pixelsPerSecondRef.current),
       0,
       durationRef.current,
     );
+    // Every gesture below is anchored somewhere — where the drag began, or the
+    // edge that isn't moving — and the pointer is held inside that anchor's
+    // span. The identity timeline returns the pointer time unchanged.
+    const held = (anchor: number) => timelineRef.current.clampToSpanOfDisplay(anchor, rawT);
 
     const ca = creatingAnnotationRef.current;
-    if (ca) { setCreatingAnnotation({ ...ca, current: t }); return; }
+    if (ca) { setCreatingAnnotation({ ...ca, current: held(ca.start) }); return; }
 
     const cs = creatingSelectionRef.current;
     if (cs) {
-      setCreatingSelection({ ...cs, current: t });
-      const liveStart = Math.min(cs.start, t);
-      const liveEnd = Math.max(cs.start, t);
+      const ct = held(cs.start);
+      setCreatingSelection({ ...cs, current: ct });
+      const liveStart = Math.min(cs.start, ct);
+      const liveEnd = Math.max(cs.start, ct);
       onSelectionChangeRef.current({ start: liveStart, end: liveEnd });
       return;
     }
@@ -234,8 +247,9 @@ export function useSpectrogramInteraction({
     const ra = resizingAnnotationRef.current;
     if (ra) {
       const updated = updateAnnotation(annotationsRef.current, ra.id, a => {
-        if (ra.side === 'start') return { ...a, start: Math.min(t, a.end - 0.05) };
-        return { ...a, end: Math.max(t, a.start + 0.05) };
+        // Anchored on the edge that isn't moving.
+        if (ra.side === 'start') return { ...a, start: Math.min(held(a.end), a.end - 0.05) };
+        return { ...a, end: Math.max(held(a.start), a.start + 0.05) };
       });
       pendingAnnotationsRef.current = updated;
       onAnnotationsChangeRef.current(updated);
@@ -250,7 +264,12 @@ export function useSpectrogramInteraction({
     if (da) {
       const updated = updateAnnotation(annotationsRef.current, da.id, a => {
         const dur = a.end - a.start;
-        const newStart = clamp(t - da.startOffset, 0, durationRef.current - dur);
+        // Whole-annotation move: both edges must land in the span it's already
+        // in, so the pointer is held there and the far edge clamped too.
+        const tl = timelineRef.current;
+        const spanEnd = tl.clampToSpanOfDisplay(a.start, durationRef.current);
+        const spanStart = tl.clampToSpanOfDisplay(a.start, 0);
+        const newStart = clamp(held(a.start) - da.startOffset, spanStart, Math.max(spanStart, spanEnd - dur));
         return { ...a, start: newStart, end: newStart + dur };
       });
       pendingAnnotationsRef.current = updated;
@@ -263,8 +282,8 @@ export function useSpectrogramInteraction({
     if (rsh && sel) {
       let newStart = sel.start;
       let newEnd = sel.end;
-      if (rsh === 'start') newStart = Math.min(t, sel.end - 0.05);
-      else newEnd = Math.max(t, sel.start + 0.05);
+      if (rsh === 'start') newStart = Math.min(held(sel.end), sel.end - 0.05);
+      else newEnd = Math.max(held(sel.start), sel.start + 0.05);
       onSelectionChangeRef.current({ start: newStart, end: newEnd });
       if (boundAnnotationIdRef.current) {
         const updated = updateAnnotation(annotationsRef.current, boundAnnotationIdRef.current, a => ({ ...a, start: newStart, end: newEnd }));

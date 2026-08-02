@@ -154,3 +154,27 @@ describe('projectIntervalToDisplay', () => {
     expect(projectIntervalToDisplay(tl, 40, 60)).toEqual({ start: 2, end: 5 });
   });
 });
+
+describe('toSourceWithin', () => {
+  const tl = buildSubsetTimeline([{ start: 10, end: 12 }, { start: 50, end: 53 }], 100);
+
+  it('resolves a cut to the end of the anchor span, not the start of the next', () => {
+    // Display 2 is both. Anchored in the first span it means source 12.
+    expect(tl.toSourceWithin(0.5, 2)).toBe(12);
+    // toSource alone picks the far side.
+    expect(tl.toSource(2)).toBe(50);
+  });
+
+  it('clamps past the anchor span in both directions', () => {
+    expect(tl.toSourceWithin(0.5, 9)).toBe(12);
+    expect(tl.toSourceWithin(3, 0)).toBe(50);
+  });
+
+  it('agrees with toSource inside a span', () => {
+    expect(tl.toSourceWithin(0.5, 1.5)).toBeCloseTo(tl.toSource(1.5), 12);
+  });
+
+  it('is plain clamping on the identity timeline', () => {
+    expect(identityTimeline(100).toSourceWithin(0, 42)).toBe(42);
+  });
+});

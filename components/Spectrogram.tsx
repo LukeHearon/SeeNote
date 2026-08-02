@@ -4,6 +4,7 @@ import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { Timeline, identityTimeline } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -22,7 +23,17 @@ interface SpectrogramProps {
   // Playback time arrives via a ref-based pub/sub store (not a prop) so a
   // playback tick redraws the canvas imperatively without re-rendering the tree.
   currentTimeStore: CurrentTimeStore;
+  // DISPLAY duration: how long the timeline being shown is. Equals the file's
+  // duration unless a subset is active, in which case it's the kept total.
   duration: number;
+  /**
+   * Display->source map (utils/subsetTimeline). Everything this component does
+   * is already in display time, so the timeline is needed in exactly two places:
+   * the chunk renderer, which looks up each column's audio by source time, and
+   * the interaction hook, which holds drags inside one span. Defaults to the
+   * identity timeline, i.e. no subset.
+   */
+  timeline?: Timeline;
   isPlaying: boolean;
   isProcessing: boolean;
   ident: string | null;
@@ -88,6 +99,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   cacheVersion,
   currentTimeStore,
   duration,
+  timeline,
   isPlaying,
   isProcessing,
   ident,
@@ -200,6 +212,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // into useSpectrogramInteraction so its rAF loop reads them stale-closure-free.
   const pixelsPerSecondRef = useRef(0);
   const durationRef = useRef(duration);
+  // Read live by the interaction hook's rAF loop and window handlers. Memoised
+  // because the chunk renderer's `draw` depends on it: a fresh identity timeline
+  // per render would dirty the spectrogram background every frame.
+  const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
+  const activeTimeline = timeline ?? fallbackTimeline;
+  const timelineRef = useRef(activeTimeline);
+  timelineRef.current = activeTimeline;
   // Lets the lifetime rAF loop (empty-dep effect) read live isPlaying for the
   // frame-timing diagnostic without resubscribing.
   const isPlayingRef = useRef(isPlaying);
@@ -287,6 +306,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     scrollLeft,
     pixelsPerSecond,
     duration,
+    timelineRef,
     annotations,
     selection,
     boundAnnotationId,
@@ -378,6 +398,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef,
     pixelsPerSecond,
     duration,
+    timeline: activeTimeline,
     settings,
     isProcessing,
     canvasRef,

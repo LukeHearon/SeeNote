@@ -54,6 +54,17 @@ export interface Timeline {
   toDisplay(src: number): number;
   /** Display → source. Clamped to [0, sourceDuration]. */
   toSource(disp: number): number;
+  /**
+   * Display → source, resolved inside the span containing `anchor`.
+   *
+   * A cut is one point on the display axis but two in the file — the end of one
+   * span and the start of the next — and `toSource` alone can only pick one of
+   * them. An interval's END must resolve to the end of ITS span, not the start
+   * of the next one, or a selection that stops exactly at a cut silently becomes
+   * a zero-length one at the far side. `anchor` (the interval's start) says which
+   * span is meant.
+   */
+  toSourceWithin(anchor: number, disp: number): number;
   /** Whether `src` falls inside a kept span (always true for the identity timeline). */
   isKept(src: number): boolean;
 
@@ -118,6 +129,14 @@ class SpanTimeline implements Timeline {
     const s = this.spans[i];
     const within = disp - s.dispStart;
     return Math.max(s.srcStart, Math.min(s.srcStart + within, s.srcEnd));
+  }
+
+  toSourceWithin(anchor: number, disp: number): number {
+    if (this.identity) return this.toSource(disp);
+    if (this.spans.length === 0) return 0;
+    const s = this.spans[this.spanIndexAtDisplay(anchor)];
+    const within = Math.max(0, Math.min(disp - s.dispStart, s.srcEnd - s.srcStart));
+    return s.srcStart + within;
   }
 
   isKept(src: number): boolean {
@@ -208,6 +227,32 @@ export function buildSubsetTimeline(
     return identityTimeline(dur);
   }
   return new SpanTimeline(spans, dur, false);
+}
+
+/**
+ * The source ranges a display window covers, in display order — one per span the
+ * window touches, clipped to the window. This is what turns "fetch the audio for
+ * what's on screen" into a set of file ranges: under a subset, one screenful can
+ * be scattered across the file.
+ */
+export function sourceRangesForDisplayRange(
+  timeline: Timeline,
+  d0: number,
+  d1: number,
+): { start: number; end: number }[] {
+  if (timeline.identity) return [{ start: d0, end: d1 }];
+  const out: { start: number; end: number }[] = [];
+  for (const s of timeline.spansForDisplayRange(d0, d1)) {
+    const len = s.srcEnd - s.srcStart;
+    const lo = Math.max(d0, s.dispStart);
+    const hi = Math.min(d1, s.dispStart + len);
+    if (hi <= lo) continue;
+    out.push({
+      start: s.srcStart + (lo - s.dispStart),
+      end: s.srcStart + (hi - s.dispStart),
+    });
+  }
+  return out;
 }
 
 /**
