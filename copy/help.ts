@@ -20,14 +20,27 @@ export const help = {
     get workspace() { return getOverride('help.parts.workspace') ?? "The workspace"; },
     get playback() { return getOverride('help.parts.playback') ?? "Playback"; },
     get annotating() { return getOverride('help.parts.annotating') ?? "Annotating"; },
+    get settings() { return getOverride('help.parts.settings') ?? "Projects & settings"; },
     get saving() { return getOverride('help.parts.saving') ?? "Saving & sharing"; },
     get reference() { return getOverride('help.parts.reference') ?? "Reference"; },
   },
 
   pages: {
+    get overview() { return getOverride('help.pages.overview') ?? "What SeeNote is"; },
+    get launch() { return getOverride('help.pages.launch') ?? "The launch screen"; },
     get projects() { return getOverride('help.pages.projects') ?? "Projects"; },
     get singleFile() { return getOverride('help.pages.singleFile') ?? "Single-file mode"; },
+    get updates() { return getOverride('help.pages.updates') ?? "Updating SeeNote"; },
+    get layout() { return getOverride('help.pages.layout') ?? "Panels & layout"; },
     get filePanel() { return getOverride('help.pages.filePanel') ?? "File panel"; },
+    get zoom() { return getOverride('help.pages.zoom') ?? "Zooming & scrolling"; },
+    get spectrogramSettings() { return getOverride('help.pages.spectrogramSettings') ?? "Spectrogram settings"; },
+    get debug() { return getOverride('help.pages.debug') ?? "Debug console"; },
+    get importing() { return getOverride('help.pages.importing') ?? "Importing annotations"; },
+    get projectSettings() { return getOverride('help.pages.projectSettings') ?? "Project settings"; },
+    get repair() { return getOverride('help.pages.repair') ?? "When files move"; },
+    get files() { return getOverride('help.pages.files') ?? "Annotation files & idents"; },
+    get troubleshooting() { return getOverride('help.pages.troubleshooting') ?? "Troubleshooting"; },
     get video() { return getOverride('help.pages.video') ?? "Video pane"; },
     get videoZoom() { return getOverride('help.pages.videoZoom') ?? "Video zoom & image"; },
     get spectrogram() { return getOverride('help.pages.spectrogram') ?? "Spectrogram"; },
@@ -41,22 +54,73 @@ export const help = {
     get editing() { return getOverride('help.pages.editing') ?? "Editing annotations"; },
     get tools() { return getOverride('help.pages.tools') ?? "Annotation tools"; },
     get bulk() { return getOverride('help.pages.bulk') ?? "Renaming & finding labels"; },
-    get autoSave() { return getOverride('help.pages.autoSave') ?? "Auto-save"; },
     get sync() { return getOverride('help.pages.sync') ?? "Sync (GitHub)"; },
     get shortcuts() { return getOverride('help.pages.shortcuts') ?? "Keyboard shortcuts"; },
+  },
+
+  overview: {
+    get p1() { return getOverride('help.overview.p1') ?? "SeeNote is a tool for listening to and looking at recordings, and marking what you find in them — building labelled datasets from audio and video."; },
+    get p2() { return getOverride('help.overview.p2') ?? "The loop is short: open a project, pick a track from the [file panel](file-panel), scrub around the [spectrogram](spectrogram-canvas) while you listen, and drag a box over anything worth labelling. Every change is written to disk immediately — there is no save button."; },
+    get h_pieces() { return getOverride('help.overview.h_pieces') ?? "The pieces"; },
+    get li_project() { return getOverride('help.overview.li_project') ?? "A **project** points at a folder of recordings and a folder to write annotations into. Everything else — your labels, your display settings, your filter — is remembered per project."; },
+    get li_track() { return getOverride('help.overview.li_track') ?? "A **track** is whichever recording is currently open."; },
+    get li_annotation() { return getOverride('help.overview.li_annotation') ?? "An **annotation** is a start time, an end time, and a label."; },
+    get li_tool() { return getOverride('help.overview.li_tool') ?? "An **annotation tool** is a named label bound to a number key. Pressing `3` and dragging is how a label gets made."; },
+    get li_ident() { return getOverride('help.overview.li_ident') ?? "An **ident** is a recording's path relative to the media folder, minus the extension. It's the key that ties `audio/site_a/dawn.wav` to `annotations/site_a/dawn.txt`."; },
+    get note_ml() { return getOverride('help.overview.note_ml') ?? "Annotation files are plain tab-delimited text in Audacity's label format, so they read straight into most training pipelines without conversion. See **Annotation files & idents**."; },
+  },
+
+  launch: {
+    get p1() { return getOverride('help.launch.p1') ?? "The first screen lists everything you've opened, most recent first. Entries are badged **Project** or **File**, so projects and one-off files share a single list."; },
+    get h_buttons() { return getOverride('help.launch.h_buttons') ?? "Getting in"; },
+    get li_new() { return getOverride('help.launch.li_new') ?? "**New Project** — create a project: pick a folder for it, name it, and point it at your media and annotation directories."; },
+    get li_open() { return getOverride('help.launch.li_open') ?? "**Open Project** — adopt a folder that already contains a project (one holding a `.seenote/settings.json`), e.g. after cloning a colleague's setup."; },
+    get li_file() { return getOverride('help.launch.li_file') ?? "**Open File** — open one recording on its own, with no project. See **Single-file mode**."; },
+    get li_sync() { return getOverride('help.launch.li_sync') ?? "**Git Sync Help** — opens the step-by-step guide to setting up a shared repository."; },
+    get li_data() { return getOverride('help.launch.li_data') ?? "**App Data** — reveals SeeNote's own data folder, where the list of known projects and recent files is kept."; },
+    get h_entries() { return getOverride('help.launch.h_entries') ?? "Working with entries"; },
+    get p_entries() { return getOverride('help.launch.p_entries') ?? "Right-click an entry to reveal it in Finder / File Explorer or remove it from the list — removing only forgets the entry, it never deletes anything on disk. The gear on a project entry opens its settings without opening the project."; },
+    get p_missing() { return getOverride('help.launch.p_missing') ?? "An entry whose folder can't be found is greyed out and won't open. Its **Locate** button re-links it — see **When files move**."; },
   },
 
   projects: {
     get p1() { return getOverride('help.projects.p1') ?? "SeeNote is organized around **projects**. Each project links a **media directory** (audio/video) to an **annotation directory** where annotation files are saved."; },
     get p2() { return getOverride('help.projects.p2') ?? "Configure project-level settings and user preferences by opening the [project settings](project-settings-btn)."; },
+    get h_dirs() { return getOverride('help.projects.h_dirs') ?? "Directories & portability"; },
+    get p_dirs() { return getOverride('help.projects.p_dirs') ?? "A project lives in its own folder, which holds a hidden **.seenote/** directory for its settings, preferences, and annotation tools. The media and annotation directories are usually subfolders of it, stored as relative paths — that keeps the project **portable**, so the whole folder can be moved or handed to a collaborator and still work."; },
+    get p_outside() { return getOverride('help.projects.p_outside') ?? "You can point either directory somewhere outside the project folder — at a media drive, say. SeeNote will read it happily, but it warns you that the project is no longer portable, because the absolute path won't mean anything on another machine. Syncing additionally requires the annotation directory to sit inside the project folder."; },
+    get h_appearance() { return getOverride('help.projects.h_appearance') ?? "Naming & appearance"; },
+    get p_appearance() { return getOverride('help.projects.p_appearance') ?? "A project's name is shown in the header and on the launch screen. You can give it a color gradient in project settings — purely decorative, but it makes several open projects easy to tell apart at a glance."; },
   },
 
   singleFile: {
     get p1() { return getOverride('help.singleFile.p1') ?? "You can also open a single audio/video file without a project — use **Open File** on the launch screen, pick a recent file, or choose SeeNote from your OS's **Open With** menu on a supported file. This opens a lean viewer (playback, spectrogram, band-pass filter) with no annotation tooling."; },
+    get p2() { return getOverride('help.singleFile.p2') ?? "Everything about playback works as it does in a project: transport, speed, volume, the band-pass filter, video modes and zoom, and the spectrogram's own pan/zoom. What's missing is anything that needs somewhere to write to — annotation tools, the file panel, saving, and syncing."; },
+    get note_assoc() { return getOverride('help.singleFile.note_assoc') ?? "SeeNote registers itself for common audio and video types, so \"Open With → SeeNote\" works from your file manager. Opening a file this way while SeeNote is already running hands it to the running copy rather than starting a second one."; },
+  },
+
+  updates: {
+    get p1() { return getOverride('help.updates.p1') ?? "SeeNote checks for a new release once, when the launch screen appears. If one is available, a banner offers **Update** — it downloads and installs in place, then restarts the app."; },
+    get note_linux() { return getOverride('help.updates.note_linux') ?? "On a Linux `.deb` install the in-place updater can't be used, so the banner offers **View** instead, which opens the releases page for you to download from. AppImage installs update in place normally."; },
+    get p_manual() { return getOverride('help.updates.p_manual') ?? "If an update fails, the error is shown on the banner and nothing has changed — the running version is untouched, and you can retry or download the release manually."; },
+  },
+
+  layout: {
+    get p1() { return getOverride('help.layout.p1') ?? "The annotation window is five regions. Down the left, the [file panel](file-panel) over the label palette; down the right, the [video pane](video-panel) over the [toolbar](toolbar) and [spectrogram](spectrogram-canvas), with the optional [buzzdetect panel](buzzdetect-toggle) beneath them."; },
+    get p2() { return getOverride('help.layout.p2') ?? "The [header](toolbar) across the top holds the back button, the project name and its settings gear, the sync controls when syncing is configured, and the debug and help buttons."; },
+    get h_resize() { return getOverride('help.layout.h_resize') ?? "Resizing"; },
+    get p_resize() { return getOverride('help.layout.p_resize') ?? "Every boundary between regions is a drag handle: the vertical divider sets the left column's width, the horizontal one between the file panel and the labels sets their split, and the one under the video sets how much height the picture gets versus the spectrogram. Layout is remembered per project."; },
+    get h_collapse() { return getOverride('help.layout.h_collapse') ?? "Collapsing"; },
+    get p_collapse() { return getOverride('help.layout.p_collapse') ?? "Drag the video divider all the way up to fold the pane into a bar, and the file panel's sidebar toggle to fold the left column into a narrow strip of colored label swatches. Both free up spectrogram height without interrupting playback."; },
   },
 
   filePanel: {
     get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order."; },
+    get h_header() { return getOverride('help.filePanel.h_header') ?? "Header buttons"; },
+    get li_filter() { return getOverride('help.filePanel.li_filter') ?? "**Filter:** cycles the list between all tracks, only annotated ones, and only unannotated ones — the quickest way to find what's left to do."; },
+    get li_shuffle() { return getOverride('help.filePanel.li_shuffle') ?? "**Shuffle:** replaces the folder tree with a randomly-ordered flat queue of every track. `{mod}+↑` / `{mod}+↓` then walk the shuffled order, which is what you want for unbiased sampling. Press it again to return to the sorted tree."; },
+    get li_expand() { return getOverride('help.filePanel.li_expand') ?? "**Expand all / collapse all:** open or close every folder at once."; },
+    get li_refresh() { return getOverride('help.filePanel.li_refresh') ?? "**Refresh:** re-scans the media directory, for when files have been added or removed underneath you. A sync that pulls changes refreshes the list on its own."; },
     get h_folders() { return getOverride('help.filePanel.h_folders') ?? "Folders"; },
     get p_folders() { return getOverride('help.filePanel.p_folders') ?? "Hover a folder and click the arrow to drill into it as the panel root; once inside, the header shows **step up one folder** and **back to root** buttons."; },
     get h_context() { return getOverride('help.filePanel.h_context') ?? "Right-click menu"; },
@@ -99,8 +163,40 @@ export const help = {
     get li3() { return getOverride('help.spectrogram.li3') ?? "**Seek:** Left-click (in Selection Mode) to move the playhead."; },
     get li4() { return getOverride('help.spectrogram.li4') ?? "**Play/Pause:** `Space`."; },
     get li5() { return getOverride('help.spectrogram.li5') ?? "**Toggle playback rate (1× ↔ last defined):** `R`."; },
-    get h_settings() { return getOverride('help.spectrogram.h_settings') ?? "Display settings"; },
-    get p_settings() { return getOverride('help.spectrogram.p_settings') ?? "[Spectrogram settings](spectrogram-settings) (FFT size, frequency scale, frequency range, display floor/ceiling) are saved per project. The **Floor** and **Ceil** dBFS controls set the dynamic range window: slide Floor toward −140 to reveal faint noise-floor detail, or toward 0 to crush it to black."; },
+    get h_axes() { return getOverride('help.spectrogram.h_axes') ?? "Axes"; },
+    get p_axes() { return getOverride('help.spectrogram.p_axes') ?? "Time runs along the bottom, frequency up the side. Both axes rescale as you zoom, and the [buzzdetect panel](buzzdetect-toggle) shares the spectrogram's exact time-to-pixel transform, so anything stacked below stays in lockstep with the playhead and your selections."; },
+    get p_settings() { return getOverride('help.spectrogram.p_settings') ?? "How the image is drawn — FFT size, frequency scale, frequency range, dynamic range — lives behind the [settings gear](spectrogram-settings). See **Spectrogram settings**."; },
+  },
+
+  zoom: {
+    get p1() { return getOverride('help.zoom.p1') ?? "The spectrogram shows a window onto the track, not the whole thing. How wide that window is, and where it sits, is yours to drive."; },
+    get h_zoom() { return getOverride('help.zoom.h_zoom') ?? "Zooming"; },
+    get li_wheel() { return getOverride('help.zoom.li_wheel') ?? "**`{mod}` + scroll wheel** over the spectrogram zooms around the cursor."; },
+    get li_keys() { return getOverride('help.zoom.li_keys') ?? "**`{mod}+=` / `{mod}+-`** zoom in and out from the center of the current view."; },
+    get li_fit() { return getOverride('help.zoom.li_fit') ?? "**`{mod}+0`** fits the entire track on screen. Press it again to drop back to exactly where you were — it remembers the window you left."; },
+    get h_pan() { return getOverride('help.zoom.h_pan') ?? "Panning"; },
+    get li_drag() { return getOverride('help.zoom.li_drag') ?? "**Right-click & drag** the spectrogram, or **scroll** without a modifier, to slide the view along."; },
+    get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** scrub the playhead by a tenth of the visible window, so the step scales with how far in you are."; },
+    get li_jump() { return getOverride('help.zoom.li_jump') ?? "**`{mod}+←` / `{mod}+→`** jump to the start / end of the track; **`Alt+←` / `Alt+→`** step between annotations."; },
+    get note_lock() { return getOverride('help.zoom.note_lock') ?? "With playhead lock on (`C`), the view follows the playhead during playback and manual scrolling is disabled — see **Transport & playhead**. Zoom level itself is saved per project."; },
+  },
+
+  spectrogramSettings: {
+    get p1() { return getOverride('help.spectrogramSettings.p1') ?? "The [gear at the right of the toolbar](spectrogram-settings) opens the display settings. They change only how the spectrogram is drawn — never the audio, the annotations, or the file on disk — and they're saved per project."; },
+    get h_range() { return getOverride('help.spectrogramSettings.h_range') ?? "Dynamic range"; },
+    get p_range() { return getOverride('help.spectrogramSettings.p_range') ?? "**Floor** and **Ceil** (in dBFS) set the window of loudness the color ramp spans. Anything at or below Floor is black; anything at or above Ceil is fully saturated. Drag Floor toward −140 to lift faint detail out of the noise floor, or toward 0 to crush it away and leave only the loud events. This is the control worth reaching for first when a recording looks like an undifferentiated wash."; },
+    get h_freq() { return getOverride('help.spectrogramSettings.h_freq') ?? "Frequency range"; },
+    get p_freq() { return getOverride('help.spectrogramSettings.p_freq') ?? "**Min** and **Max** clip the vertical axis to a band of interest, giving the frequencies you care about the full height of the panel. Useful for narrowing onto a species' band, or for cutting off the empty top half of a recording sampled far above its content."; },
+    get h_fft() { return getOverride('help.spectrogramSettings.h_fft') ?? "FFT window & scale"; },
+    get p_fft() { return getOverride('help.spectrogramSettings.p_fft') ?? "**Window size** (256 to 8192 samples) is the classic time-versus-frequency trade: a small window resolves clicks and onsets sharply but smears tones into broad bands; a large one resolves pitch finely but blurs anything brief. 1024–2048 suits most work; drop it for percussive detail, raise it for tonal detail."; },
+    get p_scale() { return getOverride('help.spectrogramSettings.p_scale') ?? "**Scale** sets how frequency is spaced up the axis. **Linear** gives every hertz equal height. **Log** and **Mel** both expand the low end and compress the high end, which matches how hearing works and how most vocalizations are structured — worth trying whenever the interesting content is bunched against the bottom of a linear plot."; },
+    get note_cost() { return getOverride('help.spectrogramSettings.note_cost') ?? "Changing FFT size or scale re-computes the image, so there's a brief redraw on large files. Floor, Ceil, and the frequency range are re-colorings of what's already computed and apply instantly."; },
+  },
+
+  debug: {
+    get p1() { return getOverride('help.debug.p1') ?? "The **bug icon** in the header opens a running log of what SeeNote has been doing under the hood — which video mode a track opened in, decode and codec errors, audio engine restarts, annotation loads and exports."; },
+    get p2() { return getOverride('help.debug.p2') ?? "It's the first place to look when a track behaves oddly: a video that won't display, playback that won't start, or a file that opens blank usually leaves a specific error here rather than an on-screen message."; },
+    get note_copy() { return getOverride('help.debug.note_copy') ?? "The copy button takes the whole log to the clipboard — paste it into a bug report. The log covers the current session only and isn't written to disk."; },
   },
 
   buzzdetect: {
@@ -183,8 +279,44 @@ export const help = {
     get p_find() { return getOverride('help.bulk.p_find') ?? "The **Find Label** (magnifying glass) icon searches every file in the project for a label. Results stream in alphabetically by file as the search runs; expand a file to see each match's start/end time, select one, and click **Go** to open that file, scroll the spectrogram to it, and select the annotation. Check **Partial** to match the search text anywhere in a label (e.g. `mech_` matches `quiet_mech_auto`), or **Regex** to search with a regular expression (already unanchored, so `buzz\\d` matches `foo_buzz3_bar`); with either on, results show each match's own label since it may differ from what you typed. Both toggles are remembered per project."; },
   },
 
-  autoSave: {
-    get p1() { return getOverride('help.autoSave.p1') ?? "Annotations save automatically every time you make a change. The file structure mirrors the audio directory. Clearing all annotations removes the annotation file."; },
+  importing: {
+    get p1() { return getOverride('help.importing.p1') ?? "Right-click a track in the [file panel](file-panel) and choose **Import annotations…** to bring in labels from an external file. They're filed under that track's ident, exactly as if you'd drawn them."; },
+    get h_conflict() { return getOverride('help.importing.h_conflict') ?? "If the track already has annotations"; },
+    get p_conflict() { return getOverride('help.importing.p_conflict') ?? "You're asked which you want: **Overwrite** replaces the existing set with the imported one, **Merge** keeps both, appending the imported annotations to what's there. Merge is the safe default when you're combining passes from different people or different detectors."; },
+    get h_format() { return getOverride('help.importing.h_format') ?? "What can be imported"; },
+    get p_format() { return getOverride('help.importing.p_format') ?? "Tab-delimited label files in Audacity's format — one row per annotation, `start`, `end`, `label` — which is the same format SeeNote writes. Rows are matched against your annotation tools by label, so an imported label that matches a tool picks up that tool's color; anything unmatched comes in as a Custom annotation."; },
+    get note_bulk() { return getOverride('help.importing.note_bulk') ?? "Import is per-track. To bring a whole detector run into a project, import each track, or drop the label files into the annotation directory yourself — the layout is documented under **Annotation files & idents**."; },
+  },
+
+  projectSettings: {
+    get p1() { return getOverride('help.projectSettings.p1') ?? "The [gear beside the project name](project-settings-btn) opens project settings. The same form appears when you create a project."; },
+    get h_settings() { return getOverride('help.projectSettings.h_settings') ?? "Settings tab"; },
+    get p_settings() { return getOverride('help.projectSettings.p_settings') ?? "The project's **name** (and its color gradient), its **Media** and **Annotations** directories, and **Output Decimal Places** — how many decimals timestamps are written with in annotation files. Under **Advanced** sit the **buzzdetect** directory and frame length; under **Sync**, the repository URL, access token, and your annotator name."; },
+    get h_prefs() { return getOverride('help.projectSettings.h_prefs') ?? "Preferences tab"; },
+    get p_prefs() { return getOverride('help.projectSettings.p_prefs') ?? "**Auto-collapse video panel** folds the video pane away on audio-only tracks and re-opens it on video ones; turn it off to control the pane by hand. **Automatically pull remote changes** governs background pulls when syncing is set up — see **Sync (GitHub)**."; },
+    get h_moving() { return getOverride('help.projectSettings.h_moving') ?? "Changing the annotation directory"; },
+    get p_moving() { return getOverride('help.projectSettings.p_moving') ?? "Point the project at a different annotation directory and SeeNote offers to **copy** your existing annotation files across, asking how to resolve any that already exist there (**Skip Existing** or **Overwrite**). It also lists any annotation files with no matching media in the new media directory — **orphaned** ones — and lets you retain or delete them. Nothing is moved or deleted without you choosing it."; },
+    get note_where() { return getOverride('help.projectSettings.note_where') ?? "Settings are stored in the project's **.seenote/** folder — `settings.json` for the project itself, `preferences.json` for your local preferences. Neither is ever pushed by a sync."; },
+  },
+
+  repair: {
+    get p1() { return getOverride('help.repair.p1') ?? "Recordings get moved, drives get remounted somewhere else, projects get copied between machines. SeeNote handles both halves of that without you having to edit anything by hand."; },
+    get h_media() { return getOverride('help.repair.h_media') ?? "The media directory is missing"; },
+    get p_media() { return getOverride('help.repair.p_media') ?? "Open a project whose media directory no longer exists and SeeNote says so instead of opening empty, and asks for the new path. Choose the folder and **Save & Open** — the project's setting is updated and it opens straight away. Annotations are untouched throughout; they're keyed by ident, not by absolute path, so they re-attach to the same recordings at the new location."; },
+    get h_project() { return getOverride('help.repair.h_project') ?? "The project folder itself has moved"; },
+    get p_project() { return getOverride('help.repair.p_project') ?? "On the launch screen, a project whose folder can't be found is greyed out with a **Locate** button. Point it at the folder's new home: SeeNote checks what's actually there and shows you what it found and what it didn't before committing. The folder must contain a `.seenote/settings.json`; a missing annotation or buzzdetect directory, or a project name that disagrees with the one on disk, only prompts for confirmation — and where the names differ, you pick which one to keep."; },
+    get note_portable() { return getOverride('help.repair.note_portable') ?? "Projects whose directories are stored as relative paths survive a move with no repair at all. That's the payoff for keeping media and annotations inside the project folder — see **Projects**."; },
+  },
+
+  files: {
+    get p1() { return getOverride('help.files.p1') ?? "Annotations save automatically every time you make a change. There's no save step and no unsaved state to lose."; },
+    get h_layout() { return getOverride('help.files.h_layout') ?? "Where things land"; },
+    get p_layout() { return getOverride('help.files.p_layout') ?? "The annotation directory mirrors the media directory's folder structure. A recording at `media/site_a/dawn.wav` gets its annotations at `annotations/site_a/dawn.txt` — same relative path, different extension. That shared path-without-extension is the recording's **ident**, and it's the only link between the two; nothing depends on absolute paths, which is what lets a project be moved or shared."; },
+    get p_delete() { return getOverride('help.files.p_delete') ?? "Removing a track's last annotation deletes its annotation file rather than leaving an empty one behind, so the presence of a file always means the track has been labelled."; },
+    get h_format() { return getOverride('help.files.h_format') ?? "File format"; },
+    get p_format() { return getOverride('help.files.p_format') ?? "Plain UTF-8 text, one annotation per line, three tab-separated fields: **start time**, **end time**, **label**. Times are in seconds, written to as many decimals as **Output Decimal Places** in project settings specifies. This is Audacity's label format — Audacity and most analysis toolchains read it directly, and it needs no conversion to feed a training pipeline."; },
+    get h_seenote() { return getOverride('help.files.h_seenote') ?? "The .seenote folder"; },
+    get p_seenote() { return getOverride('help.files.p_seenote') ?? "Each project folder holds a hidden **.seenote/** directory: `settings.json` (the project), `preferences.json` (your local preferences, including a plaintext sync token if you chose that), and **annotation-tools/**, one folder per tool holding its definition and any example clips. None of it is shared by a sync — every collaborator keeps their own tools and settings."; },
   },
 
   sync: {
@@ -197,5 +329,22 @@ export const help = {
     get p_token() { return getOverride('help.sync.p_token') ?? "Your token is stored on this machine only. Under **Token storage** you can keep it in the **OS keychain** (recommended) or switch to **plaintext**, saved unencrypted in the project's settings.json (still never pushed). Plaintext trades local secrecy for avoiding keychain password prompts on unsigned builds."; },
     get h_autopull() { return getOverride('help.sync.h_autopull') ?? "Automatic pulls"; },
     get p_autopull() { return getOverride('help.sync.p_autopull') ?? "Remote changes are **pulled in automatically** — on project open and every couple of minutes — so you're never editing behind teammates' latest annotations. This never pushes your own edits; that stays an explicit sync. Turn it off under **Project Settings → Preferences → Automatically pull remote changes** if you'd rather pull manually."; },
+  },
+
+  troubleshooting: {
+    get h_video() { return getOverride('help.troubleshooting.h_video') ?? "\"Can't display this video\""; },
+    get p_video() { return getOverride('help.troubleshooting.p_video') ?? "In **Accurate** mode this means your system lacks a codec for that file. In **Fast** or **Mixed** mode on Linux it's usually a platform limitation rather than a missing codec — switch to Accurate and it will often play. Either way, the [debug console](toolbar) records the specific decode error."; },
+    get h_stutter() { return getOverride('help.troubleshooting.h_stutter') ?? "Playback or scrubbing stutters"; },
+    get p_stutter() { return getOverride('help.troubleshooting.p_stutter') ?? "Drop the video mode one level (Accurate → Mixed → Fast → Off); frame-accurate decoding is by far the most expensive thing SeeNote does. Collapsing the video pane, turning off the buzzdetect panel, and zooming out less far all help too. Long files on slow external drives are worst on first pass, since every region has to be decoded once before it's cached."; },
+    get h_audio() { return getOverride('help.troubleshooting.h_audio') ?? "Audio stops working after changing devices"; },
+    get p_audio() { return getOverride('help.troubleshooting.p_audio') ?? "Right-click the [volume control](volume-control) and choose **Restart Audio**. Switching output device — plugging in headphones, especially on Windows — can leave the audio engine bound to the device that went away; restarting re-binds it without reopening the track."; },
+    get h_keychain() { return getOverride('help.troubleshooting.h_keychain') ?? "Repeated keychain password prompts"; },
+    get p_keychain() { return getOverride('help.troubleshooting.p_keychain') ?? "Unsigned builds can prompt every time the sync token is read from the OS keychain. Switching **Token storage** to plaintext under **Project Settings → Sync** stops the prompts, at the cost of the token sitting unencrypted in the project's `preferences.json`. It's still never pushed to the repository — but use a narrowly-scoped token if you take that trade."; },
+    get h_buzz() { return getOverride('help.troubleshooting.h_buzz') ?? "The buzzdetect panel is empty"; },
+    get p_buzz() { return getOverride('help.troubleshooting.p_buzz') ?? "Activations are looked up by ident: a track with ident `site_a/dawn` needs `site_a/dawn_buzzdetect.csv` in the configured buzzdetect directory. A mismatched folder structure or a missing `_buzzdetect` suffix is the usual cause. If the panel plots but the bins look wrong, set an explicit **frame length** — auto-detection needs enough rows to infer one."; },
+    get h_missing() { return getOverride('help.troubleshooting.h_missing') ?? "A project or its media has gone missing"; },
+    get p_missing() { return getOverride('help.troubleshooting.p_missing') ?? "See **When files move** — both a moved project folder and a moved media directory are recoverable without touching anything by hand, and annotations survive either."; },
+    get h_logs() { return getOverride('help.troubleshooting.h_logs') ?? "Reporting a problem"; },
+    get p_logs() { return getOverride('help.troubleshooting.p_logs') ?? "Open the [debug console](toolbar), copy the log, and include it. It usually contains the exact failure — which is much more use than a description of the symptom."; },
   },
 };

@@ -102,6 +102,26 @@ describe('help guide structure', () => {
   });
 });
 
+describe('help copy', () => {
+  // Keys that name the window chrome rather than page content, so they're
+  // referenced from the components instead of the guide tree.
+  const CHROME_KEYS = new Set([
+    'help.windowTitle', 'help.navAriaLabel', 'help.tocTitle',
+    'help.searchPlaceholder', 'help.searchNoResults',
+  ]);
+
+  it('renders every string in copy/help.ts somewhere in the guide', () => {
+    const copySrc = readFileSync(join(ROOT, 'copy/help.ts'), 'utf8');
+    const guideSrc = readFileSync(join(ROOT, 'components/help/guide.ts'), 'utf8');
+    const keys = [...copySrc.matchAll(/getOverride\('(help\.[\w.]+)'\)/g)].map(m => m[1]);
+    expect(keys.length).toBeGreaterThan(50);
+    const orphans = keys.filter(k => !CHROME_KEYS.has(k) && !guideSrc.includes(k));
+    // Copy nobody renders is dead weight and shows up as a phantom entry in the
+    // dev copy editor — usually the leftover of a page that got restructured.
+    expect(orphans, `unreferenced help copy: ${orphans.join(', ')}`).toEqual([]);
+  });
+});
+
 describe('help targets', () => {
   const inventory = helpTargetInventory();
 
