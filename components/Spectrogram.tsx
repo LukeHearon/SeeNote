@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
-import { chooseTimeStep, formatRulerTime, rulerTicks } from '../utils/timeAxis';
+import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks } from '../utils/timeAxis';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
@@ -499,15 +499,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const timeStep = chooseTimeStep(pixelsPerSecond);
 
     ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
     // Ticks are labelled in SOURCE time: under a subset the display axis says
     // nothing about where in the file you are, so the ruler is built per kept
     // span from that span's own file times (see utils/timeAxis). Identity
     // timeline → the same ticks as before, labelled with themselves.
+    //
+    // Under a subset each tick sits at a segment's START, so its label is
+    // left-aligned to the tick line rather than centered on it — centering
+    // would make the label read as if it spanned both sides of the cut.
     const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
     const ticks = rulerTicks(timelineRef.current, startTime, tickEndTime, timeStep, pixelsPerSecond_live);
+    const labelAlign = rulerLabelAlign(timelineRef.current);
+    ctx.textAlign = labelAlign;
+    const labelX = labelAlign === 'left' ? (x: number) => x + 3 : (x: number) => x;
     for (const tick of ticks) {
         const x = timeToX(tick.disp, scrollLeft_live, pixelsPerSecond_live);
         if (x >= 0 && x <= width) {
@@ -519,11 +525,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             ctx.stroke();
 
             const timeStr = formatRulerTime(tick.src, timeStep, timeRange);
+            const lx = labelX(x);
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 3;
-            ctx.strokeText(timeStr, x, height - 10);
+            ctx.strokeText(timeStr, lx, height - 10);
             ctx.fillStyle = 'white';
-            ctx.fillText(timeStr, x, height - 10);
+            ctx.fillText(timeStr, lx, height - 10);
         }
     }
 

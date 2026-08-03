@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatRulerTime, parseHMS, rulerTicks } from '../utils/timeAxis';
+import { formatRulerTime, parseHMS, rulerLabelAlign, rulerTicks } from '../utils/timeAxis';
 import { buildSubsetTimeline, identityTimeline } from '../utils/subsetTimeline';
 
 describe('formatRulerTime', () => {
@@ -43,20 +43,10 @@ describe('rulerTicks', () => {
     ]);
   });
 
-  it('ticks a long segment at nice source times inside it', () => {
+  it('ticks only at each segment start, even inside a long segment', () => {
     const tl = buildSubsetTimeline([{ start: 100, end: 160 }, { start: 200, end: 210 }], 300);
     const ticks = rulerTicks(tl, 0, 65, 10, PPS);
-    expect(ticks.map(t => t.src)).toEqual([110, 120, 130, 140, 150, 200]);
-    // …placed by display position: source 110 is 10s into the first segment.
-    expect(ticks[0].disp).toBe(10);
-    expect(ticks[ticks.length - 1].disp).toBe(60);
-  });
-
-  it('keeps interior ticks clear of the next segment start label', () => {
-    // A segment ending at source 160 would take a tick at 160 only if it were
-    // far enough from its own end — it isn't, so the seam label stands alone.
-    const tl = buildSubsetTimeline([{ start: 100, end: 160.5 }, { start: 200, end: 210 }], 300);
-    expect(rulerTicks(tl, 0, 70, 10, PPS).map(t => t.src)).not.toContain(160);
+    expect(ticks).toEqual([{ disp: 60, src: 200 }]);
   });
 
   it('drops labels that would overprint across short segments', () => {
@@ -68,6 +58,17 @@ describe('rulerTicks', () => {
     );
     const ticks = rulerTicks(tl, 0, 1.2, 1, PPS);
     expect(ticks.map(t => t.src)).toEqual([10, 100]);
+  });
+});
+
+describe('rulerLabelAlign', () => {
+  it('centers labels on the identity timeline', () => {
+    expect(rulerLabelAlign(identityTimeline(300))).toBe('center');
+  });
+
+  it('left-aligns labels under a subset, since each tick marks a segment start', () => {
+    const tl = buildSubsetTimeline([{ start: 1, end: 2 }, { start: 4, end: 5 }], 300);
+    expect(rulerLabelAlign(tl)).toBe('left');
   });
 });
 

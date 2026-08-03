@@ -67,20 +67,15 @@ export interface RulerTick {
  * A ruler exists to answer "where in the file am I?", and under a subset the
  * display axis can't answer that — its 0 is wherever the first kept run happens
  * to start, and every later position is short by however much was cut out. So
- * ticks are chosen per kept span, at nice values of the span's own source time,
- * and placed at the display position that source time maps to. What the user
- * reads off the ruler is a position in the file they can go back to.
- *
- * Each span also gets a tick at its start, whatever value that is: a span can be
- * shorter than one tick step (a single detection often is) and would otherwise
- * carry no label at all, and the run's own start time in the file is the most
- * useful thing to label it with anyway.
+ * under a subset there is exactly one tick per kept span, at its start: a nice
+ * mid-span tick would sit centered over a stretch of screen it doesn't actually
+ * label the START of (see `rulerTickAlign`), which is what made it easy to
+ * misread as spanning into the next segment. A span-start tick has no such
+ * ambiguity — everything to its right, up to the next cut, is that span's time.
  *
  * Ticks closer together than a label is wide are dropped, keeping the earlier
- * one — so a span start always wins over a nice tick beside it, and a stretch of
- * very short spans labels as many as fit rather than overprinting. Interior
- * ticks also keep clear of their span's END, where the next span's start label
- * will sit.
+ * one, so a stretch of very short spans labels as many as fit rather than
+ * overprinting.
  *
  * For the identity timeline (no subset) this is just nice ticks across the
  * range, labelled with themselves — the pre-subset behaviour exactly.
@@ -104,23 +99,23 @@ export function rulerTicks(
 
   const minSpacing = pixelsPerSecond > 0 ? MIN_LABEL_SPACING_PX / pixelsPerSecond : 0;
   let last = -Infinity;
-  const push = (disp: number, src: number) => {
-    if (disp <= 0 || disp - last < minSpacing) return;
-    out.push({ disp, src });
-    last = disp;
-  };
-
   for (const span of timeline.spansForDisplayRange(d0, d1)) {
-    const len = span.srcEnd - span.srcStart;
-    const dispEnd = span.dispStart + len;
-    push(span.dispStart, span.srcStart);
-    for (let s = Math.ceil(span.srcStart / step) * step; s < span.srcEnd; s += step) {
-      const disp = span.dispStart + (s - span.srcStart);
-      if (dispEnd - disp < minSpacing) break;
-      push(disp, s);
-    }
+    if (span.dispStart <= 0 || span.dispStart - last < minSpacing) continue;
+    out.push({ disp: span.dispStart, src: span.srcStart });
+    last = span.dispStart;
   }
   return out;
+}
+
+/**
+ * Whether ruler labels at `disp` positions should be left-aligned (the start of
+ * the region they describe) rather than centered on the tick. Subset ticks each
+ * mark where a segment BEGINS — not a point straddled on both sides by that
+ * segment's own time — so centering would read as if the label applied to the
+ * segment on both sides of the tick, when only the segment to its right does.
+ */
+export function rulerLabelAlign(timeline: Timeline): 'left' | 'center' {
+  return timeline.identity ? 'center' : 'left';
 }
 
 /**

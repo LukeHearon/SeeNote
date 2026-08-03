@@ -527,7 +527,7 @@ export default function BuzzdetectPanel({
     // recording, hundreds landing in the same pixel column, so each column's
     // frames stand in for the frames inside it — at most one entry per column.
     const subPixelFrames = binPx < 1 && !grouped;
-    const units: { start: number; end: number; xStart: number; xEnd: number; xMid: number }[] = [];
+    const units: { start: number; end: number; xStart: number; xEnd: number; xMid: number; tMid: number }[] = [];
     if (subPixelFrames) {
       const cols = Math.ceil(width);
       for (let c = 0; c < cols; c++) {
@@ -537,7 +537,7 @@ export default function BuzzdetectPanel({
           xToTime(c, scrollLeft, pixelsPerSecond),
           xToTime(c + 1, scrollLeft, pixelsPerSecond),
         );
-        if (r) units.push({ ...r, xStart: c, xEnd: c + 1, xMid: c + 0.5 });
+        if (r) units.push({ ...r, xStart: c, xEnd: c + 1, xMid: c + 0.5, tMid: xToTime(c + 0.5, scrollLeft, pixelsPerSecond) });
       }
     } else {
       forEachUnitInSpan(starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
@@ -552,6 +552,7 @@ export default function BuzzdetectPanel({
             xStart: xOf(p.tStart),
             xEnd: xOf(p.tEnd),
             xMid: xOf((p.tStart + p.tEnd) / 2),
+            tMid: (p.tStart + p.tEnd) / 2,
           });
         }
       });
@@ -694,41 +695,47 @@ export default function BuzzdetectPanel({
 
       // Under a subset the x-axis has cuts in it: consecutive points can be
       // minutes apart in the file even though they abut on screen, and a line
-      // joining them would draw a trend across time that was removed. Points
-      // only — each one still says exactly what its own frames did.
-      if (!subsetActive) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        let started = false;
-        if (!grouped) {
-          for (let i = iLeft; i <= iRight; i++) {
-            const cx = xOf(starts[i] + binWidth / 2);
-            const cy = yOf(perFrameValue(i));
-            if (!started) { ctx.moveTo(cx, cy); started = true; } else ctx.lineTo(cx, cy);
-          }
+      // joining them would draw a trend across time that was removed. So the
+      // path breaks (a moveTo instead of a lineTo) wherever the span changes —
+      // points stay connected within a segment, never across one. Outside a
+      // subset every point is in the one identity span, so this is exactly the
+      // old unconditional polyline.
+      const spanAt = (t: number) => subsetActive ? activeTimeline.spanIndexAtDisplay(t) : 0;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      let lastSpan = -1;
+      const lineTo = (t: number, x: number, y: number) => {
+        const spanIdx = spanAt(t);
+        if (!started || spanIdx !== lastSpan) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+        lastSpan = spanIdx;
+      };
+      if (!grouped) {
+        for (let i = iLeft; i <= iRight; i++) {
+          const t = starts[i] + binWidth / 2;
+          lineTo(t, xOf(t), yOf(perFrameValue(i)));
+        }
+      } else {
+        // One point per unit, at its midpoint. Prefix-sum lookup, not a scan: a
+        // unit can span hours of frames when the user pins a wide bin width,
+        // and units are recomputed on every redraw (they're time-anchored, so
+        // they're stable, but the draw path doesn't cache them).
+        if (units.length === 1) {
+          // Every frame in view falls in one unit (a wide override on a short
+          // file): a lone moveTo strokes nothing and grouped mode draws no dots,
+          // so the neuron would vanish. Stroke the unit's value flat across
+          // its own x-extent instead.
+          const cy = yOf(unitMean(units[0]));
+          ctx.moveTo(units[0].xStart, cy);
+          ctx.lineTo(units[0].xEnd, cy);
         } else {
-          // One point per unit, at its midpoint. Prefix-sum lookup, not a scan: a
-          // unit can span hours of frames when the user pins a wide bin width,
-          // and units are recomputed on every redraw (they're time-anchored, so
-          // they're stable, but the draw path doesn't cache them).
-          if (units.length === 1) {
-            // Every frame in view falls in one unit (a wide override on a short
-            // file): a lone moveTo strokes nothing and grouped mode draws no dots,
-            // so the neuron would vanish. Stroke the unit's value flat across
-            // its own x-extent instead.
-            const cy = yOf(unitMean(units[0]));
-            ctx.moveTo(units[0].xStart, cy);
-            ctx.lineTo(units[0].xEnd, cy);
-          } else {
-            for (const u of units) {
-              const cy = yOf(unitMean(u));
-              if (!started) { ctx.moveTo(u.xMid, cy); started = true; } else ctx.lineTo(u.xMid, cy);
-            }
+          for (const u of units) {
+            lineTo(u.tMid, u.xMid, yOf(unitMean(u)));
           }
         }
-        ctx.stroke();
       }
+      ctx.stroke();
 
       if (drawDots) {
         for (let i = iLeft; i <= iRight; i++) {
@@ -748,16 +755,6 @@ export default function BuzzdetectPanel({
             ctx.lineWidth = 1;
             ctx.stroke();
           }
-        }
-      } else if (subsetActive) {
-        // Grouped and no polyline to fall back on — draw the bucket means as
-        // points so the neuron doesn't vanish when zoomed out under a subset.
-        ctx.fillStyle = color;
-        for (const u of units) {
-          if (u.xMid < -3 || u.xMid > width + 3) continue;
-          ctx.beginPath();
-          ctx.arc(u.xMid, yOf(unitMean(u)), 2.5, 0, Math.PI * 2);
-          ctx.fill();
         }
       }
     }
