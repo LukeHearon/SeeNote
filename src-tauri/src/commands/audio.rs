@@ -755,7 +755,9 @@ mod coarse_bench {
         let fft_size = 2048usize;
         let hop = 2_097_152usize; // coarsest selected tier for a 50h file
         let n_cols = 64usize;     // sample of a 1024-col chunk
-        let pool_frames = ((COARSE_POOL_SEC * sr as f64) as usize).clamp(fft_size, hop);
+        // One FFT window per column, matching what coarse tiers do since pooling
+        // was dropped.
+        let pool_frames = fft_size;
         println!("sr={sr} pool_frames={pool_frames} hop={hop}");
 
         let mut stream = decoder::PcmStream::open(&path, 0.0).expect("open");
