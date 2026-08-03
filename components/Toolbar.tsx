@@ -7,8 +7,9 @@ import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { parseHMS } from '../utils/timeAxis';
-import { formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
-import { formatTimeOfDay, parseDatetimeInput } from '../utils/datetimeDisplay';
+import { formatTimeForUnit, formatTime, TimeDisplayUnit } from '../utils/helpers';
+import { formatDateTime, parseDatetimeInput, maxDateTimeLength, DateTimeFormat } from '../utils/datetimeDisplay';
+import { DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { tooltips } from '../copy/tooltips';
 import { useAltHeld } from '../hooks/useAltHeld';
 
@@ -16,13 +17,13 @@ type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not the whole memoized Toolbar — re-renders per tick.
-function TimeDisplay({ currentTimeStore, unit, trackStartDate }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit; trackStartDate: Date | null }) {
+function TimeDisplay({ currentTimeStore, unit, trackStartDate, dateTimeFormat }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit; trackStartDate: Date | null; dateTimeFormat: DateTimeFormat }) {
   const [t, setT] = useState(currentTimeStore.get());
   useEffect(() => {
     setT(currentTimeStore.get());
     return currentTimeStore.subscribe(() => setT(currentTimeStore.get()));
   }, [currentTimeStore]);
-  return <>{formatTimeForUnit(t, unit, 2, trackStartDate)}</>;
+  return <>{formatTimeForUnit(t, unit, 2, trackStartDate, dateTimeFormat)}</>;
 }
 
 interface ToolbarProps {
@@ -78,6 +79,8 @@ interface ToolbarProps {
   onTimeDisplayUnitChange?: (u: TimeDisplayUnit) => void;
   /** Wall-clock start of the track; null when its filename carries no parseable timestamp. */
   trackStartDate?: Date | null;
+  /** Style for wall-clock datetime readouts (ruler, running time, From/To fields). */
+  dateTimeFormat?: DateTimeFormat;
 }
 
 // Speed: log mapping. slider [0,1] ↔ speed [0.25, 4.0], slider 0.5 ↔ 1.0x.
@@ -137,6 +140,7 @@ function Toolbar({
   selectedTimeDisplayUnit = timeDisplayUnit,
   onTimeDisplayUnitChange,
   trackStartDate = null,
+  dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }: ToolbarProps) {
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
@@ -147,18 +151,38 @@ function Toolbar({
   const altHeld = useAltHeld();
 
   // Current-time box grows to fit long durations (e.g. >100,000s) instead of
-  // truncating — width in ch matches the monospace readout, sized off the
-  // longest string the box will ever need to show (time at full duration).
-  const timeBoxWidth = `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit, 2, trackStartDate).length + 3, 7)}ch`;
+  // truncating — width in ch matches the monospace readout. In datetime mode,
+  // sized off the longest string that format could ever produce (a specific
+  // instant's formatted length isn't a safe upper bound — month names vary),
+  // otherwise off the reading at full duration.
+  const timeBoxWidth = timeDisplayUnit === 'datetime' && trackStartDate
+    ? `${maxDateTimeLength(dateTimeFormat) + 3}ch`
+    : `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit, 2, trackStartDate, dateTimeFormat).length + 3, 7)}ch`;
 
-  // Datetime mode shows selection bounds as clock times ("23:00:04.25"), which
-  // need more room than the elapsed-seconds readout the fields were sized for.
+  // Datetime mode shows selection bounds as full datetimes (date + clock time),
+  // which need more room than the elapsed-seconds readout the fields were
+  // sized for. Width is the longest string the format could ever produce, not
+  // just what today's selection happens to need — using an actual instant's
+  // length would wrap onto a second line for a longer month name.
   const datetimeMode = timeDisplayUnit === 'datetime' && trackStartDate !== null;
-  const selFieldWidth = datetimeMode ? 'w-[6.2rem]' : 'w-[3.8rem]';
-  const selInputWidth = datetimeMode ? 'w-[6.9rem]' : 'w-[4.5rem]';
-  // Selection bounds follow the display unit; duration is an interval, so it
-  // stays elapsed time regardless.
-  const formatBound = (t: number): string => datetimeMode ? formatTimeOfDay(trackStartDate!, t, 2) : t.toFixed(2);
+  // Selection bounds follow the display unit; duration is an interval (there's
+  // no datetime equivalent of one), so Date mode falls back to a plain
+  // elapsed-seconds reading, but HMS mode formats it as HMS same as From/To.
+  const formatBound = (t: number): string => {
+    if (datetimeMode) return formatDateTime(trackStartDate!, t, 2, dateTimeFormat);
+    if (timeDisplayUnit === 'hms') return formatTime(t, 2);
+    return t.toFixed(2);
+  };
+  const formatDur = (d: number): string => {
+    if (timeDisplayUnit === 'hms') return formatTime(d, 2);
+    if (timeDisplayUnit === 'datetime') return `${d.toFixed(2)}s`;
+    return d.toFixed(2);
+  };
+  const maxBoundLength = datetimeMode
+    ? maxDateTimeLength(dateTimeFormat)
+    : timeDisplayUnit === 'hms' ? formatTime(duration || 0, 2).length : 0;
+  const selFieldWidth = maxBoundLength ? `${maxBoundLength + 1}ch` : '3.8rem';
+  const selInputWidth = maxBoundLength ? `${maxBoundLength + 2}ch` : '4.5rem';
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
@@ -426,12 +450,12 @@ function Toolbar({
             />
           ) : (
             <button
-              className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+              className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors whitespace-nowrap"
               style={{ width: timeBoxWidth }}
               data-tooltip={tooltips.jumpToTime}
-              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit, 2, trackStartDate)); }}
+              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit, 2, trackStartDate, dateTimeFormat)); }}
             >
-              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} trackStartDate={trackStartDate} />
+              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} trackStartDate={trackStartDate} dateTimeFormat={dateTimeFormat} />
             </button>
           )}
 
@@ -477,7 +501,8 @@ function Toolbar({
           const fieldInput = (
             <input
               autoFocus
-              className={`text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 ${selInputWidth} outline-none text-right`}
+              className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 outline-none text-right"
+              style={{ width: selInputWidth }}
               value={editingTimeRaw}
               onChange={e => setEditingTimeRaw(e.target.value)}
               onKeyDown={e => {
@@ -491,7 +516,8 @@ function Toolbar({
             <div key={field} className="flex items-center gap-1.5">
               {editingTimeField === field ? fieldInput : (
                 <button
-                  className={`text-xs font-mono px-1.5 h-5 ${selFieldWidth} bg-slate-700/50 rounded text-center transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
+                  className={`text-xs font-mono px-1.5 h-5 bg-slate-700/50 rounded text-center whitespace-nowrap transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
+                  style={{ width: selFieldWidth }}
                   onClick={() => {
                     if (has) { setEditingTimeField(field); setEditingTimeRaw(editVal); }
                     else if (canCreate) { setEditingTimeField(field); setEditingTimeRaw(''); }
@@ -508,7 +534,7 @@ function Toolbar({
             <div className="flex flex-col justify-center gap-0.5" data-help-target="selection-time">
               {renderField('selStart', formatBound(region.start), 'from', formatBound(region.start))}
               {renderField('selEnd', formatBound(region.end), 'to', formatBound(region.end))}
-              {renderField('selDur', (region.end - region.start).toFixed(2), 'dur', (region.end - region.start).toFixed(2))}
+              {renderField('selDur', formatDur(region.end - region.start), 'dur', formatDur(region.end - region.start))}
             </div>
           );
         })()}

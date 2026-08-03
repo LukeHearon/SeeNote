@@ -92,6 +92,11 @@ export const projectSettingsModal = {
   // Auto-pull preference
   get autoPullLabel() { return getOverride('ui.projectSettingsModal.autoPullLabel') ?? "Automatically pull remote changes"; },
   get autoPullHint() { return getOverride('ui.projectSettingsModal.autoPullHint') ?? "Merge in teammates' annotation changes on project open and every couple of minutes, without pushing your own edits."; },
+  // Datetime display format preference
+  get dateTimeFormatHeader() { return getOverride('ui.projectSettingsModal.dateTimeFormatHeader') ?? "Datetime Format"; },
+  get dateTimeFormatHint() { return getOverride('ui.projectSettingsModal.dateTimeFormatHint') ?? "How wall-clock datetimes (spectrogram ruler, running time, From/To fields) are displayed."; },
+  get dateTimeFormatFriendlyLabel() { return getOverride('ui.projectSettingsModal.dateTimeFormatFriendlyLabel') ?? "Friendly"; },
+  get dateTimeFormatIsoLabel() { return getOverride('ui.projectSettingsModal.dateTimeFormatIsoLabel') ?? "ISO 8601"; },
 };
 
 export const annotationToolEditModal = {

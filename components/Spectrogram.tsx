@@ -3,11 +3,11 @@ import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFil
 import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, DATETIME_LABEL_SPACING_PX } from '../utils/timeAxis';
-import { datetimeTicks, formatDatetimeRulerLabel } from '../utils/datetimeDisplay';
+import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
+import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import FilterHandles from './spectrogram/FilterHandles';
@@ -70,6 +70,8 @@ interface SpectrogramProps {
    */
   trackStartDate?: Date | null;
   timeDisplayUnit?: TimeDisplayUnit;
+  /** Style for wall-clock datetimes on the ruler. */
+  dateTimeFormat?: DateTimeFormat;
 }
 
 export interface SpectrogramHandle {
@@ -127,6 +129,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   hideLabels = false,
   trackStartDate = null,
   timeDisplayUnit = 'seconds',
+  dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -497,7 +500,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.stroke();
 
         const timeStr = datetimeRuler
-          ? formatDatetimeRulerLabel(trackStartDate, s, prevLabelled, timeStep)
+          ? formatDatetimeRulerLabel(trackStartDate, s, prevLabelled, timeStep, dateTimeFormat)
           : formatRulerTime(s, timeStep, timeRange);
         prevLabelled = s;
         // The leading full-date label is wide enough to hang off the left edge;
@@ -521,7 +524,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, trackStartDate, timeDisplayUnit]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, trackStartDate, timeDisplayUnit, dateTimeFormat]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation

@@ -18,6 +18,15 @@
 //   ss    second   (SS is accepted as a synonym)
 // Everything else in the pattern is a literal character.
 
+/**
+ * A fixed, arbitrary moment shared by the settings previews that illustrate a
+ * timestamp style — the filename-pattern preview and the datetime-display-format
+ * preview both show this same instant. Its parts are all distinct and
+ * unambiguous (month 7 vs day 31, hour 16 vs minute 56), so a mistyped pattern
+ * is visible in the preview.
+ */
+export const FILENAME_PREVIEW_DATE = new Date(2026, 6, 31, 16, 56, 12);
+
 export type FilenameTimeField = 'year4' | 'year2' | 'month' | 'day' | 'hour' | 'minute' | 'second';
 
 const TOKEN_RE = /YYYY|YY|MM|DD|HH|mm|ss|SS/;

@@ -10,8 +10,10 @@ import {
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
   Y_AXIS_WIDTH,
+  DEFAULT_DATE_TIME_FORMAT,
 } from '../constants';
 import { clamp, decimalsForTimes, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
+import type { DateTimeFormat } from '../utils/datetimeDisplay';
 import { timeToX, xToTime } from '../utils/viewportTransform';
 import type { FrameUnit } from '../utils/binIndex';
 import {
@@ -70,6 +72,8 @@ interface BuzzdetectPanelProps {
   timeDisplayUnit: TimeDisplayUnit;
   /** Wall-clock start of the track (null when unknown) — see Toolbar. */
   trackStartDate?: Date | null;
+  /** Style for wall-clock datetimes in the hover readout. */
+  dateTimeFormat?: DateTimeFormat;
   // Persisted UI state.
   thresholds: Record<string, number>;
   hiddenNeurons: string[];
@@ -104,6 +108,7 @@ export default function BuzzdetectPanel({
   selection,
   timeDisplayUnit,
   trackStartDate = null,
+  dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
   thresholds,
   hiddenNeurons,
   neuronColors: neuronColorOverrides,
@@ -973,7 +978,7 @@ export default function BuzzdetectPanel({
     return (
       <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
         <div className="text-slate-300">
-          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp, trackStartDate)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp, trackStartDate)}`}
+          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp, trackStartDate, dateTimeFormat)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp, trackStartDate, dateTimeFormat)}`}
         </div>
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {

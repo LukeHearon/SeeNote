@@ -9,13 +9,10 @@ import CollapsibleSection from './CollapsibleSection';
 import DraftNumberInput from './DraftNumberInput';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
 import { normalizeGitRemoteUrl } from '../utils/gitSync';
-import { formatFilenameTime, isUsableFilenameTimePattern } from '../utils/filenameTime';
+import { formatFilenameTime, isUsableFilenameTimePattern, FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
 
-// A fixed, arbitrary moment used to show what the pattern produces. Its parts
-// are all distinct and unambiguous (month 7 vs day 31, hour 16 vs minute 56),
-// so a mistyped pattern is visible in the preview.
-const PREVIEW_DATE = new Date(2026, 6, 31, 16, 56, 12);
-const PREVIEW_DATE_LABEL = '2026-07-31 4:56 PM';
+const PREVIEW_DATE = FILENAME_PREVIEW_DATE;
+const PREVIEW_DATE_LABEL = 'July 31, 2026 4:56 PM';
 
 interface Props {
   projectDir: string;

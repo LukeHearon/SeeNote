@@ -5,7 +5,9 @@ import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
+import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { DateTimeFormat, previewDateTimeFormat } from '../utils/datetimeDisplay';
+import { FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
 import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
@@ -50,6 +52,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   );
   const [autoPullRemoteChanges, setAutoPullRemoteChanges] = useState(
     project.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES,
+  );
+  const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormat>(
+    project.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT,
   );
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
@@ -157,6 +162,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
         : undefined,
       videoPaneAutoCollapse,
       autoPullRemoteChanges,
+      dateTimeFormat,
     };
     pendingRef.current = { settings, preferences };
 
@@ -412,6 +418,28 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                     <span className="block text-xs text-gray-500 mt-0.5">{projectSettingsModal.videoAutoCollapseHint}</span>
                   </span>
                 </label>
+              </div>
+
+              <div>
+                <h3 className="text-gray-300 text-sm font-medium mb-1">{projectSettingsModal.dateTimeFormatHeader}</h3>
+                <p className="text-xs text-gray-500 mb-3">{projectSettingsModal.dateTimeFormatHint}</p>
+                <div className="space-y-2">
+                  {(['friendly', 'iso'] as DateTimeFormat[]).map(fmt => (
+                    <label key={fmt} className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="radio"
+                        name="dateTimeFormat"
+                        checked={dateTimeFormat === fmt}
+                        onChange={() => setDateTimeFormat(fmt)}
+                        className="accent-blue-500"
+                      />
+                      <span className="text-sm text-gray-200">
+                        {fmt === 'friendly' ? projectSettingsModal.dateTimeFormatFriendlyLabel : projectSettingsModal.dateTimeFormatIsoLabel}
+                      </span>
+                      <span className="text-xs text-gray-500 font-mono">{previewDateTimeFormat(fmt, FILENAME_PREVIEW_DATE)}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

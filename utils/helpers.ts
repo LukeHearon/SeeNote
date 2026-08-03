@@ -1,6 +1,6 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
-import { formatDateTime } from './datetimeDisplay';
+import { formatDateTime, DateTimeFormat } from './datetimeDisplay';
 
 // Clamp `v` into the inclusive range [lo, hi]. Assumes lo <= hi.
 export const clamp = (v: number, lo: number, hi: number): number =>
@@ -57,8 +57,9 @@ export const formatTimeForUnit = (
   unit: TimeDisplayUnit,
   decimals: number = 2,
   trackStartDate: Date | null = null,
+  dateTimeFormat: DateTimeFormat = 'iso',
 ): string => {
-  if (unit === 'datetime' && trackStartDate) return formatDateTime(trackStartDate, seconds, decimals);
+  if (unit === 'datetime' && trackStartDate) return formatDateTime(trackStartDate, seconds, decimals, dateTimeFormat);
   if (unit === 'hms') return formatTime(seconds, decimals);
   return formatSeconds(seconds, decimals);
 };

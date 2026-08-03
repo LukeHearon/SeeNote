@@ -1,4 +1,5 @@
 import type { AnnotationTool, ProjectUiSettings, SpectrogramSettings, VideoMode } from './types';
+import type { DateTimeFormat } from './utils/datetimeDisplay';
 
 // Roseus 'r' perceptually-uniform colormap
 // © 2022 dofuuz — MIT License
@@ -102,6 +103,11 @@ export const DEFAULT_VIDEO_PANE_AUTO_COLLAPSE = true;
 // Preferences tab of project settings. Undefined (pre-existing
 // preferences.json) is treated as this default, for backwards compatibility.
 export const DEFAULT_AUTO_PULL_REMOTE_CHANGES = true;
+
+// Plain-English style ("August 3, 1:00p") reads better than ISO 8601 for most
+// users; ISO remains available as a per-user preference (ProjectPreferences.dateTimeFormat)
+// set in the Preferences tab of project settings.
+export const DEFAULT_DATE_TIME_FORMAT: DateTimeFormat = 'friendly';
 
 // Coerce a persisted videoMode to the current enum. The experimental
 // 'fast-slave' / 'fast-free' variants (and the original audio-master 'fast')
