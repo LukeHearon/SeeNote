@@ -1,19 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { BuzzdetectSeriesMode, Selection } from '../../types';
 import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, Y_AXIS_WIDTH } from '../../constants';
 import { createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { createViewportStore } from '../../utils/viewportStore';
 import {
   DEMO_DURATION,
+  DEMO_IDENT,
   DEMO_ROOT,
   DEMO_TRACK,
   demoAnnotatedTracks,
+  demoAnnotations,
   demoFiles,
   demoNonMediaFiles,
   makeDemoBuzzdetectData,
 } from '../../utils/demoProject';
+import { help } from '../../copy/help';
 import BuzzdetectPanel from '../BuzzdetectPanel';
 import FileTree from '../FileTree';
+import MassRenameModal from '../MassRenameModal';
 
 // Panels the guide renders against the example project (utils/demoProject.ts)
 // rather than the open one. They are the real components — only their data is
@@ -70,6 +74,71 @@ export function ExampleFilePanel() {
         nonMediaFiles={demoNonMediaFiles}
       />
     </div>
+  );
+}
+
+/**
+ * A modal, shown in place.
+ *
+ * Every modal in the app owns its own `fixed inset-0` backdrop, which would
+ * cover the whole guide window. A `transform` on an ancestor makes it the
+ * containing block for fixed-position descendants, so the modal lays itself out
+ * inside this box instead — no modal has to grow an "inline" variant, and what
+ * the reader sees is exactly what the app shows.
+ */
+function ModalStage({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative w-full h-[26rem] transform-gpu overflow-hidden rounded border border-slate-700 bg-slate-900/40">
+      {children}
+    </div>
+  );
+}
+
+/** Re-opens a dismissed example modal — nothing else would bring it back. */
+function ReopenButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center">
+      <button
+        onClick={onClick}
+        className="px-3 py-1.5 text-xs rounded border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+      >
+        {label}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Mass Rename over the example project's annotations. The real modal merges
+ * in-memory counts for the current track with a disk scan of every other track;
+ * the example project has one track, so the scan finds nothing to read and the
+ * counts shown are the in-memory ones.
+ */
+export function ExampleMassRename() {
+  const [annotations, setAnnotations] = useState(demoAnnotations);
+  const [open, setOpen] = useState(true);
+
+  return (
+    <ModalStage>
+      {open ? (
+        <MassRenameModal
+          annotations={annotations}
+          allTracks={[DEMO_TRACK]}
+          trackPath={DEMO_TRACK}
+          ident={DEMO_IDENT}
+          getAnnotationPath={() => null}
+          getIdent={() => DEMO_IDENT}
+          onClose={() => setOpen(false)}
+          onApply={async (oldText, newText) => {
+            const hits = annotations.filter(a => a.text === oldText);
+            setAnnotations(list => list.map(a => (a.text === oldText ? { ...a, text: newText } : a)));
+            return hits.length;
+          }}
+        />
+      ) : (
+        <ReopenButton label={help.live.reopen} onClick={() => setOpen(true)} />
+      )}
+    </ModalStage>
   );
 }
 

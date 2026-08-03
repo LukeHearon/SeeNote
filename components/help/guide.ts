@@ -392,6 +392,7 @@ export const GUIDE: Part[] = [
         target: 'tool-palette',
         blocks: () => [
           { kind: 'p', text: help.bulk.p_rename },
+          { kind: 'live', control: 'mass-rename' },
           { kind: 'h', id: 'find', text: help.bulk.h_find },
           { kind: 'p', text: help.bulk.p_find },
         ],

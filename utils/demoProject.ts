@@ -16,6 +16,8 @@ import { Annotation, AnnotationTool, BuzzdetectData, SpectrogramSettings } from 
 export const DEMO_DURATION = 137.5;
 export const DEMO_ROOT = '/Recordings/hive-3';
 export const DEMO_TRACK = `${DEMO_ROOT}/2024-06-14/morning-08h.wav`;
+/** The example track's ident — its project-relative path, minus the extension. */
+export const DEMO_IDENT = '2024-06-14/morning-08h';
 
 export const demoSpectrogramSettings: SpectrogramSettings = {
   minFreq: 0,

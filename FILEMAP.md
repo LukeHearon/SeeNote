@@ -25,7 +25,7 @@ Quick reference for agents. One phrase per file.
 - `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
 - `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
 - `components/help/LiveControls.tsx` — embeds the real controls in the guide, driving the open project (or local demo state when none is open, or when that control's panel doesn't exist in the host window)
-- `components/help/ExamplePanels.tsx` — the file panel and buzzdetect panel rendered against the example project (too big / too window-bound to mirror)
+- `components/help/ExamplePanels.tsx` — panels and modals rendered against the example project (too big / too window-bound to mirror)
 - `utils/demoProject.ts` — fixture project the guide's example panels render against
 - `components/HelpAnchor.tsx` — a term that ghosts a real control in the main window on hover
 - `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)

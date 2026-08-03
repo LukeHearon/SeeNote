@@ -14,7 +14,7 @@ import { BuzzdetectToggle, SpectrogramSettingsButton } from '../controls/Toolbar
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
-import { ExampleBuzzdetectPanel, ExampleFilePanel } from './ExamplePanels';
+import { ExampleBuzzdetectPanel, ExampleFilePanel, ExampleMassRename } from './ExamplePanels';
 import VolumeControl from '../VolumeControl';
 
 /** Which control a `live` block renders. */
@@ -31,7 +31,8 @@ export type LiveControlId =
   | 'file-panel-header'
   | 'file-panel'
   | 'tool-palette'
-  | 'buzzdetect-panel';
+  | 'buzzdetect-panel'
+  | 'mass-rename';
 
 // ---------------------------------------------------------------------------
 // Demo state
@@ -113,10 +114,10 @@ function Frame({ mode, wide, children }: { mode: Mode; wide?: boolean; children:
  * panel's x-axis IS the spectrogram's viewport). They say "example project" so
  * nobody mistakes the contents for their own.
  */
-const EXAMPLE_ONLY: ReadonlySet<LiveControlId> = new Set(['file-panel', 'buzzdetect-panel']);
+const EXAMPLE_ONLY: ReadonlySet<LiveControlId> = new Set(['file-panel', 'buzzdetect-panel', 'mass-rename']);
 
 /** Controls that want the content column's full width rather than hugging. */
-const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel']);
+const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel', 'mass-rename']);
 
 /**
  * Whether this control has something to drive in the main window. Most follow
@@ -294,6 +295,8 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
         return <ExampleFilePanel />;
       case 'buzzdetect-panel':
         return <ExampleBuzzdetectPanel />;
+      case 'mass-rename':
+        return <ExampleMassRename />;
       case 'tool-palette': {
         const tp = s.toolPalette ?? DEMO_PALETTE;
         const setTp = (patch: Partial<typeof tp>) => demo.set({ toolPalette: { ...tp, ...patch } });
