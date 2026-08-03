@@ -1,25 +1,42 @@
 // Deriving a subset timeline from buzzdetect results.
 //
-// Subset mode keeps only the time where the neurons the user picked actually
-// fired. What counts as "fired" follows the panel's current series mode, so the
-// subset always means the same thing as what the panel is drawing:
+// Subset mode keeps whole BINS of the panel's pinned bin width — never
+// individual frames — because that's the granularity the user is choosing
+// when they set a bin width and a threshold: "keep the 2s stretches where
+// [criterion] holds", not "keep whatever frames happen to clear it". What
+// "holds" means follows the panel's current series mode, so the subset always
+// means the same thing as what the panel is drawing:
 //
-//   activation      a frame is kept when ANY subset neuron's activation clears
-//                   its own threshold. The unit is one frame.
-//   detectionRate   frames are grouped into bins of the panel's pinned bin
-//                   width, and a whole bin is kept when the fraction of its
-//                   frames that fired reaches `minDetectionRate`. The unit is
-//                   one bin.
+//   activation      a bin is kept when ANY subset neuron's MEAN activation
+//                    over the bin's frames clears its own threshold.
+//   detectionRate   a bin is kept when the fraction of its frames where ANY
+//                    subset neuron fires reaches `minDetectionRate`.
 //
-// Multiple neurons are OR'd: a frame fires if any of them does. That's what lets
-// "show me buzzes" mean bee OR fly without running the subset twice.
+// Both are the same shape: aggregate each neuron over the bin, OR the neurons
+// together. Multiple neurons are OR'd so "show me buzzes" means bee OR fly
+// without running the subset twice.
 //
-// Contiguous kept frames are merged into one span by buildSubsetTimeline, so a
+// A kept bin's range is the bin's own nominal edges — `[b*binWidth,
+// (b+1)*binWidth)` — not the extent of whatever frames happen to fall inside
+// it. The bin is what was judged and what should be kept whole; frames merely
+// happen to tile it (evenly if the width divides the frame spacing, with a
+// remainder at each edge otherwise), and trimming to their extent would keep
+// a bin-sized DECISION but a frame-sized SELECTION.
+//
+// Bins are anchored to absolute file time (bucketFrameRange), matching how the
+// panel partitions frames when it groups them (utils/binIndex's
+// sourceBucketPieces) — so the subset always keeps or drops exactly the bins
+// the user was looking at. With no override, the bin width falls back to the
+// file's own frame length, where a bin IS a frame and this degenerates to the
+// old per-frame behaviour exactly.
+//
+// Contiguous kept bins are merged into one span by buildSubsetTimeline, so a
 // run of detections reads (and can be selected) as a single stretch of audio
-// rather than a chain of frame-sized pieces.
+// rather than a chain of bin-sized pieces.
 
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { bucketFrameRange } from './binIndex';
+import { buildAnyOverThresholdPrefix, buildPrefixSum, rangeMean, rangeSum } from './prefixSums';
 import { Timeline, buildSubsetTimeline, identityTimeline } from './subsetTimeline';
 
 export interface SubsetCriteria {
@@ -31,10 +48,10 @@ export interface SubsetCriteria {
   /** Minimum fraction of a bin's frames that must fire. detectionRate mode only. */
   minDetectionRate: number;
   /**
-   * Bin width (seconds) the detection rate is measured over. The panel's own
+   * Bin width (seconds) a bin is judged over, in EITHER mode. The panel's own
    * auto bin width changes with zoom, which would silently redefine the subset
-   * every time the user zoomed — so this is the PINNED width only, falling back
-   * to the file's frame length (where a rate is just the frame's own 0 or 1).
+   * every time the user zoomed — so this is the PINNED width only, falling
+   * back to the file's frame length (where a bin is just one frame).
    */
   binWidth: number;
 }
@@ -54,43 +71,34 @@ export function detectionRanges(
   if (picked.length === 0 || starts.length === 0) return [];
 
   const thresholds = picked.map(i => criteria.thresholdOf(neurons[i]));
-  const fires = (frame: number): boolean => {
-    for (let k = 0; k < picked.length; k++) {
-      if (values[picked[k]][frame] >= thresholds[k]) return true;
-    }
-    return false;
-  };
 
-  const out: { start: number; end: number }[] = [];
-
-  if (criteria.mode === 'activation') {
-    for (let i = 0; i < starts.length; i++) {
-      if (fires(i)) out.push({ start: starts[i], end: starts[i] + frameLength });
-    }
-    return out;
-  }
-
-  // detectionRate: whole bins, kept on the rate of their own frames. Bins are
-  // anchored to absolute time (bucketFrameRange), matching how the panel
-  // partitions frames when it groups them — so the bins the subset keeps are the
-  // bins the user was looking at.
+  // Whole bins, of the pinned width (never narrower than the file's own frame
+  // spacing — a mean or a rate over less than one frame means nothing).
   const bin = Math.max(criteria.binWidth, frameLength);
-  const minRate = criteria.minDetectionRate;
   const firstBin = Math.floor(starts[0] / bin);
   const lastBin = Math.floor(starts[starts.length - 1] / bin);
+
+  // Per-neuron mean-activation prefix sums (activation mode), or one shared
+  // "did any picked neuron fire this frame" prefix (detectionRate mode) — built
+  // once up front rather than scanned per bin, same prefix-sum approach the
+  // panel itself uses for these aggregates.
+  const meanPrefixes = criteria.mode === 'activation'
+    ? picked.map(i => buildPrefixSum(values[i]))
+    : null;
+  const anyFiredPrefix = criteria.mode === 'detectionRate'
+    ? buildAnyOverThresholdPrefix(picked.map((i, k) => ({ values: values[i], threshold: thresholds[k] })), starts.length)
+    : null;
+
+  const out: { start: number; end: number }[] = [];
   for (let b = firstBin; b <= lastBin; b++) {
     const r = bucketFrameRange(starts, bin, b);
     if (!r) continue;
-    let hits = 0;
-    for (let i = r.start; i <= r.end; i++) if (fires(i)) hits++;
-    const rate = hits / (r.end - r.start + 1);
-    // `>=` so a minimum of 0 keeps every bin holding frames, and a minimum of 1
-    // keeps only bins where every frame fired.
-    if (rate >= minRate) {
-      // The frames' own extent, not the bin's: a bin can reach past the last
-      // frame that starts inside it, and that tail is time no frame covers.
-      out.push({ start: starts[r.start], end: starts[r.end] + frameLength });
-    }
+    const keep = meanPrefixes
+      ? meanPrefixes.some((p, k) => rangeMean(p, r.start, r.end) >= thresholds[k])
+      // `>=` so a minimum of 0 keeps every bin holding frames, and a minimum
+      // of 1 keeps only bins where every frame fired.
+      : rangeSum(anyFiredPrefix!, r.start, r.end) / (r.end - r.start + 1) >= criteria.minDetectionRate;
+    if (keep) out.push({ start: b * bin, end: (b + 1) * bin });
   }
   return out;
 }

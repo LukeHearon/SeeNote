@@ -77,10 +77,38 @@ describe('detectionRanges — detection-rate mode', () => {
     expect(rate).toEqual(detectionRanges(data, criteria({ mode: 'activation' })));
   });
 
-  it('measures a kept bin over its frames, not the bin edge', () => {
-    // Frames stop at 9; a 20s bin reaches to 20, but only 0–10 carries frames.
+  it('keeps a bin at its own nominal edges, not the extent of its frames', () => {
+    // Frames stop at 9, but a kept bin is the DECISION unit — its whole
+    // nominal span is kept, not just the frames that happened to justify it.
+    // (buildSubsetTimeline clamps this to the real file duration downstream;
+    // detectionRanges itself doesn't know how long the file is.)
     const r = detectionRanges(data, criteria({ mode: 'detectionRate', binWidth: 20, minDetectionRate: 0 }));
-    expect(r).toEqual([{ start: 0, end: 10 }]);
+    expect(r).toEqual([{ start: 0, end: 20 }]);
+  });
+});
+
+describe('detectionRanges — binned activation mode', () => {
+  // Same ten frames, but judged as one 5s bin's MEAN activation rather than
+  // frame-by-frame: bee averages (-1+2+2+2-1)/5 = 0.8 in [0,5) and
+  // (-1-1-1+2-1)/5 = -0.4 in [5,10).
+  it('keeps a whole bin when its mean activation clears the threshold', () => {
+    const r = detectionRanges(data, criteria({ binWidth: 5, thresholdOf: () => 0 }));
+    expect(r).toEqual([{ start: 0, end: 5 }]);
+  });
+
+  it('drops a bin whose mean activation falls short', () => {
+    const r = detectionRanges(data, criteria({ binWidth: 5, thresholdOf: () => 1 }));
+    expect(r).toEqual([]);
+  });
+
+  it("ORs neurons against their OWN threshold, not a combined mean", () => {
+    // bee's mean never clears 10 in either bin, but fly's mean (-1, then
+    // -0.4) always clears its own very low threshold — so both bins are kept
+    // on fly alone, proving the OR checks each neuron independently rather
+    // than averaging bee and fly together first.
+    const thresholdOf = (n: string) => (n === 'bee' ? 10 : -1);
+    const r = detectionRanges(data, criteria({ neurons: ['bee', 'fly'], binWidth: 5, thresholdOf }));
+    expect(r).toEqual([{ start: 0, end: 5 }, { start: 5, end: 10 }]);
   });
 });
 

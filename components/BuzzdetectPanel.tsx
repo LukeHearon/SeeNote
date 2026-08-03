@@ -1304,25 +1304,29 @@ export default function BuzzdetectPanel({
                     </div>
                     {subsetNeurons.length === 0 ? (
                       <p className="text-slate-500 text-[11px]">{buzzdetectCopy.subsetNoNeurons}</p>
-                    ) : seriesMode === 'detectionRate' ? (
+                    ) : (
                       <>
-                        <div className="flex items-center gap-2">
-                          <span className="flex-1 text-[11px] text-slate-300">{buzzdetectCopy.subsetMinRateLabel}</span>
-                          <DraftNumberInput
-                            value={minDetectionRate}
-                            onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
-                            min={0}
-                            className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right text-slate-200 outline-none focus:border-[#e65161]"
-                          />
-                        </div>
+                        {seriesMode === 'detectionRate' && (
+                          <div className="flex items-center gap-2">
+                            <span className="flex-1 text-[11px] text-slate-300">{buzzdetectCopy.subsetMinRateLabel}</span>
+                            <DraftNumberInput
+                              value={minDetectionRate}
+                              onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
+                              min={0}
+                              className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right text-slate-200 outline-none focus:border-[#e65161]"
+                            />
+                          </div>
+                        )}
                         {/* The auto bin width changes with zoom, so subsetting by
                             it would silently redefine the subset every time the
-                            view moved. The rate is measured over the pinned
-                            width instead (the file's frame length until one is
-                            pinned, where a rate is just the frame's own 0 or 1). */}
+                            view moved. A bin is kept whole, on the pinned width
+                            instead (the file's frame length until one is
+                            pinned, where a bin is just one frame) — its mean
+                            activation in activation mode, its detection rate in
+                            detection rate mode. */}
                         <p className="text-slate-500 text-[10px]">{buzzdetectCopy.subsetPinBinWidth}</p>
                       </>
-                    ) : null}
+                    )}
                   </div>
                 )}
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
