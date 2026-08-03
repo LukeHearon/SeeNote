@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Grants the frontend the core event APIs. Without any capability file Tauri v2 denies every core plugin command, which silently broke `listen('open-file')` — the channel the OS \"Open With SeeNote\" handoff uses when the app is already running (see src-tauri/src/lib.rs and hooks/useOsOpenFile.ts). Everything else the frontend calls is an app-defined command, which the ACL does not gate.","local":true,"windows":["*"],"permissions":["core:event:default"]}}
