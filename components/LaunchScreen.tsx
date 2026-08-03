@@ -226,13 +226,7 @@ export default function LaunchScreen({
 
   const handleRemoveFile = async (e: React.MouseEvent, file: RecentFileEntry) => {
     e.stopPropagation();
-    const ok = await askConfirm({
-      title: launchScreen.unlinkFileTitle,
-      message: launchScreen.unlinkFileMessage,
-      confirmLabel: launchScreen.unlinkButton,
-      danger: true,
-    });
-    if (ok) await removeRecentFile(file.id);
+    await removeRecentFile(file.id);
   };
 
   // Re-link button on a non-ok row. Same flow as launchRelink — the button is
