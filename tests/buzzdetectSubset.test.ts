@@ -7,6 +7,7 @@ import {
   subsetCriteriaFrom,
   SubsetCriteria,
 } from '../utils/buzzdetectSubset';
+import { bucketFrameRange } from '../utils/binIndex';
 import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
 
 // Ten 1s frames at 0,1,...,9. `bee` fires at 1,2,3 and 7; `fly` fires at 5.
@@ -111,6 +112,52 @@ describe('detectionRanges — binned activation mode', () => {
     const thresholdOf = (n: string) => (n === 'bee' ? 10 : -1);
     const r = detectionRanges(data, criteria({ neurons: ['bee', 'fly'], binWidth: 5, thresholdOf }));
     expect(r).toEqual([{ start: 0, end: 5 }, { start: 5, end: 10 }]);
+  });
+});
+
+describe('detectionRanges — bin partition', () => {
+  // detectionRanges walks the frames forward rather than binary-searching each
+  // bin, so it has to land on the SAME partition the panel draws
+  // (binIndex.bucketFrameRange). The two disagree if the walk derives a frame's
+  // bin by dividing: at the native frame length every frame start sits exactly
+  // on a bin edge, and 0.96*i/0.96 is a float ulp under i often enough to shunt
+  // scattered frames into their neighbour's bin — which silently changes which
+  // stretches of audio the subset keeps.
+  const frame = 0.96;
+  const n = 500;
+  const noisy: BuzzdetectData = {
+    binWidth: frame,
+    neurons: ['bee'],
+    starts: Array.from({ length: n }, (_, i) => i * frame),
+    values: [Array.from({ length: n }, (_, i) => (i % 7 === 0 ? 2 : -1))],
+  };
+
+  // The partition stated directly: bin by bin, through the same lookup the
+  // panel uses. Slow (a binary search per bin) — which is why detectionRanges
+  // doesn't do it — but unambiguous about which frames belong to which bin.
+  const byBucket = (d: BuzzdetectData, bin: number, threshold: number) => {
+    const out: { start: number; end: number }[] = [];
+    const lastBin = Math.floor(d.starts[d.starts.length - 1] / bin);
+    for (let b = Math.floor(d.starts[0] / bin); b <= lastBin; b++) {
+      const r = bucketFrameRange(d.starts, bin, b);
+      if (!r) continue;
+      let sum = 0;
+      for (let i = r.start; i <= r.end; i++) sum += d.values[0][i];
+      if (sum / (r.end - r.start + 1) >= threshold) out.push({ start: b * bin, end: (b + 1) * bin });
+    }
+    return out;
+  };
+
+  it('agrees with the panel\'s bucket partition on float-noisy frame starts', () => {
+    for (const bin of [frame, 2 * frame, 5, 60]) {
+      expect(detectionRanges(noisy, criteria({ binWidth: bin })))
+        .toEqual(byBucket(noisy, Math.max(bin, frame), 0));
+    }
+  });
+
+  it('keeps every frame that fires, one bin each, at the native frame length', () => {
+    // 500 frames, every 7th firing → 72 kept bins, none merged or dropped.
+    expect(detectionRanges(noisy, criteria({ binWidth: frame }))).toHaveLength(72);
   });
 });
 

@@ -8,7 +8,6 @@ export interface CachedChunk {
   startSec: number;
   actualDurationSec: number;
   sampleRate: number;
-  lastAccessed: number;
 }
 
 /**
@@ -187,21 +186,33 @@ export class MultiTierSpectrogramCache {
 
   // ── Chunk access ────────────────────────────────────────────────────────────
 
+  /**
+   * Read-only: does NOT reorder the LRU. The renderer calls this once per
+   * offscreen COLUMN per frame — thousands of times — and the delete+set pair
+   * that used to mark recency here cost two Map mutations and a Date.now() on
+   * every one of them. Recency is instead marked once per frame, per chunk, by
+   * prefetchRanges (see touchViewport), which is a truer signal anyway: "this
+   * chunk is in the viewport", not "some column happened to sample it".
+   */
   getChunkForTime(tier: number, timeSec: number): CachedChunk | null {
     const tierConfig = this.tierByNumber.get(tier);
     if (!tierConfig) return null;
-    const idx = Math.floor(timeSec / tierConfig.chunkDuration);
     const cache = this.caches.get(tier);
     if (!cache) return null;
-    const chunk = cache.get(idx);
-    if (chunk) {
-      // Move to end of insertion order so Map iteration gives true LRU at front.
-      chunk.lastAccessed = Date.now();
+    return cache.get(Math.floor(timeSec / tierConfig.chunkDuration)) ?? null;
+  }
+
+  /**
+   * Mark the viewport's chunks as most-recently-used by reinserting them at the
+   * end of the Map, so iteration order stays true LRU for evictLRU.
+   */
+  private touchViewport(cache: Map<number, CachedChunk>, indices: readonly number[]): void {
+    for (const idx of indices) {
+      const chunk = cache.get(idx);
+      if (chunk === undefined) continue;
       cache.delete(idx);
       cache.set(idx, chunk);
-      return chunk;
     }
-    return null;
   }
 
   /**
@@ -291,17 +302,33 @@ export class MultiTierSpectrogramCache {
     // room for another one that is also still visible just thrashes.
     this.pinnedTier = tier;
     this.pinnedIndices = new Set(indices);
+    if (cache) this.touchViewport(cache, indices);
 
-    // Build center-out ordered list so the chunk under the viewport center
-    // (and playhead) renders first, expanding outward. Over the index LIST, not
-    // the index range, so a sparse subset still starts from the middle of the
-    // screen rather than the middle of the file.
+    // Order the fetch.
+    //
+    // Contiguous view: center-out, so the chunk under the viewport center (and
+    // playhead) renders first and the view fills outward from where the user is
+    // looking. Its chunks are neighbours in the file, so this costs nothing.
+    //
+    // Subset view: ascending file order instead. These chunks are scattered
+    // across the recording, and Rust's stream pool can only reuse an open
+    // stream positioned AT OR BEFORE the chunk it's asked for — a backward seek
+    // restarts the container scan from byte 0, which is ~300ms a chunk deep into
+    // a 50h MP3 (see src-tauri/src/audio/stream_pool.rs). Center-out alternates
+    // around the middle, so roughly half the requests seek backwards and pay
+    // that in full; ascending order chains them into short forward seeks. With
+    // twenty tiny segments on screen the fill order barely reads as different,
+    // and the scan cost dominates everything else about how fast it appears.
     const ordered: Array<{ tier: number; chunkIndex: number }> = [];
-    const center = indices.length >> 1;
-    let lo = center - 1, hi = center;
-    while (lo >= 0 || hi < indices.length) {
-      if (hi < indices.length) ordered.push({ tier, chunkIndex: indices[hi++] });
-      if (lo >= 0) ordered.push({ tier, chunkIndex: indices[lo--] });
+    if (ranges.length === 1) {
+      const center = indices.length >> 1;
+      let lo = center - 1, hi = center;
+      while (lo >= 0 || hi < indices.length) {
+        if (hi < indices.length) ordered.push({ tier, chunkIndex: indices[hi++] });
+        if (lo >= 0) ordered.push({ tier, chunkIndex: indices[lo--] });
+      }
+    } else {
+      for (const chunkIndex of indices) ordered.push({ tier, chunkIndex });
     }
 
     // Replace queue with new viewport, skipping already-cached or in-flight chunks.
@@ -372,7 +399,6 @@ export class MultiTierSpectrogramCache {
           startSec: result.start_sec,
           actualDurationSec: result.actual_duration_sec,
           sampleRate: result.sample_rate,
-          lastAccessed: Date.now(),
         };
         this.evictLRU(tier);
         cache.set(result.chunk_index, chunk);

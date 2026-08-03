@@ -114,8 +114,6 @@ export function detectionRanges(
   // Whole bins, of the pinned width (never narrower than the file's own frame
   // spacing — a mean or a rate over less than one frame means nothing).
   const bin = Math.max(criteria.binWidth, frameLength);
-  const firstBin = Math.floor(starts[0] / bin);
-  const lastBin = Math.floor(starts[starts.length - 1] / bin);
 
   // Per-neuron mean-activation prefix sums (activation mode), or one shared
   // "did any picked neuron fire this frame" prefix (detectionRate mode) — built
@@ -128,16 +126,33 @@ export function detectionRanges(
     ? buildAnyOverThresholdPrefix(picked.map((i, k) => ({ values: values[i], threshold: thresholds[k] })), starts.length)
     : null;
 
+  // One forward walk over the frames rather than a binary search per bin
+  // (`bucketFrameRange`). Same partition — frames are ascending, so consecutive
+  // frames below a bin's upper edge ARE that bin's frames — but linear in the
+  // frames instead of B·log F in the bins, and it never visits an empty bin. On
+  // a 50h file at the native frame length that's 187k bins, and the searches
+  // were most of what the user waits through when engaging the subset.
   const out: { start: number; end: number }[] = [];
-  for (let b = firstBin; b <= lastBin; b++) {
-    const r = bucketFrameRange(starts, bin, b);
-    if (!r) continue;
+  let i = 0;
+  while (i < starts.length) {
+    // The bin edges are the MULTIPLIED ones (`b*bin`), matching how the panel
+    // partitions the same grid (binIndex's frameStartRangeIn) — `starts[i]/bin`
+    // is only the guess, corrected against the real edges. The two disagree by a
+    // float ulp exactly at a boundary, which is the common case when the bin
+    // width IS the frame length: every frame sits on one.
+    let b = Math.floor(starts[i] / bin);
+    if (starts[i] < b * bin) b--;
+    else if (starts[i] >= (b + 1) * bin) b++;
+    const binEnd = (b + 1) * bin;
+    let end = i;
+    while (end + 1 < starts.length && starts[end + 1] < binEnd) end++;
     const keep = meanPrefixes
-      ? meanPrefixes.some((p, k) => rangeMean(p, r.start, r.end) >= thresholds[k])
+      ? meanPrefixes.some((p, k) => rangeMean(p, i, end) >= thresholds[k])
       // `>=` so a minimum of 0 keeps every bin holding frames, and a minimum
       // of 1 keeps only bins where every frame fired.
-      : rangeSum(anyFiredPrefix!, r.start, r.end) / (r.end - r.start + 1) >= criteria.minDetectionRate;
-    if (keep) out.push({ start: b * bin, end: (b + 1) * bin });
+      : rangeSum(anyFiredPrefix!, i, end) / (end - i + 1) >= criteria.minDetectionRate;
+    if (keep) out.push({ start: b * bin, end: binEnd });
+    i = end + 1;
   }
   return out;
 }
