@@ -100,6 +100,15 @@ export function frameRangeForTimeSpan(
   return { start, end };
 }
 
+/** Inclusive index range of frames whose START falls in [lo, hi), or null if none. */
+function frameStartRangeIn(starts: number[], lo: number, hi: number): { start: number; end: number } | null {
+  const start = firstStartAtOrAfter(starts, lo);
+  if (start >= starts.length) return null;
+  const end = firstStartAtOrAfter(starts, hi) - 1;
+  if (end < start) return null;
+  return { start, end };
+}
+
 /**
  * Inclusive index range of frames whose START falls in bucket `b` of width
  * `bucketWidth` (buckets anchored to absolute time, so they don't re-partition
@@ -113,12 +122,7 @@ export function bucketFrameRange(
   b: number,
 ): { start: number; end: number } | null {
   if (starts.length === 0 || !(bucketWidth > 0)) return null;
-  const bStart = b * bucketWidth;
-  const start = firstStartAtOrAfter(starts, bStart);
-  if (start >= starts.length) return null;
-  const end = firstStartAtOrAfter(starts, bStart + bucketWidth) - 1;
-  if (end < start) return null;
-  return { start, end };
+  return frameStartRangeIn(starts, b * bucketWidth, (b + 1) * bucketWidth);
 }
 
 // ── Units ───────────────────────────────────────────────────────────────────
@@ -148,11 +152,56 @@ export function isGroupedUnitWidth(binWidth: number, unitWidth: number): boolean
 }
 
 /**
+ * Frame-index range + DISPLAY extent for bucket `b` of a grid anchored to
+ * SOURCE (file) time, split into one piece per subset segment it touches.
+ *
+ * A grouped unit's bucket edges have to sit on the same absolute-time grid
+ * the subset's own criteria bucketed on (see buzzdetectSubset.ts's
+ * `detectionRanges`), not on the display axis — which is shifted by however
+ * much got cut before it, and so tiles a DIFFERENT grid than file time once
+ * anything's been spliced out. So the bucket is defined in source time first,
+ * then converted to display PER SEGMENT it touches (the map is a pure offset
+ * within one segment), which is what keeps a bucket's edges on the real
+ * file-time boundary regardless of what's been hidden ahead of it.
+ *
+ * Identity timeline → source time IS display time, so this is one piece at
+ * the plain `[b*bucketWidth, (b+1)*bucketWidth)` bucket, same as before.
+ */
+export function sourceBucketPieces(
+  timeline: Timeline,
+  starts: number[],
+  binWidth: number,
+  bucketWidth: number,
+  b: number,
+): FrameUnit[] {
+  const srcLo = b * bucketWidth;
+  const srcHi = srcLo + bucketWidth;
+  const out: FrameUnit[] = [];
+  for (const s of timeline.spansForSourceRange(srcLo, srcHi)) {
+    const lo = Math.max(srcLo, s.srcStart);
+    const hi = Math.min(srcHi, s.srcEnd);
+    if (hi <= lo) continue;
+    const dispLo = s.dispStart + (lo - s.srcStart);
+    const dispHi = s.dispStart + (hi - s.srcStart);
+    const r = frameStartRangeIn(starts, dispLo, dispHi);
+    if (!r) continue;
+    out.push({ ...r, tStart: dispLo, tEnd: dispHi });
+  }
+  return out;
+}
+
+/**
  * The unit containing time `t`, or null where it holds no frame — a gap
  * between frames (frame length overridden shorter than the frame spacing), a
  * bucket with no frames in it, or a time outside the data.
+ *
+ * Under a subset, `t` is a display time but the bucket it belongs to is
+ * decided in source time (see `sourceBucketPieces`) — and the segment cut may
+ * leave more than one piece of that bucket on screen, so the result is
+ * whichever piece actually contains `t`.
  */
 export function unitAtTime(
+  timeline: Timeline,
   starts: number[],
   binWidth: number,
   unitWidth: number,
@@ -162,50 +211,27 @@ export function unitAtTime(
     const i = binAtTime(starts, binWidth, t);
     return i === null ? null : { start: i, end: i, tStart: starts[i], tEnd: starts[i] + binWidth };
   }
-  const b = Math.floor(t / unitWidth);
-  const r = bucketFrameRange(starts, unitWidth, b);
-  return r === null ? null : { ...r, tStart: b * unitWidth, tEnd: (b + 1) * unitWidth };
-}
-
-/**
- * `u`, cut at every subset segment boundary it crosses — in time order, with
- * each piece's frame indices recomputed for the time it actually covers.
- *
- * A bin width is a drawing/aggregation choice; a segment is a statement about
- * which audio exists. So the segment wins: a bin wider than a segment (or one
- * that merely straddles a join) must not wash, highlight or select across the
- * cut, because the time on the far side is a different part of the file. One
- * unit in, one piece per segment out.
- *
- * Identity timeline (no subset) → `[u]`, untouched. A unit narrower than the
- * segment it sits in also comes back as one piece, so this is a no-op except at
- * the joins.
- */
-export function unitPiecesInSpans(
-  timeline: Timeline,
-  starts: number[],
-  binWidth: number,
-  u: FrameUnit,
-): FrameUnit[] {
-  if (timeline.identity) return [u];
-  const out: FrameUnit[] = [];
-  for (const s of timeline.spansForDisplayRange(u.tStart, u.tEnd)) {
-    const tStart = Math.max(u.tStart, s.dispStart);
-    const tEnd = Math.min(u.tEnd, s.dispStart + (s.srcEnd - s.srcStart));
-    if (tEnd <= tStart) continue;
-    const r = frameRangeForTimeSpan(starts, binWidth, tStart, tEnd);
-    if (!r) continue;
-    out.push({ ...r, tStart, tEnd });
-  }
-  return out;
+  if (!(unitWidth > 0)) return null;
+  const b = Math.floor(timeline.toSource(t) / unitWidth);
+  const pieces = sourceBucketPieces(timeline, starts, binWidth, unitWidth, b);
+  return pieces.find(p => t >= p.tStart && t < p.tEnd) ?? null;
 }
 
 /**
  * Enumerates, in time order, the units covering [t0, t1] — widened by one unit
  * each side so a polyline connects to its off-screen neighbours. Empty units
  * are skipped, so uncovered time is simply never visited.
+ *
+ * A bin width is a drawing/aggregation choice; a segment is a statement about
+ * which audio exists. So under a subset the segment wins: a bin wider than a
+ * segment (or one that merely straddles a join) must not wash, highlight or
+ * select across the cut, because the time on the far side is a different part
+ * of the file. `sourceBucketPieces` is what makes that true AND keeps the
+ * bucket grid itself anchored to file time — one function serving both jobs
+ * instead of grouping on the display axis and cutting the result afterward.
  */
 export function forEachUnitInSpan(
+  timeline: Timeline,
   starts: number[],
   binWidth: number,
   unitWidth: number,
@@ -223,13 +249,16 @@ export function forEachUnitInSpan(
     return;
   }
   if (!(unitWidth > 0)) return;
-  // Buckets are anchored to absolute time, not to the first visible frame, so
-  // scrolling can't re-partition which frames group together.
-  const firstBucket = Math.floor(t0 / unitWidth) - 1;
-  const lastBucket = Math.floor(t1 / unitWidth) + 1;
+  // The source-time extent of every segment touching the display window —
+  // buckets are anchored to file time, so the grid has to be walked in that
+  // domain, not the (possibly multi-segment) display one.
+  const spans = timeline.spansForDisplayRange(t0, t1);
+  if (spans.length === 0) return;
+  const firstBucket = Math.floor(spans[0].srcStart / unitWidth) - 1;
+  const lastBucket = Math.floor(spans[spans.length - 1].srcEnd / unitWidth) + 1;
   for (let b = firstBucket; b <= lastBucket; b++) {
-    const r = bucketFrameRange(starts, unitWidth, b);
-    if (!r) continue;
-    fn({ start: r.start, end: r.end, tStart: b * unitWidth, tEnd: (b + 1) * unitWidth });
+    for (const piece of sourceBucketPieces(timeline, starts, binWidth, unitWidth, b)) {
+      fn(piece);
+    }
   }
 }

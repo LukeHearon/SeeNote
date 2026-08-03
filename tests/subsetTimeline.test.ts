@@ -118,6 +118,30 @@ describe('spansForDisplayRange', () => {
   });
 });
 
+describe('spansForSourceRange', () => {
+  const tl = buildSubsetTimeline(
+    [{ start: 10, end: 12 }, { start: 50, end: 53 }, { start: 80, end: 81 }],
+    100,
+  );
+
+  it('returns every span the file-time range touches', () => {
+    expect(tl.spansForSourceRange(0, 90).map(s => s.srcStart)).toEqual([10, 50, 80]);
+  });
+
+  it('returns only the spans overlapping the range', () => {
+    expect(tl.spansForSourceRange(40, 60).map(s => s.srcStart)).toEqual([50]);
+    expect(tl.spansForSourceRange(0, 11).map(s => s.srcStart)).toEqual([10]);
+  });
+
+  it('returns nothing for a range entirely inside a gap', () => {
+    expect(tl.spansForSourceRange(20, 40)).toEqual([]);
+  });
+
+  it('returns nothing for a range past every span', () => {
+    expect(tl.spansForSourceRange(85, 90)).toEqual([]);
+  });
+});
+
 describe('clampToSpanOfDisplay', () => {
   const tl = buildSubsetTimeline([{ start: 10, end: 12 }, { start: 50, end: 53 }], 100);
 

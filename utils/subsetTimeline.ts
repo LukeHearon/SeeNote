@@ -76,6 +76,16 @@ export interface Timeline {
    */
   spansForDisplayRange(d0: number, d1: number): Span[];
   /**
+   * The spans overlapping the SOURCE (file-time) range [s0, s1) — the mirror
+   * of `spansForDisplayRange`, keyed on file time instead of display time.
+   * Needed anywhere a grid is anchored to the file's own absolute time (e.g. a
+   * buzzdetect bucket width): flooring the display axis directly floors a
+   * DIFFERENT grid once spans have been spliced together, because a span's
+   * display start is wherever the kept audio before it happened to add up to,
+   * essentially never a multiple of the grid's own width in file time.
+   */
+  spansForSourceRange(s0: number, s1: number): Span[];
+  /**
    * `disp`, clamped to the span containing `anchor`. This is what keeps a drag
    * from crossing a cut: two runs that are adjacent on screen are not adjacent
    * in the file, so a selection spanning them would name audio the user never
@@ -160,6 +170,18 @@ class SpanTimeline implements Timeline {
       const s = this.spans[i];
       if (s.dispStart >= d1) break;
       out.push(s);
+    }
+    return out;
+  }
+
+  spansForSourceRange(s0: number, s1: number): Span[] {
+    if (this.spans.length === 0) return [];
+    const out: Span[] = [];
+    const start = lastSpanAtOrBefore(this.spans, s0, s => s.srcStart);
+    for (let i = start; i < this.spans.length; i++) {
+      const s = this.spans[i];
+      if (s.srcStart >= s1) break;
+      if (s.srcEnd > s0) out.push(s);
     }
     return out;
   }

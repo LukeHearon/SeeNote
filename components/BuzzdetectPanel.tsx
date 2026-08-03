@@ -20,7 +20,6 @@ import {
   frameRangeForTimeSpan,
   isGroupedUnitWidth,
   unitAtTime,
-  unitPiecesInSpans,
   visibleBinRange,
 } from '../utils/binIndex';
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
@@ -372,13 +371,10 @@ export default function BuzzdetectPanel({
     const t = timeAtClientX(clientX);
     if (t === null) return null;
     // Null where the unit holds no frame — a gap between frames, or an empty
-    // bucket. Nothing is drawn there either, so there's nothing to select.
-    const u = unitAtTime(data.starts, data.binWidth, effectiveBinWidthRef.current, t);
-    if (!u) return null;
-    // A bin wider than a subset segment gets cut at the segment's edges, same
-    // as the drawn band — the piece under the cursor is the one it points at.
-    const pieces = unitPiecesInSpans(activeTimeline, data.starts, data.binWidth, u);
-    return pieces.find(p => t >= p.tStart && t < p.tEnd) ?? null;
+    // bucket. Nothing is drawn there either, so there's nothing to select. A
+    // bin wider than a subset segment resolves to the piece cut at the
+    // segment's edges, same as the drawn band (see utils/binIndex).
+    return unitAtTime(activeTimeline, data.starts, data.binWidth, effectiveBinWidthRef.current, t);
   }, [data, timeAtClientX, activeTimeline]);
 
   // A unit's own time extent, end clamped to EOF — the same span the panel
@@ -540,21 +536,20 @@ export default function BuzzdetectPanel({
         if (r) units.push({ ...r, xStart: c, xEnd: c + 1, xMid: c + 0.5, tMid: xToTime(c + 0.5, scrollLeft, pixelsPerSecond) });
       }
     } else {
-      forEachUnitInSpan(starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
-        // Cut at the subset's segment boundaries: a bin wider than a segment
-        // becomes one drawn unit per segment, so no band, point or wash reaches
-        // across a cut into audio from elsewhere in the file. Hit-testing cuts
-        // the same way, so what's painted stays what the cursor can pick.
-        for (const p of unitPiecesInSpans(activeTimeline, starts, binWidth, u)) {
-          units.push({
-            start: p.start,
-            end: p.end,
-            xStart: xOf(p.tStart),
-            xEnd: xOf(p.tEnd),
-            xMid: xOf((p.tStart + p.tEnd) / 2),
-            tMid: (p.tStart + p.tEnd) / 2,
-          });
-        }
+      // Buckets anchored to file time (utils/binIndex's sourceBucketPieces),
+      // cut at the subset's segment boundaries: a bin wider than a segment
+      // becomes one drawn unit per segment, so no band, point or wash reaches
+      // across a cut into audio from elsewhere in the file. Hit-testing cuts
+      // the same way, so what's painted stays what the cursor can pick.
+      forEachUnitInSpan(activeTimeline, starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
+        units.push({
+          start: u.start,
+          end: u.end,
+          xStart: xOf(u.tStart),
+          xEnd: xOf(u.tEnd),
+          xMid: xOf((u.tStart + u.tEnd) / 2),
+          tMid: (u.tStart + u.tEnd) / 2,
+        });
       });
     }
     // Width of one unit on screen, for the "is this too tight to draw?" gates —
