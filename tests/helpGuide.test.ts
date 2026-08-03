@@ -39,13 +39,25 @@ function helpTargetInventory(): Set<string> {
   return found;
 }
 
-/** `[text](target)` links in a copy string are highlight anchors, not URLs. */
+/** `[text](target)` links in a copy string are highlight/cross-reference anchors, not URLs. */
 function anchorTargets(text: string): string[] {
   const out: string[] = [];
   const re = /\[(?:.+?)\]\((.+?)\)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) out.push(m[1]);
   return out;
+}
+
+/**
+ * A link target is a bare highlight target, or that plus `@pageId[#headingId]`
+ * for a cross-reference — see components/help/HelpContent.tsx's parseLinkTarget.
+ */
+function parseAnchorTarget(raw: string): { target?: string; page?: string; heading?: string } {
+  const at = raw.indexOf('@');
+  if (at === -1) return { target: raw };
+  const target = raw.slice(0, at) || undefined;
+  const [page, heading] = raw.slice(at + 1).split('#');
+  return { target, page: page || undefined, heading };
 }
 
 describe('help guide structure', () => {
@@ -143,8 +155,32 @@ describe('help targets', () => {
           : block.kind === 'p' || block.kind === 'note' || block.kind === 'h' ? [block.text]
           : [];
         for (const text of texts) {
-          for (const target of anchorTargets(text)) {
-            expect(inventory.has(target), `page "${page.id}" links to missing target "${target}"`).toBe(true);
+          for (const raw of anchorTargets(text)) {
+            const { target } = parseAnchorTarget(raw);
+            if (target) expect(inventory.has(target), `page "${page.id}" links to missing target "${target}"`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it('points every inline cross-reference at a real, different page', () => {
+    for (const page of allPages()) {
+      for (const block of page.blocks()) {
+        const texts = block.kind === 'ul' ? block.items
+          : block.kind === 'p' || block.kind === 'note' || block.kind === 'h' ? [block.text]
+          : [];
+        for (const text of texts) {
+          for (const raw of anchorTargets(text)) {
+            const { page: refPage, heading } = parseAnchorTarget(raw);
+            if (!refPage) continue;
+            const target = findPage(refPage);
+            expect(target, `page "${page.id}" cross-references missing page "${refPage}"`).toBeDefined();
+            expect(refPage, `page "${page.id}" cross-references itself`).not.toBe(page.id);
+            if (heading) {
+              const headingIds = pageHeadings(target!).map(h => h.id);
+              expect(headingIds, `page "${page.id}" cross-references missing heading "${refPage}#${heading}"`).toContain(heading);
+            }
           }
         }
       }

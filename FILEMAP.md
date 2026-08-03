@@ -27,7 +27,8 @@ Quick reference for agents. One phrase per file.
 - `components/help/LiveControls.tsx` — embeds the real controls in the guide, driving the open project (or local demo state when none is open, or when that control's panel doesn't exist in the host window)
 - `components/help/ExamplePanels.tsx` — panels and modals rendered against the example project (too big / too window-bound to mirror)
 - `utils/demoProject.ts` — fixture project the guide's example panels render against
-- `components/HelpAnchor.tsx` — a term that ghosts a real control in the main window on hover
+- `components/HelpAnchor.tsx` — a term that ghosts a real control on hover (`target`) and/or is a clickable cross-reference to another guide page (`page`, with a superscript icon)
+- `components/HighlightOverlay.tsx` — shared ghost-overlay renderer; `HelpHighlightHost` drives it from the cross-window broadcast, `HelpWindow` drives it from local hover state (so the guide's own embedded chip highlights too)
 - `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
 - `utils/liveBridge.ts` — BroadcastChannel mirroring toolbar state to the guide and control actions back (`useLiveHost` / `useLiveClient`)
 - `copy/help.ts` — all guide prose, keyed `help.<page>.<block>`

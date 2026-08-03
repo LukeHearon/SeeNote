@@ -9,16 +9,40 @@ import type { LiveClient } from '../../utils/liveBridge';
 const kbdRenderer = (text: string, key: number) => (
   <kbd key={key} className="font-mono bg-slate-700 px-1 rounded text-slate-200">{text}</kbd>
 );
-const anchorRenderer = (target: string, text: string, key: number) => (
-  <HelpAnchor key={key} target={target}>{text}</HelpAnchor>
-);
 
-/** Inline markdown with the guide's kbd + highlight-anchor renderers. */
-export function md(text: string): React.ReactNode[] {
+/**
+ * A link's target string is either a bare `data-help-target` (hover highlight
+ * only — the original behavior) or that plus `@pageId[#headingId]` for a
+ * cross-reference: `@pageId` on its own is a cross-reference with no hover
+ * highlight; `highlight-target@pageId` gets both.
+ */
+function parseLinkTarget(raw: string): { target?: string; page?: string; heading?: string } {
+  const at = raw.indexOf('@');
+  if (at === -1) return { target: raw };
+  const target = raw.slice(0, at) || undefined;
+  const [page, heading] = raw.slice(at + 1).split('#');
+  return { target, page: page || undefined, heading: heading || undefined };
+}
+
+export interface NavigateFn {
+  (page: string, heading?: string): void;
+}
+
+/** Inline markdown with the guide's kbd + anchor renderers. */
+export function md(text: string, onNavigate: NavigateFn, onHighlight: (target: string | null) => void): React.ReactNode[] {
+  const anchorRenderer = (raw: string, linkText: string, key: number) => {
+    const { target, page, heading } = parseLinkTarget(raw);
+    return (
+      <HelpAnchor key={key} target={target} page={page} heading={heading} onNavigate={onNavigate} onHighlight={onHighlight}>
+        {linkText}
+      </HelpAnchor>
+    );
+  };
   return renderInlineMarkdown(text, { codeRenderer: kbdRenderer, anchorRenderer });
 }
 
-function renderBlock(block: Block, key: number, client: LiveClient): React.ReactNode {
+function renderBlock(block: Block, key: number, client: LiveClient, onNavigate: NavigateFn, onHighlight: (target: string | null) => void): React.ReactNode {
+  const t = (text: string) => md(text, onNavigate, onHighlight);
   switch (block.kind) {
     case 'live':
       return <LiveControl key={key} id={block.control} client={client} />;
@@ -33,13 +57,13 @@ function renderBlock(block: Block, key: number, client: LiveClient): React.React
         </h2>
       );
     case 'p':
-      return <p key={key} className="leading-relaxed">{md(block.text)}</p>;
+      return <p key={key} className="leading-relaxed">{t(block.text)}</p>;
     case 'note':
-      return <p key={key} className="text-xs text-slate-400 leading-relaxed">{md(block.text)}</p>;
+      return <p key={key} className="text-xs text-slate-400 leading-relaxed">{t(block.text)}</p>;
     case 'ul':
       return (
         <ul key={key} className="space-y-1.5 list-none">
-          {block.items.map((item, i) => <li key={i} className="leading-relaxed">{md(item)}</li>)}
+          {block.items.map((item, i) => <li key={i} className="leading-relaxed">{t(item)}</li>)}
         </ul>
       );
     case 'shortcuts':
@@ -49,19 +73,24 @@ function renderBlock(block: Block, key: number, client: LiveClient): React.React
   }
 }
 
-export function HelpContent({ page, client }: { page: Page; client: LiveClient }) {
+export function HelpContent({ page, client, onNavigate, onHighlight }: {
+  page: Page;
+  client: LiveClient;
+  onNavigate: NavigateFn;
+  onHighlight: (target: string | null) => void;
+}) {
   return (
     <article className={`space-y-3 text-sm text-slate-300 ${page.wide ? '' : 'max-w-3xl'}`}>
       <header className="pb-2">
         {page.target ? (
-          <HelpAnchor target={page.target} as="h1" className="text-2xl font-bold text-white">
+          <HelpAnchor target={page.target} onHighlight={onHighlight} as="h1" className="text-2xl font-bold text-white">
             {page.title()}
           </HelpAnchor>
         ) : (
           <h1 className="text-2xl font-bold text-white">{page.title()}</h1>
         )}
       </header>
-      {page.blocks().map((block, i) => renderBlock(block, i, client))}
+      {page.blocks().map((block, i) => renderBlock(block, i, client, onNavigate, onHighlight))}
     </article>
   );
 }

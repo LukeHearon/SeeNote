@@ -3,6 +3,7 @@ import { PanelLeft, X } from 'lucide-react';
 import { DEFAULT_PAGE_ID, findPage } from './guide';
 import { HelpContent } from './HelpContent';
 import { HelpNav } from './HelpNav';
+import { HighlightOverlay } from '../HighlightOverlay';
 import TooltipLayer from '../TooltipLayer';
 import { help } from '../../copy/help';
 import { useCollapsibleSidebar } from '../../hooks/useCollapsibleSidebar';
@@ -30,6 +31,22 @@ export function HelpWindow() {
   const liveClient = useLiveClient();
   const nav = useCollapsibleSidebar({ initialWidth: 240, minWidth: 150, maxWidth: 420, collapsedWidth: 40 });
 
+  // Ghosts a live-control chip embedded in this same window. Separate from the
+  // cross-window broadcast in HelpAnchor: a BroadcastChannel never delivers a
+  // message back to the instance that sent it, so the guide can't hear its own
+  // highlight requests that way.
+  const [localHighlight, setLocalHighlight] = useState<string | null>(null);
+
+  // A cross-reference can target a subsection; consumed by the scroll effect
+  // below once the page it points at has actually mounted.
+  const pendingHeadingRef = useRef<string | null>(null);
+
+  const navigate = (page: string, heading?: string) => {
+    if (!findPage(page)) return;
+    pendingHeadingRef.current = heading ?? null;
+    setPageId(page);
+  };
+
   useEffect(() => onHelpMessage(msg => {
     if (msg.type === 'navigate' && findPage(msg.page)) setPageId(msg.page);
   }), []);
@@ -42,9 +59,18 @@ export function HelpWindow() {
     return () => window.removeEventListener('beforeunload', clear);
   }, []);
 
-  // Every page starts at the top; without this, switching from a long page to a
-  // short one lands mid-document.
-  useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }); }, [pageId]);
+  // Every page starts at the top, unless a cross-reference asked for a
+  // subsection; without the top-reset, switching from a long page to a short
+  // one lands mid-document.
+  useEffect(() => {
+    const heading = pendingHeadingRef.current;
+    pendingHeadingRef.current = null;
+    if (heading) {
+      document.getElementById(`section-${heading}`)?.scrollIntoView({ block: 'start' });
+    } else {
+      scrollRef.current?.scrollTo({ top: 0 });
+    }
+  }, [pageId]);
 
   useHotkeys([
     { key: 'Escape', allowInInput: true, stop: true, handler: () => closeHelpWindow() },
@@ -94,9 +120,13 @@ export function HelpWindow() {
           </div>
         )}
         <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto px-8 py-6">
-          <HelpContent page={page} client={liveClient} />
+          <HelpContent page={page} client={liveClient} onNavigate={navigate} onHighlight={setLocalHighlight} />
         </div>
       </div>
+
+      {/* Ghosts this window's own embedded live-control chip when a
+          cross-window highlight anchor is hovered. */}
+      <HighlightOverlay target={localHighlight} />
 
       {/* The embedded controls carry the same data-tooltip attributes as the
           real ones, so the guide needs the layer that renders them. */}
