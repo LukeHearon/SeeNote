@@ -37,6 +37,9 @@ Quick reference for agents. One phrase per file.
 - `components/controls/SelectionTimeFields.tsx` — the from/to/dur trio
 - `components/controls/PlaybackSpeedControl.tsx` — speed readout, wheel-to-nudge, 1× toggle
 - `components/controls/FilterControls.tsx` — band-pass tool button and dry/wet strength slider
+- `components/controls/ToolbarToggles.tsx` — buzzdetect panel toggle and spectrogram-settings gear
+- `components/controls/SpectrogramSettingsPanel.tsx` — the settings popover body (level range, frequency, FFT)
+- `components/controls/FilePanelHeaderButtons.tsx` — expand/collapse, refresh, file filter, shuffle
 - `components/VolumeControl.tsx` — volume slider with 2× gain boost and mute
 
 ## Video

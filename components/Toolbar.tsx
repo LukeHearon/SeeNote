@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Settings, Activity } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp, SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../utils/helpers';
@@ -10,6 +9,7 @@ import { TimeReadout } from './controls/TimeReadout';
 import { SelectionTimeFields } from './controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from './controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from './controls/FilterControls';
+import { BuzzdetectToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { tooltips } from '../copy/tooltips';
 
@@ -233,24 +233,10 @@ function Toolbar({
       {(onToggleSettings !== undefined || buzzdetectAvailable) && (
         <div className="ml-auto flex items-center gap-1">
           {buzzdetectAvailable && (
-            <button
-              onClick={onToggleBuzzdetect}
-              className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${buzzdetectEnabled ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-              data-tooltip={tooltips.buzzdetectPanel}
-              data-help-target="buzzdetect-toggle"
-            >
-              <Activity size={16} />
-            </button>
+            <BuzzdetectToggle enabled={!!buzzdetectEnabled} onToggle={() => onToggleBuzzdetect?.()} />
           )}
           {onToggleSettings !== undefined && (
-            <button
-              onClick={onToggleSettings}
-              className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-              data-tooltip={tooltips.spectrogramSettings}
-              data-help-target="spectrogram-settings"
-            >
-              <Settings size={16} />
-            </button>
+            <SpectrogramSettingsButton open={!!showSettings} onToggle={onToggleSettings} />
           )}
         </div>
       )}

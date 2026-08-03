@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, Shuffle, AlignJustify, UnfoldVertical, FoldVertical, RefreshCw, EyeOff, Eye, Filter } from 'lucide-react';
+import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
+import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
 import { fileTree as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 
@@ -670,38 +671,15 @@ function FileTree({
           </span>
           <span className="text-[10px] text-slate-600 flex-none">({effectiveFiles.length})</span>
         </div>
-        <div className="flex items-center gap-0.5 flex-none">
-          {!shuffleMode && (
-            <button
-              onClick={toggleExpandCollapse}
-              className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-              data-tooltip={isAnyExpanded ? tooltips.collapseAll : tooltips.expandAll}
-            >
-              {isAnyExpanded ? <FoldVertical size={13} /> : <UnfoldVertical size={13} />}
-            </button>
-          )}
-          <button
-            onClick={onRefresh}
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            data-tooltip={tooltips.refreshFileList}
-          >
-            <RefreshCw size={13} />
-          </button>
-          <button
-            onClick={onToggleFileFilter}
-            className={`p-1 rounded hover:bg-slate-700 ${fileFilter !== 'all' ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
-            data-tooltip={fileFilter === 'all' ? tooltips.showAllFiles : fileFilter === 'unannotated' ? tooltips.showingUnannotated : tooltips.showingAnnotated}
-          >
-            {fileFilter === 'all' ? <Eye size={13} /> : fileFilter === 'unannotated' ? <EyeOff size={13} /> : <Filter size={13} />}
-          </button>
-          <button
-            onClick={onToggleShuffle}
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-            data-tooltip={shuffleMode ? tooltips.switchToSorted : tooltips.shuffleQueue}
-          >
-            {shuffleMode ? <AlignJustify size={13} /> : <Shuffle size={13} />}
-          </button>
-        </div>
+        <FilePanelHeaderButtons
+          shuffleMode={shuffleMode}
+          anyExpanded={isAnyExpanded}
+          fileFilter={fileFilter}
+          onToggleExpandCollapse={toggleExpandCollapse}
+          onRefresh={onRefresh}
+          onToggleFileFilter={onToggleFileFilter}
+          onToggleShuffle={onToggleShuffle}
+        />
       </div>
 
       {/* File list — grid row; inner flex row keeps scrollbar track a true sibling, not an overlay */}

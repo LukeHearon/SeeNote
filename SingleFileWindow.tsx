@@ -6,9 +6,9 @@ import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import Toolbar, { speedRangeFor } from './components/Toolbar';
-import LevelRangeSlider from './components/LevelRangeSlider';
+import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import TooltipLayer from './components/TooltipLayer';
-import { FrequencyScale, Selection, SpectrogramSettings, VideoMode } from './types';
+import { Selection, SpectrogramSettings, VideoMode } from './types';
 import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
 import { getFileInfo, toAssetUrl } from './utils/tauriCommands';
@@ -399,63 +399,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
           {showSettings && (
             <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-              <div className="p-4 space-y-6">
-                <LevelRangeSlider
-                  floor={settings.displayFloor}
-                  ceil={settings.displayCeil}
-                  onChange={(r) => setSettings(s => ({ ...s, ...r }))}
-                />
-                <div className="space-y-3">
-                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.freqHeader}</h4>
-                  <div className="flex space-x-2 pt-2">
-                    <div className="flex-1">
-                      <label className="text-xs text-slate-400">{annotationWindow.freqMin}</label>
-                      <input
-                        type="number"
-                        value={settings.minFreq}
-                        onChange={(e) => setSettings(s => ({ ...s, minFreq: Math.max(0, parseInt(e.target.value)) }))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-xs text-slate-400">{annotationWindow.freqMax}</label>
-                      <input
-                        type="number"
-                        value={settings.maxFreq}
-                        onChange={(e) => setSettings(s => ({ ...s, maxFreq: parseInt(e.target.value) }))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.fftHeader}</h4>
-                  <div>
-                    <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.windowSize}</label>
-                    <select
-                      value={settings.fftSize}
-                      onChange={(e) => setSettings(s => ({ ...s, fftSize: parseInt(e.target.value) }))}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                    >
-                      {[256, 512, 1024, 2048, 4096, 8192].map(n => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.scaleLabel}</label>
-                    <select
-                      value={settings.frequencyScale}
-                      onChange={(e) => setSettings(s => ({ ...s, frequencyScale: e.target.value as FrequencyScale }))}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                    >
-                      <option value="linear">{annotationWindow.scaleLinear}</option>
-                      <option value="log">{annotationWindow.scaleLog}</option>
-                      <option value="mel">{annotationWindow.scaleMel}</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
+              <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
             </div>
           )}
 

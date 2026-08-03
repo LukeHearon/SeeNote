@@ -6,7 +6,7 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
+import { Annotation, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename } from './utils/helpers';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
@@ -50,7 +50,7 @@ import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar, { speedRangeFor } from './components/Toolbar';
-import LevelRangeSlider from './components/LevelRangeSlider';
+import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
 import { tooltips } from './copy/tooltips';
 import { annotationWindow, debugConsole } from './copy/ui';
@@ -1835,69 +1835,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
                 <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                    <div className="p-4 space-y-6">
-                        {/* Level Range */}
-                        <LevelRangeSlider
-                            floor={settings.displayFloor}
-                            ceil={settings.displayCeil}
-                            onChange={(r) => setSettings(s => ({ ...s, ...r }))}
-                        />
-
-                        {/* Frequency */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.freqHeader}</h4>
-                            <div className="flex space-x-2 pt-2">
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">{annotationWindow.freqMin}</label>
-                                    <input
-                                        type="number"
-                                        value={settings.minFreq}
-                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">{annotationWindow.freqMax}</label>
-                                    <input
-                                        type="number"
-                                        value={settings.maxFreq}
-                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* FFT */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.fftHeader}</h4>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.windowSize}</label>
-                                <select
-                                    value={settings.fftSize}
-                                    onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                                >
-                                    {[256, 512, 1024, 2048, 4096, 8192].map(n => (
-                                        <option key={n} value={n}>{n}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.scaleLabel}</label>
-                                <select
-                                    value={settings.frequencyScale}
-                                    onChange={(e) => setSettings(s => ({...s, frequencyScale: e.target.value as FrequencyScale}))}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                                >
-                                    <option value="linear">{annotationWindow.scaleLinear}</option>
-                                    <option value="log">{annotationWindow.scaleLog}</option>
-                                    <option value="mel">{annotationWindow.scaleMel}</option>
-                                </select>
-                            </div>
-                        </div>
-
-                    </div>
+                    <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
                 </div>
              )}
 
