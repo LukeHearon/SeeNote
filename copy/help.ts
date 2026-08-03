@@ -14,11 +14,13 @@ export const help = {
   get showSections() { return getOverride('help.showSections') ?? "Show sections"; },
   get searchPlaceholder() { return getOverride('help.searchPlaceholder') ?? "Search the guide"; },
   get searchNoResults() { return getOverride('help.searchNoResults') ?? "No matching sections"; },
+  get back() { return getOverride('help.back') ?? "Back"; },
+  get forward() { return getOverride('help.forward') ?? "Forward"; },
 
   live: {
     get connected() { return getOverride('help.live.connected') ?? "Live"; },
     get demo() { return getOverride('help.live.demo') ?? "Open a project for live control"; },
-    get example() { return getOverride('help.live.example') ?? "Example project — not your data"; },
+    get example() { return getOverride('help.live.example') ?? "Example project"; },
     get reopen() { return getOverride('help.live.reopen') ?? "Open it again"; },
   },
 

@@ -540,6 +540,26 @@ export function pageHeadings(page: Page): { id: string; text: string }[] {
     .map(b => ({ id: b.id, text: b.text }));
 }
 
+/** Strip inline markdown tokens down to their plain text, for contexts (like a
+ * hover preview) that can't render markup. */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/_(.+?)_/g, '$1');
+}
+
+/**
+ * A markup-free blurb for a page's hover preview: its first paragraph, in
+ * full. The preview card itself clips this to a few lines with a fade, rather
+ * than this function truncating the words.
+ */
+export function pagePreview(page: Page): string {
+  const first = page.blocks().find((b): b is Extract<Block, { kind: 'p' }> => b.kind === 'p');
+  return first ? stripMarkdown(first.text) : '';
+}
+
 /**
  * Plain-text haystack for a page, for nav filtering. Markdown tokens are left
  * in — they're rare enough in search terms not to matter, and stripping them

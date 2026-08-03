@@ -21,13 +21,14 @@ Quick reference for agents. One phrase per file.
 
 ## Help guide (its own window — `index.html?window=help`)
 - `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/search derivations (keep in sync with behavior changes)
-- `components/help/HelpWindow.tsx` — two-column shell: nav and page body
+- `components/help/HelpWindow.tsx` — two-column shell: nav and page body; owns session browsing history (back/forward buttons and `Alt+←`/`Alt+→`) so a cross-reference or nav-rail click can be undone
 - `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
 - `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
 - `components/help/LiveControls.tsx` — embeds the real controls in the guide, driving the open project (or local demo state when none is open, or when that control's panel doesn't exist in the host window)
 - `components/help/ExamplePanels.tsx` — panels and modals rendered against the example project (too big / too window-bound to mirror)
 - `utils/demoProject.ts` — fixture project the guide's example panels render against
-- `components/HelpAnchor.tsx` — a term that ghosts a real control on hover (`target`) and/or is a clickable cross-reference to another guide page (`page`, with a superscript icon)
+- `components/HelpAnchor.tsx` — a term that ghosts a real control on hover (`target`) and/or is a clickable cross-reference to another guide page (`page`): light background + superscript icon, plus a delayed `HelpPreviewCard` of the target page
+- `components/HelpPreviewCard.tsx` — the cross-reference hover preview, styled like a shrunken guide page (title + opening blurb) rather than a generic tooltip
 - `components/HighlightOverlay.tsx` — shared ghost-overlay renderer; `HelpHighlightHost` drives it from the cross-window broadcast, `HelpWindow` drives it from local hover state (so the guide's own embedded chip highlights too)
 - `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
 - `utils/liveBridge.ts` — BroadcastChannel mirroring toolbar state to the guide and control actions back (`useLiveHost` / `useLiveClient`)
