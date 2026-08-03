@@ -5,13 +5,16 @@ import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
-import { HelpPanel } from './components/HelpPanel';
+import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_DATE_TIME_FORMAT, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
+import { showHelpPage } from './utils/helpChannel';
+import { useLiveHost } from './utils/liveBridge';
+import { isFilterAvailable } from './utils/videoPlaybackMode';
 import { isLinux } from './utils/platform';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
@@ -47,8 +50,8 @@ import FindLabelModal from './components/FindLabelModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
-import Toolbar from './components/Toolbar';
-import LevelRangeSlider from './components/LevelRangeSlider';
+import Toolbar, { speedRangeFor } from './components/Toolbar';
+import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
 import { tooltips } from './copy/tooltips';
 import { annotationWindow, debugConsole } from './copy/ui';
@@ -195,8 +198,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // (below), which also owns the 'c' hotkey that toggles it.
 
   const [showSettings, setShowSettings] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const [helpTab, setHelpTab] = useState<'guide' | 'annotations' | 'shortcuts'>('guide');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'info'|'error'}[]>([]);
 
@@ -1153,6 +1154,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     updateProjectPreferences(project.id, { ...project.preferences, fileFilter: next });
   }, [project, updateProjectPreferences]);
 
+  // The file panel's expand/collapse state lives inside FileTree; it reports it
+  // up so the help guide's live copy of the header buttons can show and drive it.
+  const fileTreeHeaderRef = useRef<{ toggleExpandCollapse: () => void } | null>(null);
+  const [fileTreeAnyExpanded, setFileTreeAnyExpanded] = useState(false);
+  const handleFileTreeHeaderState = useCallback((state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => {
+    fileTreeHeaderRef.current = state;
+    setFileTreeAnyExpanded(state.anyExpanded);
+  }, []);
+
   const handleFindLabelUseRegexChange = useCallback((useRegex: boolean) => {
     updateProjectPreferences(project.id, { ...project.preferences, findLabelUseRegex: useRegex });
   }, [project, updateProjectPreferences]);
@@ -1280,8 +1290,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
   };
   useHotkeys([
-      // Help panel — also fires inside text inputs, since help is universal.
-      { key: 'F1', allowInInput: true, handler: () => setShowHelp(prev => !prev) },
+      // Help guide — also fires inside text inputs, since help is universal.
+      { key: 'F1', allowInInput: true, handler: () => showHelpPage() },
 
       // Mod+key bindings. Undo/redo (useAnnotationHistory), band-pass filter
       // toggle (useBandPassFilter), spectrogram zoom (useSpectrogramZoomHotkeys),
@@ -1310,8 +1320,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           if (tool) examplePlayer.toggle(tool);
       }},
       // Escape — universal undo of the most-recently-activated layer. Fires
-      // even when a text input has focus (HelpPanel's `stop:true` Esc handler
-      // still wins when help is open). Layer kinds & clear actions:
+      // even when a text input has focus. (The guide's own Esc-to-close lives
+      // in its own window, so the two never contend.) Layer kinds & clear
+      // actions:
       //   annotationTool → setActiveToolKey(null)
       //   selection      → clear selection bounds
       //   filterTool     → setFilterToolActive(false)
@@ -1406,12 +1417,103 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     ));
   }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek]);
 
+  const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
+
+  // Mirror the toolbar's state into the help guide window and accept control
+  // input back from it, so the controls the guide documents are the live ones.
+  // Both sides here are the exact values the Toolbar below is given — the
+  // guide renders the same components against them.
+  useLiveHost(
+    {
+      hasTrack: !!videoSrc,
+      duration,
+      isPlaying,
+      isBuffering: isBuffering || exampleAudioActive,
+      volume,
+      muted,
+      playbackSpeed,
+      lastDefinedSpeed,
+      speedMin: liveSpeedRange.min,
+      speedMax: liveSpeedRange.max,
+      selection,
+      timeDisplayUnit: shownTimeUnit,
+      selectedTimeDisplayUnit: timeDisplayUnit,
+      trackStartMs: trackStartDate?.getTime() ?? null,
+      dateTimeFormat,
+      canGoPrevAnnotation,
+      canGoNextAnnotation,
+      playheadLocked,
+      filterToolActive,
+      filterUnavailable: !isFilterAvailable(isAudioTrack, videoMode),
+      filterEnabled: bandPassFilter !== null,
+      filterStrength,
+      bandPassFilter,
+      buzzdetectAvailable: project.buzzdetectDirectoryAbs !== null,
+      buzzdetectEnabled,
+      spectrogramSettings: settings,
+      spectrogramSettingsOpen: showSettings,
+      filePanel: {
+        fileFilter: (project?.preferences.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
+        shuffleMode,
+        anyExpanded: fileTreeAnyExpanded,
+      },
+      toolPalette: {
+        tools: annotationTools,
+        activeToolKey,
+        playingExampleToolId: examplePlayer.playingToolId,
+      },
+    },
+    {
+      play: togglePlay,
+      seek: (t, scroll) => seek(t, scroll),
+      skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      skipToEnd: () => { seek(duration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      prevAnnotation: () => spectrogramRef.current?.goToPrevAnnotation(),
+      nextAnnotation: () => spectrogramRef.current?.goToNextAnnotation(),
+      togglePlayheadLock: () => {
+        const willLock = !playheadLocked;
+        setPlayheadLocked(willLock);
+        if (willLock) spectrogramRef.current?.recenterPlayhead();
+      },
+      setVolume,
+      setMuted,
+      setPlaybackSpeed,
+      setLastDefinedSpeed,
+      setTimeDisplayUnit,
+      setSelection: s => { handleSelectionChange(s); handleToolbarAnnotationBoundsChange(s.start, s.end); },
+      toggleFilterTool: handleToggleFilterTool,
+      setFilterStrength: s => {
+        setFilterStrength(s);
+        if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
+      },
+      enableFilter: handleEnableBandPassFilter,
+      disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
+      toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
+      toggleSpectrogramSettings: () => setShowSettings(s => !s),
+      setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
+      toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
+      refreshFiles: handleRefreshFiles,
+      toggleFileFilter: handleToggleFileFilter,
+      toggleShuffle: toggleShuffle,
+      activateTool: handleToolActivate,
+      activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
+      openToolSettings: () => setShowToolSettings(true),
+      openMassRename: () => setShowMassRename(true),
+      openFindLabel: () => setShowFindLabel(true),
+      editTool: setPanelEditingToolIndex,
+      requestDeleteTool: setPanelDeletingToolIndex,
+      playExample: toolId => {
+        const tool = annotationTools.find(t => t.id === toolId);
+        if (tool) examplePlayer.toggle(tool);
+      },
+      showExamples: handleShowExamples,
+    },
+    currentTimeStoreRef.current,
+  );
+
 
   return (
-    <div
-      className="flex flex-col h-screen bg-slate-900 text-slate-200"
-      style={{ marginRight: showHelp ? '320px' : '0', transition: 'margin-right 300ms ease-in-out' }}
-    >
+    <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
       {/* Header */}
       <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative" data-help-target="toolbar">
         <div className="flex items-center space-x-4">
@@ -1515,14 +1617,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 <Bug size={18} />
             </button>
              <button
-                onClick={() => { setHelpTab('guide'); setShowHelp(prev => !prev); }}
-                className={`p-2 rounded hover:bg-slate-700 transition-colors ${showHelp ? 'text-[#e65161] bg-slate-700' : 'text-slate-400 hover:text-white'}`}
+                onClick={() => showHelpPage()}
+                className="p-2 rounded hover:bg-slate-700 transition-colors text-slate-400 hover:text-white"
                 data-tooltip={tooltips.helpGuide}
             >
                 <HelpCircle size={18} />
             </button>
              <button
-                onClick={() => { setHelpTab('shortcuts'); setShowHelp(true); }}
+                onClick={() => showHelpPage('shortcuts')}
                 className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
                 data-tooltip={tooltips.keyboardShortcuts}
             >
@@ -1582,12 +1684,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
 
-      <HelpPanel
-        open={showHelp}
-        tab={helpTab}
-        onTabChange={setHelpTab}
-        onClose={() => setShowHelp(false)}
-      />
+      <HelpHighlightHost />
 
       {/* Import-annotations conflict confirmation */}
       {pendingImport && (
@@ -1674,6 +1771,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             nonMediaFiles: allNonMediaFiles,
             initialEnteredFolderPath: project?.preferences.enteredFolderPath ?? null,
             onEnteredFolderChange: handleEnteredFolderChange,
+            onHeaderState: handleFileTreeHeaderState,
           };
 
           if (filePanelCollapsed) {
@@ -1798,69 +1896,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
                 <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                    <div className="p-4 space-y-6">
-                        {/* Level Range */}
-                        <LevelRangeSlider
-                            floor={settings.displayFloor}
-                            ceil={settings.displayCeil}
-                            onChange={(r) => setSettings(s => ({ ...s, ...r }))}
-                        />
-
-                        {/* Frequency */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.freqHeader}</h4>
-                            <div className="flex space-x-2 pt-2">
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">{annotationWindow.freqMin}</label>
-                                    <input
-                                        type="number"
-                                        value={settings.minFreq}
-                                        onChange={(e) => setSettings(s => ({...s, minFreq: Math.max(0, parseInt(e.target.value))}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                                <div className="flex-1">
-                                    <label className="text-xs text-slate-400">{annotationWindow.freqMax}</label>
-                                    <input
-                                        type="number"
-                                        value={settings.maxFreq}
-                                        onChange={(e) => setSettings(s => ({...s, maxFreq: parseInt(e.target.value)}))}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* FFT */}
-                        <div className="space-y-3">
-                            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-700">{annotationWindow.fftHeader}</h4>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.windowSize}</label>
-                                <select
-                                    value={settings.fftSize}
-                                    onChange={(e) => setSettings(s => ({...s, fftSize: parseInt(e.target.value)}))}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                                >
-                                    {[256, 512, 1024, 2048, 4096, 8192].map(n => (
-                                        <option key={n} value={n}>{n}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400 mb-1 block">{annotationWindow.scaleLabel}</label>
-                                <select
-                                    value={settings.frequencyScale}
-                                    onChange={(e) => setSettings(s => ({...s, frequencyScale: e.target.value as FrequencyScale}))}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm focus:border-[#e65161] outline-none text-white"
-                                >
-                                    <option value="linear">{annotationWindow.scaleLinear}</option>
-                                    <option value="log">{annotationWindow.scaleLog}</option>
-                                    <option value="mel">{annotationWindow.scaleMel}</option>
-                                </select>
-                            </div>
-                        </div>
-
-                    </div>
+                    <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
                 </div>
              )}
 

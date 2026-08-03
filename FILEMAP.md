@@ -8,9 +8,9 @@ Quick reference for agents. One phrase per file.
 - `index.tsx` / `main.tsx` — Vite/React mount point
 
 ## Toolbar & panels
-- `components/Toolbar.tsx` — top toolbar: playback controls, export, zoom, tool selection
+- `components/Toolbar.tsx` — composes the shared controls below into the strip above the spectrogram
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
-- `components/HelpPanel.tsx` — keyboard shortcut reference panel (keep in sync with behavior changes)
+- `components/HelpHighlightHost.tsx` — draws the ghost highlight over a real control when the guide window asks for it
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
@@ -18,6 +18,33 @@ Quick reference for agents. One phrase per file.
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
+
+## Help guide (its own window — `index.html?window=help`)
+- `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/search derivations (keep in sync with behavior changes)
+- `components/help/HelpWindow.tsx` — two-column shell: nav and page body; owns session browsing history (back/forward buttons and `Alt+←`/`Alt+→`) so a cross-reference or nav-rail click can be undone
+- `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
+- `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
+- `components/help/LiveControls.tsx` — embeds the real controls in the guide, driving the open project (or local demo state when none is open, or when that control's panel doesn't exist in the host window)
+- `components/help/ExamplePanels.tsx` — panels and modals rendered against the example project (too big / too window-bound to mirror)
+- `utils/demoProject.ts` — fixture project the guide's example panels render against
+- `components/HelpAnchor.tsx` — a term that ghosts a real control on hover (`target`) and/or is a clickable cross-reference to another guide page (`page`): light background + superscript icon, plus a delayed `HelpPreviewCard` of the target page
+- `components/HelpPreviewCard.tsx` — the cross-reference hover preview, styled like a shrunken guide page (title + opening blurb) rather than a generic tooltip
+- `components/HighlightOverlay.tsx` — shared ghost-overlay renderer; `HelpHighlightHost` drives it from the cross-window broadcast, `HelpWindow` drives it from local hover state (so the guide's own embedded chip highlights too)
+- `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
+- `utils/liveBridge.ts` — BroadcastChannel mirroring toolbar state to the guide and control actions back (`useLiveHost` / `useLiveClient`)
+- `copy/help.ts` — all guide prose, keyed `help.<page>.<block>`
+
+## Toolbar controls (shared by the toolbar and the guide's live copies)
+- `components/controls/TransportButtons.tsx` — start/prev/play/next/end plus the playhead lock
+- `components/controls/TimeReadout.tsx` — running playhead time, click-to-type, Seconds/HMS toggle
+- `components/controls/SelectionTimeFields.tsx` — the from/to/dur trio
+- `components/controls/PlaybackSpeedControl.tsx` — speed readout, wheel-to-nudge, 1× toggle
+- `components/controls/FilterControls.tsx` — band-pass tool button and dry/wet strength slider
+- `components/controls/ToolbarToggles.tsx` — buzzdetect panel toggle and spectrogram-settings gear
+- `components/controls/SpectrogramSettingsPanel.tsx` — the settings popover body (level range, frequency, FFT)
+- `components/controls/FilePanelHeaderButtons.tsx` — expand/collapse, refresh, file filter, shuffle
+- `components/VolumeControl.tsx` — volume slider with 2× gain boost and mute
+- `components/AnnotationToolsPanel.tsx` — the tool palette; already pure, so the guide embeds it directly
 
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer
@@ -62,7 +89,7 @@ Quick reference for agents. One phrase per file.
 - `src-tauri/src/commands/git_sync/merge.rs` — three-way merge of the remote tracking branch into HEAD with conflict resolution
 - `src-tauri/src/commands/git_sync/annotate.rs` — annotation set-merge (conflict-free model) and tree-diff change summaries
 - `src-tauri/src/commands/git_sync/repo.rs` — repo setup (open/init, branch, gitignore), staging/commit, and local/remote status checks
-- `src-tauri/src/commands/window.rs` — window bounds and secondary-window (sync guide, copy editor) commands; also `PendingOpenFile` state for OS "Open With" launches
+- `src-tauri/src/commands/window.rs` — window bounds and secondary-window (help guide, sync guide, copy editor) commands; also `PendingOpenFile` state for OS "Open With" launches
 - `src-tauri/src/lib.rs` — registers all commands in `invoke_handler!`; handles OS file-association launches (single-instance relaunch forwarding, `RunEvent::Opened` on macOS, cold-start argv on Windows/Linux)
 
 ## Hooks
@@ -72,6 +99,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useExamplePlayer.ts` — plays annotation-tool example clips
 - `hooks/useAnnotationHistory.ts` — undo/redo snapshot stack for annotations
 - `hooks/usePanelLayout.ts` — split-ratio / panel-width layout state and drag resizing
+- `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a left panel (the file panel and the guide's section rail)
 - `hooks/useBandPassFilter.ts` — band-pass filter tool state and draw/apply wiring
 - `hooks/useBuzzdetect.ts` — buzzdetect panel enable/load state for the active track
 - `hooks/useProjectPersistence.ts` — debounced persistence of project settings/preferences

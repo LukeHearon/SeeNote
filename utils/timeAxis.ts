@@ -6,6 +6,8 @@
 // because labels now show hours (e.g. "35h36m00s") — a fixed viewSpan
 // threshold cascade doesn't account for how much wider that makes each
 // label, so ticks must be chosen by the actual pixel gap instead.
+import { parseDatetimeInput } from './datetimeDisplay';
+
 const NICE_TIME_STEPS = [
   0.25, 0.5, 1, 2, 5, 10, 15, 30,
   60, 120, 300, 600, 900, 1800,
@@ -71,4 +73,42 @@ export function parseHMS(raw: string): number | null {
   if (h === undefined && mi === undefined && sec === undefined) return null;
   const total = parseFloat(h ?? '0') * 3600 + parseFloat(mi ?? '0') * 60 + parseFloat(sec ?? '0');
   return neg ? -total : total;
+}
+
+/**
+ * Parse a timestamp a user typed into a time field, in seconds.
+ *
+ * Accepts, in this order: `hh:mm:ss(.ff)`, `mm:ss(.ff)`, h/m/s shorthand
+ * (see parseHMS), and plain seconds. Returns null for anything else, and for
+ * negatives — the one field that allows a negative value (selection duration)
+ * parses with parseHMS directly rather than going through here.
+ *
+ * Shared by every time field so the accepted formats can't drift between the
+ * toolbar and the copy of it embedded in the help guide.
+ *
+ * `datetime` puts the field in wall-clock mode: a datetime or bare clock time
+ * is tried first and returned as an offset from the track's start, so "1:23"
+ * means twenty-three past one rather than 83 seconds in. Everything above
+ * still parses, so elapsed-time input keeps working in datetime mode.
+ */
+export function parseTimestamp(
+  raw: string,
+  datetime?: { start: Date; duration: number } | null,
+): number | null {
+  const s = raw.trim();
+  if (datetime) {
+    const asDatetime = parseDatetimeInput(s, datetime.start, datetime.duration);
+    if (asDatetime !== null) return asDatetime;
+  }
+  const hms = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+  if (hms) return parseInt(hms[1]) * 3600 + parseInt(hms[2]) * 60 + parseFloat(hms[3]);
+  const ms = s.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (ms) return parseInt(ms[1]) * 60 + parseFloat(ms[2]);
+  const shorthand = parseHMS(s);
+  if (shorthand !== null && shorthand >= 0) return shorthand;
+  // Anchored, so a string that merely *starts* with a number is rejected rather
+  // than silently truncated — bare parseFloat turns "1:2:3:4" into 1, which used
+  // to seek to one second instead of refusing a malformed timestamp.
+  if (/^\d*\.?\d+$/.test(s)) return parseFloat(s);
+  return null;
 }

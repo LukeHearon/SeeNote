@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { startDragSession, useCollapsibleSidebar } from './useCollapsibleSidebar';
 
 export interface PanelLayoutInitial {
   splitRatio: number;
@@ -33,6 +34,9 @@ export interface PanelLayoutApi {
 const VIDEO_COLLAPSE_MIN_RATIO = 0.2;
 const VIDEO_COLLAPSED_BAR_PX = 32;
 const LEFT_PANEL_COLLAPSE_THRESHOLD = 120;
+const LEFT_PANEL_MAX_WIDTH = 480;
+/** Width of the collapsed file-panel rail (w-10). */
+const LEFT_PANEL_COLLAPSED_PX = 40;
 
 /**
  * Panel sizing + drag handling for AnnotationWindow's three resizable
@@ -41,13 +45,26 @@ const LEFT_PANEL_COLLAPSE_THRESHOLD = 120;
  * by the owner (same DEFAULT_* values as before).
  */
 export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
-  const [filePanelCollapsed, setFilePanelCollapsed] = useState(false);
   const [videoCollapsed, setVideoCollapsed] = useState(false);
   const [hideLabels, setHideLabels] = useState(false);
 
   const [splitRatio, setSplitRatio] = useState(initial.splitRatio);
   const [leftPanelRatio, setLeftPanelRatio] = useState(initial.leftPanelRatio);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(initial.leftPanelWidth);
+
+  // The file panel's width + drag-to-collapse is the generic sidebar behaviour,
+  // shared with the help guide's section rail.
+  const {
+    width: leftPanelWidth,
+    setWidth: setLeftPanelWidth,
+    collapsed: filePanelCollapsed,
+    setCollapsed: setFilePanelCollapsed,
+    handleWidthDrag: handleLeftPanelWidthDrag,
+  } = useCollapsibleSidebar({
+    initialWidth: initial.leftPanelWidth,
+    minWidth: LEFT_PANEL_COLLAPSE_THRESHOLD,
+    maxWidth: LEFT_PANEL_MAX_WIDTH,
+    collapsedWidth: LEFT_PANEL_COLLAPSED_PX,
+  });
 
   // H held → hide annotation fills/text (border stays). keyup restores them.
   useEffect(() => {
@@ -74,18 +91,6 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
       window.removeEventListener('keyup', onKeyUp);
     };
   }, []);
-
-  // Shared window-drag scaffold: wires a mousemove listener and a one-shot
-  // mouseup that tears both down. Each handler supplies only its delta math.
-  const startDragSession = (onMove: (e: MouseEvent) => void) => {
-      const move = (e: MouseEvent) => onMove(e);
-      const up = () => {
-          window.removeEventListener('mousemove', move);
-          window.removeEventListener('mouseup', up);
-      };
-      window.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', up);
-  };
 
   const handleSplitDrag = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -116,22 +121,6 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
           const dividerOffset = 8 / totalHeight;
           if (Math.abs(newRatio - (splitRatio - dividerOffset)) < 0.025) newRatio = splitRatio - dividerOffset;
           setLeftPanelRatio(newRatio);
-      });
-  };
-
-  const handleLeftPanelWidthDrag = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = filePanelCollapsed ? 40 : leftPanelWidth;
-      startDragSession((moveEvent) => {
-          const delta = moveEvent.clientX - startX;
-          const newWidth = startWidth + delta;
-          if (newWidth < LEFT_PANEL_COLLAPSE_THRESHOLD) {
-              setFilePanelCollapsed(true);
-          } else {
-              setFilePanelCollapsed(false);
-              setLeftPanelWidth(Math.max(LEFT_PANEL_COLLAPSE_THRESHOLD, Math.min(480, newWidth)));
-          }
       });
   };
 

@@ -77,6 +77,40 @@ pub fn close_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Open (or focus) the help guide window. `page` selects the guide page to land
+/// on; when the window already exists the frontend is told to navigate there
+/// over the `seenote-help` BroadcastChannel, so we only need to focus it here.
+#[tauri::command]
+pub fn open_help_window(app: tauri::AppHandle, page: Option<String>) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("help") {
+        win.unminimize().ok();
+        win.show().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let url = match page.as_deref() {
+        Some(p) if !p.is_empty() => format!("index.html?window=help&page={p}"),
+        _ => "index.html?window=help".to_string(),
+    };
+    WebviewWindowBuilder::new(&app, "help", WebviewUrl::App(url.into()))
+        .title("SeeNote Guide")
+        .inner_size(1100.0, 760.0)
+        .min_inner_size(760.0, 520.0)
+        .center()
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_help_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("help") {
+        win.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_copy_editor_window(app: tauri::AppHandle) -> Result<(), String> {
     if app.get_webview_window("copy-editor").is_some() {
