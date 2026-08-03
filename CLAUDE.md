@@ -12,7 +12,8 @@ For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.m
 ## Non-obvious constraints
 
 - **Key "0" is reserved** for the Custom Annotation Tool — new annotations get an empty `text` field so the user can type a one-off name. Auto-focus on the annotation text input is triggered by `text === ""`. Do not repurpose key "0".
-- **Keep `components/HelpPanel.tsx` current**: when a user-facing behavior or hotkey changes, update the relevant Section and Shortcuts entry in the same change.
+- **Keep the help guide current**: when a user-facing behavior or hotkey changes, update the relevant page in the same change. Prose lives in `copy/help.ts` (keyed `help.<page>.<block>`); page structure lives in `components/help/guide.ts`; the shortcut map lives in `components/KeyboardShortcutsView.tsx`. The guide runs in its own window — see the "Help guide" section of `FILEMAP.md`.
+- **Toolbar controls are shared with the guide**: everything in `components/controls/` is rendered both by `Toolbar.tsx` and, live, by the guide (`components/help/LiveControls.tsx`). Keep them pure — state in, callbacks out, no project or engine access — and when adding a control prop, add the matching field to `LiveSnapshot` / `LiveHandlers` in `utils/liveBridge.ts` and wire it in both `AnnotationWindow` and `SingleFileWindow`.
 - **Tauri IPC**: never call `invoke()` directly from components. All Rust commands are wrapped in `utils/tauriCommands.ts` or `utils/projectCommands.ts` — add a wrapper there. When adding a new Rust command: implement in `src-tauri/src/commands/*.rs`, register in `src-tauri/src/lib.rs` `invoke_handler!`, then add a TypeScript wrapper.
 
 ## Tests

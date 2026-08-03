@@ -327,3 +327,19 @@ export async function findFirstValidAncestor(path: string): Promise<string> {
     current = current.substring(0, lastSep);
   }
 }
+
+// Playback-speed slider mapping. The slider is linear in log-space so that
+// halving and doubling take the same travel: slider [0,1] <-> speed
+// [SPEED_MIN, SPEED_MAX], with slider 0.5 landing exactly on 1.0x.
+export const SPEED_MIN = 0.25;
+export const SPEED_MAX = 4.0;
+
+export const speedToSlider = (speed: number): number => {
+  const lnMin = Math.log(SPEED_MIN), lnMax = Math.log(SPEED_MAX);
+  return (Math.log(speed) - lnMin) / (lnMax - lnMin);
+};
+
+export const sliderToSpeed = (slider: number): number => {
+  const lnMin = Math.log(SPEED_MIN), lnMax = Math.log(SPEED_MAX);
+  return Math.exp(lnMin + slider * (lnMax - lnMin));
+};

@@ -67,3 +67,29 @@ export function parseHMS(raw: string): number | null {
   const total = parseFloat(h ?? '0') * 3600 + parseFloat(mi ?? '0') * 60 + parseFloat(sec ?? '0');
   return neg ? -total : total;
 }
+
+/**
+ * Parse a timestamp a user typed into a time field, in seconds.
+ *
+ * Accepts, in this order: `hh:mm:ss(.ff)`, `mm:ss(.ff)`, h/m/s shorthand
+ * (see parseHMS), and plain seconds. Returns null for anything else, and for
+ * negatives — the one field that allows a negative value (selection duration)
+ * parses with parseHMS directly rather than going through here.
+ *
+ * Shared by every time field so the accepted formats can't drift between the
+ * toolbar and the copy of it embedded in the help guide.
+ */
+export function parseTimestamp(raw: string): number | null {
+  const s = raw.trim();
+  const hms = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+  if (hms) return parseInt(hms[1]) * 3600 + parseInt(hms[2]) * 60 + parseFloat(hms[3]);
+  const ms = s.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (ms) return parseInt(ms[1]) * 60 + parseFloat(ms[2]);
+  const shorthand = parseHMS(s);
+  if (shorthand !== null && shorthand >= 0) return shorthand;
+  // Anchored, so a string that merely *starts* with a number is rejected rather
+  // than silently truncated — bare parseFloat turns "1:2:3:4" into 1, which used
+  // to seek to one second instead of refusing a malformed timestamp.
+  if (/^\d*\.?\d+$/.test(s)) return parseFloat(s);
+  return null;
+}
