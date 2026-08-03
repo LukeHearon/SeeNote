@@ -128,32 +128,25 @@ export const maxScroll = (
 ): number =>
   Math.max(0, durationSec * pixelsPerSecond - containerWidth + containerWidth * 0.4);
 
-// Upper bound on how many spectrogram columns the renderer builds per CSS
-// pixel. 2 gives ~1 column per physical pixel on a retina display, which is
-// what the downsampling blit wants; higher just burns memory and CPU on detail
-// the screen can't show.
-export const MAX_COLS_PER_PIXEL = 2;
-
-// Column rate (columns/second) the offscreen spectrogram buffer is built at.
+// Column rate (columns/second) the offscreen spectrogram buffer is built at:
+// exactly ONE column per physical pixel.
 //
-// The buffer used to be built at the active tier's own colsPerSec, i.e. one
-// offscreen pixel per STFT column regardless of how many pixels the viewport
-// actually has. That is fine while a tier's column rate is near the pixel rate,
-// but the tier ladder bottoms out at a finite resolution: viewing a 50h file in
-// a 1600px window is ~0.009 px/s against a coarsest tier of 1 col/s, so the
-// buffer came out ~180,000 columns wide — past the browser's max canvas
-// dimension, and a ~370MB typed-array fill per redraw on the main thread.
+// Matching the buffer grid to the pixel grid makes the final blit a 1:1 copy.
+// Any other ratio means the blit resamples with a phase that slides as the
+// view scrolls: single-column transients pulse brighter and dimmer as the
+// bilinear weights shift under them ("twinkle"), and near-integer ratios beat
+// against the pixel grid into moire bands that crawl across the screen during
+// playback. Bridging between the active tier's own column rate and this grid
+// happens in the DATA domain instead (see sampleChunkColumnInto), anchored to
+// absolute column indices so every pixel is a pure function of file time.
 //
-// Capping at MAX_COLS_PER_PIXEL keeps the buffer proportional to the window
-// instead of to the file, so cost is bounded by screen size at every zoom
-// level. The cap only binds when the tier is finer than the screen can resolve;
-// zoomed in (where tier selection already guarantees colsPerSec >= pixelsPerSecond)
-// it returns tierColsPerSec unchanged and rendering is bit-identical to before.
+// This also keeps the buffer proportional to the window rather than the file:
+// built at a tier's own colsPerSec, a 50h file zoomed out wanted a ~180,000-
+// column canvas — past the browser's max canvas dimension.
 export const resolveRenderCps = (
-  tierColsPerSec: number,
   pixelsPerSecond: number,
-  maxColsPerPixel: number = MAX_COLS_PER_PIXEL,
-): number => Math.min(tierColsPerSec, pixelsPerSecond * maxColsPerPixel);
+  devicePixelRatio: number,
+): number => pixelsPerSecond * devicePixelRatio;
 
 // Scroll offset (in pixels) that centers `timeSec` in the visible window,
 // clamped so the view never scrolls before the start or past the end overrun.

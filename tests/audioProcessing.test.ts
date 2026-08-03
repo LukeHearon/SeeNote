@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { freqToY, yToFreq, toMel, fromMel } from '../utils/audioProcessing';
+import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto } from '../utils/audioProcessing';
 
 const H = 500;            // canvas height
 const MIN_F = 20;
@@ -190,4 +190,80 @@ describe('different canvas heights', () => {
       }
     });
   }
+});
+
+describe('sampleChunkColumnInto', () => {
+  // A chunk with 2 freq bins and 8 columns; data[c*2 + b] = c*10 + b, so any
+  // averaging/interp result is easy to compute by hand.
+  const nFreqBins = 2;
+  const nCols = 8;
+  const data = new Uint16Array(nCols * nFreqBins);
+  for (let c = 0; c < nCols; c++) {
+    data[c * 2] = c * 10;
+    data[c * 2 + 1] = c * 10 + 1;
+  }
+  const sample = (pos: number, posEnd: number, bins = 2) => {
+    const dst = new Uint16Array(4).fill(9999);
+    sampleChunkColumnInto(dst, 1, bins, data, nFreqBins, nCols, pos, posEnd);
+    return dst;
+  };
+
+  it('area-averages every column center inside the window', () => {
+    // Window [0, 4) holds centers 0..3 → mean of 0,10,20,30 = 15.
+    const dst = sample(0, 4);
+    expect(dst[1]).toBe(15);
+    expect(dst[2]).toBe(16);
+    // Only [dstOffset, dstOffset+bins) is written.
+    expect(dst[0]).toBe(9999);
+    expect(dst[3]).toBe(9999);
+  });
+
+  it('copies the column when exactly one center falls in the window', () => {
+    const dst = sample(1.6, 2.4); // only center 2 in [1.6, 2.4)
+    expect(dst[1]).toBe(20);
+    expect(dst[2]).toBe(21);
+  });
+
+  it('tiles adjacent windows over the columns with no gap or overlap', () => {
+    // Consecutive equal windows must partition the column centers — the
+    // invariance that pins each transient to exactly one output column.
+    const w = 2.5;
+    const seen: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      const pos = k * w;
+      const c0 = Math.ceil(pos);
+      const c1 = Math.ceil(pos + w);
+      for (let c = c0; c < c1; c++) seen.push(c);
+    }
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('linearly interpolates when the window holds no center (upsampling)', () => {
+    // Window [2.3, 2.55): no integer center inside; center 2.425 lerps
+    // between cols 2 and 3: 20 + 10*0.425 = 24.25 → rounds to 24.
+    const dst = sample(2.3, 2.55);
+    expect(dst[1]).toBe(24);
+    expect(dst[2]).toBe(25); // 21 + 10*0.425 = 25.25 → 25
+  });
+
+  it('clamps windows that run past the chunk edges', () => {
+    // Window beyond the last column: falls back to the last column's data.
+    const dst = sample(7.2, 9);
+    expect(dst[1]).toBe(70);
+    // Window starting before the chunk: averages only the real columns.
+    const dst2 = sample(-2, 2); // centers 0,1 → mean 5
+    expect(dst2[1]).toBe(5);
+  });
+
+  it('is deterministic under the stride cap for very wide windows', () => {
+    // 1 bin, 4096 columns of constant value: any strided subset averages to
+    // the same value, and two identical calls must agree exactly.
+    const wide = new Uint16Array(4096).fill(123);
+    const a = new Uint16Array(1);
+    const b = new Uint16Array(1);
+    sampleChunkColumnInto(a, 0, 1, wide, 1, 4096, 0, 4096);
+    sampleChunkColumnInto(b, 0, 1, wide, 1, 4096, 0, 4096);
+    expect(a[0]).toBe(123);
+    expect(b[0]).toBe(123);
+  });
 });

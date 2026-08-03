@@ -192,34 +192,25 @@ describe('centerScrollLeft', () => {
 });
 
 describe('resolveRenderCps', () => {
-  it('returns the tier rate unchanged when the screen can resolve it', () => {
-    // Zoomed into a 4s clip on a 1600px canvas: 400 px/s against tier 3's
-    // ~94 col/s. The cap (800) is far above the tier rate, so nothing changes.
-    expect(resolveRenderCps(93.75, 400)).toBe(93.75);
+  it('is exactly one column per physical pixel', () => {
+    // The 1:1 blit invariant: a buffer built at this rate maps onto the
+    // canvas with no rescale, so the stage-2 drawImage never resamples.
+    expect(resolveRenderCps(400, 2)).toBe(800);
+    expect(resolveRenderCps(400, 1)).toBe(400);
+    expect(resolveRenderCps(10, 1.5)).toBe(15);
   });
 
-  it('caps the column rate when the tier is finer than the screen', () => {
-    // 50h file in a 1600px window: ~0.0089 px/s against a coarsest tier of
-    // 1 col/s. Uncapped this asks for 180,000 columns; capped it asks for
-    // ~2 per pixel.
-    const pps = 1600 / (50 * 3600);
-    expect(resolveRenderCps(1, pps)).toBeCloseTo(pps * 2, 12);
-  });
-
-  it('keeps the buffer within a small multiple of the canvas width', () => {
+  it('keeps the buffer proportional to the window, not the file', () => {
+    // 50h file in a 1600px window: built at a tier's own column rate this
+    // asked for ~180,000 columns; at pixel resolution it's the canvas width.
     const canvasWidth = 1600;
     for (const durationSec of [4, 300, 3600, 50 * 3600]) {
-      const pps = canvasWidth / durationSec;
-      for (const tierCps of [93.75, 46.875, 1, 0.1]) {
-        const cps = resolveRenderCps(tierCps, pps);
+      for (const dpr of [1, 2]) {
+        const pps = canvasWidth / durationSec;
+        const cps = resolveRenderCps(pps, dpr);
         const bbWidth = Math.ceil(durationSec * cps) + 3;
-        expect(bbWidth).toBeLessThanOrEqual(canvasWidth * 2 + 4);
+        expect(bbWidth).toBeLessThanOrEqual(canvasWidth * dpr + 4);
       }
     }
-  });
-
-  it('honours an explicit maxColsPerPixel', () => {
-    expect(resolveRenderCps(100, 10, 1)).toBe(10);
-    expect(resolveRenderCps(100, 10, 4)).toBe(40);
   });
 });

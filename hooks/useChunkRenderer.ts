@@ -1,6 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
-import { drawSpectrogramChunk } from '../utils/audioProcessing';
+import { drawSpectrogramChunk, sampleChunkColumnInto } from '../utils/audioProcessing';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { resolveRenderCps } from '../utils/viewportTransform';
 import { Timeline, sourceRangesForDisplayRange } from '../utils/subsetTimeline';
@@ -117,9 +117,6 @@ export function useChunkRenderer({
   const offTierRef = useRef<Uint8Array>(new Uint8Array(0));
   // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
   const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Scratch canvases for the area-average pre-shrink step in stage 2 (ping-pong).
-  const preshrinkCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const preshrink2CanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // True while the visible viewport still has chunks resolving (first load or a
   // settings-driven rebuild). Drives the "building spectrogram" veil. Computed
@@ -155,14 +152,18 @@ export function useChunkRenderer({
 
     if (chunkCache && duration > 0) {
         // ── Two-stage spectrogram rendering pipeline ────────────────────────
-        // Stage 1 (THIS BLOCK): build a column-resolution viewport buffer
-        // (one entry per STFT column, no time-axis discretization here) and
-        // render it into an offscreen canvas at native column resolution.
+        // Stage 1 (THIS BLOCK): build a viewport buffer at exactly one column
+        // per PHYSICAL pixel and render it into an offscreen canvas. The
+        // bridge between the active tier's own column rate and this pixel grid
+        // happens here, in the data domain (fillColumn → sampleChunkColumnInto),
+        // anchored to absolute column indices so each column's bytes are a pure
+        // function of file time.
         //
-        // Stage 2: ctx.drawImage with sub-pixel destination shift lets the
-        // browser bilinearly resample the offscreen canvas onto the visible
-        // canvas. Smooth sub-pixel scrolling works because dx is fractional;
-        // no aliasing pattern can lock to the canvas pixel grid.
+        // Stage 2: a 1:1 drawImage of the offscreen canvas at an integer-
+        // snapped destination offset — a bit-exact translate, no resampling.
+        // Any rescale or fractional offset here re-interpolates every column
+        // with a phase that slides as the view scrolls, which reads as
+        // brightness twinkle / crawling moire during playback.
         //
         // Stage 2b (drawSpectrogramChunk in utils/audioProcessing.ts): handles
         // frequency-axis remap (linear/log/mel), contrast, brightness, and
@@ -200,13 +201,13 @@ export function useChunkRenderer({
           if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
-        // The "global" cps used for the offscreen-canvas grid. Starts from the
-        // active tier's colsPerSec — fallback chunks at other tiers are resampled by
-        // nearest-col lookup into this grid — but is capped at a few columns per CSS
-        // pixel so the buffer stays proportional to the window rather than to the
-        // file. Without the cap, zooming all the way out on a multi-hour file asks
-        // for a buffer tens of thousands of columns wide. See resolveRenderCps.
-        const cps = resolveRenderCps(activeTier.colsPerSec, pixelsPerSecond);
+        // The offscreen-canvas grid's column rate: one column per physical
+        // pixel, whatever the active tier's own colsPerSec is. Chunk data finer
+        // than the pixel grid is area-averaged into each column and coarser
+        // data interpolated (fillColumn below), so stage 2 never rescales.
+        // Also keeps the buffer proportional to the window, not the file.
+        // See resolveRenderCps.
+        const cps = resolveRenderCps(pixelsPerSecond, dpr);
 
         // Compute the offscreen backbuffer extent. One offscreen pixel per STFT
         // column at the active tier. Add 1-col margin on the left so sub-pixel
@@ -223,6 +224,36 @@ export function useChunkRenderer({
         const bbWidth = Math.max(1, Math.ceil(visibleDurationSec * cps) + 3);
         const bbEndCol = bbStartCol + bbWidth;
         const bbStartTime = bbStartCol / cps;
+
+        // Fill one offscreen column's freq-bin data from the cache. `absCol` is
+        // the column's absolute index on the cps grid, so everything below is a
+        // pure function of file time — the same absolute column always yields
+        // the same bytes wherever the viewport sits. Any viewport-phase
+        // dependence here becomes per-frame twinkle on screen. Returns the tier
+        // byte (tier+1, 0 = no data) for offTier / drawSpectrogramChunk's
+        // colMask. Shared by the incremental and full-redraw paths so the
+        // sampling math lives in exactly one place.
+        const fillColumn = (absCol: number, dst: Uint16Array, dstOffset: number): number => {
+          if (absCol < 0) return 0;
+          const dispT = absCol / cps;
+          if (dispT >= duration) return 0;
+          const t = timeline.toSource(dispT);
+          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+          if (!result) return 0;
+          const { chunk } = result;
+          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) return 0;
+          const chunkCps = chunk.nCols / chunk.actualDurationSec;
+          // The column covers [dispT, dispT + 1/cps) — one physical pixel of
+          // time; source rate equals display rate within a subset span, so the
+          // window is the same width in the chunk's coordinates.
+          const pos = (t - chunk.startSec) * chunkCps;
+          sampleChunkColumnInto(
+            dst, dstOffset, Math.min(nFreqBins, chunk.nFreqBins),
+            chunk.data, chunk.nFreqBins, chunk.nCols,
+            pos, pos + chunkCps / cps,
+          );
+          return result.tier + 1;
+        };
 
         // Decide between incremental scroll update and full redraw.
         //
@@ -346,22 +377,7 @@ export function useChunkRenderer({
           }
           const cb = incrCbBuf.current.subarray(0, count);
           for (let i = 0; i < count; i++) {
-            const absCol = bbStartCol + destStartCol + i;
-            if (absCol < 0) continue;
-            const dispT = absCol / cps;
-            if (dispT >= duration) continue;
-            const t = timeline.toSource(dispT);
-            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-            if (!result) continue;
-            const { chunk } = result;
-            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
-            const chunkCps = chunk.nCols / chunk.actualDurationSec;
-            let col = Math.round((t - chunk.startSec) * chunkCps);
-            if (col < 0) col = 0;
-            if (col >= chunk.nCols) col = chunk.nCols - 1;
-            const bins = Math.min(nFreqBins, chunk.nFreqBins);
-            vd.set(chunk.data.subarray(col * chunk.nFreqBins, col * chunk.nFreqBins + bins), i * nFreqBins);
-            cb[i] = result.tier + 1;
+            cb[i] = fillColumn(bbStartCol + destStartCol + i, vd, i * nFreqBins);
           }
           if (!incrCanvasRef.current) incrCanvasRef.current = document.createElement('canvas');
           const incrCanvas = incrCanvasRef.current;
@@ -466,24 +482,7 @@ export function useChunkRenderer({
           const colBuilt = colBuiltBuf.current.subarray(0, bbWidth);
 
           for (let i = 0; i < bbWidth; i++) {
-            const absCol = bbStartCol + i;
-            if (absCol < 0) continue;
-            const dispT = absCol / cps;
-            if (dispT >= duration) continue;
-            const t = timeline.toSource(dispT);
-            const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-            if (!result) continue;
-            const { chunk } = result;
-            if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
-            const chunkCps = chunk.nCols / chunk.actualDurationSec;
-            let col = Math.round((t - chunk.startSec) * chunkCps);
-            if (col < 0) col = 0;
-            if (col >= chunk.nCols) col = chunk.nCols - 1;
-            const bins = Math.min(nFreqBins, chunk.nFreqBins);
-            const srcOffset = col * chunk.nFreqBins;
-            const dstOffset = i * nFreqBins;
-            viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), dstOffset);
-            colBuilt[i] = result.tier + 1;
+            colBuilt[i] = fillColumn(bbStartCol + i, viewportData, i * nFreqBins);
           }
 
           drawSpectrogramChunk(
@@ -501,55 +500,18 @@ export function useChunkRenderer({
         prevCpsRef.current = cps;
         prevScanCacheVersionRef.current = cacheVersion;
 
-        // Blit offscreen → visible canvas with sub-pixel destination shift.
-        // dxPhys / dwPhys are in physical pixels (canvas.width is in physical px).
-        const dxCss = (bbStartTime - startTime) * pixelsPerSecond;
-        const dwCss = bbWidth / cps * pixelsPerSecond;
-        const dwPhys = dwCss * dpr;
-        const dxPhys = dxCss * dpr;
-
-        // When cps >> pps the blit is a large downsample. Browser bilinear uses
-        // only 2 taps regardless of scale, so it skips source columns and those
-        // weights shift frame-to-frame as dxPhys slides — "brightness shimmer".
-        // Fix: halve in ≤2× steps until we reach destination width, then blit
-        // ~1:1. Each ≤2× bilinear pass is an accurate area average.
-        let blitSrc: HTMLCanvasElement = offscreen as unknown as HTMLCanvasElement;
-        let blitW = bbWidth;
-        if (bbWidth / dwPhys > 1.5) {
-          // Use canvas.width + 4 as a stable target rather than round(dwPhys),
-          // which oscillates ±1 every frame as bbWidth changes and causes the
-          // preshrink canvas to resize (and clear) on every other frame.
-          const targetW = canvas.width + 4;
-          if (!preshrinkCanvasRef.current) preshrinkCanvasRef.current = document.createElement('canvas');
-          if (!preshrink2CanvasRef.current) preshrink2CanvasRef.current = document.createElement('canvas');
-          const scratch = [preshrinkCanvasRef.current, preshrink2CanvasRef.current];
-          let flip = 0;
-          while (blitW > targetW) {
-            const stepW = blitW / targetW > 2 ? Math.ceil(blitW / 2) : targetW;
-            const dst = scratch[flip++ & 1];
-            if (dst.width !== stepW) dst.width = stepW;
-            if (dst.height !== offscreen.height) dst.height = offscreen.height;
-            const dstCtx = dst.getContext('2d');
-            if (!dstCtx) break;
-            // 'copy' rather than the default source-over: these scratch canvases
-            // are reused across frames AND across tracks, and only resize (which
-            // clears) when the target width changes. Under source-over the
-            // transparent columns of an unresolved viewport would let the last
-            // image drawn here show through — the previous frame's content, or
-            // the previous track's entire spectrogram.
-            dstCtx.globalCompositeOperation = 'copy';
-            dstCtx.imageSmoothingEnabled = true;
-            dstCtx.imageSmoothingQuality = 'high';
-            dstCtx.drawImage(blitSrc, 0, 0, blitW, offscreen.height, 0, 0, stepW, offscreen.height);
-            blitSrc = dst;
-            blitW = stepW;
-          }
-        }
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(blitSrc, 0, 0, blitW, offscreen.height,
-                      dxPhys, 0, dwPhys, canvas.height);
+        // Blit offscreen → visible canvas. The buffer is one column per
+        // physical pixel (cps === pps·dpr), so this is a 1:1 copy — and the
+        // destination x is snapped to an integer pixel. With a fractional
+        // offset the browser re-interpolates every column each frame, and
+        // since that phase slides with the scroll, single-pixel transients
+        // pulse brighter/dimmer ("twinkle"). Snapping makes every frame a
+        // bit-exact translate of the buffer, at the cost of ≤half a physical
+        // pixel of position error against the overlays' time→x mapping —
+        // far below what the eye can register.
+        const dxPhys = Math.round((bbStartTime - startTime) * pixelsPerSecond * dpr);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(offscreen, dxPhys, 0);
 
         // Paint end-of-file region with the background color so it's distinct
         // from zero-value spectrogram data.

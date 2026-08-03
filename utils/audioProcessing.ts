@@ -118,16 +118,90 @@ export const freqAxisTicks = (
   return ticks;
 };
 
+// ── Time-axis column resampling ─────────────────────────────────────────────
+// One offscreen column covers the window [pos, posEnd) of a chunk's column
+// grid, expressed in fractional column coordinates (column centers sit at
+// integer coordinates). Fill dst[dstOffset .. dstOffset+bins) from that window:
+//
+//   - ≥2 centers in the window → equal-weight area average. A transient's
+//     energy lands in exactly one output column with a value that does not
+//     depend on sub-column phase — nearest-sampling instead made transients
+//     appear and disappear with scroll position.
+//   - exactly 1 center → plain copy of that column.
+//   - 0 centers (chunk coarser than the pixel grid, i.e. upsampling) → linear
+//     interpolation at the window center, matching the smoothness of the
+//     canvas-bilinear upsample this replaces.
+//
+// Callers anchor windows to absolute column indices, so the output is a pure
+// function of file time — the invariance that keeps the scrolling spectrogram
+// image rock-solid.
+let _colAccum = new Float64Array(0);
+export const sampleChunkColumnInto = (
+  dst: Uint16Array,
+  dstOffset: number,
+  bins: number,
+  data: Uint16Array,
+  nFreqBins: number,
+  nCols: number,
+  pos: number,
+  posEnd: number,
+): void => {
+  let c0 = Math.ceil(pos);
+  let c1 = Math.ceil(posEnd);
+  if (c0 < 0) c0 = 0;
+  if (c1 > nCols) c1 = nCols;
+  const span = c1 - c0;
+  if (span >= 2) {
+    // Cap the work for pathological windows (e.g. a much finer tier serving as
+    // a temporary fallback while zoomed far out): average a strided subset.
+    // The stride pattern starts at c0, an absolute index, so it's still
+    // deterministic per output column.
+    const stride = span > 32 ? Math.ceil(span / 32) : 1;
+    if (_colAccum.length < bins) _colAccum = new Float64Array(bins);
+    const acc = _colAccum;
+    acc.fill(0, 0, bins);
+    let n = 0;
+    for (let c = c0; c < c1; c += stride) {
+      const off = c * nFreqBins;
+      for (let b = 0; b < bins; b++) acc[b] += data[off + b];
+      n++;
+    }
+    const inv = 1 / n;
+    for (let b = 0; b < bins; b++) dst[dstOffset + b] = acc[b] * inv + 0.5;
+    return;
+  }
+  if (span === 1) {
+    dst.set(data.subarray(c0 * nFreqBins, c0 * nFreqBins + bins), dstOffset);
+    return;
+  }
+  // Upsampling: interpolate at the window center between its two neighbours.
+  const pc = (pos + posEnd) / 2;
+  let base = Math.floor(pc);
+  let frac = pc - base;
+  if (base < 0) { base = 0; frac = 0; }
+  if (base >= nCols - 1) { base = nCols - 1; frac = 0; }
+  const off = base * nFreqBins;
+  if (frac === 0) {
+    dst.set(data.subarray(off, off + bins), dstOffset);
+    return;
+  }
+  const off2 = off + nFreqBins;
+  for (let b = 0; b < bins; b++) {
+    const a = data[off + b];
+    dst[dstOffset + b] = a + (data[off2 + b] - a) * frac + 0.5;
+  }
+};
+
 // NOTE TO FUTURE READERS / CODE AUDITORS:
 // This function does NOT decide which STFT column lands on which pixel.
-// It is invoked by the offscreen-canvas builder in `Spectrogram.tsx`,
-// which has already built a column-resolution viewport buffer where
-// `specWidth === canvasWidth` (one data column per offscreen-canvas
-// pixel). Time-axis resampling onto the visible canvas happens later
-// via `ctx.drawImage` with bilinear filtering. Here we only do per-
+// It is invoked by the offscreen-canvas builder in `useChunkRenderer.ts`,
+// which has already resampled chunk data onto a one-column-per-physical-
+// pixel buffer (via sampleChunkColumnInto above) where `specWidth ===
+// canvasWidth`. The visible canvas then receives a 1:1 pixel-snapped
+// blit — no further time-axis resampling anywhere. Here we only do per-
 // pixel work: frequency-axis mapping (linear/log/mel) and colormap
 // lookup. `col === x` by construction — do not reintroduce a time-axis
-// remap without first reading the offscreen pipeline in Spectrogram.tsx.
+// remap without first reading the offscreen pipeline in useChunkRenderer.ts.
 export const drawSpectrogramChunk = (
   ctx: CanvasRenderingContext2D,
   specData: Uint16Array,
