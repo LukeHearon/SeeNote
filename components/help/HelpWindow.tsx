@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { PanelLeft, X } from 'lucide-react';
 import { DEFAULT_PAGE_ID, findPage } from './guide';
 import { HelpContent } from './HelpContent';
 import { HelpNav } from './HelpNav';
 import TooltipLayer from '../TooltipLayer';
 import { help } from '../../copy/help';
+import { useCollapsibleSidebar } from '../../hooks/useCollapsibleSidebar';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import { onHelpMessage, postHelpMessage } from '../../utils/helpChannel';
 import { useLiveClient } from '../../utils/liveBridge';
@@ -27,6 +28,7 @@ export function HelpWindow() {
   // Mirrors the main window's toolbar state so the guide's embedded controls
   // drive the open project — see utils/liveBridge.ts.
   const liveClient = useLiveClient();
+  const nav = useCollapsibleSidebar({ initialWidth: 240, minWidth: 150, maxWidth: 420, collapsedWidth: 40 });
 
   useEffect(() => onHelpMessage(msg => {
     if (msg.type === 'navigate' && findPage(msg.page)) setPageId(msg.page);
@@ -64,9 +66,33 @@ export function HelpWindow() {
       </header>
 
       <div className="flex-1 flex min-h-0">
-        <div className="w-60 flex-none min-h-0">
-          <HelpNav activePageId={page.id} onSelect={setPageId} />
-        </div>
+        {/* Section rail — drag the right edge to resize, drag past the minimum
+            to collapse it to a strip, exactly as the file panel behaves. */}
+        {nav.collapsed ? (
+          <div className="flex-none w-10 min-h-0 bg-slate-900/60 border-r border-slate-700 flex flex-col items-center pt-2 relative">
+            <button
+              onClick={() => nav.setCollapsed(false)}
+              className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+              data-tooltip={help.showSections}
+            >
+              <PanelLeft size={16} />
+            </button>
+            <div
+              className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+              style={{ right: '-3px', width: '6px' }}
+              onMouseDown={nav.handleWidthDrag}
+            />
+          </div>
+        ) : (
+          <div className="flex-none min-h-0 relative" style={{ width: nav.width }}>
+            <HelpNav activePageId={page.id} onSelect={setPageId} />
+            <div
+              className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+              style={{ right: '-3px', width: '6px' }}
+              onMouseDown={nav.handleWidthDrag}
+            />
+          </div>
+        )}
         <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto px-8 py-6">
           <HelpContent page={page} client={liveClient} />
         </div>

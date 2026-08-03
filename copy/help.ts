@@ -11,6 +11,7 @@ import { getOverride } from './overrideStore';
 export const help = {
   get windowTitle() { return getOverride('help.windowTitle') ?? "SeeNote Guide"; },
   get navAriaLabel() { return getOverride('help.navAriaLabel') ?? "Guide sections"; },
+  get showSections() { return getOverride('help.showSections') ?? "Show sections"; },
   get searchPlaceholder() { return getOverride('help.searchPlaceholder') ?? "Search the guide"; },
   get searchNoResults() { return getOverride('help.searchNoResults') ?? "No matching sections"; },
 
