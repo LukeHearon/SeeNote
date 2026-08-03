@@ -599,15 +599,14 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
-    // Subset segment joins — the same seams the spectrogram marks (dashed),
-    // emphasized here with a solid line and small flags top/bottom: this panel
-    // is what a subsetted run of detections is drawn from, so a join here is
-    // where one detection's frames end and the next one's begin.
+    // Subset segment joins — the same seams the spectrogram marks, drawn the
+    // same way (gold, dashed), so a cut reads identically on both: a splice,
+    // not a marker unique to one panel.
     if (subsetJoins.length > 0) {
       ctx.save();
-      ctx.strokeStyle = '#fbbf24';
-      ctx.fillStyle = '#fbbf24';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
       for (const t of subsetJoins) {
         const x = xOf(t);
         if (x < -1 || x > width + 1) continue;
@@ -615,15 +614,6 @@ export default function BuzzdetectPanel({
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
-        const FLAG = 5;
-        ctx.beginPath();
-        ctx.moveTo(x - FLAG, 0); ctx.lineTo(x + FLAG, 0); ctx.lineTo(x, FLAG);
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(x - FLAG, h); ctx.lineTo(x + FLAG, h); ctx.lineTo(x, h - FLAG);
-        ctx.closePath();
-        ctx.fill();
       }
       ctx.restore();
     }
