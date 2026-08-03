@@ -159,11 +159,11 @@ export function useChunkRenderer({
         // anchored to absolute column indices so each column's bytes are a pure
         // function of file time.
         //
-        // Stage 2: a 1:1 drawImage of the offscreen canvas at an integer-
-        // snapped destination offset — a bit-exact translate, no resampling.
-        // Any rescale or fractional offset here re-interpolates every column
-        // with a phase that slides as the view scrolls, which reads as
-        // brightness twinkle / crawling moire during playback.
+        // Stage 2: a 1:1 drawImage of the offscreen canvas at a fractional
+        // (sub-pixel) destination offset. Because the scale is exactly 1:1,
+        // the bilinear pass only blends immediate neighbour columns — smooth
+        // scrolling with no moire. Any RESCALE here instead beats against the
+        // pixel grid and reads as crawling bands / flicker during playback.
         //
         // Stage 2b (drawSpectrogramChunk in utils/audioProcessing.ts): handles
         // frequency-axis remap (linear/log/mel), contrast, brightness, and
@@ -500,18 +500,21 @@ export function useChunkRenderer({
         prevCpsRef.current = cps;
         prevScanCacheVersionRef.current = cacheVersion;
 
-        // Blit offscreen → visible canvas. The buffer is one column per
-        // physical pixel (cps === pps·dpr), so this is a 1:1 copy — and the
-        // destination x is snapped to an integer pixel. With a fractional
-        // offset the browser re-interpolates every column each frame, and
-        // since that phase slides with the scroll, single-pixel transients
-        // pulse brighter/dimmer ("twinkle"). Snapping makes every frame a
-        // bit-exact translate of the buffer, at the cost of ≤half a physical
-        // pixel of position error against the overlays' time→x mapping —
-        // far below what the eye can register.
-        const dxPhys = Math.round((bbStartTime - startTime) * pixelsPerSecond * dpr);
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(offscreen, dxPhys, 0);
+        // Blit offscreen → visible canvas with a sub-pixel destination offset.
+        // The buffer is one column per physical pixel (cps === pps·dpr), so
+        // the scale is exactly 1:1: the browser's bilinear only ever blends
+        // each column with its immediate neighbour by the fractional phase.
+        // That is what makes the scroll smooth AND stable — a non-unit ratio
+        // here beats against the pixel grid (crawling moire, flicker), and
+        // integer-snapping the offset instead makes low scroll rates visibly
+        // steppy and mid rates juddery. The residual artifact is fundamental
+        // and mild: a feature exactly one pixel wide dims slightly while it
+        // straddles two pixels mid-crossing.
+        const dxPhys = (bbStartTime - startTime) * pixelsPerSecond * dpr;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(offscreen, 0, 0, bbWidth, offscreen.height,
+                      dxPhys, 0, bbWidth, canvas.height);
 
         // Paint end-of-file region with the background color so it's distinct
         // from zero-value spectrogram data.
