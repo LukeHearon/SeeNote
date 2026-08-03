@@ -6,9 +6,12 @@ use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Tr
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase, Timestamp};
+use std::collections::HashMap;
 use std::fs::File;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
+#[derive(Clone, Copy)]
 pub struct FileInfo {
     pub duration_secs: f64,
     pub sample_rate: u32,
@@ -63,11 +66,70 @@ fn is_ffmpeg_ext(path: &str) -> bool {
     )
 }
 
+// ── FileInfo cache ────────────────────────────────────────────────────────────
+//
+// Probing a file is not cheap on either backend: symphonia opens it, probes the
+// container, and decodes up to 16 packets to discover the post-SBR spec, while
+// the ffmpeg path spawns `ffprobe` (~107ms measured on a `.wma`). Yet the
+// duration/rate/channels it returns are needed at the top of essentially every
+// command — `compute_spectrogram_chunk` calls it once per chunk, and
+// `FfmpegStream::open` calls it again on the way to opening the stream, so a
+// single cold `.wma` chunk paid for two ffprobe spawns before decoding a sample.
+//
+// Entries are validated against the file's mtime and length rather than expired
+// on a timer, so a file rewritten on disk is re-probed on its next use while an
+// untouched one is probed exactly once.
+
+/// Cap on tracked files. A session that walks hundreds of files should not grow
+/// this without bound; entries are tiny and order carries no information, so the
+/// map is simply cleared when it overflows rather than evicted one at a time.
+const MAX_CACHED_FILE_INFO: usize = 256;
+
+type InfoCache = HashMap<String, (Option<SystemTime>, u64, FileInfo)>;
+
+fn info_cache() -> &'static Mutex<InfoCache> {
+    static CACHE: OnceLock<Mutex<InfoCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Identity of the bytes on disk: (mtime, length). `None` mtime on filesystems
+/// that do not report one — length alone still catches most rewrites, and the
+/// probe cost is what we are avoiding, not correctness of the file itself.
+fn file_stamp(path: &str) -> Option<(Option<SystemTime>, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok(), meta.len()))
+}
+
 pub fn get_file_info(path: &str) -> Result<FileInfo> {
-    if is_ffmpeg_ext(path) {
-        return super::ffmpeg_stream::get_file_info(path);
+    let stamp = file_stamp(path);
+
+    if let Some((mtime, len)) = stamp {
+        if let Ok(cache) = info_cache().lock() {
+            if let Some((cached_mtime, cached_len, info)) = cache.get(path) {
+                if *cached_mtime == mtime && *cached_len == len {
+                    return Ok(*info);
+                }
+            }
+        }
     }
-    get_file_info_symphonia(path)
+
+    let info = if is_ffmpeg_ext(path) {
+        super::ffmpeg_stream::get_file_info(path)?
+    } else {
+        get_file_info_symphonia(path)?
+    };
+
+    // A file we could not stat is still probed, just never cached.
+    if let Some((mtime, len)) = stamp {
+        if let Ok(mut cache) = info_cache().lock() {
+            if cache.len() >= MAX_CACHED_FILE_INFO && !cache.contains_key(path) {
+                cache.clear();
+            }
+            cache.insert(path.to_string(), (mtime, len, info));
+        }
+    }
+
+    Ok(info)
 }
 
 fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
@@ -922,8 +984,13 @@ mod tests {
 
     /// Write a mono 16-bit WAV whose frame i holds sample value i, and return
     /// its path. Values wrap at 30000 to stay inside i16.
+    ///
+    /// The pid keeps the path unique per test process, so two concurrent
+    /// `cargo test` runs cannot rewrite each other's fixture mid-read — which
+    /// matters most for `file_info_is_cached_but_reprobed_when_the_file_changes`,
+    /// where rewriting one path is the point of the test.
     fn write_ramp_wav(name: &str, sample_rate: u32, n_frames: usize) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(name);
+        let path = std::env::temp_dir().join(format!("{}_{name}", std::process::id()));
         let data_bytes = (n_frames * 2) as u32;
         let byte_rate = sample_rate * 2;
         let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
@@ -949,6 +1016,38 @@ mod tests {
     /// f32 value symphonia yields for ramp frame `i`.
     fn ramp_value(i: usize) -> f32 {
         (i % 30000) as f32 / 32768.0
+    }
+
+    /// The FileInfo cache keys on the file's mtime and length, so a file
+    /// rewritten on disk must be re-probed rather than served stale — the whole
+    /// reason it validates a stamp instead of expiring on a timer.
+    #[test]
+    fn file_info_is_cached_but_reprobed_when_the_file_changes() {
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_info_cache.wav", sr, 16_000); // 2s
+        let p = path.to_str().unwrap();
+
+        let first = get_file_info(p).expect("info");
+        assert!((first.duration_secs - 2.0).abs() < 0.01, "got {}", first.duration_secs);
+
+        // A repeat call must agree (served from cache or not, the answer is the same).
+        let cached = get_file_info(p).expect("info");
+        assert_eq!(cached.duration_secs, first.duration_secs);
+        assert_eq!(cached.sample_rate, first.sample_rate);
+
+        // Rewrite with a different length. mtime resolution can be coarse, so
+        // the length change is what this asserts on — either half of the stamp
+        // is enough to invalidate.
+        let path2 = write_ramp_wav("seenote_info_cache.wav", sr, 48_000); // 6s
+        assert_eq!(path2, path);
+        let after = get_file_info(p).expect("info");
+        assert!(
+            (after.duration_secs - 6.0).abs() < 0.01,
+            "stale duration {} after rewrite",
+            after.duration_secs
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
