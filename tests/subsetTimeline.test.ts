@@ -3,6 +3,7 @@ import {
   identityTimeline,
   buildSubsetTimeline,
   projectIntervalToDisplay,
+  segmentJoins,
 } from '../utils/subsetTimeline';
 
 describe('identityTimeline', () => {
@@ -176,5 +177,25 @@ describe('toSourceWithin', () => {
 
   it('is plain clamping on the identity timeline', () => {
     expect(identityTimeline(100).toSourceWithin(0, 42)).toBe(42);
+  });
+});
+
+describe('segmentJoins', () => {
+  it('is empty for the identity timeline', () => {
+    expect(segmentJoins(identityTimeline(100))).toEqual([]);
+  });
+
+  it('is empty for a single-span subset', () => {
+    const tl = buildSubsetTimeline([{ start: 10, end: 20 }], 100);
+    expect(segmentJoins(tl)).toEqual([]);
+  });
+
+  it('returns one join per interior boundary, not the outer edges', () => {
+    // Three kept spans of length 2, 3, 3 -> display seams at 2 and 5.
+    const tl = buildSubsetTimeline(
+      [{ start: 10, end: 12 }, { start: 50, end: 53 }, { start: 80, end: 83 }],
+      100,
+    );
+    expect(segmentJoins(tl)).toEqual([2, 5]);
   });
 });

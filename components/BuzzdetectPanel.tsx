@@ -3,6 +3,7 @@ import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
+import { Timeline, segmentJoins } from '../utils/subsetTimeline';
 import {
   buzzdetectNeuronColor,
   BUZZDETECT_PALETTE,
@@ -88,6 +89,10 @@ interface BuzzdetectPanelProps {
   // between neighbouring points would imply continuity across a join that isn't
   // there, so the series is drawn as bare points.
   subsetActive: boolean;
+  // Display->source map, same object the spectrogram draws against. Used here
+  // only to mark the seams between spliced-together spans (see subsetJoins
+  // below) — everything else about drawing stays in display time already.
+  timeline?: Timeline;
   // Neuron labels the subset is keyed to (OR'd). Independent of `hiddenNeurons`:
   // a neuron can drive the subset while another is merely plotted alongside it.
   subsetNeurons: string[];
@@ -98,6 +103,8 @@ interface BuzzdetectPanelProps {
   // Callbacks.
   onThresholdChange: (neuron: string, value: number) => void;
   onToggleNeuron: (neuron: string, hidden: boolean) => void;
+  // Show/hide every neuron in the graph at once (distinct from subsetting).
+  onSetAllNeuronsHidden: (hidden: boolean) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
@@ -123,11 +130,13 @@ export default function BuzzdetectPanel({
   seriesMode,
   binWidthOverride,
   subsetActive,
+  timeline,
   subsetNeurons,
   minDetectionRate,
   height,
   onThresholdChange,
   onToggleNeuron,
+  onSetAllNeuronsHidden,
   onNeuronColorChange,
   onSeriesModeChange,
   onBinWidthOverrideChange,
@@ -224,6 +233,10 @@ export default function BuzzdetectPanel({
   const unitPxRef = useRef(0);
 
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
+
+  // Display-time seams between spliced-together spans (see Spectrogram, which
+  // marks the same positions) — empty whenever there's no subset to seam.
+  const subsetJoins = useMemo(() => (timeline ? segmentJoins(timeline) : []), [timeline]);
 
   // Per-neuron color: the user's override (keyed by label, persisted across
   // files) if set, else the palette-by-index default — so a neuron keeps its
@@ -566,6 +579,35 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
+    // Subset segment joins — the same seams the spectrogram marks (dashed),
+    // emphasized here with a solid line and small flags top/bottom: this panel
+    // is what a subsetted run of detections is drawn from, so a join here is
+    // where one detection's frames end and the next one's begin.
+    if (subsetJoins.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#fbbf24';
+      ctx.fillStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      for (const t of subsetJoins) {
+        const x = xOf(t);
+        if (x < -1 || x > width + 1) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        const FLAG = 5;
+        ctx.beginPath();
+        ctx.moveTo(x - FLAG, 0); ctx.lineTo(x + FLAG, 0); ctx.lineTo(x, FLAG);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x - FLAG, h); ctx.lineTo(x + FLAG, h); ctx.lineTo(x, h - FLAG);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // (The hovered bin/bin-group band lives on the overlay canvas — see
     // drawOverlay — so moving the cursor doesn't repaint this canvas.)
 
@@ -732,7 +774,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1007,8 +1049,12 @@ export default function BuzzdetectPanel({
     const dp = decimalsForTimes(shown, READOUT_MAX_DECIMALS);
     return (
       <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
+        <div className="text-slate-400 font-bold">{buzzdetectCopy.timeReadoutHeader}</div>
         <div className="text-slate-300">
-          {`t=${formatTimeForUnit(shown[0], timeDisplayUnit, dp)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp)}`}
+          {`${formatTimeForUnit(shown[0], timeDisplayUnit, dp)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp)}`}
+        </div>
+        <div className="text-slate-400 font-bold mt-1">
+          {isSingle ? buzzdetectCopy.rawActivationsHeader : buzzdetectCopy.avgActivationsHeader}
         </div>
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {
@@ -1037,7 +1083,7 @@ export default function BuzzdetectPanel({
               : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
             return (
               <span key={n} style={{ color: neuronColors[i] }}>
-                {n} {value.toFixed(2)}{!isSingle && ' avg'}
+                {n} {value.toFixed(2)}
               </span>
             );
           })}
@@ -1225,7 +1271,24 @@ export default function BuzzdetectPanel({
                   </div>
                 )}
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
-                  <span>{buzzdetectCopy.neuronHeader}</span>
+                  <span className="flex items-center gap-1.5">
+                    {buzzdetectCopy.neuronHeader}
+                    {data && data.neurons.length > 0 && (() => {
+                      // One button whose action flips with the current state: while
+                      // every neuron is shown, the only useful next step is hiding
+                      // them all; otherwise (some or none shown) it's showing them
+                      // all — so the label always names what a click is about to do.
+                      const allShown = data.neurons.every(n => !hidden.has(n));
+                      return (
+                        <button
+                          onClick={() => onSetAllNeuronsHidden(allShown)}
+                          className="normal-case tracking-normal text-slate-400 hover:text-[#e65161] underline decoration-dotted"
+                        >
+                          {allShown ? buzzdetectCopy.selectNoneNeurons : buzzdetectCopy.selectAllNeurons}
+                        </button>
+                      );
+                    })()}
+                  </span>
                   <span className="flex items-center gap-2">
                     <span>{buzzdetectCopy.subsetColumnHeader}</span>
                     <span>{buzzdetectCopy.thresholdHeader}</span>

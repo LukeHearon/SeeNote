@@ -181,6 +181,18 @@ export function identityTimeline(sourceDuration: number): Timeline {
 }
 
 /**
+ * Display-time positions of the cuts between contiguous spans — the seams a
+ * subset timeline splices together. Empty for the identity timeline (nothing
+ * was cut) or a single-span subset (nothing to seam). Consecutive spans abut
+ * on the display axis, so a span's end and the next span's start are the same
+ * point: one join per interior boundary, not two.
+ */
+export function segmentJoins(timeline: Timeline): number[] {
+  if (timeline.identity || timeline.spans.length < 2) return [];
+  return timeline.spans.slice(1).map(s => s.dispStart);
+}
+
+/**
  * Build a subset timeline from kept source ranges. Ranges are sorted, clamped to
  * the file, and merged where they touch or overlap (`mergeTolerance` absorbs the
  * float round-off between one frame's end and the next one's start, so a run of

@@ -311,6 +311,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectToggleSubsetNeuron,
     toggleBuzzdetectSubset,
+    handleBuzzdetectSetAllNeuronsHidden,
   } = useBuzzdetect({ project, ident, addLog });
 
   // ── Subset mode ─────────────────────────────────────────────────────────────
@@ -2130,11 +2131,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  seriesMode={buzzdetectSeriesMode}
                  binWidthOverride={buzzdetectBinWidthOverride}
                  subsetActive={subsetActive}
+                 timeline={timeline}
                  subsetNeurons={buzzdetectSubsetNeurons}
                  minDetectionRate={buzzdetectMinDetectionRate}
                  height={buzzdetectPanelHeight}
                  onThresholdChange={handleBuzzdetectThresholdChange}
                  onToggleNeuron={handleBuzzdetectToggleNeuron}
+                 onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
                  onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                  onSeriesModeChange={setBuzzdetectSeriesMode}
                  onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}

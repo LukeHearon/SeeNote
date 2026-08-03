@@ -32,6 +32,12 @@ export interface BuzzdetectApi {
   handleBuzzdetectToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
   /** Toggle subset mode. No-op when no neuron is picked — there'd be nothing to subset by. */
   toggleBuzzdetectSubset: () => void;
+  /**
+   * Show/hide every neuron in the graph at once. `neurons` is the file's own
+   * list (from the loaded data) — hiding-all sets exactly that list, so a
+   * label from a previously loaded file never lingers in `hiddenNeurons`.
+   */
+  handleBuzzdetectSetAllNeuronsHidden: (neurons: string[], hidden: boolean) => void;
 }
 
 export interface BuzzdetectParams {
@@ -98,6 +104,9 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
       return next;
     });
   }, []);
+  const handleBuzzdetectSetAllNeuronsHidden = useCallback((neurons: string[], hidden: boolean) => {
+    setBuzzdetectHiddenNeurons(hidden ? neurons : []);
+  }, []);
   const toggleBuzzdetectSubset = useCallback(() => {
     setBuzzdetectSubsetEnabled(prev => {
       if (!prev && buzzdetectSubsetNeurons.length === 0) return false;
@@ -133,5 +142,6 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectToggleSubsetNeuron,
     toggleBuzzdetectSubset,
+    handleBuzzdetectSetAllNeuronsHidden,
   };
 }

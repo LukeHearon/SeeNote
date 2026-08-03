@@ -297,6 +297,11 @@ export const buzzdetectPanel = {
   get subsetEmpty() { return getOverride('ui.buzzdetectPanel.subsetEmpty') ?? "No frames meet the subset criteria"; },
   get detection() { return getOverride('ui.buzzdetectPanel.detection') ?? "Detection"; },
   get noDetection() { return getOverride('ui.buzzdetectPanel.noDetection') ?? "No Detection"; },
+  get timeReadoutHeader() { return getOverride('ui.buzzdetectPanel.timeReadoutHeader') ?? "Time"; },
+  get rawActivationsHeader() { return getOverride('ui.buzzdetectPanel.rawActivationsHeader') ?? "Activations"; },
+  get avgActivationsHeader() { return getOverride('ui.buzzdetectPanel.avgActivationsHeader') ?? "Mean Activations"; },
+  get selectAllNeurons() { return getOverride('ui.buzzdetectPanel.selectAllNeurons') ?? "All"; },
+  get selectNoneNeurons() { return getOverride('ui.buzzdetectPanel.selectNoneNeurons') ?? "None"; },
 };
 
 export const debugConsole = {

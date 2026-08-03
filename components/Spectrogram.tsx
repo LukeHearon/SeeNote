@@ -4,7 +4,7 @@ import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
-import { Timeline, identityTimeline } from '../utils/subsetTimeline';
+import { Timeline, identityTimeline, segmentJoins } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -219,6 +219,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const activeTimeline = timeline ?? fallbackTimeline;
   const timelineRef = useRef(activeTimeline);
   timelineRef.current = activeTimeline;
+  // Display-time seams between spliced-together spans, so the overlay can mark
+  // them — subset audio reads as continuous, but the cut is still a real jump
+  // in the source file, worth flagging visually.
+  const subsetJoins = useMemo(() => segmentJoins(activeTimeline), [activeTimeline]);
   // Lets the lifetime rAF loop (empty-dep effect) read live isPlaying for the
   // frame-timing diagnostic without resubscribing.
   const isPlayingRef = useRef(isPlaying);
@@ -456,6 +460,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
+    // 1b. Draw subset segment joins — the seams where the display axis skips
+    // from the end of one kept span to the start of the next. Dashed and
+    // distinct from the playhead/ruler so a cut reads as a splice, not a marker.
+    if (subsetJoins.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      for (const t of subsetJoins) {
+        const x = timeToX(t, scrollLeft_live, pixelsPerSecond_live);
+        if (x < 0 || x > width) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // 2. Draw Playhead Line
     const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
     if (playheadX >= 0 && playheadX <= width) {
@@ -511,7 +534,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
