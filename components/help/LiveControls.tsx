@@ -1,8 +1,9 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
-import { AnnotationTool, Selection, SpectrogramSettings } from '../../types';
+import { Selection } from '../../types';
 import { CurrentTimeStore, createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { LiveClient, LiveSnapshot } from '../../utils/liveBridge';
 import { SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../../utils/helpers';
+import { DEMO_DURATION, demoAnnotationTools, demoSpectrogramSettings } from '../../utils/demoProject';
 import { help } from '../../copy/help';
 import { TransportButtons } from '../controls/TransportButtons';
 import { TimeReadout } from '../controls/TimeReadout';
@@ -13,6 +14,7 @@ import { BuzzdetectToggle, SpectrogramSettingsButton } from '../controls/Toolbar
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
+import { ExampleBuzzdetectPanel, ExampleFilePanel } from './ExamplePanels';
 import VolumeControl from '../VolumeControl';
 
 /** Which control a `live` block renders. */
@@ -27,7 +29,9 @@ export type LiveControlId =
   | 'spectrogram-settings-button'
   | 'spectrogram-settings'
   | 'file-panel-header'
-  | 'tool-palette';
+  | 'file-panel'
+  | 'tool-palette'
+  | 'buzzdetect-panel';
 
 // ---------------------------------------------------------------------------
 // Demo state
@@ -37,29 +41,13 @@ export type LiveControlId =
 // reader can work out what a control does by driving it, project or no project.
 // ---------------------------------------------------------------------------
 
-const DEMO_DURATION = 137.5;
-
-const DEMO_SETTINGS: SpectrogramSettings = {
-  minFreq: 0,
-  maxFreq: 12000,
-  fftSize: 1024,
-  frequencyScale: 'linear',
-  displayFloor: -100,
-  displayCeil: 0,
-};
-
 const DEMO_FILE_PANEL = { fileFilter: 'all' as const, shuffleMode: false, anyExpanded: false };
 
-/** Stand-in palette for the tool-panel demo — the shape a real project's is. */
-const DEMO_TOOLS: AnnotationTool[] = [
-  { id: 'demo-custom', key: '0', text: 'Custom', color: '#64748b' },
-  { id: 'demo-1', key: '1', text: 'Buzz', color: '#e65161', description: 'Wingbeat buzz' },
-  { id: 'demo-2', key: '2', text: 'Song', color: '#38bdf8' },
-  { id: 'demo-3', key: '3', text: 'Call', color: '#a78bfa' },
-  { id: 'demo-4', key: '4', text: 'Noise', color: '#facc15' },
-];
-
-const DEMO_PALETTE = { tools: DEMO_TOOLS, activeToolKey: '1' as string | null, playingExampleToolId: null };
+const DEMO_PALETTE = {
+  tools: demoAnnotationTools,
+  activeToolKey: '1' as string | null,
+  playingExampleToolId: null,
+};
 
 function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnapshot>) => void; store: CurrentTimeStore } {
   const storeRef = useRef<CurrentTimeStore | null>(null);
@@ -90,7 +78,7 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     bandPassFilter: null,
     buzzdetectAvailable: false,
     buzzdetectEnabled: false,
-    spectrogramSettings: DEMO_SETTINGS,
+    spectrogramSettings: demoSpectrogramSettings,
     spectrogramSettingsOpen: true,
     filePanel: DEMO_FILE_PANEL,
     toolPalette: DEMO_PALETTE,
@@ -103,19 +91,32 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
 // Frame
 // ---------------------------------------------------------------------------
 
-function Frame({ connected, children }: { connected: boolean; children: ReactNode }) {
+type Mode = 'live' | 'demo' | 'example';
+
+function Frame({ mode, wide, children }: { mode: Mode; wide?: boolean; children: ReactNode }) {
+  const label = mode === 'live' ? help.live.connected : mode === 'example' ? help.live.example : help.live.demo;
   return (
-    <div className="my-3 rounded-lg border border-slate-700 bg-slate-800/60 overflow-hidden w-fit max-w-full">
+    <div className={`my-3 rounded-lg border border-slate-700 bg-slate-800/60 overflow-hidden max-w-full ${wide ? 'w-full' : 'w-fit'}`}>
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-700/70">
-        <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-slate-600'}`} />
-        <span className="text-[10px] uppercase tracking-wider text-slate-500">
-          {connected ? help.live.connected : help.live.demo}
-        </span>
+        <span className={`w-1.5 h-1.5 rounded-full ${mode === 'live' ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+        <span className="text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
       </div>
       <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap">{children}</div>
     </div>
   );
 }
+
+/**
+ * Panels that always render against utils/demoProject rather than the open
+ * project. Either the data is too big to mirror (a file list is thousands of
+ * paths) or it means nothing outside the window that owns it (the buzzdetect
+ * panel's x-axis IS the spectrogram's viewport). They say "example project" so
+ * nobody mistakes the contents for their own.
+ */
+const EXAMPLE_ONLY: ReadonlySet<LiveControlId> = new Set(['file-panel', 'buzzdetect-panel']);
+
+/** Controls that want the content column's full width rather than hugging. */
+const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel']);
 
 /**
  * Whether this control has something to drive in the main window. Most follow
@@ -124,7 +125,7 @@ function Frame({ connected, children }: { connected: boolean; children: ReactNod
  * snapshot, so they fall back to the demo rather than to a dead button.
  */
 function isLive(id: LiveControlId, state: LiveSnapshot | null): boolean {
-  if (!state) return false;
+  if (!state || EXAMPLE_ONLY.has(id)) return false;
   switch (id) {
     case 'buzzdetect': return state.buzzdetectAvailable;
     case 'file-panel-header': return state.filePanel !== null;
@@ -289,6 +290,10 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           />
         );
       }
+      case 'file-panel':
+        return <ExampleFilePanel />;
+      case 'buzzdetect-panel':
+        return <ExampleBuzzdetectPanel />;
       case 'tool-palette': {
         const tp = s.toolPalette ?? DEMO_PALETTE;
         const setTp = (patch: Partial<typeof tp>) => demo.set({ toolPalette: { ...tp, ...patch } });
@@ -316,5 +321,9 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
     }
   };
 
-  return <Frame connected={connected}>{body()}</Frame>;
+  return (
+    <Frame mode={connected ? 'live' : EXAMPLE_ONLY.has(id) ? 'example' : 'demo'} wide={WIDE.has(id)}>
+      {body()}
+    </Frame>
+  );
 }

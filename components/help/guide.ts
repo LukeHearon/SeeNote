@@ -136,6 +136,7 @@ export const GUIDE: Part[] = [
         target: 'file-panel',
         blocks: () => [
           { kind: 'p', text: help.filePanel.p1 },
+          { kind: 'live', control: 'file-panel' },
           { kind: 'h', id: 'header', text: help.filePanel.h_header },
           { kind: 'ul', items: [
             help.filePanel.li_filter,
@@ -247,6 +248,7 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.buzzdetect.p1 },
           { kind: 'live', control: 'buzzdetect' },
+          { kind: 'live', control: 'buzzdetect-panel' },
           { kind: 'h', id: 'reading', text: help.buzzdetect.h_reading },
           { kind: 'p', text: help.buzzdetect.p_reading },
           { kind: 'h', id: 'frames', text: help.buzzdetect.h_frames },
