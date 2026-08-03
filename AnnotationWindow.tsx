@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
@@ -667,14 +667,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setIsAudioTrack(isAudio);
     setTrackName(fileName);
 
-    // Auto-manage the video pane by track type: collapse for audio-only tracks,
-    // re-open (to the last split size) for video tracks. Decided here from the
-    // extension alone, so a later decode error doesn't re-collapse a video pane.
-    // videoPaneAutoCollapse is a Preferences-tab setting (not session state), read
-    // via projectRef so this callback doesn't need to be recreated when it changes.
-    const autoCollapse = projectRef.current.preferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE;
-    if (autoCollapse) setVideoCollapsed(isAudio);
-
     const assetUrl = toAssetUrl(absolutePath);
     // On Linux, <video>/<audio> playback goes through WebKitGTK's GStreamer
     // pipeline, which can't resolve the `asset://` scheme (see toVideoServerUrl
@@ -1239,10 +1231,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     await updateProjectPreferences(project.id, updatedPreferences);
     loadAnnotationTools(updated);
     setVideoMode(migrateVideoMode(updated.preferences.uiSettings?.videoMode));
-    // Apply the auto-collapse preference immediately to the open track so the
-    // pane reflects it without waiting for the next track switch.
-    const autoCollapse = updatedPreferences.videoPaneAutoCollapse ?? DEFAULT_VIDEO_PANE_AUTO_COLLAPSE;
-    if (autoCollapse && trackPath) setVideoCollapsed(isAudioTrack);
     if (mediaDirChanged) {
       await flushPendingAutosaveRef.current();
       setCurrentDirectory(updated.mediaDirectoryAbs);
@@ -1264,7 +1252,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools, trackPath, isAudioTrack]);
+  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools]);
 
   const handleToggleFileFilter = useCallback(() => {
     const current = project.preferences.fileFilter ?? 'all';
@@ -2020,55 +2008,59 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         {/* Right: video + spectrogram stacked */}
         <div className="flex-1 flex flex-col relative overflow-hidden">
 
-        {/* Video Pane — kept mounted when collapsed (the <video> element is the
-            audio transport in Fast/Mixed mode) but squished behind an opaque bar. */}
-        <div
-          style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
-          className="bg-black relative flex flex-none overflow-hidden"
-          data-help-target="video-panel"
-        >
-          <VideoPane
-            frameSource={frameSourceRef.current}
-            frameSourceVersion={frameSourceVersion}
-            frameSourceDecodeError={frameSourceDecodeError}
-            isAudioTrack={isAudioTrack}
-            videoSrc={videoSrc}
-            isProcessing={isProcessing}
-            isBuffering={isBuffering}
-            getMediaTime={getMediaTime}
-            onDebugLog={addLog}
-            onDurationChange={isAudioTrack ? undefined : setDuration}
-            videoMode={videoMode}
-            hasSelection={selection !== null}
-            onVideoModeChange={handleVideoModeChange}
-            onVideoElement={attachVideoElement}
-            brightness={videoBrightness}
-            contrast={videoContrast}
-            onBrightnessChange={setVideoBrightness}
-            onContrastChange={setVideoContrast}
-          />
-          {videoCollapsed && (
-            <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
-              <button
-                type="button"
-                onClick={() => setVideoCollapsed(false)}
-                className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
-                data-tooltip={tooltips.expandVideoPanel}
-              >
-                <ChevronDown size={16} />
-                <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
-              </button>
+        {/* Video Pane — only created for video tracks; audio-only tracks route
+            playback through AudioEngine and never use the <video> element. */}
+        {!isAudioTrack && (
+          <>
+            <div
+              style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
+              className="bg-black relative flex flex-none overflow-hidden"
+              data-help-target="video-panel"
+            >
+              <VideoPane
+                frameSource={frameSourceRef.current}
+                frameSourceVersion={frameSourceVersion}
+                frameSourceDecodeError={frameSourceDecodeError}
+                isAudioTrack={isAudioTrack}
+                videoSrc={videoSrc}
+                isProcessing={isProcessing}
+                isBuffering={isBuffering}
+                getMediaTime={getMediaTime}
+                onDebugLog={addLog}
+                onDurationChange={setDuration}
+                videoMode={videoMode}
+                hasSelection={selection !== null}
+                onVideoModeChange={handleVideoModeChange}
+                onVideoElement={attachVideoElement}
+                brightness={videoBrightness}
+                contrast={videoContrast}
+                onBrightnessChange={setVideoBrightness}
+                onContrastChange={setVideoContrast}
+              />
+              {videoCollapsed && (
+                <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
+                  <button
+                    type="button"
+                    onClick={() => setVideoCollapsed(false)}
+                    className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
+                    data-tooltip={tooltips.expandVideoPanel}
+                  >
+                    <ChevronDown size={16} />
+                    <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Resizer Handle */}
-        <div
-            className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors z-10 flex justify-center items-center"
-            onMouseDown={handleSplitDrag}
-        >
-            <div className="w-12 h-1 bg-slate-600 rounded-full" />
-        </div>
+            {/* Resizer Handle */}
+            <div
+                className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors z-10 flex justify-center items-center"
+                onMouseDown={handleSplitDrag}
+            >
+                <div className="w-12 h-1 bg-slate-600 rounded-full" />
+            </div>
+          </>
+        )}
 
         {/* Spectrogram Pane */}
         <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col" data-help-target="spectrogram-canvas">

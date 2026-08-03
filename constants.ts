@@ -97,12 +97,6 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   videoContrast: 100,
 };
 
-// On by default: opening an audio-only track collapses the video pane;
-// opening a video track re-opens it to the last size. A per-user preference
-// (ProjectPreferences.videoPaneAutoCollapse), set in the Preferences tab of
-// project settings — not a session/layout field like DEFAULT_UI_SETTINGS.
-export const DEFAULT_VIDEO_PANE_AUTO_COLLAPSE = true;
-
 // On by default: remote annotation changes get pulled in automatically (on
 // project open and the sync heartbeat) without an explicit "Sync" click. A
 // per-user preference (ProjectPreferences.autoPullRemoteChanges), set in the

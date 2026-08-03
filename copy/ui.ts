@@ -85,10 +85,6 @@ export const projectSettingsModal = {
   get projectDirLabel() { return getOverride('ui.projectSettingsModal.projectDirLabel') ?? "Project Directory"; },
   get showInFinderTitle() { return getOverride('ui.projectSettingsModal.showInFinderTitle') ?? "Show in Finder"; },
   get orphanedNoMedia() { return getOverride('ui.projectSettingsModal.orphanedNoMedia') ?? "no corresponding media in the new media directory:"; },
-  // Video pane layout preference
-  get videoPaneHeader() { return getOverride('ui.projectSettingsModal.videoPaneHeader') ?? "Video Pane"; },
-  get videoAutoCollapseLabel() { return getOverride('ui.projectSettingsModal.videoAutoCollapseLabel') ?? "Auto-collapse video panel"; },
-  get videoAutoCollapseHint() { return getOverride('ui.projectSettingsModal.videoAutoCollapseHint') ?? "Automatically minimize the video pane on audio files, open it on video files."; },
   // Auto-pull preference
   get autoPullLabel() { return getOverride('ui.projectSettingsModal.autoPullLabel') ?? "Automatically pull remote changes"; },
   get autoPullHint() { return getOverride('ui.projectSettingsModal.autoPullHint') ?? "Merge in teammates' annotation changes on project open and every couple of minutes, without pushing your own edits."; },
