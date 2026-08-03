@@ -268,6 +268,49 @@ export function sourceRangesForDisplayRange(
 }
 
 /**
+ * Display position for a source time the user asked for — the nearest KEPT time
+ * when that source time was cut out.
+ *
+ * A typed-in time is the one place a source time arrives from outside the
+ * timeline, so it can name a stretch that isn't on the axis at all. There's no
+ * position to go to, but there is an obvious intent: the nearest edge of the
+ * subset. `toDisplay` alone always falls back to the preceding span, which sends
+ * a time one second before the next detection all the way back to the previous
+ * one.
+ */
+export function displayOfNearestKept(timeline: Timeline, src: number): number {
+  if (timeline.identity || timeline.isKept(src)) return timeline.toDisplay(src);
+  const spans = timeline.spans;
+  if (spans.length === 0) return 0;
+  if (src <= spans[0].srcStart) return 0;
+  const i = lastSpanAtOrBefore(spans, src, s => s.srcStart);
+  const prev = spans[i];
+  const prevEnd = prev.dispStart + (prev.srcEnd - prev.srcStart);
+  const next = spans[i + 1];
+  if (!next) return prevEnd;
+  return src - prev.srcEnd <= next.srcStart - src ? prevEnd : next.dispStart;
+}
+
+/**
+ * The source-time interval a display interval names — what a readout shows the
+ * user, since every time they can act on outside the app (a note, an export, a
+ * position in the file) is a source time.
+ *
+ * The end is resolved inside the start's span (`toSourceWithin`): a selection
+ * running exactly to a cut ends where that segment ends in the file, not at the
+ * start of whatever comes next on screen. Interval ends can't cross a cut
+ * anyway, so the anchor is always the right span.
+ */
+export function sourceIntervalOf(
+  timeline: Timeline,
+  start: number,
+  end: number,
+): { start: number; end: number } {
+  if (timeline.identity) return { start, end };
+  return { start: timeline.toSource(start), end: timeline.toSourceWithin(start, end) };
+}
+
+/**
  * Project a source-time interval onto the display axis, or null when it lands
  * entirely in hidden time. Used for annotations and selections: both are stored
  * in source time and drawn in display time.

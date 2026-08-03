@@ -3,7 +3,7 @@ import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
-import { Timeline, segmentJoins } from '../utils/subsetTimeline';
+import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
 import {
   buzzdetectNeuronColor,
   BUZZDETECT_PALETTE,
@@ -20,6 +20,7 @@ import {
   frameRangeForTimeSpan,
   isGroupedUnitWidth,
   unitAtTime,
+  unitPiecesInSpans,
   visibleBinRange,
 } from '../utils/binIndex';
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
@@ -238,6 +239,11 @@ export default function BuzzdetectPanel({
   // marks the same positions) — empty whenever there's no subset to seam.
   const subsetJoins = useMemo(() => (timeline ? segmentJoins(timeline) : []), [timeline]);
 
+  // The timeline every unit below is cut against. Memoised even in the identity
+  // case so `draw` doesn't get a fresh dep object on every render.
+  const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
+  const activeTimeline = timeline ?? fallbackTimeline;
+
   // Per-neuron color: the user's override (keyed by label, persisted across
   // files) if set, else the palette-by-index default — so a neuron keeps its
   // color across files and toggles even before it's ever been customized.
@@ -367,8 +373,13 @@ export default function BuzzdetectPanel({
     if (t === null) return null;
     // Null where the unit holds no frame — a gap between frames, or an empty
     // bucket. Nothing is drawn there either, so there's nothing to select.
-    return unitAtTime(data.starts, data.binWidth, effectiveBinWidthRef.current, t);
-  }, [data, timeAtClientX]);
+    const u = unitAtTime(data.starts, data.binWidth, effectiveBinWidthRef.current, t);
+    if (!u) return null;
+    // A bin wider than a subset segment gets cut at the segment's edges, same
+    // as the drawn band — the piece under the cursor is the one it points at.
+    const pieces = unitPiecesInSpans(activeTimeline, data.starts, data.binWidth, u);
+    return pieces.find(p => t >= p.tStart && t < p.tEnd) ?? null;
+  }, [data, timeAtClientX, activeTimeline]);
 
   // A unit's own time extent, end clamped to EOF — the same span the panel
   // washes and highlights, so a selection lands exactly on what the cursor
@@ -377,12 +388,19 @@ export default function BuzzdetectPanel({
     { start: u.tStart, end: duration > 0 ? Math.min(u.tEnd, duration) : u.tEnd }
   ), [duration]);
 
-  // Interval spanning two units — the drag anchor and the unit under the
-  // cursor, in either order.
-  const unitSpan = useCallback((a: FrameUnit, b: FrameUnit): Selection => ({
-    start: Math.min(a.tStart, b.tStart),
-    end: unitInterval(a.tEnd > b.tEnd ? a : b).end,
-  }), [unitInterval]);
+  // Interval spanning two units — the drag anchor `a` and the unit under the
+  // cursor, in either order — held inside the anchor's subset segment. Dragging
+  // past a cut selects up to the segment edge and no further: the units on the
+  // far side are elsewhere in the file, so a selection covering both would name
+  // audio between them that was never shown. No-op with no subset.
+  const unitSpan = useCallback((a: FrameUnit, b: FrameUnit): Selection => {
+    const start = Math.min(a.tStart, b.tStart);
+    const end = unitInterval(a.tEnd > b.tEnd ? a : b).end;
+    return {
+      start: activeTimeline.clampToSpanOfDisplay(a.tStart, start),
+      end: activeTimeline.clampToSpanOfDisplay(a.tStart, end),
+    };
+  }, [unitInterval, activeTimeline]);
 
   // ── Drawing ────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -523,13 +541,19 @@ export default function BuzzdetectPanel({
       }
     } else {
       forEachUnitInSpan(starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
-        units.push({
-          start: u.start,
-          end: u.end,
-          xStart: xOf(u.tStart),
-          xEnd: xOf(u.tEnd),
-          xMid: xOf((u.tStart + u.tEnd) / 2),
-        });
+        // Cut at the subset's segment boundaries: a bin wider than a segment
+        // becomes one drawn unit per segment, so no band, point or wash reaches
+        // across a cut into audio from elsewhere in the file. Hit-testing cuts
+        // the same way, so what's painted stays what the cursor can pick.
+        for (const p of unitPiecesInSpans(activeTimeline, starts, binWidth, u)) {
+          units.push({
+            start: p.start,
+            end: p.end,
+            xStart: xOf(p.tStart),
+            xEnd: xOf(p.tEnd),
+            xMid: xOf((p.tStart + p.tEnd) / 2),
+          });
+        }
       });
     }
     // Width of one unit on screen, for the "is this too tight to draw?" gates —
@@ -774,7 +798,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, activeTimeline, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -955,10 +979,13 @@ export default function BuzzdetectPanel({
     // merging the two ranges into one bounding interval. Using min/max of the
     // two ranges naturally handles overlap — the union of two overlapping
     // intervals is just their combined min/max.
+    // Held inside the existing selection's segment, for the same reason a drag
+    // is (see unitSpan): shift-clicking into another segment extends only as
+    // far as the cut.
     if (e.shiftKey && selection) {
       const merged: Selection = {
-        start: Math.min(selection.start, interval.start),
-        end: Math.max(selection.end, interval.end),
+        start: activeTimeline.clampToSpanOfDisplay(selection.start, Math.min(selection.start, interval.start)),
+        end: activeTimeline.clampToSpanOfDisplay(selection.start, Math.max(selection.end, interval.end)),
       };
       onSelectionChange(merged);
       return;
@@ -1036,7 +1063,12 @@ export default function BuzzdetectPanel({
     // indices here rather than reading past the new arrays.
     if (start < 0 || end < start || end >= data.starts.length) return null;
     const isSingle = start === end;
-    const { start: tStart, end: tEnd } = unitInterval(unit);
+    // Shown in source time — a readout is something the user reads off and acts
+    // on, and the only time that means anything outside this view is the file's.
+    const { start: tStart, end: tEnd } = (() => {
+      const i = unitInterval(unit);
+      return sourceIntervalOf(activeTimeline, i.start, i.end);
+    })();
     // Always a span, one frame included — a frame covers time like anything
     // else here, and collapsing it to its start time hides how much.
     //

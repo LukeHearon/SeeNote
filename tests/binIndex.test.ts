@@ -10,8 +10,10 @@ import {
   isGroupedUnitWidth,
   unitAtTime,
   forEachUnitInSpan,
+  unitPiecesInSpans,
   FrameUnit,
 } from '../utils/binIndex';
+import { buildSubsetTimeline, identityTimeline } from '../utils/subsetTimeline';
 
 // Native 0.96s frames with the extent overridden to 0.4s: frames cover
 // [0,0.4), [0.96,1.36), [1.92,2.32)… leaving 0.56s gaps between them.
@@ -266,5 +268,46 @@ describe('forEachUnitInSpan', () => {
     forEachUnitInSpan(starts, FULL, 0, 0, 4, u => out.push(u));
     expect(out.every(u => u.start === u.end)).toBe(true);
     expect(unitAtTime(starts, FULL, 0, 1.5)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + FULL });
+  });
+});
+
+describe('unitPiecesInSpans', () => {
+  // The panel is fed subset-projected data: three 1s detections lifted out of a
+  // long file and butted together, so display 0–1, 1–2, 2–3 are three different
+  // parts of the file. Frames are 1s and contiguous inside each.
+  const dispStarts = [0, 1, 2];
+  const tl = buildSubsetTimeline(
+    [{ start: 10, end: 11 }, { start: 50, end: 51 }, { start: 80, end: 81 }],
+    300,
+  );
+
+  it('passes a unit through untouched with no subset', () => {
+    const u: FrameUnit = { start: 0, end: 2, tStart: 0, tEnd: 3 };
+    expect(unitPiecesInSpans(identityTimeline(300), dispStarts, 1, u)).toEqual([u]);
+  });
+
+  it('cuts a bin wider than a segment into one piece per segment', () => {
+    // A 3s bin over three 1s segments: three pieces, not one band spanning all.
+    const pieces = unitPiecesInSpans(tl, dispStarts, 1, { start: 0, end: 2, tStart: 0, tEnd: 3 });
+    expect(pieces).toEqual([
+      { start: 0, end: 0, tStart: 0, tEnd: 1 },
+      { start: 1, end: 1, tStart: 1, tEnd: 2 },
+      { start: 2, end: 2, tStart: 2, tEnd: 3 },
+    ]);
+  });
+
+  it('cuts a bin that merely straddles a join', () => {
+    const pieces = unitPiecesInSpans(tl, dispStarts, 1, { start: 0, end: 1, tStart: 0.5, tEnd: 1.5 });
+    expect(pieces.map(p => [p.tStart, p.tEnd])).toEqual([[0.5, 1], [1, 1.5]]);
+  });
+
+  it('leaves a unit sitting inside one segment alone', () => {
+    const u: FrameUnit = { start: 1, end: 1, tStart: 1, tEnd: 2 };
+    expect(unitPiecesInSpans(tl, dispStarts, 1, u)).toEqual([u]);
+  });
+
+  it('drops pieces holding no frame', () => {
+    // Past the end of the timeline: nothing to draw or select there.
+    expect(unitPiecesInSpans(tl, dispStarts, 1, { start: 0, end: 0, tStart: 5, tEnd: 6 })).toEqual([]);
   });
 });

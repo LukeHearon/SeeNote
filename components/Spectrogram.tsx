@@ -2,9 +2,9 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
-import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
+import { chooseTimeStep, formatRulerTime, rulerTicks } from '../utils/timeAxis';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
-import { Timeline, identityTimeline, segmentJoins } from '../utils/subsetTimeline';
+import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -502,11 +502,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
+    // Ticks are labelled in SOURCE time: under a subset the display axis says
+    // nothing about where in the file you are, so the ruler is built per kept
+    // span from that span's own file times (see utils/timeAxis). Identity
+    // timeline → the same ticks as before, labelled with themselves.
     const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
-    const firstTimeTick = Math.floor(startTime / timeStep) * timeStep;
-    for (let s = firstTimeTick; s <= tickEndTime; s += timeStep) {
-        if (s <= 0) continue;
-        const x = timeToX(s, scrollLeft_live, pixelsPerSecond_live);
+    const ticks = rulerTicks(timelineRef.current, startTime, tickEndTime, timeStep, pixelsPerSecond_live);
+    for (const tick of ticks) {
+        const x = timeToX(tick.disp, scrollLeft_live, pixelsPerSecond_live);
         if (x >= 0 && x <= width) {
             ctx.beginPath();
             ctx.strokeStyle = 'white';
@@ -515,7 +518,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             ctx.lineTo(x, height - 8);
             ctx.stroke();
 
-            const timeStr = formatRulerTime(s, timeStep, timeRange);
+            const timeStr = formatRulerTime(tick.src, timeStep, timeRange);
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 3;
             ctx.strokeText(timeStr, x, height - 10);
@@ -534,7 +537,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins]);
+  // activeTimeline is read through its ref at draw time, but it's a dep as well
+  // so a timeline swap repaints the ruler (whose labels come from it).
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins, activeTimeline]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -987,14 +992,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const eTime = Math.max(creatingAnnotation.start, creatingAnnotation.current);
     const left = timeToX(s, scrollLeft, pixelsPerSecond);
     const width = ((eTime - s) * pixelsPerSecond);
+    // Labelled in source time, like every other time the user reads.
+    const src = sourceIntervalOf(activeTimeline, s, eTime);
 
     return (
         <div
             className="absolute top-0 bottom-0 bg-white/20 border-l border-r border-white/50 pointer-events-none"
             style={{ left: `${left}px`, width: `${width}px` }}
         >
-            <span className="absolute -top-6 left-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(s)}</span>
-            <span className="absolute -top-6 right-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(eTime)}</span>
+            <span className="absolute -top-6 left-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.start)}</span>
+            <span className="absolute -top-6 right-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.end)}</span>
         </div>
     );
   };

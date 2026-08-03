@@ -9,6 +9,8 @@
 //
 // `starts` is ascending, so every lookup here is a binary search.
 
+import type { Timeline } from './subsetTimeline';
+
 /** Index of the last start <= t, or -1 if t precedes every start. */
 export function lastStartAtOrBefore(starts: number[], t: number): number {
   let lo = 0;
@@ -163,6 +165,39 @@ export function unitAtTime(
   const b = Math.floor(t / unitWidth);
   const r = bucketFrameRange(starts, unitWidth, b);
   return r === null ? null : { ...r, tStart: b * unitWidth, tEnd: (b + 1) * unitWidth };
+}
+
+/**
+ * `u`, cut at every subset segment boundary it crosses — in time order, with
+ * each piece's frame indices recomputed for the time it actually covers.
+ *
+ * A bin width is a drawing/aggregation choice; a segment is a statement about
+ * which audio exists. So the segment wins: a bin wider than a segment (or one
+ * that merely straddles a join) must not wash, highlight or select across the
+ * cut, because the time on the far side is a different part of the file. One
+ * unit in, one piece per segment out.
+ *
+ * Identity timeline (no subset) → `[u]`, untouched. A unit narrower than the
+ * segment it sits in also comes back as one piece, so this is a no-op except at
+ * the joins.
+ */
+export function unitPiecesInSpans(
+  timeline: Timeline,
+  starts: number[],
+  binWidth: number,
+  u: FrameUnit,
+): FrameUnit[] {
+  if (timeline.identity) return [u];
+  const out: FrameUnit[] = [];
+  for (const s of timeline.spansForDisplayRange(u.tStart, u.tEnd)) {
+    const tStart = Math.max(u.tStart, s.dispStart);
+    const tEnd = Math.min(u.tEnd, s.dispStart + (s.srcEnd - s.srcStart));
+    if (tEnd <= tStart) continue;
+    const r = frameRangeForTimeSpan(starts, binWidth, tStart, tEnd);
+    if (!r) continue;
+    out.push({ ...r, tStart, tEnd });
+  }
+  return out;
 }
 
 /**

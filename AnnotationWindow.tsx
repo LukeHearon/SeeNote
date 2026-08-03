@@ -23,6 +23,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { subsetTimelineFor, subsetBuzzdetectData, type SubsetCriteria } from './utils/buzzdetectSubset';
+import { sourceIntervalOf } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
@@ -356,13 +357,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   effectiveVideoModeRef.current = effectiveVideoMode;
 
   // A selection is display-time everywhere (view + playback bounds); an
-  // annotation made from one has to be converted. toSourceWithin resolves the
-  // end inside the selection's own span, so a selection ending exactly at a cut
-  // doesn't collapse onto the far side of it.
-  const selectionToSource = useCallback((sel: Selection): Selection => ({
-    start: timeline.toSource(sel.start),
-    end: timeline.toSourceWithin(sel.start, sel.end),
-  }), [timeline]);
+  // annotation made from one has to be converted — the same conversion the
+  // toolbar and panel readouts make (utils/subsetTimeline).
+  const selectionToSource = useCallback(
+    (sel: Selection): Selection => sourceIntervalOf(timeline, sel.start, sel.end),
+    [timeline],
+  );
 
   // Display duration mirror for the hooks that clamp seeks/pans against it.
   const displayDurationRef = useRef(displayDuration);
@@ -2065,6 +2065,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                }}
                timeDisplayUnit={timeDisplayUnit}
                onTimeDisplayUnitChange={setTimeDisplayUnit}
+               timeline={timeline}
              />
 
              <div className="flex-1 relative overflow-hidden">

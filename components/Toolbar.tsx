@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2, Settings, Gauge, Filter, Activity, LocateFixed, Scissors } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
@@ -8,6 +8,7 @@ import VolumeControl from './VolumeControl';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { parseHMS } from '../utils/timeAxis';
 import { formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
+import { Timeline, identityTimeline, displayOfNearestKept, sourceIntervalOf } from '../utils/subsetTimeline';
 import { tooltips } from '../copy/tooltips';
 import { useAltHeld } from '../hooks/useAltHeld';
 
@@ -15,13 +16,15 @@ type TimeField = 'time' | 'selStart' | 'selEnd' | 'selDur';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not the whole memoized Toolbar — re-renders per tick.
-function TimeDisplay({ currentTimeStore, unit }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit }) {
+// The store is in display time; the readout is in source time, because a time
+// the user might write down or search for has to be a position in the file.
+function TimeDisplay({ currentTimeStore, unit, timeline }: { currentTimeStore: CurrentTimeStore; unit: TimeDisplayUnit; timeline: Timeline }) {
   const [t, setT] = useState(currentTimeStore.get());
   useEffect(() => {
     setT(currentTimeStore.get());
     return currentTimeStore.subscribe(() => setT(currentTimeStore.get()));
   }, [currentTimeStore]);
-  return <>{formatTimeForUnit(t, unit)}</>;
+  return <>{formatTimeForUnit(timeline.toSource(t), unit)}</>;
 }
 
 interface ToolbarProps {
@@ -74,6 +77,12 @@ interface ToolbarProps {
   subsetAvailable?: boolean;
   subsetActive?: boolean;
   onToggleSubset?: () => void;
+  /**
+   * The display↔source map. Every time in this toolbar is READ and WRITTEN in
+   * source time — the seek/selection callbacks below still speak display time,
+   * so the conversion happens here at the edge. Identity when no subset is on.
+   */
+  timeline?: Timeline;
   onToggleBuzzdetect?: () => void;
   onRestartAudio?: () => void;
   playheadLocked?: boolean;
@@ -134,6 +143,7 @@ function Toolbar({
   subsetAvailable,
   subsetActive,
   onToggleSubset,
+  timeline,
   onToggleBuzzdetect,
   onRestartAudio,
   playheadLocked = false,
@@ -141,6 +151,14 @@ function Toolbar({
   timeDisplayUnit = 'seconds',
   onTimeDisplayUnitChange,
 }: ToolbarProps) {
+  // Timeline every readout below converts through. Memoised in the identity
+  // case so it isn't a fresh object per render.
+  const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
+  const tl = timeline ?? fallbackTimeline;
+  // Selection edges, in source time — what the from/to boxes show and what a
+  // typed value is read as.
+  const srcSelection = selection ? sourceIntervalOf(tl, selection.start, selection.end) : null;
+
   const [editingTimeField, setEditingTimeField] = useState<TimeField | null>(null);
   const [editingTimeRaw, setEditingTimeRaw] = useState('');
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -152,7 +170,9 @@ function Toolbar({
   // Current-time box grows to fit long durations (e.g. >100,000s) instead of
   // truncating — width in ch matches the monospace readout, sized off the
   // longest string the box will ever need to show (time at full duration).
-  const timeBoxWidth = `${Math.max(formatTimeForUnit(duration || 0, timeDisplayUnit).length + 3, 7)}ch`;
+  // Sized off the longest source time it can show — under a subset that's the
+  // whole file's duration, not the shortened axis's.
+  const timeBoxWidth = `${Math.max(formatTimeForUnit(tl.sourceDuration || 0, timeDisplayUnit).length + 3, 7)}ch`;
 
   // Refs for use in the non-React wheel event handler (attached once, reads live values)
   const speedRef = useRef(playbackSpeed);
@@ -267,6 +287,10 @@ function Toolbar({
       onAnnotationBoundsChange?.(s.start, s.end);
     };
 
+    // A duration is the same number on either axis (nothing is stretched, only
+    // cut), so this one needs no conversion — just the same span clamp a drag
+    // gets, so a typed length can't run past the end of its segment.
+    //
     // selDur accepts negative values (anchor is always selection.start / currentTime),
     // so handle it separately from parseTimestamp (which rejects negatives).
     if (editingTimeField === 'selDur') {
@@ -275,8 +299,9 @@ function Toolbar({
       if (!isNaN(dur)) {
         const anchor = selection ? selection.start : (!isPlaying ? currentTimeStore.get() : null);
         if (anchor !== null) {
-          const a = clamp(Math.min(anchor, anchor + dur), 0, duration);
-          const b = clamp(Math.max(anchor, anchor + dur), 0, duration);
+          const far = tl.clampToSpanOfDisplay(anchor, anchor + dur);
+          const a = clamp(Math.min(anchor, far), 0, duration);
+          const b = clamp(Math.max(anchor, far), 0, duration);
           if (a !== b) applySelection({ start: a, end: b });
         }
       }
@@ -285,20 +310,23 @@ function Toolbar({
       return;
     }
 
+    // Typed times are source times. A time that was cut out of the subset has no
+    // position on the axis, so it goes to the nearest kept one — the same answer
+    // dragging there gives.
     const parsed = parseTimestamp(raw);
     if (parsed !== null) {
-      const clamped = clamp(parsed, 0, duration);
+      const clamped = clamp(displayOfNearestKept(tl, parsed), 0, duration);
       if (editingTimeField === 'time') {
         onSeek(clamped, true);
-      } else if (editingTimeField === 'selStart') {
-        const other = selection ? selection.end : currentTimeStore.get();
-        const a = clamp(Math.min(clamped, other), 0, duration);
-        const b = clamp(Math.max(clamped, other), 0, duration);
-        if (a !== b) applySelection({ start: a, end: b });
-      } else if (editingTimeField === 'selEnd') {
-        const other = selection ? selection.start : currentTimeStore.get();
-        const a = clamp(Math.min(clamped, other), 0, duration);
-        const b = clamp(Math.max(clamped, other), 0, duration);
+      } else if (editingTimeField === 'selStart' || editingTimeField === 'selEnd') {
+        // The edge that isn't being typed anchors the selection, exactly as it
+        // anchors a handle drag: the typed edge is held inside its segment.
+        const other = selection
+          ? (editingTimeField === 'selStart' ? selection.end : selection.start)
+          : currentTimeStore.get();
+        const held = tl.clampToSpanOfDisplay(other, clamped);
+        const a = clamp(Math.min(held, other), 0, duration);
+        const b = clamp(Math.max(held, other), 0, duration);
         if (a !== b) applySelection({ start: a, end: b });
       }
     }
@@ -417,9 +445,9 @@ function Toolbar({
               className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
               style={{ width: timeBoxWidth }}
               data-tooltip={tooltips.jumpToTime}
-              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(currentTimeStore.get(), timeDisplayUnit)); }}
+              onClick={() => { setEditingTimeField('time'); setEditingTimeRaw(formatTimeForUnit(tl.toSource(currentTimeStore.get()), timeDisplayUnit)); }}
             >
-              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} />
+              <TimeDisplay currentTimeStore={currentTimeStore} unit={timeDisplayUnit} timeline={tl} />
             </button>
           )}
 
@@ -446,7 +474,8 @@ function Toolbar({
 
         {/* Selection fields — always visible, blank when no selection active */}
         {(() => {
-          const region = selection ?? { start: 0, end: 0 };
+          // Shown in source time; the duration is axis-independent.
+          const region = srcSelection ?? { start: 0, end: 0 };
           const has = !!selection;
           // Allow editing when paused and no selection to create one from the playhead
           const canCreate = !has && !isPlaying;

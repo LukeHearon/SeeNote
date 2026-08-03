@@ -2,6 +2,8 @@
 // scrolling Spectrogram and the static ExampleSpectrogram so tick spacing and
 // label formatting stay identical (no duplicated cascade).
 
+import type { Timeline } from './subsetTimeline';
+
 // Candidate tick spacings (seconds), ascending. Extends well past an hour
 // because labels now show hours (e.g. "35h36m00s") — a fixed viewSpan
 // threshold cascade doesn't account for how much wider that makes each
@@ -49,6 +51,76 @@ export function formatRulerTime(s: number, timeStep: number, viewSpan: number): 
   } else {
     return `${sec}s`;
   }
+}
+
+/** One ruler tick: where it sits on screen, and the time it is labelled with. */
+export interface RulerTick {
+  /** Display time (seconds) — where the tick is drawn. */
+  disp: number;
+  /** Source time (seconds) — what the label reads. */
+  src: number;
+}
+
+/**
+ * The ticks for the display range [d0, d1], labelled in SOURCE time.
+ *
+ * A ruler exists to answer "where in the file am I?", and under a subset the
+ * display axis can't answer that — its 0 is wherever the first kept run happens
+ * to start, and every later position is short by however much was cut out. So
+ * ticks are chosen per kept span, at nice values of the span's own source time,
+ * and placed at the display position that source time maps to. What the user
+ * reads off the ruler is a position in the file they can go back to.
+ *
+ * Each span also gets a tick at its start, whatever value that is: a span can be
+ * shorter than one tick step (a single detection often is) and would otherwise
+ * carry no label at all, and the run's own start time in the file is the most
+ * useful thing to label it with anyway.
+ *
+ * Ticks closer together than a label is wide are dropped, keeping the earlier
+ * one — so a span start always wins over a nice tick beside it, and a stretch of
+ * very short spans labels as many as fit rather than overprinting. Interior
+ * ticks also keep clear of their span's END, where the next span's start label
+ * will sit.
+ *
+ * For the identity timeline (no subset) this is just nice ticks across the
+ * range, labelled with themselves — the pre-subset behaviour exactly.
+ */
+export function rulerTicks(
+  timeline: Timeline,
+  d0: number,
+  d1: number,
+  step: number,
+  pixelsPerSecond: number,
+): RulerTick[] {
+  const out: RulerTick[] = [];
+  if (!(step > 0)) return out;
+
+  if (timeline.identity) {
+    for (let s = Math.floor(d0 / step) * step; s <= d1; s += step) {
+      if (s > 0) out.push({ disp: s, src: s });
+    }
+    return out;
+  }
+
+  const minSpacing = pixelsPerSecond > 0 ? MIN_LABEL_SPACING_PX / pixelsPerSecond : 0;
+  let last = -Infinity;
+  const push = (disp: number, src: number) => {
+    if (disp <= 0 || disp - last < minSpacing) return;
+    out.push({ disp, src });
+    last = disp;
+  };
+
+  for (const span of timeline.spansForDisplayRange(d0, d1)) {
+    const len = span.srcEnd - span.srcStart;
+    const dispEnd = span.dispStart + len;
+    push(span.dispStart, span.srcStart);
+    for (let s = Math.ceil(span.srcStart / step) * step; s < span.srcEnd; s += step) {
+      const disp = span.dispStart + (s - span.srcStart);
+      if (dispEnd - disp < minSpacing) break;
+      push(disp, s);
+    }
+  }
+  return out;
 }
 
 /**

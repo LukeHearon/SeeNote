@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   identityTimeline,
   buildSubsetTimeline,
+  displayOfNearestKept,
   projectIntervalToDisplay,
   segmentJoins,
+  sourceIntervalOf,
 } from '../utils/subsetTimeline';
 
 describe('identityTimeline', () => {
@@ -197,5 +199,53 @@ describe('segmentJoins', () => {
       100,
     );
     expect(segmentJoins(tl)).toEqual([2, 5]);
+  });
+});
+
+describe('sourceIntervalOf', () => {
+  const tl = buildSubsetTimeline([{ start: 10, end: 12 }, { start: 50, end: 53 }], 100);
+
+  it('passes an interval through with no subset', () => {
+    expect(sourceIntervalOf(identityTimeline(100), 3, 7)).toEqual({ start: 3, end: 7 });
+  });
+
+  it('reads a display interval back as the file times it names', () => {
+    expect(sourceIntervalOf(tl, 0.5, 1.5)).toEqual({ start: 10.5, end: 11.5 });
+    expect(sourceIntervalOf(tl, 2.5, 4)).toEqual({ start: 50.5, end: 52 });
+  });
+
+  it('ends a segment-length interval at that segment end, not the next start', () => {
+    // Display 0–2 is the whole first segment: it ends at source 12, even though
+    // display 2 is also where the second segment (source 50) begins.
+    expect(sourceIntervalOf(tl, 0, 2)).toEqual({ start: 10, end: 12 });
+  });
+});
+
+describe('displayOfNearestKept', () => {
+  const tl = buildSubsetTimeline([{ start: 10, end: 12 }, { start: 50, end: 53 }], 100);
+
+  it('is plain conversion for a kept time', () => {
+    expect(displayOfNearestKept(tl, 11)).toBe(1);
+    expect(displayOfNearestKept(identityTimeline(100), 42)).toBe(42);
+  });
+
+  it('snaps a cut-out time to the nearer segment edge', () => {
+    expect(displayOfNearestKept(tl, 13)).toBe(2);   // just after the first → its end
+    expect(displayOfNearestKept(tl, 49)).toBe(2);   // just before the second → its start
+    // Both edges are display 2 here; what matters is that a time near the later
+    // segment doesn't get sent back to the earlier one, which toDisplay does.
+    expect(tl.toDisplay(49)).toBe(2);
+  });
+
+  it('clamps outside the subset entirely', () => {
+    expect(displayOfNearestKept(tl, 0)).toBe(0);
+    expect(displayOfNearestKept(tl, 99)).toBe(5);
+  });
+
+  it('picks the nearer of two distant segments', () => {
+    const far = buildSubsetTimeline([{ start: 0, end: 10 }, { start: 90, end: 100 }], 100);
+    expect(displayOfNearestKept(far, 20)).toBe(10);  // nearer the first → its end
+    expect(displayOfNearestKept(far, 80)).toBe(10);  // nearer the second → its start
+    expect(far.spans[1].dispStart).toBe(10);
   });
 });
