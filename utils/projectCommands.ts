@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ProjectPreferences, ProjectRegistryEntry, ProjectSettings, RecentFileEntry } from '../types';
+import { AppSettings, ProjectPreferences, ProjectRegistryEntry, ProjectSettings, RecentFileEntry } from '../types';
 
 // ── Registry (slim per-machine pointer file) ──────────────────────────────────
 
@@ -154,6 +154,20 @@ export const writeProjectPreferences = (
 
 export const projectDirExists = (projectDir: string): Promise<boolean> =>
   invoke('project_dir_exists', { projectDir });
+
+// ── Application settings (system-wide, one file per machine) ─────────────────
+
+/** Read `{appDataDir}/app_settings.json`. Returns `{}` if the file doesn't exist. */
+export const readAppSettings = async (): Promise<AppSettings> => {
+  const appDataDir = await getAppDataDir();
+  return invoke('read_app_settings', { appDataDir });
+};
+
+/** Write the settings object to `{appDataDir}/app_settings.json`. */
+export const writeAppSettings = async (settings: AppSettings): Promise<void> => {
+  const appDataDir = await getAppDataDir();
+  await invoke('write_app_settings', { appDataDir, settings });
+};
 
 // ── Misc project-related filesystem helpers (unchanged signatures) ────────────
 

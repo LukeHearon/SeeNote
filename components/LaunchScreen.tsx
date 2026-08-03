@@ -72,6 +72,7 @@ export default function LaunchScreen({
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
   const [showCreate, setShowCreate] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
+  const [showAppSettings, setShowAppSettings] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entryId: string } | null>(null);
   // In-app confirmation dialog. We can't use the browser `confirm()` here: in
@@ -335,6 +336,14 @@ export default function LaunchScreen({
               <Plus size={15} />
               {launchScreen.newProjectButton}
             </button>
+            <button
+              onClick={() => setShowAppSettings(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
+              data-tooltip={tooltips.appSettings}
+            >
+              <Settings size={15} />
+              {launchScreen.settingsButton}
+            </button>
           </div>
         </div>
 
@@ -584,6 +593,10 @@ export default function LaunchScreen({
           }}
           onClose={() => setEditingEntry(null)}
         />
+      )}
+
+      {showAppSettings && (
+        <ProjectSettingsModal onClose={() => setShowAppSettings(false)} />
       )}
 
       {confirmState && (

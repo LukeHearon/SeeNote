@@ -191,6 +191,21 @@ export type ProjectPath =
  * implicit — it is the parent of `.seenote/`. Per-user preferences live in
  * `preferences.json` (see ProjectPreferences).
  */
+/**
+ * Contents of `{appDataDir}/app_settings.json`. System-wide, shared across
+ * every project on this machine (unlike ProjectSettings/ProjectPreferences,
+ * which are scoped to a single project). Not tied to git or project sync.
+ */
+export interface AppSettings {
+  /**
+   * Path to a custom ffmpeg/ffprobe install (either binary — both are looked
+   * up alongside each other), used as a fallback decode backend for formats
+   * symphonia can't handle (currently just .wma). When unset, falls back to
+   * PATH lookup.
+   */
+  ffmpegPath?: string;
+}
+
 export interface ProjectSettings {
   projectName: string;
   mediaDirectory: ProjectPath;

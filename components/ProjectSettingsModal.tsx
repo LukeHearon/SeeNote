@@ -13,50 +13,55 @@ import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
+import ApplicationSettingsFields from './ApplicationSettingsFields';
 
 type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
-type SettingsTab = 'settings' | 'preferences';
+type SettingsTab = 'application' | 'settings' | 'preferences';
 
 interface Props {
-  project: Project;
-  onSave: (settings: ProjectSettings, preferences: ProjectPreferences) => void;
+  /** Omit to open the modal in application-settings-only mode (e.g. from the
+   *  launch screen, before any project is loaded) — the Project Settings and
+   *  User Preferences tabs only make sense once a project is open. */
+  project?: Project;
+  onSave?: (settings: ProjectSettings, preferences: ProjectPreferences) => void;
   onClose: () => void;
 }
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
-  const [name, setName] = useState(project.settings.projectName);
-  const [mediaDir, setMediaDir] = useState(() => trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs));
-  const [annotationDir, setAnnotationDir] = useState(() => trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs));
+  const [name, setName] = useState(project?.settings.projectName ?? '');
+  const [mediaDir, setMediaDir] = useState(() => project ? trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs) : '');
+  const [annotationDir, setAnnotationDir] = useState(() => project ? trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs) : '');
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
-    project.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
-  const [filenameTimeFormat, setFilenameTimeFormat] = useState(project.settings.filenameTimeFormat ?? '');
+    project?.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
+  const [filenameTimeFormat, setFilenameTimeFormat] = useState(project?.settings.filenameTimeFormat ?? '');
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
-    project.settings.buzzdetectFrameLength ?? null,
+    project?.settings.buzzdetectFrameLength ?? null,
   );
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
-    project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
+    project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
   const [gradientColors, setGradientColors] = useState<[string, string]>(
-    project.settings.nameGradientColors ?? ['#e65161', '#f9c387'],
+    project?.settings.nameGradientColors ?? ['#e65161', '#f9c387'],
   );
-  const [syncRemoteUrl, setSyncRemoteUrl] = useState(project.settings.gitSync?.remoteUrl ?? '');
+  const [syncRemoteUrl, setSyncRemoteUrl] = useState(project?.settings.gitSync?.remoteUrl ?? '');
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenDirty, setSyncTokenDirty] = useState(false);
   const [syncTokenSavedLength, setSyncTokenSavedLength] = useState<number | null>(null);
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>(
-    project.preferences.gitSyncUser?.tokenStorage ?? 'keychain',
+    project?.preferences.gitSyncUser?.tokenStorage ?? 'keychain',
   );
-  const [syncAuthorName, setSyncAuthorName] = useState(project.preferences.gitSyncUser?.authorName ?? '');
+  const [syncAuthorName, setSyncAuthorName] = useState(project?.preferences.gitSyncUser?.authorName ?? '');
   const [autoPullRemoteChanges, setAutoPullRemoteChanges] = useState(
-    project.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES,
+    project?.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES,
   );
   const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormat>(
-    project.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT,
+    project?.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT,
   );
   // Track the original URL so we can delete the old keyring entry if the user changes it.
-  const initialRemoteUrlRef = React.useRef(project.settings.gitSync?.remoteUrl ?? '');
+  const initialRemoteUrlRef = React.useRef(project?.settings.gitSync?.remoteUrl ?? '');
 
   React.useEffect(() => {
+    if (!project) return;
     const cfg = project.settings.gitSync;
     const userCfg = project.preferences.gitSyncUser ?? {};
     if (!cfg?.remoteUrl) return;
@@ -67,11 +72,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const resolvedMediaDir = resolveInputPath(project.projectDir, mediaDir);
-  const resolvedAnnotationDir = resolveInputPath(project.projectDir, annotationDir);
-  const resolvedBuzzdetectDir = resolveInputPath(project.projectDir, buzzdetectDir);
+  const resolvedMediaDir = project ? resolveInputPath(project.projectDir, mediaDir) : '';
+  const resolvedAnnotationDir = project ? resolveInputPath(project.projectDir, annotationDir) : '';
+  const resolvedBuzzdetectDir = project ? resolveInputPath(project.projectDir, buzzdetectDir) : '';
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('settings');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(project ? 'settings' : 'application');
   const [focusToken, setFocusToken] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
@@ -82,10 +87,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const copiesRef = React.useRef<{ src: string; dst: string }[] | null>(null);
 
   const commitSave = async (settings: ProjectSettings, preferences: ProjectPreferences) => {
-    onSave(settings, preferences);
+    onSave?.(settings, preferences);
   };
 
   const handleFormSubmit = async () => {
+    if (!project) { onClose(); return; }
     if (!name.trim()) { setError('Project name is required.'); return; }
     if (!mediaDir) { setError('Media directory is required.'); return; }
     if (!annotationDir) { setError('Annotations directory is required.'); return; }
@@ -289,28 +295,37 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       {step === 'form' && (
         <SettingsModalShell
-          title={projectSettingsModal.title}
+          title={project ? projectSettingsModal.title : projectSettingsModal.titleApplicationOnly}
           onClose={onClose}
-          tabs={[
+          tabs={project ? [
+            { label: projectSettingsModal.tabApplication, active: activeTab === 'application', onClick: () => setActiveTab('application') },
             { label: projectSettingsModal.tabSettings, active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
             { label: projectSettingsModal.tabPreferences, active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
-          ]}
+          ] : undefined}
           footer={
-            <>
-              <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
-                {projectSettingsModal.cancelButton}
+            project ? (
+              <>
+                <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
+                  {projectSettingsModal.cancelButton}
+                </button>
+                <button
+                  onClick={handleFormSubmit}
+                  disabled={isBusy}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+                >
+                  {isBusy ? projectSettingsModal.savingButton : projectSettingsModal.saveButton}
+                </button>
+              </>
+            ) : (
+              <button onClick={onClose} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors">
+                {projectSettingsModal.closeButton}
               </button>
-              <button
-                onClick={handleFormSubmit}
-                disabled={isBusy}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-              >
-                {isBusy ? projectSettingsModal.savingButton : projectSettingsModal.saveButton}
-              </button>
-            </>
+            )
           }
         >
-          {activeTab === 'settings' && (
+          {activeTab === 'application' && <ApplicationSettingsFields />}
+
+          {project && activeTab === 'settings' && (
             <>
               <div>
                 <label className="text-gray-400 text-sm block mb-1">{projectSettingsModal.projectDirLabel}</label>
@@ -361,7 +376,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             </>
           )}
 
-          {activeTab === 'preferences' && (
+          {project && activeTab === 'preferences' && (
             <>
               <div>
                 <div className="flex items-center justify-between mb-3">

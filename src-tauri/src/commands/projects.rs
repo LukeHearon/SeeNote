@@ -153,6 +153,30 @@ pub async fn write_project_preferences(
     atomic_write(&prefs_path, &content)
 }
 
+/// Read `{app_data_dir}/app_settings.json` and return its parsed JSON.
+/// Returns an empty object if the file does not exist yet (fresh install).
+/// Unlike project settings/preferences, this is one file per machine, shared
+/// across every project.
+#[tauri::command]
+pub async fn read_app_settings(app_data_dir: String) -> Result<JsonValue, String> {
+    let path = Path::new(&app_data_dir).join("app_settings.json");
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+/// Write `settings` to `{app_data_dir}/app_settings.json`, creating the
+/// directory if missing.
+#[tauri::command]
+pub async fn write_app_settings(app_data_dir: String, settings: JsonValue) -> Result<(), String> {
+    std::fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
+    let path = Path::new(&app_data_dir).join("app_settings.json");
+    let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    atomic_write(&path, &content)
+}
+
 #[tauri::command]
 pub async fn project_dir_exists(project_dir: String) -> Result<bool, String> {
     Ok(Path::new(&project_dir).is_dir())

@@ -26,6 +26,7 @@ export const tooltips = {
   get setupSync() { return getOverride('tooltips.setupSync') ?? "Instructions for setting up GitHub-synced annotations"; },
   get relinkProject() { return getOverride('tooltips.relinkProject') ?? "Find this project's folder on disk and re-link it"; },
   get projectSettings() { return getOverride('tooltips.projectSettings') ?? "Project settings"; },
+  get appSettings() { return getOverride('tooltips.appSettings') ?? "Application settings"; },
   get unlinkProject() { return getOverride('tooltips.unlinkProject') ?? "Unlink project"; },
   get unlinkFile() { return getOverride('tooltips.unlinkFile') ?? "Remove from Recent"; },
   get openDataFolder() { return getOverride('tooltips.openDataFolder') ?? "Open SeeNote’s internal data folder"; },
