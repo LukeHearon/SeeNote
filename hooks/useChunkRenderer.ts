@@ -243,14 +243,25 @@ export function useChunkRenderer({
           const { chunk } = result;
           if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) return 0;
           const chunkCps = chunk.nCols / chunk.actualDurationSec;
-          // The column covers [dispT, dispT + 1/cps) — one physical pixel of
-          // time; source rate equals display rate within a subset span, so the
-          // window is the same width in the chunk's coordinates.
-          const pos = (t - chunk.startSec) * chunkCps;
+          // Average over a TWO-pixel window centred on the column,
+          // [dispT − 0.5/cps, dispT + 1.5/cps), not the column's own 1px span.
+          // The buffer must stay slightly band-limited relative to the pixel
+          // grid: at exactly one independent value per pixel, the sub-pixel
+          // blit's neighbour blend makes the whole texture soften-and-resharpen
+          // once per column crossing — a global brightness pulse at pps·dpr Hz.
+          // With the 2px box, an isolated transient lands as two half-amplitude
+          // columns whose blended peak is constant at every phase, and adjacent
+          // columns share half their window, which kills most of the texture
+          // breathing. Cost: a fixed ~2px horizontal softening, comparable to
+          // the bilinear downscale this pipeline replaced. Source rate equals
+          // display rate within a subset span, so the window is the same width
+          // in the chunk's coordinates.
+          const colsPerPx = chunkCps / cps;
+          const pos = (t - chunk.startSec) * chunkCps - 0.5 * colsPerPx;
           sampleChunkColumnInto(
             dst, dstOffset, Math.min(nFreqBins, chunk.nFreqBins),
             chunk.data, chunk.nFreqBins, chunk.nCols,
-            pos, pos + chunkCps / cps,
+            pos, pos + 2 * colsPerPx,
           );
           return result.tier + 1;
         };
