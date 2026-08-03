@@ -32,4 +32,9 @@ Never launch the app or take screenshots to visually verify a UI change — too 
 
 ## Commit workflow
 
-After completing any task that modifies files, create a git commit — but only after the user has verified the changes. **Workflow: edit → ask user to verify → wait for confirmation → commit.** Never commit proactively. The `local/` directory is gitignored; never stage files from it.
+After completing any task that modifies files, create a git commit. How much ceremony first depends on the branch:
+
+- **`development` and worktree branches** — commit at will. Finish the change, run `npx tsc --noEmit` and `npm test`, then commit. Don't stop to ask; these commits are cheap and reversible.
+- **`main`** — **edit → ask user to verify → wait for confirmation → commit.** Never commit to `main` proactively.
+
+The `local/` directory is gitignored; never stage files from it.
