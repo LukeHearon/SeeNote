@@ -695,15 +695,36 @@ export default function BuzzdetectPanel({
       // points stay connected within a segment, never across one. Outside a
       // subset every point is in the one identity span, so this is exactly the
       // old unconditional polyline.
+      //
+      // A segment holding only ONE point has nothing to connect to — a lone
+      // moveTo strokes nothing, so the neuron would silently vanish there.
+      // `drawDots` already puts a dot on every point when frames are resolved
+      // individually and wide enough to draw, so the gap only shows up
+      // without it (grouped buckets, or frames too narrow for their own dot);
+      // isolated points are tracked here and dotted in afterward, once it's
+      // known no lineTo ever reached them.
       const spanAt = (t: number) => subsetActive ? activeTimeline.spanIndexAtDisplay(t) : 0;
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       let started = false;
       let lastSpan = -1;
+      let pointsInSpan = 0;
+      let lastX = 0;
+      let lastY = 0;
+      const isolatedPoints: { x: number; y: number }[] = [];
       const lineTo = (t: number, x: number, y: number) => {
         const spanIdx = spanAt(t);
-        if (!started || spanIdx !== lastSpan) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+        if (!started || spanIdx !== lastSpan) {
+          if (started && pointsInSpan === 1) isolatedPoints.push({ x: lastX, y: lastY });
+          ctx.moveTo(x, y);
+          started = true;
+          pointsInSpan = 0;
+        } else {
+          ctx.lineTo(x, y);
+        }
+        pointsInSpan++;
+        lastX = x; lastY = y;
         lastSpan = spanIdx;
       };
       if (!grouped) {
@@ -730,7 +751,17 @@ export default function BuzzdetectPanel({
           }
         }
       }
+      if (started && pointsInSpan === 1) isolatedPoints.push({ x: lastX, y: lastY });
       ctx.stroke();
+
+      if (!drawDots) {
+        ctx.fillStyle = color;
+        for (const p of isolatedPoints) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       if (drawDots) {
         for (let i = iLeft; i <= iRight; i++) {
