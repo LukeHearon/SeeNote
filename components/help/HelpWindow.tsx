@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { DEFAULT_PAGE_ID, findPage } from './guide';
 import { HelpContent } from './HelpContent';
 import { HelpNav } from './HelpNav';
-import { HelpToc } from './HelpToc';
+import TooltipLayer from '../TooltipLayer';
 import { help } from '../../copy/help';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import { onHelpMessage, postHelpMessage } from '../../utils/helpChannel';
@@ -11,8 +11,8 @@ import { useLiveClient } from '../../utils/liveBridge';
 import { closeHelpWindow } from '../../utils/tauriCommands';
 
 /**
- * The guide, as a standalone window (index.html?window=help). Three columns:
- * section tree, page body, in-page table of contents.
+ * The guide, as a standalone window (index.html?window=help). Two columns:
+ * section tree and page body.
  *
  * The main window opens this via `open_help_window`; because a second call only
  * focuses the existing window, deep links after the first open arrive as
@@ -70,8 +70,11 @@ export function HelpWindow() {
         <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto px-8 py-6">
           <HelpContent page={page} client={liveClient} />
         </div>
-        <HelpToc page={page} scrollRef={scrollRef} />
       </div>
+
+      {/* The embedded controls carry the same data-tooltip attributes as the
+          real ones, so the guide needs the layer that renders them. */}
+      <TooltipLayer />
     </div>
   );
 }

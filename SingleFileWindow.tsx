@@ -258,7 +258,6 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // the two windows is ever mounted, so there's never a second host.
   useLiveHost(
     {
-      trackName: trackName || null,
       hasTrack: !!videoSrc,
       duration,
       isPlaying,
@@ -282,6 +281,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       bandPassFilter,
       buzzdetectAvailable: false,
       buzzdetectEnabled: false,
+      spectrogramSettings: settings,
+      spectrogramSettingsOpen: showSettings,
+      // No file panel and no annotation tools in single-file mode — the guide's
+      // copies of those fall back to their demos rather than to dead buttons.
+      filePanel: null,
+      toolPalette: null,
     },
     {
       play: togglePlay,
@@ -309,6 +314,21 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       enableFilter: handleEnableBandPassFilter,
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => {},
+      toggleSpectrogramSettings: () => setShowSettings(s => !s),
+      setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
+      toggleFileExpandCollapse: () => {},
+      refreshFiles: () => {},
+      toggleFileFilter: () => {},
+      toggleShuffle: () => {},
+      activateTool: () => {},
+      activateSelectMode: () => {},
+      openToolSettings: () => {},
+      openMassRename: () => {},
+      openFindLabel: () => {},
+      editTool: () => {},
+      requestDeleteTool: () => {},
+      playExample: () => {},
+      showExamples: () => {},
     },
     currentTimeStoreRef.current,
   );

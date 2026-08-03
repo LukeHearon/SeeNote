@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
-import { Selection } from '../../types';
+import { AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { CurrentTimeStore, createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { LiveClient, LiveSnapshot } from '../../utils/liveBridge';
 import { SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../../utils/helpers';
@@ -9,6 +9,10 @@ import { TimeReadout } from '../controls/TimeReadout';
 import { SelectionTimeFields } from '../controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from '../controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from '../controls/FilterControls';
+import { BuzzdetectToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
+import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
+import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
+import AnnotationToolsPanel from '../AnnotationToolsPanel';
 import VolumeControl from '../VolumeControl';
 
 /** Which control a `live` block renders. */
@@ -18,7 +22,12 @@ export type LiveControlId =
   | 'selection'
   | 'speed'
   | 'volume'
-  | 'filter';
+  | 'filter'
+  | 'buzzdetect'
+  | 'spectrogram-settings-button'
+  | 'spectrogram-settings'
+  | 'file-panel-header'
+  | 'tool-palette';
 
 // ---------------------------------------------------------------------------
 // Demo state
@@ -30,6 +39,28 @@ export type LiveControlId =
 
 const DEMO_DURATION = 137.5;
 
+const DEMO_SETTINGS: SpectrogramSettings = {
+  minFreq: 0,
+  maxFreq: 12000,
+  fftSize: 1024,
+  frequencyScale: 'linear',
+  displayFloor: -100,
+  displayCeil: 0,
+};
+
+const DEMO_FILE_PANEL = { fileFilter: 'all' as const, shuffleMode: false, anyExpanded: false };
+
+/** Stand-in palette for the tool-panel demo — the shape a real project's is. */
+const DEMO_TOOLS: AnnotationTool[] = [
+  { id: 'demo-custom', key: '0', text: 'Custom', color: '#64748b' },
+  { id: 'demo-1', key: '1', text: 'Buzz', color: '#e65161', description: 'Wingbeat buzz' },
+  { id: 'demo-2', key: '2', text: 'Song', color: '#38bdf8' },
+  { id: 'demo-3', key: '3', text: 'Call', color: '#a78bfa' },
+  { id: 'demo-4', key: '4', text: 'Noise', color: '#facc15' },
+];
+
+const DEMO_PALETTE = { tools: DEMO_TOOLS, activeToolKey: '1' as string | null, playingExampleToolId: null };
+
 function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnapshot>) => void; store: CurrentTimeStore } {
   const storeRef = useRef<CurrentTimeStore | null>(null);
   if (!storeRef.current) {
@@ -37,7 +68,6 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     storeRef.current.set(42.5);
   }
   const [snapshot, setSnapshot] = useState<LiveSnapshot>({
-    trackName: null,
     hasTrack: true,
     duration: DEMO_DURATION,
     isPlaying: false,
@@ -60,6 +90,10 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     bandPassFilter: null,
     buzzdetectAvailable: false,
     buzzdetectEnabled: false,
+    spectrogramSettings: DEMO_SETTINGS,
+    spectrogramSettingsOpen: true,
+    filePanel: DEMO_FILE_PANEL,
+    toolPalette: DEMO_PALETTE,
   });
   const set = (patch: Partial<LiveSnapshot>) => setSnapshot(s => ({ ...s, ...patch }));
   return { snapshot, set, store: storeRef.current };
@@ -69,20 +103,34 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
 // Frame
 // ---------------------------------------------------------------------------
 
-function Frame({ connected, trackName, children }: { connected: boolean; trackName: string | null; children: ReactNode }) {
+function Frame({ connected, children }: { connected: boolean; children: ReactNode }) {
   return (
-    <div className="my-3 rounded-lg border border-slate-700 bg-slate-800/60 overflow-hidden">
+    <div className="my-3 rounded-lg border border-slate-700 bg-slate-800/60 overflow-hidden w-fit max-w-full">
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-700/70">
         <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-slate-600'}`} />
         <span className="text-[10px] uppercase tracking-wider text-slate-500">
-          {connected
-            ? (trackName ? help.live.connectedTo(trackName) : help.live.connected)
-            : help.live.demo}
+          {connected ? help.live.connected : help.live.demo}
         </span>
       </div>
       <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap">{children}</div>
     </div>
   );
+}
+
+/**
+ * Whether this control has something to drive in the main window. Most follow
+ * the connection itself; the ones backed by a panel that doesn't exist in every
+ * window — or by a feature that isn't configured — go by their own slice of the
+ * snapshot, so they fall back to the demo rather than to a dead button.
+ */
+function isLive(id: LiveControlId, state: LiveSnapshot | null): boolean {
+  if (!state) return false;
+  switch (id) {
+    case 'buzzdetect': return state.buzzdetectAvailable;
+    case 'file-panel-header': return state.filePanel !== null;
+    case 'tool-palette': return state.toolPalette !== null;
+    default: return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +150,8 @@ function Frame({ connected, trackName, children }: { connected: boolean; trackNa
  */
 export function LiveControl({ id, client }: { id: LiveControlId; client: LiveClient }) {
   const demo = useDemoState();
-  const connected = client.state !== null;
-  const s = client.state ?? demo.snapshot;
+  const connected = isLive(id, client.state);
+  const s = connected && client.state ? client.state : demo.snapshot;
   const store = connected ? client.currentTimeStore : demo.store;
 
   // Demo playback: with no project to follow, the readout still needs to move
@@ -198,8 +246,75 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
             />
           </>
         );
+      case 'buzzdetect':
+        return (
+          <BuzzdetectToggle
+            enabled={s.buzzdetectEnabled}
+            onToggle={() => act(() => client.call('toggleBuzzdetect'), () => demo.set({ buzzdetectEnabled: !demo.snapshot.buzzdetectEnabled }))}
+          />
+        );
+      case 'spectrogram-settings-button':
+        return (
+          <SpectrogramSettingsButton
+            open={s.spectrogramSettingsOpen}
+            onToggle={() => act(() => client.call('toggleSpectrogramSettings'), () => demo.set({ spectrogramSettingsOpen: !demo.snapshot.spectrogramSettingsOpen }))}
+          />
+        );
+      case 'spectrogram-settings':
+        return (
+          <div className="w-72">
+            <SpectrogramSettingsPanel
+              settings={s.spectrogramSettings}
+              onChange={patch => act(
+                () => client.call('setSpectrogramSettings', patch),
+                () => demo.set({ spectrogramSettings: { ...demo.snapshot.spectrogramSettings, ...patch } }),
+              )}
+            />
+          </div>
+        );
+      case 'file-panel-header': {
+        const fp = s.filePanel ?? DEMO_FILE_PANEL;
+        const setFp = (patch: Partial<typeof fp>) => demo.set({ filePanel: { ...fp, ...patch } });
+        return (
+          <FilePanelHeaderButtons
+            shuffleMode={fp.shuffleMode}
+            anyExpanded={fp.anyExpanded}
+            fileFilter={fp.fileFilter}
+            onToggleExpandCollapse={() => act(() => client.call('toggleFileExpandCollapse'), () => setFp({ anyExpanded: !fp.anyExpanded }))}
+            onRefresh={() => act(() => client.call('refreshFiles'), () => {})}
+            onToggleFileFilter={() => act(() => client.call('toggleFileFilter'), () => setFp({
+              fileFilter: fp.fileFilter === 'all' ? 'unannotated' : fp.fileFilter === 'unannotated' ? 'annotated' : 'all',
+            }))}
+            onToggleShuffle={() => act(() => client.call('toggleShuffle'), () => setFp({ shuffleMode: !fp.shuffleMode }))}
+          />
+        );
+      }
+      case 'tool-palette': {
+        const tp = s.toolPalette ?? DEMO_PALETTE;
+        const setTp = (patch: Partial<typeof tp>) => demo.set({ toolPalette: { ...tp, ...patch } });
+        // The buttons that open a modal do it in the main window — there is no
+        // modal to open in the guide, so with no project they do nothing.
+        return (
+          <div className="w-56 h-72 flex flex-col bg-slate-900 rounded border border-slate-700 overflow-hidden">
+            <AnnotationToolsPanel
+              annotationTools={tp.tools}
+              activeToolKey={tp.activeToolKey}
+              onToolActivate={key => act(() => client.call('activateTool', key), () => setTp({ activeToolKey: key }))}
+              onSelectModeActivate={() => act(() => client.call('activateSelectMode'), () => setTp({ activeToolKey: null }))}
+              onOpenSettings={() => act(() => client.call('openToolSettings'), () => {})}
+              onOpenMassRename={() => act(() => client.call('openMassRename'), () => {})}
+              onOpenFindLabel={() => act(() => client.call('openFindLabel'), () => {})}
+              onEditTool={i => act(() => client.call('editTool', i), () => {})}
+              onRequestDeleteTool={i => act(() => client.call('requestDeleteTool', i), () => {})}
+              playingExampleToolId={tp.playingExampleToolId}
+              onPlayExample={tool => act(() => client.call('playExample', tool.id), () => {})}
+              onShowExamples={i => act(() => client.call('showExamples', i), () => {})}
+            />
+          </div>
+        );
+      }
     }
   };
 
-  return <Frame connected={connected} trackName={s.trackName}>{body()}</Frame>;
+  return <Frame connected={connected}>{body()}</Frame>;
 }

@@ -11,14 +11,12 @@ import { getOverride } from './overrideStore';
 export const help = {
   get windowTitle() { return getOverride('help.windowTitle') ?? "SeeNote Guide"; },
   get navAriaLabel() { return getOverride('help.navAriaLabel') ?? "Guide sections"; },
-  get tocTitle() { return getOverride('help.tocTitle') ?? "On this page"; },
   get searchPlaceholder() { return getOverride('help.searchPlaceholder') ?? "Search the guide"; },
   get searchNoResults() { return getOverride('help.searchNoResults') ?? "No matching sections"; },
 
   live: {
-    get connected() { return getOverride('help.live.connected') ?? "Live — this drives your project"; },
-    get demo() { return getOverride('help.live.demo') ?? "Demo — open a project to make this live"; },
-    connectedTo: (trackName: string) => `Live — driving ${trackName}`,
+    get connected() { return getOverride('help.live.connected') ?? "Live"; },
+    get demo() { return getOverride('help.live.demo') ?? "Open a project for live control"; },
   },
 
   parts: {

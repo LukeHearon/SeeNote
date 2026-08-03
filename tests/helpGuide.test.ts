@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { GUIDE, allPages, findPage, partOfPage, tocEntries, pageSearchText, DEFAULT_PAGE_ID } from '../components/help/guide';
+import { GUIDE, allPages, findPage, partOfPage, pageHeadings, pageSearchText, DEFAULT_PAGE_ID } from '../components/help/guide';
 
 // ---------------------------------------------------------------------------
 // Help-target inventory
@@ -90,7 +90,7 @@ describe('help guide structure', () => {
 
   it('gives every page unique heading ids', () => {
     for (const page of allPages()) {
-      const ids = tocEntries(page).map(e => e.id);
+      const ids = pageHeadings(page).map(e => e.id);
       expect(new Set(ids).size, `duplicate heading id on page ${page.id}`).toBe(ids.length);
     }
   });

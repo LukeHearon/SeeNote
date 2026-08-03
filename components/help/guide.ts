@@ -5,9 +5,8 @@ import type { LiveControlId } from './LiveControls';
 // reach it); this file says what the pages are, what order they come in, and
 // which real control each one points at.
 //
-// Both rails are derived from this tree — HelpNav renders parts → pages, HelpToc
-// renders the `h` blocks of the active page — so adding a section is a matter of
-// adding copy and slotting a block in here.
+// The nav rail is derived from this tree — HelpNav renders parts → pages — so
+// adding a section is a matter of adding copy and slotting a block in here.
 
 /** One renderable piece of a page. */
 export type Block =
@@ -17,7 +16,7 @@ export type Block =
   | { kind: 'note'; text: string }
   /** Bulleted list. */
   | { kind: 'ul'; items: string[] }
-  /** Subsection heading. Also becomes a table-of-contents entry. */
+  /** Subsection heading. Its `id` is also the page's in-document anchor. */
   | { kind: 'h'; id: string; text: string }
   /** A working copy of one of the app's controls, wired to the open project. */
   | { kind: 'live'; control: LiveControlId }
@@ -144,6 +143,7 @@ export const GUIDE: Part[] = [
             help.filePanel.li_expand,
             help.filePanel.li_refresh,
           ] },
+          { kind: 'live', control: 'file-panel-header' },
           { kind: 'h', id: 'folders', text: help.filePanel.h_folders },
           { kind: 'p', text: help.filePanel.p_folders },
           { kind: 'h', id: 'context', text: help.filePanel.h_context },
@@ -188,6 +188,8 @@ export const GUIDE: Part[] = [
         target: 'spectrogram-settings',
         blocks: () => [
           { kind: 'p', text: help.spectrogramSettings.p1 },
+          { kind: 'live', control: 'spectrogram-settings-button' },
+          { kind: 'live', control: 'spectrogram-settings' },
           { kind: 'h', id: 'range', text: help.spectrogramSettings.h_range },
           { kind: 'p', text: help.spectrogramSettings.p_range },
           { kind: 'h', id: 'freq', text: help.spectrogramSettings.h_freq },
@@ -244,6 +246,7 @@ export const GUIDE: Part[] = [
         target: 'buzzdetect-toggle',
         blocks: () => [
           { kind: 'p', text: help.buzzdetect.p1 },
+          { kind: 'live', control: 'buzzdetect' },
           { kind: 'h', id: 'reading', text: help.buzzdetect.h_reading },
           { kind: 'p', text: help.buzzdetect.p_reading },
           { kind: 'h', id: 'frames', text: help.buzzdetect.h_frames },
@@ -333,6 +336,7 @@ export const GUIDE: Part[] = [
         target: 'tool-palette',
         blocks: () => [
           { kind: 'ul', items: [help.modes.li1, help.modes.li2] },
+          { kind: 'live', control: 'tool-palette' },
           { kind: 'note', text: help.modes.note1 },
           { kind: 'note', text: help.modes.note2 },
         ],
@@ -370,6 +374,7 @@ export const GUIDE: Part[] = [
         target: 'tool-palette',
         blocks: () => [
           { kind: 'p', text: help.tools.p1 },
+          { kind: 'live', control: 'tool-palette' },
           { kind: 'h', id: 'manage', text: help.tools.h_manage },
           { kind: 'p', text: help.tools.p_manage },
           { kind: 'note', text: help.tools.note_undo },
@@ -525,8 +530,8 @@ export function partOfPage(pageId: string): Part | undefined {
 
 export const DEFAULT_PAGE_ID = GUIDE[0].pages[0].id;
 
-/** Table-of-contents entries for a page: its `h` blocks, in document order. */
-export function tocEntries(page: Page): { id: string; text: string }[] {
+/** A page's subsection headings, in document order. */
+export function pageHeadings(page: Page): { id: string; text: string }[] {
   return page.blocks()
     .filter((b): b is Extract<Block, { kind: 'h' }> => b.kind === 'h')
     .map(b => ({ id: b.id, text: b.text }));

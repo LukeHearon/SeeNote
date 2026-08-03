@@ -38,6 +38,12 @@ interface FileTreeProps {
   initialEnteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
   nonMediaFiles?: string[];
+  /**
+   * Reports the header state the guide's live copy of these buttons needs, plus
+   * the one action (expand/collapse) whose state lives inside this component.
+   * Called whenever `anyExpanded` flips.
+   */
+  onHeaderState?: (state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => void;
 }
 
 interface ContextMenuState {
@@ -332,6 +338,7 @@ function FileTree({
   initialEnteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
+  onHeaderState,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -607,6 +614,14 @@ function FileTree({
     if (isAnyExpanded) collapseAll();
     else expandAll();
   };
+
+  // Publish the header state upward for the guide's live copy of these buttons.
+  // The callback closes over the current isAnyExpanded, so it is re-sent
+  // whenever that flips rather than held as a stale closure.
+  useEffect(() => {
+    onHeaderState?.({ anyExpanded: isAnyExpanded, toggleExpandCollapse });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAnyExpanded]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();

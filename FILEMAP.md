@@ -20,12 +20,11 @@ Quick reference for agents. One phrase per file.
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 
 ## Help guide (its own window — `index.html?window=help`)
-- `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/TOC/search derivations (keep in sync with behavior changes)
-- `components/help/HelpWindow.tsx` — three-column shell: nav, page body, table of contents
+- `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/search derivations (keep in sync with behavior changes)
+- `components/help/HelpWindow.tsx` — two-column shell: nav and page body
 - `components/help/HelpNav.tsx` — nested collapsible section tree with search filter
-- `components/help/HelpToc.tsx` — "on this page" rail with scroll-spy
 - `components/help/HelpContent.tsx` — renders a page's blocks through `renderInlineMarkdown`
-- `components/help/LiveControls.tsx` — embeds the real toolbar controls in the guide, driving the open project (or local demo state when none is open)
+- `components/help/LiveControls.tsx` — embeds the real controls in the guide, driving the open project (or local demo state when none is open, or when that control's panel doesn't exist in the host window)
 - `components/HelpAnchor.tsx` — a term that ghosts a real control in the main window on hover
 - `utils/helpChannel.ts` — BroadcastChannel bridging the guide window and the main window (highlight / navigate)
 - `utils/liveBridge.ts` — BroadcastChannel mirroring toolbar state to the guide and control actions back (`useLiveHost` / `useLiveClient`)
@@ -41,6 +40,7 @@ Quick reference for agents. One phrase per file.
 - `components/controls/SpectrogramSettingsPanel.tsx` — the settings popover body (level range, frequency, FFT)
 - `components/controls/FilePanelHeaderButtons.tsx` — expand/collapse, refresh, file filter, shuffle
 - `components/VolumeControl.tsx` — volume slider with 2× gain boost and mute
+- `components/AnnotationToolsPanel.tsx` — the tool palette; already pure, so the guide embeds it directly
 
 ## Video
 - `components/VideoPane.tsx` — video container; positions VideoPlayer and VideoZoomLayer

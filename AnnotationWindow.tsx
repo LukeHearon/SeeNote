@@ -1135,6 +1135,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     updateProjectPreferences(project.id, { ...project.preferences, fileFilter: next });
   }, [project, updateProjectPreferences]);
 
+  // The file panel's expand/collapse state lives inside FileTree; it reports it
+  // up so the help guide's live copy of the header buttons can show and drive it.
+  const fileTreeHeaderRef = useRef<{ toggleExpandCollapse: () => void } | null>(null);
+  const [fileTreeAnyExpanded, setFileTreeAnyExpanded] = useState(false);
+  const handleFileTreeHeaderState = useCallback((state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => {
+    fileTreeHeaderRef.current = state;
+    setFileTreeAnyExpanded(state.anyExpanded);
+  }, []);
+
   const handleFindLabelUseRegexChange = useCallback((useRegex: boolean) => {
     updateProjectPreferences(project.id, { ...project.preferences, findLabelUseRegex: useRegex });
   }, [project, updateProjectPreferences]);
@@ -1397,7 +1406,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // guide renders the same components against them.
   useLiveHost(
     {
-      trackName: trackName || null,
       hasTrack: !!videoSrc,
       duration,
       isPlaying,
@@ -1420,6 +1428,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       bandPassFilter,
       buzzdetectAvailable: project.buzzdetectDirectoryAbs !== null,
       buzzdetectEnabled,
+      spectrogramSettings: settings,
+      spectrogramSettingsOpen: showSettings,
+      filePanel: {
+        fileFilter: (project?.preferences.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
+        shuffleMode,
+        anyExpanded: fileTreeAnyExpanded,
+      },
+      toolPalette: {
+        tools: annotationTools,
+        activeToolKey,
+        playingExampleToolId: examplePlayer.playingToolId,
+      },
     },
     {
       play: togglePlay,
@@ -1447,6 +1467,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       enableFilter: handleEnableBandPassFilter,
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
+      toggleSpectrogramSettings: () => setShowSettings(s => !s),
+      setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
+      toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
+      refreshFiles: handleRefreshFiles,
+      toggleFileFilter: handleToggleFileFilter,
+      toggleShuffle: toggleShuffle,
+      activateTool: handleToolActivate,
+      activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
+      openToolSettings: () => setShowToolSettings(true),
+      openMassRename: () => setShowMassRename(true),
+      openFindLabel: () => setShowFindLabel(true),
+      editTool: setPanelEditingToolIndex,
+      requestDeleteTool: setPanelDeletingToolIndex,
+      playExample: toolId => {
+        const tool = annotationTools.find(t => t.id === toolId);
+        if (tool) examplePlayer.toggle(tool);
+      },
+      showExamples: handleShowExamples,
     },
     currentTimeStoreRef.current,
   );
@@ -1711,6 +1749,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             nonMediaFiles: allNonMediaFiles,
             initialEnteredFolderPath: project?.preferences.enteredFolderPath ?? null,
             onEnteredFolderChange: handleEnteredFolderChange,
+            onHeaderState: handleFileTreeHeaderState,
           };
 
           if (filePanelCollapsed) {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BandPassFilter, Selection } from '../types';
+import { AnnotationTool, BandPassFilter, Selection, SpectrogramSettings } from '../types';
+import type { FileFilter } from '../components/controls/FilePanelHeaderButtons';
 import { CurrentTimeStore, createCurrentTimeStore } from './currentTimeStore';
 import { TimeDisplayUnit } from './helpers';
 
@@ -19,7 +20,6 @@ import { TimeDisplayUnit } from './helpers';
 
 /** Everything the embedded controls need to render. Must stay serializable. */
 export interface LiveSnapshot {
-  trackName: string | null;
   /** False when no track is loaded — the controls render disabled. */
   hasTrack: boolean;
   duration: number;
@@ -43,6 +43,16 @@ export interface LiveSnapshot {
   bandPassFilter: BandPassFilter | null;
   buzzdetectAvailable: boolean;
   buzzdetectEnabled: boolean;
+  spectrogramSettings: SpectrogramSettings;
+  /** Whether the settings popover is open in the main window. */
+  spectrogramSettingsOpen: boolean;
+  /**
+   * File panel state, or null in single-file mode — there is no file panel to
+   * drive there, so the guide's copy of those buttons falls back to its demo.
+   */
+  filePanel: { fileFilter: FileFilter; shuffleMode: boolean; anyExpanded: boolean } | null;
+  /** Annotation tools, or null in single-file mode (no tool palette). */
+  toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null } | null;
 }
 
 /**
@@ -69,6 +79,24 @@ export interface LiveHandlers {
   enableFilter(strength: number): void;
   disableFilter(): void;
   toggleBuzzdetect(): void;
+  toggleSpectrogramSettings(): void;
+  setSpectrogramSettings(patch: Partial<SpectrogramSettings>): void;
+  // File panel. No-ops in single-file mode, which publishes `filePanel: null`
+  // and so never gets a live copy of these buttons in the first place.
+  toggleFileExpandCollapse(): void;
+  refreshFiles(): void;
+  toggleFileFilter(): void;
+  toggleShuffle(): void;
+  // Tool palette. The ones that open a modal do so in the main window.
+  activateTool(key: string): void;
+  activateSelectMode(): void;
+  openToolSettings(): void;
+  openMassRename(): void;
+  openFindLabel(): void;
+  editTool(index: number): void;
+  requestDeleteTool(index: number): void;
+  playExample(toolId: string): void;
+  showExamples(index: number): void;
 }
 
 type ActionMessage = {

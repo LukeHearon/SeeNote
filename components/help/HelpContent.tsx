@@ -27,7 +27,6 @@ function renderBlock(block: Block, key: number, client: LiveClient): React.React
         <h2
           key={key}
           id={`section-${block.id}`}
-          data-toc-id={block.id}
           className="scroll-mt-4 pt-4 text-base font-semibold text-white"
         >
           {block.text}
