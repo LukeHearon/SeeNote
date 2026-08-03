@@ -180,14 +180,17 @@ export function useChunkRenderer({
         // per subset span), so the cache is asked for each of them rather than
         // for the span between the first and the last — which under a sparse
         // subset would be most of the recording.
+        // They go in as ONE prefetch: each call replaces the fetch queue, so
+        // asking range by range had every span but the last cancel the one
+        // before it.
         const srcRanges = sourceRangesForDisplayRange(timeline, startTime, endTime);
-        for (const r of srcRanges) chunkCache.prefetchViewport(r.start, r.end, activeTier.tier);
+        chunkCache.prefetchRanges(srcRanges, activeTier.tier);
 
         // "Building" = the visible range isn't yet fully resolved at the active
         // tier (so columns are missing or drawn blurry from a coarser fallback),
         // with in-flight fetches as a corroborating signal. Both probes are
         // read-only — they never mutate tier hysteresis or LRU order.
-        const allResolved = srcRanges.every(r => chunkCache.isViewportResolved(r.start, r.end, activeTier.tier));
+        const allResolved = chunkCache.isViewportResolvedForRanges(srcRanges, activeTier.tier);
         building = !allResolved && chunkCache.pendingCount() > 0;
 
         // Probe one chunk for nFreqBins (same as before).

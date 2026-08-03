@@ -68,6 +68,41 @@ export function takeContiguousRun(
   return { tier, firstIndex: lo, count: hi - lo + 1 };
 }
 
+/**
+ * The chunk indices covering `ranges` at a tier's `chunkDuration`, deduped and
+ * sorted. Ranges are SOURCE-time ranges: under a subset one screenful is
+ * several disjoint stretches of the file, and two of them often land in the
+ * same chunk, so the dedup matters.
+ *
+ * `pad` extends the span by one chunk on each side — scroll margin, so panning
+ * doesn't stall at the edge. It only applies to a single contiguous range. Under
+ * a subset the thing you scroll into next is the NEXT SPAN, not the file time
+ * adjacent to this span, so padding every span would triple the fetch and cache
+ * pressure for chunks that will never be shown (a one-second span at the finest
+ * tier is one chunk; padded it is three).
+ *
+ * Shared by prefetchRanges and isViewportResolvedForRanges so "what the viewport
+ * needs" is defined in exactly one place.
+ */
+export function chunkIndicesForRanges(
+  ranges: readonly { start: number; end: number }[],
+  chunkDuration: number,
+  sourceDuration: number,
+  pad: boolean,
+): number[] {
+  const indices = new Set<number>();
+  for (const r of ranges) {
+    const first = Math.max(0, Math.floor(r.start / chunkDuration) - (pad ? 1 : 0));
+    const last = Math.floor(r.end / chunkDuration) + (pad ? 1 : 0);
+    for (let idx = first; idx <= last; idx++) {
+      // Chunks starting past the end of the file are never fetched.
+      if (idx * chunkDuration >= sourceDuration) break;
+      indices.add(idx);
+    }
+  }
+  return [...indices].sort((a, b) => a - b);
+}
+
 export class MultiTierSpectrogramCache {
   private tiers: TierConfig[];
   private tierByNumber: Map<number, TierConfig>; // tier number -> tier config
@@ -81,6 +116,11 @@ export class MultiTierSpectrogramCache {
   private activeRequests = 0;
   private fetchQueue: Array<{ tier: number; chunkIndex: number }> = [];
   private activeTierIndex: number = -1; // for hysteresis
+  // Chunks the current viewport is drawing from — exempt from LRU eviction.
+  // One tier at a time: only the active tier is prefetched, and stale pins on a
+  // tier the view has left must not keep its chunks alive forever.
+  private pinnedTier: number = -1;
+  private pinnedIndices = new Set<number>();
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
   private generationId: number = 0;
 
@@ -199,57 +239,83 @@ export class MultiTierSpectrogramCache {
   }
 
   /**
-   * True once every chunk index spanning [startTime, endTime] is cached at the
-   * given tier — i.e. the visible range can be drawn sharp without falling back
-   * to a coarser tier. Mirrors prefetchViewport's index range exactly. Does NOT
-   * touch LRU order (uses cache.has, not getChunkForTime).
+   * True once every chunk the source ranges need is cached at the given tier —
+   * i.e. the visible range can be drawn sharp without falling back to a coarser
+   * tier. Shares its index set with prefetchRanges. Does NOT touch LRU order
+   * (uses cache.has, not getChunkForTime).
    */
-  isViewportResolved(startTime: number, endTime: number, tier: number): boolean {
+  isViewportResolvedForRanges(
+    ranges: readonly { start: number; end: number }[],
+    tier: number,
+  ): boolean {
     const tierConfig = this.tierByNumber.get(tier);
     const cache = this.caches.get(tier);
     if (!tierConfig || !cache) return false;
+    const indices = chunkIndicesForRanges(
+      ranges, tierConfig.chunkDuration, this.duration, ranges.length === 1,
+    );
+    return indices.every(idx => cache.has(idx));
+  }
 
-    const firstIdx = Math.max(0, Math.floor(startTime / tierConfig.chunkDuration) - 1);
-    const lastIdx = Math.floor(endTime / tierConfig.chunkDuration) + 1;
-
-    for (let idx = firstIdx; idx <= lastIdx; idx++) {
-      // Chunks whose start is past the file end are never fetched, so they
-      // can't be "missing" — skip them.
-      if (idx * tierConfig.chunkDuration >= this.duration) break;
-      if (!cache.has(idx)) return false;
-    }
-    return true;
+  /** Single-range convenience wrapper (no subset in play). */
+  isViewportResolved(startTime: number, endTime: number, tier: number): boolean {
+    return this.isViewportResolvedForRanges([{ start: startTime, end: endTime }], tier);
   }
 
   // ── Prefetching ─────────────────────────────────────────────────────────────
 
-  prefetchViewport(startTime: number, endTime: number, tier: number): void {
+  /**
+   * Queue everything the viewport needs, where "the viewport" may be several
+   * disjoint stretches of the file (one per subset span on screen).
+   *
+   * All ranges go into ONE queue in one call. They cannot be prefetched one at a
+   * time: each call replaces the queue, so a per-range loop had every span but
+   * the last wipe the span before it, and only the handful of chunks that
+   * happened to dispatch during that call's drain were ever fetched. The rest
+   * silently never loaded, which is what made individual subset segments render
+   * blank, blurry (coarse-tier fallback), or flicker as which span won the race
+   * changed frame to frame.
+   */
+  prefetchRanges(ranges: readonly { start: number; end: number }[], tier: number): void {
     const tierConfig = this.tierByNumber.get(tier);
     if (!tierConfig) return;
-
-    const firstIdx = Math.max(0, Math.floor(startTime / tierConfig.chunkDuration) - 1);
-    const lastIdx = Math.floor(endTime / tierConfig.chunkDuration) + 1;
     const cache = this.caches.get(tier);
 
+    const indices = chunkIndicesForRanges(
+      ranges, tierConfig.chunkDuration, this.duration, ranges.length === 1,
+    );
+
+    // Everything on screen is pinned against eviction until the next prefetch.
+    // See evictLRU: a scattered subset viewport can need more chunks than the
+    // per-tier budget holds, and evicting a chunk that is still visible to make
+    // room for another one that is also still visible just thrashes.
+    this.pinnedTier = tier;
+    this.pinnedIndices = new Set(indices);
+
     // Build center-out ordered list so the chunk under the viewport center
-    // (and playhead) renders first, expanding outward.
-    const centerIdx = Math.round((firstIdx + lastIdx) / 2);
+    // (and playhead) renders first, expanding outward. Over the index LIST, not
+    // the index range, so a sparse subset still starts from the middle of the
+    // screen rather than the middle of the file.
     const ordered: Array<{ tier: number; chunkIndex: number }> = [];
-    let lo = centerIdx, hi = centerIdx + 1;
-    while (lo >= firstIdx || hi <= lastIdx) {
-      if (lo >= firstIdx) ordered.push({ tier, chunkIndex: lo-- });
-      if (hi <= lastIdx) ordered.push({ tier, chunkIndex: hi++ });
+    const center = indices.length >> 1;
+    let lo = center - 1, hi = center;
+    while (lo >= 0 || hi < indices.length) {
+      if (hi < indices.length) ordered.push({ tier, chunkIndex: indices[hi++] });
+      if (lo >= 0) ordered.push({ tier, chunkIndex: indices[lo--] });
     }
 
     // Replace queue with new viewport, skipping already-cached or in-flight chunks.
     // In-flight fetches continue undisturbed; stale queued items are dropped.
-    this.fetchQueue = ordered.filter(({ tier: t, chunkIndex }) => {
-      const key = `${t}:${chunkIndex}`;
-      const startSec = chunkIndex * tierConfig.chunkDuration;
-      return startSec < this.duration && !cache?.has(chunkIndex) && !this.inFlight.has(key);
-    });
+    this.fetchQueue = ordered.filter(({ tier: t, chunkIndex }) =>
+      !cache?.has(chunkIndex) && !this.inFlight.has(`${t}:${chunkIndex}`),
+    );
 
     this.drainQueue();
+  }
+
+  /** Single-range convenience wrapper (no subset in play). */
+  prefetchViewport(startTime: number, endTime: number, tier: number): void {
+    this.prefetchRanges([{ start: startTime, end: endTime }], tier);
   }
 
   // ── Internal fetch/cache ────────────────────────────────────────────────────
@@ -331,12 +397,30 @@ export class MultiTierSpectrogramCache {
   private evictLRU(tier: number): void {
     const tierConfig = this.tierByNumber.get(tier);
     const cache = this.caches.get(tier);
-    if (!tierConfig || !cache || cache.size < tierConfig.maxChunks) return;
+    if (!tierConfig || !cache) return;
+    const pinned = tier === this.pinnedTier ? this.pinnedIndices : null;
 
     // Because getChunkForTime() moves every hit to the end of the Map via
     // delete+set, the first key in insertion order is always the true LRU.
-    const lruKey = cache.keys().next().value;
-    if (lruKey !== undefined) cache.delete(lruKey);
+    //
+    // Chunks the current viewport needs are skipped. A subset viewport scattered
+    // across the file can require more chunks at once than the byte budget
+    // allows (a 16MB / 2MB-per-chunk tier holds 8; twenty visible segments in
+    // twenty different parts of the file need twenty). Evicting one of those to
+    // fetch another only to have IT evicted on the next arrival is a loop with
+    // no fixed point: every chunk lands, gets drawn, and is thrown out before the
+    // next frame — segments blinking out and dropping to a coarser fallback tier
+    // at random, changing with zoom because zoom changes how many segments fit.
+    // So the cap yields to what is on screen; the ceiling is then the viewport,
+    // which is bounded, and it drops back to the budget as soon as the pins move.
+    while (cache.size >= tierConfig.maxChunks) {
+      let victim: number | undefined;
+      for (const key of cache.keys()) {
+        if (!pinned?.has(key)) { victim = key; break; }
+      }
+      if (victim === undefined) return; // everything left is still being drawn
+      cache.delete(victim);
+    }
   }
 
   /** Clears all cached data (call when fftSize changes). */
@@ -350,5 +434,7 @@ export class MultiTierSpectrogramCache {
     this.activeRequests = 0;
     this.fetchQueue = [];
     this.activeTierIndex = -1;
+    this.pinnedTier = -1;
+    this.pinnedIndices.clear();
   }
 }

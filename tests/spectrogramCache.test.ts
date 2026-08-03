@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { MultiTierSpectrogramCache, swapChunkCache, takeContiguousRun } from '../MultiTierSpectrogramCache';
+import {
+  MultiTierSpectrogramCache,
+  chunkIndicesForRanges,
+  swapChunkCache,
+  takeContiguousRun,
+} from '../MultiTierSpectrogramCache';
 import {
   buildTierLadder,
   COLS_PER_CHUNK,
@@ -213,6 +218,76 @@ describe('swapChunkCache', () => {
     const ref: { current: MultiTierSpectrogramCache | null } = { current: cache };
     swapChunkCache(ref, cache);
     expect(ref.current).toBe(cache);
+  });
+});
+
+describe('chunkIndicesForRanges', () => {
+  it('pads a single contiguous range by one chunk on each side', () => {
+    // Scroll margin: the view sits in chunk 5, so 4..6 are wanted.
+    expect(chunkIndicesForRanges([{ start: 55, end: 59 }], 10, 3600, true))
+      .toEqual([4, 5, 6]);
+  });
+
+  it('does not pad when the viewport is several disjoint spans', () => {
+    // Each span is one chunk; padding them would fetch (and cache) three times
+    // as much for file time the subset has hidden and will never display.
+    expect(chunkIndicesForRanges(
+      [{ start: 55, end: 59 }, { start: 205, end: 209 }], 10, 3600, false,
+    )).toEqual([5, 20]);
+  });
+
+  it('dedupes spans that land in the same chunk', () => {
+    expect(chunkIndicesForRanges(
+      [{ start: 51, end: 52 }, { start: 55, end: 56 }, { start: 58, end: 59 }],
+      10, 3600, false,
+    )).toEqual([5]);
+  });
+
+  it('never asks for a chunk starting past the end of the file', () => {
+    expect(chunkIndicesForRanges([{ start: 95, end: 100 }], 10, 100, true))
+      .toEqual([8, 9]);
+  });
+
+  it('clamps the padded start at zero', () => {
+    expect(chunkIndicesForRanges([{ start: 0, end: 5 }], 10, 3600, true))
+      .toEqual([0, 1]);
+  });
+});
+
+describe('MultiTierSpectrogramCache.prefetchRanges', () => {
+  // The subset regression: one screenful can be many disjoint stretches of the
+  // file, and each prefetch call REPLACES the queue. Fetching them one range at
+  // a time therefore had every span but the last cancel the span before it, so
+  // most segments never loaded — they drew blank or from a coarse fallback, and
+  // which ones won changed frame to frame (the flicker).
+  const spans = (n: number, tierConfig: { chunkDuration: number }) =>
+    // Every other chunk, well inside it, so each span is exactly one chunk.
+    Array.from({ length: n }, (_, i) => ({
+      start: (2 * i + 0.25) * tierConfig.chunkDuration,
+      end: (2 * i + 0.5) * tierConfig.chunkDuration,
+    }));
+
+  it('queues every span in one pass', () => {
+    const cache = makeCache();
+    const tier = LADDER[LADDER.length - 1];
+    const ranges = spans(12, tier);
+    cache.prefetchRanges(ranges, tier.tier);
+    // Nothing is cached yet, so all 12 distinct chunks must be pending
+    // (queued or in flight) — the fetches themselves reject under the test
+    // stub, but only asynchronously.
+    expect(cache.pendingCount()).toBe(12);
+  });
+
+  it('reports the viewport unresolved until every span has its chunk', () => {
+    const cache = makeCache();
+    const tier = LADDER[LADDER.length - 1];
+    const ranges = spans(5, tier);
+    expect(cache.isViewportResolvedForRanges(ranges, tier.tier)).toBe(false);
+  });
+
+  it('an empty range list is trivially resolved', () => {
+    const cache = makeCache();
+    expect(cache.isViewportResolvedForRanges([], 1)).toBe(true);
   });
 });
 
