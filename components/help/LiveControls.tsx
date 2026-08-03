@@ -10,7 +10,7 @@ import { TimeReadout } from '../controls/TimeReadout';
 import { SelectionTimeFields } from '../controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from '../controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from '../controls/FilterControls';
-import { BuzzdetectToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
+import { BuzzdetectToggle, SubsetToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
@@ -26,6 +26,7 @@ export type LiveControlId =
   | 'volume'
   | 'filter'
   | 'buzzdetect'
+  | 'subset'
   | 'spectrogram-settings-button'
   | 'spectrogram-settings'
   | 'file-panel-header'
@@ -84,6 +85,8 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     bandPassFilter: null,
     buzzdetectAvailable: false,
     buzzdetectEnabled: false,
+    subsetAvailable: false,
+    subsetActive: false,
     spectrogramSettings: demoSpectrogramSettings,
     spectrogramSettingsOpen: true,
     filePanel: DEMO_FILE_PANEL,
@@ -134,6 +137,9 @@ function isLive(id: LiveControlId, state: LiveSnapshot | null): boolean {
   if (!state || EXAMPLE_ONLY.has(id)) return false;
   switch (id) {
     case 'buzzdetect': return state.buzzdetectAvailable;
+    // Nothing is ticked to subset by, so the real button isn't on screen to
+    // drive — fall back to the demo rather than to a dead scissors.
+    case 'subset': return state.subsetAvailable;
     case 'file-panel-header': return state.filePanel !== null;
     case 'tool-palette': return state.toolPalette !== null;
     default: return true;
@@ -264,6 +270,13 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <BuzzdetectToggle
             enabled={s.buzzdetectEnabled}
             onToggle={() => act(() => client.call('toggleBuzzdetect'), () => demo.set({ buzzdetectEnabled: !demo.snapshot.buzzdetectEnabled }))}
+          />
+        );
+      case 'subset':
+        return (
+          <SubsetToggle
+            active={s.subsetActive}
+            onToggle={() => act(() => client.call('toggleSubset'), () => demo.set({ subsetActive: !demo.snapshot.subsetActive }))}
           />
         );
       case 'spectrogram-settings-button':

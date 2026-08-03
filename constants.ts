@@ -80,6 +80,7 @@ export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // file-tree vs tool-palette split
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
+  'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
   'splitRatio' | 'leftPanelRatio' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
@@ -127,6 +128,10 @@ export const MAX_BUZZDETECT_PANEL_HEIGHT = 600;
 // Logits: 0 is the natural decision boundary (sigmoid 0.5). Used per neuron
 // until the user sets a custom threshold.
 export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
+// Detection-rate subsetting: keep a bin when at least half its frames fired.
+// A middling default — high enough that one stray frame doesn't keep a bin,
+// low enough that a real burst isn't thrown away for not being unanimous.
+export const DEFAULT_BUZZDETECT_MIN_DETECTION_RATE = 0.5;
 // Categorical palette for neuron polylines, assigned by neuron order. Chosen to
 // read clearly on the slate-900 panel background and stay distinct from the
 // magma spectrogram colormap.

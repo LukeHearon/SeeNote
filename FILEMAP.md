@@ -71,6 +71,9 @@ Quick reference for agents. One phrase per file.
 - `utils/BandPassFilterGraph.ts` — persistent Butterworth band-pass filter graph plus async group-delay measurement
 - `utils/PhaseVocoder.ts` — phase vocoder for time-stretching (slow-down playback)
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops
+- `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
+- `utils/buzzdetectSubset.ts` — derives the subset timeline from buzzdetect activations, and re-expresses the activations on it
+- `utils/annotationProjection.ts` — projects annotations onto the display axis and reconciles edits back to source time
 - `MultiTierSpectrogramCache.ts` — in-memory multi-tier cache of decoded spectrogram chunks, with LRU eviction and a bounded fetch queue
 
 ## IPC layer

@@ -286,6 +286,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       bandPassFilter,
       buzzdetectAvailable: false,
       buzzdetectEnabled: false,
+      // No buzzdetect here, so nothing to subset by.
+      subsetAvailable: false,
+      subsetActive: false,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
       // No file panel and no annotation tools in single-file mode — the guide's
@@ -319,6 +322,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       enableFilter: handleEnableBandPassFilter,
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => {},
+      toggleSubset: () => {},
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => {},

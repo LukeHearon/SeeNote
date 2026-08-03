@@ -9,9 +9,10 @@ import { TimeReadout } from './controls/TimeReadout';
 import { SelectionTimeFields } from './controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from './controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from './controls/FilterControls';
-import { BuzzdetectToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
+import { BuzzdetectToggle, SubsetToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { DateTimeFormat } from '../utils/datetimeDisplay';
+import { Timeline } from '../utils/subsetTimeline';
 import { DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { tooltips } from '../copy/tooltips';
 
@@ -58,6 +59,20 @@ interface ToolbarProps {
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
   onToggleBuzzdetect?: () => void;
+  /**
+   * Subset mode (utils/subsetTimeline.ts). `subsetAvailable` is whether any
+   * neuron has been ticked to subset by — without one there's nothing the
+   * button could do, so it isn't shown rather than shown-and-inert.
+   */
+  subsetAvailable?: boolean;
+  subsetActive?: boolean;
+  onToggleSubset?: () => void;
+  /**
+   * The display↔source map. Every time in this toolbar is READ and WRITTEN in
+   * source time — the seek/selection callbacks still speak display time, so the
+   * conversion happens inside the readouts. Identity when no subset is on.
+   */
+  timeline?: Timeline;
   onRestartAudio?: () => void;
   playheadLocked?: boolean;
   onTogglePlayheadLock?: () => void;
@@ -119,6 +134,10 @@ function Toolbar({
   buzzdetectAvailable,
   buzzdetectEnabled,
   onToggleBuzzdetect,
+  subsetAvailable,
+  subsetActive,
+  onToggleSubset,
+  timeline,
   onRestartAudio,
   playheadLocked = false,
   onTogglePlayheadLock,
@@ -200,6 +219,7 @@ function Toolbar({
           selectedUnit={selectedTimeDisplayUnit}
           trackStartDate={trackStartDate}
           dateTimeFormat={dateTimeFormat}
+          timeline={timeline}
           onSeek={onSeek}
           onUnitChange={u => onTimeDisplayUnitChange?.(u)}
         />
@@ -214,6 +234,7 @@ function Toolbar({
           unit={timeDisplayUnit}
           trackStartDate={trackStartDate}
           dateTimeFormat={dateTimeFormat}
+          timeline={timeline}
           onApply={s => { onSelectionChange(s); onAnnotationBoundsChange?.(s.start, s.end); }}
         />
       </div>
@@ -247,9 +268,12 @@ function Toolbar({
         />
       </div>
 
-      {/* Right-aligned controls: buzzdetect toggle + spectrogram settings */}
-      {(onToggleSettings !== undefined || buzzdetectAvailable) && (
+      {/* Right-aligned controls: subset + buzzdetect toggles, spectrogram settings */}
+      {(onToggleSettings !== undefined || buzzdetectAvailable || subsetAvailable) && (
         <div className="ml-auto flex items-center gap-1">
+          {subsetAvailable && (
+            <SubsetToggle active={!!subsetActive} onToggle={() => onToggleSubset?.()} />
+          )}
           {buzzdetectAvailable && (
             <BuzzdetectToggle enabled={!!buzzdetectEnabled} onToggle={() => onToggleBuzzdetect?.()} />
           )}

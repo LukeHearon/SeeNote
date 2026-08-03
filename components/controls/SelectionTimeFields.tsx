@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Selection } from '../../types';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 import { clamp, formatTime, TimeDisplayUnit } from '../../utils/helpers';
 import { formatDateTime, maxDateTimeLength, DateTimeFormat } from '../../utils/datetimeDisplay';
 import { parseHMS, parseTimestamp } from '../../utils/timeAxis';
+import { Timeline, identityTimeline, displayOfNearestKept, sourceIntervalOf } from '../../utils/subsetTimeline';
 import { tooltips } from '../../copy/tooltips';
 
 type Field = 'selStart' | 'selEnd' | 'selDur';
@@ -19,6 +20,11 @@ export interface SelectionTimeFieldsProps {
    *  parseable timestamp, which keeps the fields in elapsed time. */
   trackStartDate?: Date | null;
   dateTimeFormat?: DateTimeFormat;
+  /** The display↔source map. The fields read and write SOURCE times, while
+   *  onApply speaks display time, so the conversion happens here at the edge.
+   *  A typed edge is held inside its own segment, exactly as a drag is.
+   *  Identity (or omitted) when no subset is on. */
+  timeline?: Timeline;
   /** Apply an edited selection. Called only with a non-empty region. */
   onApply: (selection: Selection) => void;
 }
@@ -38,12 +44,19 @@ export function SelectionTimeFields({
   unit = 'seconds',
   trackStartDate = null,
   dateTimeFormat = 'iso',
+  timeline,
   onApply,
 }: SelectionTimeFieldsProps) {
   const [editing, setEditing] = useState<Field | null>(null);
   const [raw, setRaw] = useState('');
 
-  const region = selection ?? { start: 0, end: 0 };
+  // Memoised in the identity case so it isn't a fresh object per render.
+  const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
+  const tl = timeline ?? fallbackTimeline;
+
+  // Shown in source time; the duration is axis-independent (nothing is
+  // stretched, only cut), so it needs no conversion.
+  const region = (selection ? sourceIntervalOf(tl, selection.start, selection.end) : null) ?? { start: 0, end: 0 };
   const has = !!selection;
   // Allow editing when paused and no selection, to create one from the playhead.
   const canCreate = !has && !isPlaying;
@@ -70,7 +83,7 @@ export function SelectionTimeFields({
   // would let a longer month name wrap onto a second line.
   const maxBoundLength = datetimeMode
     ? maxDateTimeLength(dateTimeFormat)
-    : unit === 'hms' ? formatTime(duration || 0, 2).length : 0;
+    : unit === 'hms' ? formatTime(tl.sourceDuration || 0, 2).length : 0;
   const fieldWidth = maxBoundLength ? `${maxBoundLength + 1}ch` : '3.8rem';
   const inputWidth = maxBoundLength ? `${maxBoundLength + 2}ch` : '4.5rem';
 
@@ -90,16 +103,20 @@ export function SelectionTimeFields({
       const dur = parseHMS(trimmed) ?? parseFloat(trimmed);
       if (!isNaN(dur)) {
         const anchor = selection ? selection.start : (!isPlaying ? currentTimeStore.get() : null);
-        if (anchor !== null) apply(anchor, anchor + dur);
+        // Same span clamp a drag gets, so a typed length can't run past the
+        // end of its segment.
+        if (anchor !== null) apply(anchor, tl.clampToSpanOfDisplay(anchor, anchor + dur));
       }
     } else {
-      const parsed = parseTimestamp(raw, datetimeMode ? { start: trackStartDate!, duration } : null);
+      const parsed = parseTimestamp(raw, datetimeMode ? { start: trackStartDate!, duration: tl.sourceDuration } : null);
       if (parsed !== null) {
-        const clamped = clamp(parsed, 0, duration);
+        const clamped = clamp(displayOfNearestKept(tl, parsed), 0, duration);
+        // The edge that isn't being typed anchors the selection, exactly as it
+        // anchors a handle drag: the typed edge is held inside its segment.
         const other = editing === 'selStart'
           ? (selection ? selection.end : currentTimeStore.get())
           : (selection ? selection.start : currentTimeStore.get());
-        apply(clamped, other);
+        apply(tl.clampToSpanOfDisplay(other, clamped), other);
       }
     }
     setEditing(null);

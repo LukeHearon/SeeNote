@@ -2,10 +2,11 @@ import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMe
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
-import { chooseTimeStep, formatRulerTime, DATETIME_LABEL_SPACING_PX } from '../utils/timeAxis';
+import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -24,7 +25,17 @@ interface SpectrogramProps {
   // Playback time arrives via a ref-based pub/sub store (not a prop) so a
   // playback tick redraws the canvas imperatively without re-rendering the tree.
   currentTimeStore: CurrentTimeStore;
+  // DISPLAY duration: how long the timeline being shown is. Equals the file's
+  // duration unless a subset is active, in which case it's the kept total.
   duration: number;
+  /**
+   * Display->source map (utils/subsetTimeline). Everything this component does
+   * is already in display time, so the timeline is needed in exactly two places:
+   * the chunk renderer, which looks up each column's audio by source time, and
+   * the interaction hook, which holds drags inside one span. Defaults to the
+   * identity timeline, i.e. no subset.
+   */
+  timeline?: Timeline;
   isPlaying: boolean;
   isProcessing: boolean;
   ident: string | null;
@@ -99,6 +110,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   cacheVersion,
   currentTimeStore,
   duration,
+  timeline,
   isPlaying,
   isProcessing,
   ident,
@@ -214,6 +226,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // into useSpectrogramInteraction so its rAF loop reads them stale-closure-free.
   const pixelsPerSecondRef = useRef(0);
   const durationRef = useRef(duration);
+  // Read live by the interaction hook's rAF loop and window handlers. Memoised
+  // because the chunk renderer's `draw` depends on it: a fresh identity timeline
+  // per render would dirty the spectrogram background every frame.
+  const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
+  const activeTimeline = timeline ?? fallbackTimeline;
+  const timelineRef = useRef(activeTimeline);
+  timelineRef.current = activeTimeline;
+  // Display-time seams between spliced-together spans, so the overlay can mark
+  // them — subset audio reads as continuous, but the cut is still a real jump
+  // in the source file, worth flagging visually.
+  const subsetJoins = useMemo(() => segmentJoins(activeTimeline), [activeTimeline]);
   // Lets the lifetime rAF loop (empty-dep effect) read live isPlaying for the
   // frame-timing diagnostic without resubscribing.
   const isPlayingRef = useRef(isPlaying);
@@ -301,6 +324,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     scrollLeft,
     pixelsPerSecond,
     duration,
+    timelineRef,
     annotations,
     selection,
     boundAnnotationId,
@@ -392,6 +416,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef,
     pixelsPerSecond,
     duration,
+    timeline: activeTimeline,
     settings,
     isProcessing,
     canvasRef,
@@ -449,6 +474,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
+    // 1b. Draw subset segment joins — the seams where the display axis skips
+    // from the end of one kept span to the start of the next. Dashed and
+    // distinct from the playhead/ruler so a cut reads as a splice, not a marker.
+    if (subsetJoins.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      for (const t of subsetJoins) {
+        const x = timeToX(t, scrollLeft_live, pixelsPerSecond_live);
+        if (x < 0 || x > width) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // 2. Draw Playhead Line
     const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
     if (playheadX >= 0 && playheadX <= width) {
@@ -473,24 +517,33 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const timeStep = chooseTimeStep(pixelsPerSecond, datetimeRuler ? DATETIME_LABEL_SPACING_PX : undefined);
 
     ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
+    // Ticks are labelled in SOURCE time: under a subset the display axis says
+    // nothing about where in the file you are, so the ruler is built per kept
+    // span from that span's own file times (see utils/timeAxis). Identity
+    // timeline → the same ticks as before, labelled with themselves.
+    //
+    // Under a subset each tick sits at a segment's START, so its label is
+    // left-aligned to the tick line rather than centered on it — centering
+    // would make the label read as if it spanned both sides of the cut.
     const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
-    const ticks = datetimeRuler
-      ? datetimeTicks(trackStartDate, Math.max(startTime, 0), tickEndTime, timeStep)
-      : (() => {
-          const out: number[] = [];
-          const first = Math.floor(startTime / timeStep) * timeStep;
-          for (let s = first; s <= tickEndTime; s += timeStep) if (s > 0) out.push(s);
-          return out;
-        })();
+    // Wall-clock ticks only land on clock boundaries when the axis runs
+    // continuously; under a subset the display axis is spliced, so ticks come
+    // from the timeline (one per segment start) and are simply *labelled* as
+    // datetimes. Either way each tick carries the source time its label reads.
+    const ticks: RulerTick[] = datetimeRuler && timelineRef.current.identity
+      ? datetimeTicks(trackStartDate, Math.max(startTime, 0), tickEndTime, timeStep).map(s => ({ disp: s, src: s }))
+      : rulerTicks(timelineRef.current, startTime, tickEndTime, timeStep, pixelsPerSecond_live,
+          datetimeRuler ? DATETIME_LABEL_SPACING_PX : undefined);
+    const labelAlign = rulerLabelAlign(timelineRef.current);
+    ctx.textAlign = labelAlign;
 
     // Only labels actually drawn feed the "what changed since the last label"
     // logic, so scrolling never leaves a view whose first label lacks its date.
     let prevLabelled: number | null = null;
-    for (const s of ticks) {
-        const x = timeToX(s, scrollLeft_live, pixelsPerSecond_live);
+    for (const tick of ticks) {
+        const x = timeToX(tick.disp, scrollLeft_live, pixelsPerSecond_live);
         if (x < 0 || x > width) continue;
         ctx.beginPath();
         ctx.strokeStyle = 'white';
@@ -500,13 +553,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.stroke();
 
         const timeStr = datetimeRuler
-          ? formatDatetimeRulerLabel(trackStartDate, s, prevLabelled, timeStep, dateTimeFormat)
-          : formatRulerTime(s, timeStep, timeRange);
-        prevLabelled = s;
+          ? formatDatetimeRulerLabel(trackStartDate, tick.src, prevLabelled, timeStep, dateTimeFormat)
+          : formatRulerTime(tick.src, timeStep, timeRange);
+        prevLabelled = tick.src;
         // The leading full-date label is wide enough to hang off the left edge;
         // nudge it back on-canvas rather than letting it clip.
-        const half = ctx.measureText(timeStr).width / 2;
-        const labelX = datetimeRuler ? Math.max(x, half + 2) : x;
+        let labelX = labelAlign === 'left' ? x + 3 : x;
+        if (datetimeRuler && labelAlign === 'center') {
+          labelX = Math.max(labelX, ctx.measureText(timeStr).width / 2 + 2);
+        }
         ctx.strokeStyle = 'black';
         ctx.lineWidth = 3;
         ctx.strokeText(timeStr, labelX, height - 10);
@@ -524,7 +579,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
 
     ctx.restore();
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, trackStartDate, timeDisplayUnit, dateTimeFormat]);
+  // activeTimeline is read through its ref at draw time, but it's a dep as well
+  // so a timeline swap repaints the ruler (whose labels come from it).
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -977,14 +1034,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const eTime = Math.max(creatingAnnotation.start, creatingAnnotation.current);
     const left = timeToX(s, scrollLeft, pixelsPerSecond);
     const width = ((eTime - s) * pixelsPerSecond);
+    // Labelled in source time, like every other time the user reads.
+    const src = sourceIntervalOf(activeTimeline, s, eTime);
 
     return (
         <div
             className="absolute top-0 bottom-0 bg-white/20 border-l border-r border-white/50 pointer-events-none"
             style={{ left: `${left}px`, width: `${width}px` }}
         >
-            <span className="absolute -top-6 left-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(s)}</span>
-            <span className="absolute -top-6 right-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(eTime)}</span>
+            <span className="absolute -top-6 left-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.start)}</span>
+            <span className="absolute -top-6 right-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.end)}</span>
         </div>
     );
   };

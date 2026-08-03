@@ -3,6 +3,7 @@ import { SpectrogramSettings } from '../types';
 import { drawSpectrogramChunk } from '../utils/audioProcessing';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { resolveRenderCps } from '../utils/viewportTransform';
+import { Timeline, sourceRangesForDisplayRange } from '../utils/subsetTimeline';
 
 // TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
 // we can tell a real playback hitch (dropped frame) from the sampling twinkle.
@@ -29,7 +30,12 @@ export interface ChunkRendererParams {
   // Same value as the ref, taken as a prop purely so `draw` is recreated and the
   // dirty flag set when the zoom genuinely changes.
   pixelsPerSecond: number;
+  // DISPLAY duration and the display->source map. Every column below is placed
+  // by display time and its data looked up by source time; with no subset the
+  // timeline is the identity and the two are the same number, so this path is
+  // unchanged from before.
   duration: number;
+  timeline: Timeline;
   settings: SpectrogramSettings;
   isProcessing: boolean;
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -63,6 +69,7 @@ export function useChunkRenderer({
   pixelsPerSecondRef,
   pixelsPerSecond: pixelsPerSecondProp,
   duration,
+  timeline,
   settings,
   isProcessing,
   canvasRef,
@@ -169,20 +176,24 @@ export function useChunkRenderer({
         // spectrogram and overlays stay locked in time.
         const visibleDuration = endTime - startTime;
         const activeTier = chunkCache.selectTier(visibleDuration, cssWidth);
-        chunkCache.prefetchViewport(startTime, endTime, activeTier.tier);
+        // What's on screen may be several disjoint stretches of the file (one
+        // per subset span), so the cache is asked for each of them rather than
+        // for the span between the first and the last — which under a sparse
+        // subset would be most of the recording.
+        const srcRanges = sourceRangesForDisplayRange(timeline, startTime, endTime);
+        for (const r of srcRanges) chunkCache.prefetchViewport(r.start, r.end, activeTier.tier);
 
         // "Building" = the visible range isn't yet fully resolved at the active
         // tier (so columns are missing or drawn blurry from a coarser fallback),
         // with in-flight fetches as a corroborating signal. Both probes are
         // read-only — they never mutate tier hysteresis or LRU order.
-        building =
-          !chunkCache.isViewportResolved(startTime, endTime, activeTier.tier) &&
-          chunkCache.pendingCount() > 0;
+        const allResolved = srcRanges.every(r => chunkCache.isViewportResolved(r.start, r.end, activeTier.tier));
+        building = !allResolved && chunkCache.pendingCount() > 0;
 
         // Probe one chunk for nFreqBins (same as before).
         let nFreqBins = settings.fftSize / 2;
         {
-          const probe = chunkCache.getChunkWithFallback(startTime, activeTier.tier);
+          const probe = chunkCache.getChunkWithFallback(timeline.toSource(startTime), activeTier.tier);
           if (probe) nFreqBins = probe.chunk.nFreqBins;
         }
 
@@ -264,8 +275,7 @@ export function useChunkRenderer({
         // offTier. So it stays correct while the viewport is still building; it does
         // NOT need a full redraw just because data is streaming in. It falls back to
         // full redraw only on genuine geometry changes that remap every column.
-        const viewportResolved =
-            chunkCache.isViewportResolved(startTime, endTime, activeTier.tier);
+        const viewportResolved = allResolved;
         const cpsChanged = prevCpsRef.current !== cps;
         // Whether chunk data arrived since the dirty-fill last ran. Lets the scan run
         // on the frame the viewport completes (when viewportResolved has already
@@ -335,8 +345,9 @@ export function useChunkRenderer({
           for (let i = 0; i < count; i++) {
             const absCol = bbStartCol + destStartCol + i;
             if (absCol < 0) continue;
-            const t = absCol / cps;
-            if (t >= duration) continue;
+            const dispT = absCol / cps;
+            if (dispT >= duration) continue;
+            const t = timeline.toSource(dispT);
             const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
             if (!result) continue;
             const { chunk } = result;
@@ -417,9 +428,9 @@ export function useChunkRenderer({
                 const absCol = bbStartCol + i;
                 let bestTier1 = 0;
                 if (absCol >= 0) {
-                  const t = absCol / cps;
-                  if (t < duration) {
-                    const r = chunkCache.getChunkWithFallback(t, activeTier.tier);
+                  const dispT = absCol / cps;
+                  if (dispT < duration) {
+                    const r = chunkCache.getChunkWithFallback(timeline.toSource(dispT), activeTier.tier);
                     if (r) bestTier1 = r.tier + 1;
                   }
                 }
@@ -454,8 +465,9 @@ export function useChunkRenderer({
           for (let i = 0; i < bbWidth; i++) {
             const absCol = bbStartCol + i;
             if (absCol < 0) continue;
-            const t = absCol / cps;
-            if (t >= duration) continue;
+            const dispT = absCol / cps;
+            if (dispT >= duration) continue;
+            const t = timeline.toSource(dispT);
             const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
             if (!result) continue;
             const { chunk } = result;
@@ -576,7 +588,7 @@ export function useChunkRenderer({
         console.warn(`[frametiming] draw ${dur.toFixed(1)}ms`);
       }
     }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecondRef, pixelsPerSecondProp, duration, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
+  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecondRef, pixelsPerSecondProp, duration, timeline, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
 
   return { draw };
 }

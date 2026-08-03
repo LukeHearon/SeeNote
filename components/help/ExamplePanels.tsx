@@ -1,6 +1,6 @@
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { BuzzdetectSeriesMode, Selection } from '../../types';
-import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, Y_AXIS_WIDTH } from '../../constants';
+import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, Y_AXIS_WIDTH } from '../../constants';
 import { createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { createViewportStore } from '../../utils/viewportStore';
 import {
@@ -13,7 +13,11 @@ import {
   demoFiles,
   demoNonMediaFiles,
   makeDemoBuzzdetectData,
+  DEMO_BIN_WIDTH,
+  DEMO_NEURONS,
+  DEMO_THRESHOLD,
 } from '../../utils/demoProject';
+import { subsetBuzzdetectData, subsetCriteriaFrom, subsetTimelineFor } from '../../utils/buzzdetectSubset';
 import { help } from '../../copy/help';
 import BuzzdetectPanel from '../BuzzdetectPanel';
 import FileTree from '../FileTree';
@@ -166,35 +170,68 @@ export function ExampleBuzzdetectPanel() {
   }
   const { viewport, time, data } = storesRef.current;
 
-  const [thresholds, setThresholds] = useState<Record<string, number>>({});
+  const [thresholds, setThresholds] = useState<Record<string, number>>(
+    () => Object.fromEntries(DEMO_NEURONS.map(n => [n, DEMO_THRESHOLD])));
   const [hiddenNeurons, setHiddenNeurons] = useState<string[]>([]);
   const [neuronColors, setNeuronColors] = useState<Record<string, string>>({});
   const [seriesMode, setSeriesMode] = useState<BuzzdetectSeriesMode>('activation');
   const [binWidthOverride, setBinWidthOverride] = useState<number | null>(null);
   const [height, setHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [subsetNeurons, setSubsetNeurons] = useState<string[]>([]);
+  const [minDetectionRate, setMinDetectionRate] = useState(DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+
+  // Subsetting for real, through the same two calls the annotation window
+  // makes: tick a Sub box here and the example track genuinely collapses to
+  // those detections. The panel is handed the re-expressed data, so — exactly
+  // as in the app — it plots the subset without knowing one exists.
+  const timeline = useMemo(() => subsetTimelineFor(
+    data,
+    subsetCriteriaFrom({
+      enabled: true,
+      neurons: subsetNeurons,
+      mode: seriesMode,
+      thresholds,
+      minDetectionRate,
+      binWidthOverride,
+      frameLength: DEMO_BIN_WIDTH,
+    }),
+    DEMO_DURATION,
+  ), [data, subsetNeurons, seriesMode, thresholds, minDetectionRate, binWidthOverride]);
+  const shownData = useMemo(() => subsetBuzzdetectData(data, timeline), [data, timeline]);
+  const subsetActive = subsetNeurons.length > 0;
 
   // No spectrogram is driving the viewport here, so fit the whole track to the
-  // panel's plot area and keep it fitted as the guide window resizes.
+  // panel's plot area and keep it fitted as the guide window resizes. Under a
+  // subset the axis is only as long as what was kept, so the fit follows it.
+  const displayDuration = timeline.duration;
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
     const fit = () => {
       const plotWidth = Math.max(1, el.clientWidth - Y_AXIS_WIDTH);
-      viewport.set({ scrollLeft: 0, pixelsPerSecond: plotWidth / DEMO_DURATION, containerWidth: plotWidth });
+      viewport.set({
+        scrollLeft: 0,
+        pixelsPerSecond: plotWidth / Math.max(displayDuration, 1e-6),
+        containerWidth: plotWidth,
+      });
     };
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [viewport]);
+  }, [viewport, displayDuration]);
+
+  // A selection made before the subset changed names time that may no longer be
+  // on the axis; drop it rather than leave a region pointing at nothing.
+  useEffect(() => { setSelection(null); }, [timeline]);
 
   return (
     <div ref={areaRef} className="w-full rounded border border-slate-700 overflow-hidden">
       <BuzzdetectPanel
-        data={data}
+        data={shownData}
         viewportStore={viewport}
-        duration={DEMO_DURATION}
+        duration={displayDuration}
         currentTimeStore={time}
         selection={selection}
         timeDisplayUnit="seconds"
@@ -203,13 +240,21 @@ export function ExampleBuzzdetectPanel() {
         neuronColors={neuronColors}
         seriesMode={seriesMode}
         binWidthOverride={binWidthOverride}
+        subsetActive={subsetActive}
+        timeline={timeline}
+        subsetNeurons={subsetNeurons}
+        minDetectionRate={minDetectionRate}
         height={height}
         onThresholdChange={(neuron, value) => setThresholds(t => ({ ...t, [neuron]: value }))}
         onToggleNeuron={(neuron, hidden) => setHiddenNeurons(list =>
           hidden ? [...list, neuron] : list.filter(n => n !== neuron))}
+        onSetAllNeuronsHidden={hidden => setHiddenNeurons(hidden ? [...DEMO_NEURONS] : [])}
         onNeuronColorChange={(neuron, color) => setNeuronColors(c => ({ ...c, [neuron]: color }))}
         onSeriesModeChange={setSeriesMode}
         onBinWidthOverrideChange={setBinWidthOverride}
+        onToggleSubsetNeuron={(neuron, willSubset) => setSubsetNeurons(list =>
+          willSubset ? [...list, neuron] : list.filter(n => n !== neuron))}
+        onMinDetectionRateChange={setMinDetectionRate}
         onHeightChange={setHeight}
         onSelectionChange={setSelection}
         onBoundAnnotationChange={() => {}}

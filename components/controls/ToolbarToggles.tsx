@@ -1,4 +1,4 @@
-import { Settings, Activity } from 'lucide-react';
+import { Settings, Activity, Scissors } from 'lucide-react';
 import { tooltips } from '../../copy/tooltips';
 
 // The two icon toggles at the right end of the toolbar. Extracted so the help
@@ -15,6 +15,25 @@ export function BuzzdetectToggle({ enabled, onToggle }: { enabled: boolean; onTo
       data-help-target="buzzdetect-toggle"
     >
       <Activity size={16} />
+    </button>
+  );
+}
+
+/**
+ * Collapses the track to the ticked neurons' detections (utils/subsetTimeline.ts).
+ * Only rendered when at least one neuron has been ticked to subset by — without
+ * one there's nothing the button could do, so it isn't shown rather than
+ * shown-and-inert.
+ */
+export function SubsetToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`p-1.5 rounded hover:bg-slate-700 transition-colors ${active ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white'}`}
+      data-tooltip={tooltips.buzzdetectSubset}
+      data-help-target="buzzdetect-subset-toggle"
+    >
+      <Scissors size={16} />
     </button>
   );
 }

@@ -75,8 +75,13 @@ export const demoAnnotatedTracks = new Set<string>([
 
 export const demoNonMediaFiles: string[] = [`${DEMO_ROOT}/2024-06-14/field-notes.txt`];
 
-const DEMO_BIN_WIDTH = 0.96;
-const DEMO_NEURONS = ['bee', 'bird', 'insect', 'ambient'];
+export const DEMO_BIN_WIDTH = 0.96;
+export const DEMO_NEURONS = ['bee', 'bird', 'insect', 'ambient'];
+// The demo series run 0–1 rather than as logits, so the real default threshold
+// (0, the logit decision boundary) would put every frame over the line and
+// leave the guide's dots uniformly filled and its subset keeping everything.
+// Half-scale is where these curves actually separate.
+export const DEMO_THRESHOLD = 0.5;
 
 /**
  * Synthetic activation series — three bursts of "bee" with the other neurons

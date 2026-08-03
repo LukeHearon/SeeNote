@@ -120,6 +120,11 @@ export interface ProjectUiSettings {
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
   buzzdetectSeriesMode?: BuzzdetectSeriesMode; // which series the panel plots
   buzzdetectBinWidthOverride?: number | null; // user-pinned bin width (seconds); null/absent = auto-calculated
+  // Subset mode (see utils/subsetTimeline.ts): show only the time where the
+  // chosen neurons fired, with the rest removed from the time axis.
+  buzzdetectSubsetEnabled?: boolean;       // master toggle; the neuron picks survive turning it off
+  buzzdetectSubsetNeurons?: string[];      // neuron labels the subset is keyed to, OR'd
+  buzzdetectMinDetectionRate?: number;     // 0-1; detection-rate mode's minimum per bin
 
   // Panel layout (see hooks/usePanelLayout.ts).
   playheadLocked?: boolean;

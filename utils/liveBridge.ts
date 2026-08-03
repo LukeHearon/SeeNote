@@ -23,6 +23,14 @@ import type { DateTimeFormat } from './datetimeDisplay';
 export interface LiveSnapshot {
   /** False when no track is loaded — the controls render disabled. */
   hasTrack: boolean;
+  /**
+   * The SOURCE duration — the length of the file, not of the (possibly subset)
+   * display axis. Everything crossing this bridge is in source time: the guide
+   * shows the same file positions the toolbar does, and the host converts at
+   * its own edge, where the timeline lives. A timeline can have thousands of
+   * spans, and the snapshot is stringified on every host render, so it is
+   * deliberately NOT shipped.
+   */
   duration: number;
   isPlaying: boolean;
   isBuffering: boolean;
@@ -32,6 +40,7 @@ export interface LiveSnapshot {
   lastDefinedSpeed: number;
   speedMin: number;
   speedMax: number;
+  /** In source time, like every other time here. */
   selection: Selection | null;
   /** The unit actually in force — already resolved through effectiveTimeUnit. */
   timeDisplayUnit: TimeDisplayUnit;
@@ -55,6 +64,9 @@ export interface LiveSnapshot {
   bandPassFilter: BandPassFilter | null;
   buzzdetectAvailable: boolean;
   buzzdetectEnabled: boolean;
+  /** Whether any neuron is ticked to subset by — gates the scissors button. */
+  subsetAvailable: boolean;
+  subsetActive: boolean;
   spectrogramSettings: SpectrogramSettings;
   /** Whether the settings popover is open in the main window. */
   spectrogramSettingsOpen: boolean;
@@ -74,6 +86,7 @@ export interface LiveSnapshot {
  */
 export interface LiveHandlers {
   play(): void;
+  /** `time` is a source time; the host maps it onto the display axis. */
   seek(time: number, scroll?: boolean): void;
   skipToStart(): void;
   skipToEnd(): void;
@@ -85,12 +98,14 @@ export interface LiveHandlers {
   setPlaybackSpeed(speed: number): void;
   setLastDefinedSpeed(speed: number): void;
   setTimeDisplayUnit(unit: TimeDisplayUnit): void;
+  /** In source time; the host projects it back onto the display axis. */
   setSelection(selection: Selection): void;
   toggleFilterTool(): void;
   setFilterStrength(strength: number): void;
   enableFilter(strength: number): void;
   disableFilter(): void;
   toggleBuzzdetect(): void;
+  toggleSubset(): void;
   toggleSpectrogramSettings(): void;
   setSpectrogramSettings(patch: Partial<SpectrogramSettings>): void;
   // File panel. No-ops in single-file mode, which publishes `filePanel: null`
@@ -152,9 +167,14 @@ export function useLiveHost(
   snapshot: LiveSnapshot,
   handlers: LiveHandlers,
   currentTimeStore: CurrentTimeStore,
+  /** Display → source for the playhead. Omit where the two are the same. */
+  toSourceTime?: (t: number) => number,
 ): void {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
+
+  const toSourceRef = useRef(toSourceTime);
+  toSourceRef.current = toSourceTime;
 
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -202,14 +222,15 @@ export function useLiveHost(
     const now = Date.now();
     if (now - lastTimePostRef.current < TIME_THROTTLE_MS) return;
     lastTimePostRef.current = now;
-    post({ type: 'time', t: currentTimeStore.get() });
+    const t = currentTimeStore.get();
+    post({ type: 'time', t: toSourceRef.current ? toSourceRef.current(t) : t });
   }), [currentTimeStore]);
 }
 
 export interface LiveClient {
   /** Null when no main window is publishing — the guide falls back to a demo. */
   state: LiveSnapshot | null;
-  /** Mirrors the host's playhead; feed straight into the shared controls. */
+  /** Mirrors the host's playhead, in source time. */
   currentTimeStore: CurrentTimeStore;
   call: <K extends keyof LiveHandlers>(name: K, ...args: Parameters<LiveHandlers[K]>) => void;
 }

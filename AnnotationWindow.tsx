@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_DATE_TIME_FORMAT, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_VIDEO_PANE_AUTO_COLLAPSE, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
@@ -26,6 +26,9 @@ import { useAnnotationHistory } from './hooks/useAnnotationHistory';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
+import { subsetTimelineFor, subsetBuzzdetectData, subsetCriteriaFrom, type SubsetCriteria } from './utils/buzzdetectSubset';
+import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
+import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
@@ -286,6 +289,113 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return stripExt(rel);
   }, [currentDirectory]);
 
+  // Ident of the open track — the key linking it to its annotation and
+  // buzzdetect files.
+  const ident = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
+
+  // buzzdetect activations panel UI state + load-by-ident effect. Instantiated
+  // here, well before the hooks that consume it, because the subset timeline
+  // derived from it (below) decides the DISPLAY duration and the effective
+  // video mode — both of which the frame source and the transport need.
+  const {
+    buzzdetectEnabled, setBuzzdetectEnabled,
+    buzzdetectThresholds, setBuzzdetectThresholds,
+    buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
+    buzzdetectNeuronColors, setBuzzdetectNeuronColors,
+    buzzdetectSeriesMode, setBuzzdetectSeriesMode,
+    buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
+    buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled,
+    buzzdetectSubsetNeurons, setBuzzdetectSubsetNeurons,
+    buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate,
+    buzzdetectPanelHeight, setBuzzdetectPanelHeight,
+    buzzdetectData, setBuzzdetectData,
+    handleBuzzdetectThresholdChange,
+    handleBuzzdetectToggleNeuron,
+    handleBuzzdetectNeuronColorChange,
+    handleBuzzdetectToggleSubsetNeuron,
+    toggleBuzzdetectSubset,
+    handleBuzzdetectSetAllNeuronsHidden,
+  } = useBuzzdetect({ project, ident, addLog });
+
+  // ── Subset mode ─────────────────────────────────────────────────────────────
+  // The criteria the subset is keyed to, or null when it's off. Null here is
+  // what makes every path below run the whole-file case unchanged.
+  const subsetCriteria = useMemo<SubsetCriteria | null>(() => subsetCriteriaFrom({
+    enabled: buzzdetectSubsetEnabled,
+    neurons: buzzdetectSubsetNeurons,
+    mode: buzzdetectSeriesMode,
+    thresholds: buzzdetectThresholds,
+    minDetectionRate: buzzdetectMinDetectionRate,
+    binWidthOverride: buzzdetectBinWidthOverride,
+    frameLength: buzzdetectData?.binWidth ?? 0,
+  }), [buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectSeriesMode, buzzdetectThresholds,
+      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
+
+  // The display axis. Identity (i.e. the whole file, unchanged) whenever the
+  // subset is off. `duration` here is the file's own length; `displayDuration`
+  // below is what the whole UI and the transport are measured in.
+  const timeline = useMemo(
+    () => subsetTimelineFor(buzzdetectData, subsetCriteria, duration),
+    [buzzdetectData, subsetCriteria, duration],
+  );
+  const displayDuration = timeline.duration;
+  // "The user has asked for a subset", as distinct from "the timeline differs
+  // from the file": a subset that happens to keep everything still draws as a
+  // subset, and one that keeps nothing is still engaged.
+  const subsetActive = subsetCriteria !== null;
+
+  // Video is turned off outright while a subset is on. The picture can't follow
+  // a timeline that jumps between distant parts of the file without stalling on
+  // every join, and the point of the subset is to hear the detections back to
+  // back. The user's own videoMode preference is left untouched — this only
+  // overrides what's in effect right now.
+  const effectiveVideoMode: VideoMode = subsetActive ? 'off' : videoMode;
+  const effectiveVideoModeRef = useRef(effectiveVideoMode);
+  effectiveVideoModeRef.current = effectiveVideoMode;
+
+  // A selection is display-time everywhere (view + playback bounds); an
+  // annotation made from one has to be converted — the same conversion the
+  // toolbar and panel readouts make (utils/subsetTimeline).
+  const selectionToSource = useCallback(
+    (sel: Selection): Selection => sourceIntervalOf(timeline, sel.start, sel.end),
+    [timeline],
+  );
+
+  // Display duration mirror for the hooks that clamp seeks/pans against it.
+  const displayDurationRef = useRef(displayDuration);
+  displayDurationRef.current = displayDuration;
+
+  // ── Subset seam ────────────────────────────────────────────────────────────
+  // Annotations are stored in source time (they name audio in the file, and
+  // must keep naming it whatever the view is showing) but drawn and dragged in
+  // display time. See utils/annotationProjection.ts for why the return trip
+  // isn't simply the inverse.
+  const { shown: displayAnnotations, hidden: hiddenAnnotations } = useMemo(
+    () => projectAnnotations(annotations, timeline),
+    [annotations, timeline],
+  );
+  // The activations, re-expressed on the display axis. The panel is handed only
+  // the frames the subset kept, so it plots the subset without knowing one
+  // exists (see utils/buzzdetectSubset.ts).
+  const displayBuzzdetectData = useMemo(
+    () => subsetBuzzdetectData(buzzdetectData, timeline),
+    [buzzdetectData, timeline],
+  );
+
+  const toSourceAnnotations = useCallback(
+    (displayed: Annotation[]) => reconcileAnnotations(displayed, annotations, hiddenAnnotations, timeline),
+    [annotations, hiddenAnnotations, timeline],
+  );
+  const handleDisplayAnnotationsChange = useCallback(
+    (displayed: Annotation[]) => setAnnotations(toSourceAnnotations(displayed)),
+    [toSourceAnnotations, setAnnotations],
+  );
+  const handleDisplayAnnotationsCommit = useCallback(
+    (displayed: Annotation[]) => handleAnnotationsCommit(toSourceAnnotations(displayed)),
+    [toSourceAnnotations, handleAnnotationsCommit],
+  );
+
+
   // Annotation-tool palette: tool array + mirror ref, the folder-reconcile
   // persistence effect, and every tool CRUD/import handler. See
   // hooks/useAnnotationTools.ts. Instantiated here (before useVideoFrameSource/
@@ -366,7 +476,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     trackPathRef,
     isAudioTrack,
-    videoMode,
+    // Effective, not preferred: a subset closes the frame source outright.
+    videoMode: effectiveVideoMode,
     durationRef,
     selectionRef,
     addLog,
@@ -397,12 +508,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     project,
     isAudioTrack,
     isAudioTrackRef,
-    videoMode,
-    videoModeRef,
+    // The transport runs on the DISPLAY axis (see AudioEngine's time model), so
+    // it gets the display duration and the effective video mode — under a subset
+    // that's 'off', which routes playback through AudioEngine for video tracks
+    // too, exactly as for audio.
+    videoMode: effectiveVideoMode,
+    videoModeRef: effectiveVideoModeRef,
     videoSrc,
     videoSrcRef,
-    duration,
-    durationRef,
+    duration: displayDuration,
+    durationRef: displayDurationRef,
     selection,
     selectionRef,
     frameSourceRef,
@@ -425,7 +540,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // same store the buzzdetect panel subscribes to for x-alignment).
   useSpectrogramZoomHotkeys({
     spectrogramRef,
-    durationRef,
+    durationRef: displayDurationRef,
     zoomSecRef,
     preZoomExtentRef,
     getViewportStartTime: () => {
@@ -744,6 +859,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // current list without re-subscribing on every annotation change.
   const sortedAnnotationsRef = useRef(sortedAnnotations);
   useEffect(() => { sortedAnnotationsRef.current = sortedAnnotations; }, [sortedAnnotations]);
+  // The same list on the display axis, for the prev/next-annotation enablement
+  // below: that's a question about what the user can navigate to on screen, and
+  // the playhead it's compared against is a display position. (The source-time
+  // ref above stays as-is — persistence and sync must see real file times.)
+  const sortedDisplayAnnotations = useMemo(
+    () => [...displayAnnotations].sort((a, b) => a.start - b.start),
+    [displayAnnotations],
+  );
+  const sortedDisplayAnnotationsRef = useRef(sortedDisplayAnnotations);
+  useEffect(() => { sortedDisplayAnnotationsRef.current = sortedDisplayAnnotations; }, [sortedDisplayAnnotations]);
 
   // Prev/next-annotation button enablement. These depend on playback time, which
   // updates ~50/sec via the currentTime store. Recomputing them through a memo
@@ -758,7 +883,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const canGoNextRef = useRef(false);
   const recomputeCanGo = useCallback(() => {
     const t = currentTimeStoreRef.current.get();
-    const anns = sortedAnnotationsRef.current;
+    const anns = sortedDisplayAnnotationsRef.current;
     const prev = anns.some(a => a.start < t - 0.05);
     const next = anns.some(a => a.start > t + 0.05);
     if (prev !== canGoPrevRef.current) { canGoPrevRef.current = prev; setCanGoPrevAnnotation(prev); }
@@ -769,10 +894,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => currentTimeStoreRef.current.subscribe(recomputeCanGo), [recomputeCanGo]);
   // Also recompute when the annotation set changes (a new/removed annotation can
   // flip enablement without the playhead moving).
-  useEffect(() => { recomputeCanGo(); }, [sortedAnnotations, recomputeCanGo]);
+  useEffect(() => { recomputeCanGo(); }, [sortedDisplayAnnotations, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
-  const ident = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
 
   // Wall-clock start of the open track, read out of its filename with the
   // project's timestamp pattern. Null (so time readouts stay elapsed) when the
@@ -804,9 +928,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const found = annotations.find(a => a.start === match.start && a.end === match.end && a.text === match.label);
     if (!found) return;
     setSelectedAnnotationId(found.id);
-    seek(match.start);
-    spectrogramRef.current?.zoomToRange(match.start, match.end);
-  }, [annotations, seek]);
+    // The match carries source times; the view and the playhead are on the
+    // display axis.
+    const dStart = timeline.toDisplay(match.start);
+    seek(dStart);
+    spectrogramRef.current?.zoomToRange(dStart, timeline.toDisplay(match.end));
+  }, [annotations, seek, timeline]);
 
   // Find Label "Go" handler: same-track matches select + scroll immediately;
   // matches on another track open it first, and the effect below finishes
@@ -831,21 +958,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     goToAnnotationMatch(pending);
   }, [annotations, ident, goToAnnotationMatch]);
 
-  // buzzdetect activations panel UI state + load-by-ident effect.
-  const {
-    buzzdetectEnabled, setBuzzdetectEnabled,
-    buzzdetectThresholds, setBuzzdetectThresholds,
-    buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
-    buzzdetectNeuronColors, setBuzzdetectNeuronColors,
-    buzzdetectSeriesMode, setBuzzdetectSeriesMode,
-    buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
-    buzzdetectPanelHeight, setBuzzdetectPanelHeight,
-    buzzdetectData, setBuzzdetectData,
-    handleBuzzdetectThresholdChange,
-    handleBuzzdetectToggleNeuron,
-    handleBuzzdetectNeuronColorChange,
-  } = useBuzzdetect({ project, ident, addLog });
-
   // Band-pass filter state machine (filter tool / band / strength + engine-push
   // and persistence effects, plus its own F / Shift+F hotkeys). Needs engineRef,
   // the activation stack, and the project plumbing for debounced persistence.
@@ -867,7 +979,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     prevProjectIdRef,
     updateProjectPreferences,
     isAudioTrack,
-    videoMode,
+    videoMode: effectiveVideoMode,
     enabled: libraryToolIndex === null,
   });
 
@@ -891,6 +1003,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectNeuronColors,
     buzzdetectSeriesMode,
     buzzdetectBinWidthOverride,
+    buzzdetectSubsetEnabled,
+    buzzdetectSubsetNeurons,
+    buzzdetectMinDetectionRate,
     videoMode,
     videoBrightness,
     videoContrast,
@@ -1003,6 +1118,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setBuzzdetectNeuronColors(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
     setBuzzdetectSeriesMode(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
     setBuzzdetectBinWidthOverride(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
+    setBuzzdetectSubsetEnabled(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
+    setBuzzdetectSubsetNeurons(project.preferences.uiSettings?.buzzdetectSubsetNeurons ?? []);
+    setBuzzdetectMinDetectionRate(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
     setFilterToolActive(false);
@@ -1239,7 +1357,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               }
           }
       } else if (activeToolKey === null && selection !== null) {
-          const newAnnotation = makeAnnotationFromTool(tool, selection.start, selection.end);
+          const src = selectionToSource(selection);
+          const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
           handleAnnotationsCommit([...annotations, newAnnotation]);
           setSelectedAnnotationId(newAnnotation.id);
           setBoundAnnotationId(newAnnotation.id);
@@ -1259,24 +1378,32 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             return key;
           });
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
   // so we don't need to manage a dep list here.
   const selectAllOrAnnotateFullTrack = () => {
-      if (duration <= 0) return;
+      if (displayDuration <= 0) return;
+      // Under a subset, "everything" means the segment the playhead is sitting
+      // in, not the whole concatenated timeline: a selection spanning a cut
+      // would cover audio that isn't between its own endpoints in the file.
+      const span = {
+        start: timeline.clampToSpanOfDisplay(currentTimeRef.current, 0),
+        end: timeline.clampToSpanOfDisplay(currentTimeRef.current, displayDuration),
+      };
       if (activeToolKey !== null) {
           const tool = annotationTools.find(t => t.key === activeToolKey);
           if (tool) {
-              const newAnnotation = makeAnnotationFromTool(tool, 0, duration);
+              const src = selectionToSource(span);
+              const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
               handleAnnotationsCommit([...annotations, newAnnotation]);
               setSelectedAnnotationId(newAnnotation.id);
               setBoundAnnotationId(newAnnotation.id);
-              handleSelectionChange({ start: 0, end: duration });
+              handleSelectionChange(span);
           }
       } else {
-          handleSelectionChange({ start: 0, end: duration });
+          handleSelectionChange(span);
       }
   };
   const deleteSelectedAnnotation = () => {
@@ -1314,6 +1441,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setActiveToolKey(null);
           activationStack.remove('annotationTool');
       }},
+      // `Shift+S`: subset the track to the ticked neurons' detections, and
+      // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
+      // be nothing to subset by.
+      { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);
@@ -1405,17 +1536,51 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [activationStack, clearSelectionEnd]);
 
+  // Hand the engine the axis it should play, and bring the rest of the view
+  // onto it. Fires on every timeline change (subset toggled, threshold edited,
+  // track swapped). AudioEngine stops playback rather than remapping audio
+  // already scheduled against the old axis.
+  //
+  // The playhead and any selection are positions on an axis that no longer
+  // exists, so both are reset: the selection outright (its endpoints named
+  // audio by where it sat, and the cuts have moved), the playhead only where it
+  // now points past the end. Skipped on the first run, which is just the empty
+  // initial state.
+  //
+  // Everything here is gated on the timeline object actually changing, not just
+  // on the effect running: `seek` and `handleSelectionChange` are callbacks whose
+  // identity turns over on unrelated renders, and setTimeline stops playback —
+  // so an ungated call would cut the audio at arbitrary moments mid-play.
+  const prevTimelineRef = useRef(timeline);
+  useEffect(() => {
+    const changed = prevTimelineRef.current !== timeline;
+    prevTimelineRef.current = timeline;
+    if (!changed) return;
+    engineRef.current?.setTimeline(timeline);
+    handleSelectionChange(null);
+    if (currentTimeRef.current > displayDuration) seek(displayDuration);
+    // A subset can be a few seconds of a multi-hour file. Fit the window to it
+    // rather than leaving the user staring at one narrow band of content in a
+    // screen of blank — the same courtesy handleOpenTrack does for short files.
+    if (displayDuration > 0 && zoomSecRef.current > displayDuration) {
+      setZoomSec(Math.max(MIN_ZOOM_SEC, displayDuration));
+    }
+  }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef]);
+
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
     if (!boundAnnotationId) return;
     const old = annotations.find(a => a.id === boundAnnotationId);
-    if (old && Math.abs(currentTimeRef.current - old.start) <= 0.5) {
+    // Both times here are display; `old.start` is source, so the comparison is
+    // made on the display axis the playhead is also on.
+    if (old && Math.abs(currentTimeRef.current - timeline.toDisplay(old.start)) <= 0.5) {
       seek(start, false);
     }
+    const src = selectionToSource({ start, end });
     handleAnnotationsCommit(annotations.map(a =>
-      a.id === boundAnnotationId ? { ...a, start, end } : a
+      a.id === boundAnnotationId ? { ...a, start: src.start, end: src.end } : a
     ));
-  }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek]);
+  }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek, timeline, selectionToSource]);
 
   const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
 
@@ -1435,7 +1600,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       lastDefinedSpeed,
       speedMin: liveSpeedRange.min,
       speedMax: liveSpeedRange.max,
-      selection,
+      // Source time, like everything else on the bridge — the guide's copy of
+      // the from/to fields must read the same file positions the toolbar's do.
+      selection: selection && selectionToSource(selection),
       timeDisplayUnit: shownTimeUnit,
       selectedTimeDisplayUnit: timeDisplayUnit,
       trackStartMs: trackStartDate?.getTime() ?? null,
@@ -1450,6 +1617,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       bandPassFilter,
       buzzdetectAvailable: project.buzzdetectDirectoryAbs !== null,
       buzzdetectEnabled,
+      subsetAvailable: buzzdetectSubsetNeurons.length > 0,
+      subsetActive,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
       filePanel: {
@@ -1465,9 +1634,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     },
     {
       play: togglePlay,
-      seek: (t, scroll) => seek(t, scroll),
+      // Times arrive in source time (see LiveSnapshot). One that a subset cut
+      // out has no place on the axis, so it goes to the nearest kept moment —
+      // the same answer typing it into the toolbar gives.
+      seek: (t, scroll) => seek(displayOfNearestKept(timeline, t), scroll),
       skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
-      skipToEnd: () => { seek(duration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      skipToEnd: () => { seek(displayDuration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
       prevAnnotation: () => spectrogramRef.current?.goToPrevAnnotation(),
       nextAnnotation: () => spectrogramRef.current?.goToNextAnnotation(),
       togglePlayheadLock: () => {
@@ -1480,7 +1652,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setPlaybackSpeed,
       setLastDefinedSpeed,
       setTimeDisplayUnit,
-      setSelection: s => { handleSelectionChange(s); handleToolbarAnnotationBoundsChange(s.start, s.end); },
+      setSelection: s => {
+        const d = projectIntervalToDisplay(timeline, s.start, s.end);
+        if (!d) return;
+        handleSelectionChange(d);
+        handleToolbarAnnotationBoundsChange(d.start, d.end);
+      },
       toggleFilterTool: handleToggleFilterTool,
       setFilterStrength: s => {
         setFilterStrength(s);
@@ -1489,6 +1666,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       enableFilter: handleEnableBandPassFilter,
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
+      toggleSubset: toggleBuzzdetectSubset,
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
@@ -1509,6 +1687,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       showExamples: handleShowExamples,
     },
     currentTimeStoreRef.current,
+    // Bound, not passed as a bare method reference — Timeline is a class.
+    t => timeline.toSource(t),
   );
 
 
@@ -1905,7 +2085,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                isBuffering={isBuffering || exampleAudioActive}
                videoSrc={videoSrc}
                currentTimeStore={currentTimeStoreRef.current}
-               duration={duration}
+               duration={displayDuration}
                selection={selection}
                volume={volume}
                muted={muted}
@@ -1933,11 +2113,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                onEnableBandPassFilter={handleEnableBandPassFilter}
                filterStrength={filterStrength}
                setFilterStrength={setFilterStrength}
-               videoMode={videoMode}
+               videoMode={effectiveVideoMode}
                isAudioTrack={isAudioTrack}
                buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
+               subsetAvailable={buzzdetectSubsetNeurons.length > 0}
+               subsetActive={subsetActive}
+               onToggleSubset={toggleBuzzdetectSubset}
                onRestartAudio={() => { engineRef.current?.restart(); }}
                playheadLocked={playheadLocked}
                onTogglePlayheadLock={() => {
@@ -1950,6 +2133,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                onTimeDisplayUnitChange={chooseTimeDisplayUnit}
                trackStartDate={trackStartDate}
                dateTimeFormat={dateTimeFormat}
+               timeline={timeline}
              />
 
              <div className="flex-1 relative overflow-hidden">
@@ -1959,21 +2143,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 sampleRate={sampleRate}
                 cacheVersion={cacheVersion}
                 currentTimeStore={currentTimeStoreRef.current}
-                duration={duration}
+                duration={displayDuration}
+                timeline={timeline}
                 isPlaying={isPlaying}
                 isProcessing={isProcessing}
                 ident={ident}
                 settings={settings}
                 zoomSec={zoomSec}
-                annotations={annotations}
+                annotations={displayAnnotations}
                 selectedAnnotationId={selectedAnnotationId}
                 activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
                 annotationTools={annotationTools}
                 selection={selection}
                 boundAnnotationId={boundAnnotationId}
                 onSeek={seek}
-                onAnnotationsChange={setAnnotations}
-                onAnnotationsCommit={handleAnnotationsCommit}
+                onAnnotationsChange={handleDisplayAnnotationsChange}
+                onAnnotationsCommit={handleDisplayAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
@@ -1984,7 +2169,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={publishViewport}
-                videoMode={videoMode}
+                videoMode={effectiveVideoMode}
                 isAudioTrack={isAudioTrack}
                 playheadLocked={playheadLocked}
                 hideLabels={hideLabels}
@@ -2006,9 +2191,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
              {buzzdetectEnabled && (
                <BuzzdetectPanel
-                 data={buzzdetectData}
+                 data={displayBuzzdetectData}
                  viewportStore={viewportStoreRef.current}
-                 duration={duration}
+                 duration={displayDuration}
                  currentTimeStore={currentTimeStoreRef.current}
                  selection={selection}
                  timeDisplayUnit={shownTimeUnit}
@@ -2019,12 +2204,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  neuronColors={buzzdetectNeuronColors}
                  seriesMode={buzzdetectSeriesMode}
                  binWidthOverride={buzzdetectBinWidthOverride}
+                 subsetActive={subsetActive}
+                 timeline={timeline}
+                 subsetNeurons={buzzdetectSubsetNeurons}
+                 minDetectionRate={buzzdetectMinDetectionRate}
                  height={buzzdetectPanelHeight}
                  onThresholdChange={handleBuzzdetectThresholdChange}
                  onToggleNeuron={handleBuzzdetectToggleNeuron}
+                 onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
                  onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                  onSeriesModeChange={setBuzzdetectSeriesMode}
                  onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
+                 onToggleSubsetNeuron={handleBuzzdetectToggleSubsetNeuron}
+                 onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
                  onBoundAnnotationChange={setBoundAnnotationId}

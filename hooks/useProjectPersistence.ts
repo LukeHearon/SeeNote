@@ -22,6 +22,9 @@ interface UseProjectPersistenceArgs {
   buzzdetectNeuronColors: Record<string, string>;
   buzzdetectSeriesMode: BuzzdetectSeriesMode;
   buzzdetectBinWidthOverride: number | null;
+  buzzdetectSubsetEnabled: boolean;
+  buzzdetectSubsetNeurons: string[];
+  buzzdetectMinDetectionRate: number;
   videoMode: VideoMode;
   videoBrightness: number;
   videoContrast: number;
@@ -59,6 +62,9 @@ export function useProjectPersistence({
   buzzdetectNeuronColors,
   buzzdetectSeriesMode,
   buzzdetectBinWidthOverride,
+  buzzdetectSubsetEnabled,
+  buzzdetectSubsetNeurons,
+  buzzdetectMinDetectionRate,
   videoMode,
   videoBrightness,
   videoContrast,
@@ -113,6 +119,9 @@ export function useProjectPersistence({
         buzzdetectNeuronColors,
         buzzdetectSeriesMode,
         buzzdetectBinWidthOverride,
+        buzzdetectSubsetEnabled,
+        buzzdetectSubsetNeurons,
+        buzzdetectMinDetectionRate,
         videoMode,
         videoBrightness,
         videoContrast,
@@ -130,5 +139,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectMinDetectionRate, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, leftPanelRatio, leftPanelWidth]);
 }
