@@ -19,7 +19,7 @@ export const help = {
 
   live: {
     get connected() { return getOverride('help.live.connected') ?? "Live"; },
-    get demo() { return getOverride('help.live.demo') ?? "Open a project for live control"; },
+    get demo() { return getOverride('help.live.demo') ?? "Demo"; },
     get example() { return getOverride('help.live.example') ?? "Example project"; },
     get reopen() { return getOverride('help.live.reopen') ?? "Open it again"; },
   },
