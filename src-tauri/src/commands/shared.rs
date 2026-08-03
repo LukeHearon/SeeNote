@@ -6,7 +6,11 @@
 use std::path::Path;
 
 /// Audio file extensions SeeNote recognizes (lowercase, no leading dot).
-pub const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a"];
+/// `wma` decodes via a system ffmpeg/ffprobe binary rather than symphonia (see
+/// `audio::ffmpeg_stream`) — it's still listed here since the file is real
+/// audio, but opening it fails with an actionable error on machines without
+/// ffmpeg installed.
+pub const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac", "m4a", "wma"];
 /// Video file extensions SeeNote recognizes (lowercase, no leading dot).
 pub const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 

@@ -50,7 +50,27 @@ fn find_audio_track(format: &dyn FormatReader) -> Option<&Track> {
     })
 }
 
+/// Extensions with no symphonia decoder, routed instead to the `ffmpeg_stream`
+/// fallback backend (see that module for why).
+fn is_ffmpeg_ext(path: &str) -> bool {
+    matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("wma")
+    )
+}
+
 pub fn get_file_info(path: &str) -> Result<FileInfo> {
+    if is_ffmpeg_ext(path) {
+        return super::ffmpeg_stream::get_file_info(path);
+    }
+    get_file_info_symphonia(path)
+}
+
+fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
     let file = File::open(path).with_context(|| format!("Cannot open file: {path}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -179,7 +199,7 @@ pub const DEFAULT_SEEK_MARGIN_SEC: f64 = 0.5;
 
 /// Streaming PCM reader. Yields interleaved f32 samples at the file's native
 /// sample rate and channel count, starting from an exact sample position.
-pub struct PcmStream {
+pub struct SymphoniaStream {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
@@ -209,7 +229,7 @@ pub struct PcmStream {
     next_output_frame: u64,
 }
 
-impl PcmStream {
+impl SymphoniaStream {
     /// Open a file and seek to just before `start_sec` using the 500ms margin
     /// + first-packet timestamp technique (see module-level doc).
     pub fn open(path: &str, start_sec: f64) -> Result<Self> {
@@ -277,7 +297,7 @@ impl PcmStream {
 
         // Alignment state is set by seek_to below; these are placeholders that
         // are never observable (seek_to overwrites all of them, or errors).
-        let mut stream = PcmStream {
+        let mut stream = SymphoniaStream {
             format,
             decoder,
             track_id,
@@ -599,6 +619,82 @@ impl PcmStream {
     }
 }
 
+// ── PcmStream: backend dispatch ────────────────────────────────────────────────
+//
+// symphonia has no WMA decoder (nor does anything else in the Rust ecosystem —
+// it's a proprietary codec), so `.wma` is routed to `ffmpeg_stream`, which
+// shells out to a system-installed `ffmpeg`/`ffprobe` rather than linking
+// libavcodec (see that module's doc comment for the licensing/bundling
+// rationale). Every other extension keeps using `SymphoniaStream` unchanged.
+//
+// Callers (`stream_pool.rs`, `commands/audio.rs`) only ever call `PcmStream`'s
+// public methods, never touch its fields, so this dispatch is invisible to them.
+pub enum PcmStream {
+    Symphonia(SymphoniaStream),
+    Ffmpeg(super::ffmpeg_stream::FfmpegStream),
+}
+
+impl PcmStream {
+    pub fn open(path: &str, start_sec: f64) -> Result<Self> {
+        if is_ffmpeg_ext(path) {
+            Ok(PcmStream::Ffmpeg(super::ffmpeg_stream::FfmpegStream::open(
+                path, start_sec,
+            )?))
+        } else {
+            Ok(PcmStream::Symphonia(SymphoniaStream::open(path, start_sec)?))
+        }
+    }
+
+    pub fn skip_to(&mut self, start_sec: f64) -> Result<()> {
+        match self {
+            PcmStream::Symphonia(s) => s.skip_to(start_sec),
+            PcmStream::Ffmpeg(s) => s.skip_to(start_sec),
+        }
+    }
+
+    pub fn seek_to(&mut self, start_sec: f64, margin_sec: f64) -> Result<()> {
+        match self {
+            PcmStream::Symphonia(s) => s.seek_to(start_sec, margin_sec),
+            PcmStream::Ffmpeg(s) => s.seek_to(start_sec, margin_sec),
+        }
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        match self {
+            PcmStream::Symphonia(s) => s.sample_rate(),
+            PcmStream::Ffmpeg(s) => s.sample_rate(),
+        }
+    }
+
+    pub fn channels(&self) -> u16 {
+        match self {
+            PcmStream::Symphonia(s) => s.channels(),
+            PcmStream::Ffmpeg(s) => s.channels(),
+        }
+    }
+
+    pub fn position_frames(&self) -> u64 {
+        match self {
+            PcmStream::Symphonia(s) => s.position_frames(),
+            PcmStream::Ffmpeg(s) => s.position_frames(),
+        }
+    }
+
+    pub fn position_secs(&self) -> f64 {
+        match self {
+            PcmStream::Symphonia(s) => s.position_secs(),
+            PcmStream::Ffmpeg(s) => s.position_secs(),
+        }
+    }
+
+    pub fn read(&mut self, max_frames: usize) -> Result<(Vec<f32>, usize)> {
+        match self {
+            PcmStream::Symphonia(s) => s.read(max_frames),
+            PcmStream::Ffmpeg(s) => s.read(max_frames),
+        }
+    }
+}
+
 // ── decode_audio_range ────────────────────────────────────────────────────────
 
 /// Decodes PCM samples for [start_sec, start_sec + duration_sec).
@@ -746,7 +842,7 @@ mod tests {
         desired_start_frame: u64,
         abs_frame_start: u64,
         n_frames: usize,
-    ) -> PcmStream {
+    ) -> SymphoniaStream {
         use symphonia::core::formats::TrackType;
 
         let channels = 1u16;
@@ -786,7 +882,7 @@ mod tests {
                 .expect("probe silent wav")
         }
 
-        PcmStream {
+        SymphoniaStream {
             // These fields are never exercised by read() in the pure in-memory path
             // because pending is pre-filled and we won't call fill_next_packet.
             format: open_silent_wav(),

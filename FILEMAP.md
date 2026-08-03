@@ -60,7 +60,8 @@ Quick reference for agents. One phrase per file.
 - `components/spectrogram/SelectionHandles.tsx` — selection rectangle and its drag handles overlay
 - `components/spectrogram/FilterHandles.tsx` — band-pass filter band and its drag handles overlay
 - `components/spectrogram/AnnotationOverlay.tsx` — annotation boxes, labels, and text-input editing overlay
-- `src-tauri/src/audio/decoder.rs` — PCM decoder with seek-margin logic (canonical sample-accuracy contract)
+- `src-tauri/src/audio/decoder.rs` — PCM decoder with seek-margin logic (canonical sample-accuracy contract); dispatches to `ffmpeg_stream` for formats symphonia can't decode
+- `src-tauri/src/audio/ffmpeg_stream.rs` — fallback decode backend for `.wma` (no Rust decoder exists), shells out to a system ffmpeg/ffprobe binary rather than linking libavcodec
 - `src-tauri/src/audio/fft.rs` — FFT / spectrogram chunk computation
 - `src-tauri/src/audio/stream_pool.rs` — reuses open decoder streams across chunk requests so repeated seeks into a long file dont rescan the container
 - `src-tauri/src/audio/mod.rs` — audio module exports

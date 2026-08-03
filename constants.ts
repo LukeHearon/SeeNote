@@ -24,7 +24,12 @@ export const MAGMA_STOPS = [
 // in our environment (play button never unsticks). Revisit if/when we swap
 // decoders or upgrade symphonia. Ogg files are still scanned and shown, just
 // grayed as (unsupported) so users aren't surprised by silent failures.
-export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a']);
+//
+// wma decodes via a system ffmpeg/ffprobe binary instead of symphonia (see
+// src-tauri/src/audio/ffmpeg_stream.rs) — included here since it's a real,
+// decodable format, but it'll fail with an actionable error at open time on a
+// machine without ffmpeg installed, rather than being caught here.
+export const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'flac', 'wav', 'aac', 'm4a', 'wma']);
 export const SUPPORTED_VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm']);
 
 // Canonical on-disk extension for internal annotation files (no leading dot).

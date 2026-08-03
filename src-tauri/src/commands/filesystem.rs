@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn classify_ext_audio_extensions() {
         // Every entry in AUDIO_EXTS should classify as audio.
-        for ext in ["mp3", "flac", "wav", "ogg", "aac", "m4a"] {
+        for ext in ["mp3", "flac", "wav", "ogg", "aac", "m4a", "wma"] {
             let p = PathBuf::from(format!("/tmp/song.{ext}"));
             assert_eq!(classify_ext(&p), (true, false), "ext .{ext} should be audio");
         }
