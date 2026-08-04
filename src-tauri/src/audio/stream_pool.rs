@@ -262,6 +262,48 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The same guarantee on a real MP3, through `acquire` itself — the entry
+    /// point playback now uses (`commands::audio::start_pcm_stream`).
+    ///
+    /// The WAV test above covers the pool's bookkeeping; this covers the case
+    /// the bookkeeping is *for*. MP3 has no seek index, carries an encoder delay
+    /// to skip, and needs a decoder reset across a seek, so a pooled stream
+    /// disagreeing with a fresh open would put audio at the wrong time under the
+    /// playhead. Walks forward the way playback does: repeated acquire/release
+    /// at increasing positions, each checked against a cold open.
+    ///
+    /// #[ignore]d: needs a fixture at `<repo>/local/test.mp3` (gitignored).
+    /// Run with: cargo test -- --ignored pooled_mp3_streams_land_where_a_fresh_open_would
+    #[test]
+    #[ignore]
+    fn pooled_mp3_streams_land_where_a_fresh_open_would() {
+        clear();
+        let p = "../local/test.mp3";
+
+        // Mix of gaps: some larger than the margin (seek_to), some inside it
+        // (skip_to), which is exactly how acquire picks between the two.
+        for start_sec in [0.0, 0.2, 1.0, 1.1, 3.0, 3.25, 7.5] {
+            let (from_pool, n_pool) = {
+                let mut pooled = acquire(p, start_sec, super::super::decoder::DEFAULT_SEEK_MARGIN_SEC)
+                    .expect("acquire");
+                assert_eq!(
+                    pooled.position_frames(),
+                    (start_sec * pooled.sample_rate() as f64).round() as u64,
+                    "pooled stream position at {start_sec}s",
+                );
+                pooled.read(4096).expect("read")
+                // released back to the pool here, for the next iteration to reuse
+            };
+
+            let mut fresh = PcmStream::open(p, start_sec).expect("open");
+            let (from_open, n_open) = fresh.read(4096).expect("read");
+
+            assert_eq!(n_pool, n_open, "frame count at {start_sec}s");
+            assert_eq!(from_pool, from_open, "samples at {start_sec}s");
+        }
+        clear();
+    }
+
     /// A stream is reusable only for targets at or after its position; seeking
     /// backward would restart the container scan, which is the cost the pool
     /// exists to avoid.
