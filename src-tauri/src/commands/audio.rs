@@ -19,7 +19,13 @@ pub(crate) struct StreamEntry {
     /// The actual stream, independently locked so reads on different streams
     /// don't serialize against each other (fixing the race from the old design
     /// where the global `streams` MutexGuard was held for the full read).
-    stream: Arc<Mutex<decoder::PcmStream>>,
+    ///
+    /// Held as a `PooledStream` so that dropping the entry — on
+    /// `close_pcm_stream`, or on idle-TTL eviction — hands the positioned
+    /// decoder back to `stream_pool` rather than discarding it. A later play or
+    /// seek at or after that position then reuses it instead of re-scanning the
+    /// container.
+    stream: Arc<Mutex<stream_pool::PooledStream>>,
     /// Wall-clock time of the last `read_pcm_chunk` call. Updated under the
     /// global `streams` lock; used to evict idle entries (Finding 4 TTL).
     last_used: Instant,
@@ -534,6 +540,15 @@ fn build_pcm_chunk_response(frames_read: u32, start_frame: u64, samples: &[f32])
 
 /// Open a PCM stream at `start_sec` in the given file. Returns a handle the
 /// client uses for subsequent `read_pcm_chunk` / `close_pcm_stream` calls.
+///
+/// Goes through `stream_pool` rather than opening the decoder directly. An MP3
+/// carries no seek index, so opening one at time T scans the container from
+/// byte 0 to T — 122-310ms at depth in a long file (see `decoder::seek_bench`
+/// and `audio::stream_pool`). Playback opened a fresh stream on every play,
+/// resume and seek and paid that scan every time, which is the gap between
+/// pressing space and hearing audio. The pool hands back a stream already
+/// positioned at or before the target whenever one is idle, turning the scan
+/// into a short forward seek; when none is, it opens fresh exactly as before.
 #[tauri::command]
 pub async fn start_pcm_stream(
     path: String,
@@ -541,7 +556,8 @@ pub async fn start_pcm_stream(
     state: tauri::State<'_, PcmStreamState>,
 ) -> Result<PcmStreamHandle, String> {
     let info = decoder::get_file_info(&path).map_err(|e| e.to_string())?;
-    let stream = decoder::PcmStream::open(&path, start_sec).map_err(|e| e.to_string())?;
+    let stream = stream_pool::acquire(&path, start_sec, decoder::DEFAULT_SEEK_MARGIN_SEC)
+        .map_err(|e| e.to_string())?;
 
     let sample_rate = stream.sample_rate();
     let channels = stream.channels();

@@ -755,6 +755,18 @@ impl PcmStream {
             PcmStream::Ffmpeg(s) => s.read(max_frames),
         }
     }
+
+    /// Whether holding this stream idle also holds an OS process.
+    ///
+    /// A `Symphonia` stream idles as a file handle and some buffered container
+    /// state. An `Ffmpeg` one idles as a live `ffmpeg` child, blocked writing to
+    /// a full pipe and killed only on drop — cheap in CPU, but tens of MB of RSS
+    /// apiece. `stream_pool` uses this to expire subprocess-backed streams much
+    /// sooner than it expires the rest, so a long pool TTL does not leave a
+    /// handful of idle decoders resident (see POOL_TTL there).
+    pub fn is_subprocess_backed(&self) -> bool {
+        matches!(self, PcmStream::Ffmpeg(_))
+    }
 }
 
 // ── decode_audio_range ────────────────────────────────────────────────────────
@@ -841,7 +853,9 @@ mod tests {
     #[test]
     #[ignore]
     fn chunked_matches_oneshot() {
-        let path = "../../local/test.mp3"; // adjust to a real file
+        // Relative to the crate manifest dir (src-tauri), which is cargo's cwd
+        // for tests — so this is <repo>/local/test.mp3.
+        let path = "../local/test.mp3";
         let start_sec = 1.0f64;
         let duration_sec = 4.0f64;
 
@@ -1150,6 +1164,72 @@ mod tests {
             assert_eq!(from_walk, from_open, "samples at {t}s");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The same guarantee, on a real MP3.
+    ///
+    /// The WAV version above proves the alignment arithmetic, but WAV seeking is
+    /// trivial — position is a byte offset. MP3 is where it can actually go
+    /// wrong: no seek index, a container seek that lands wherever it lands, an
+    /// encoder delay to skip, and a decoder that must be reset across the seek.
+    /// Playback reuses pooled streams via `seek_to`/`skip_to` (see
+    /// `audio::stream_pool` and `commands::audio::start_pcm_stream`), so a
+    /// reused stream disagreeing with a fresh open by even one frame would put
+    /// the audio at the wrong time under the playhead.
+    ///
+    /// #[ignore]d like `chunked_matches_oneshot`: needs a fixture at
+    /// `<repo>/local/test.mp3` (gitignored). Run with:
+    ///   cargo test -- --ignored seek_to_matches_a_fresh_open_on_mp3
+    #[test]
+    #[ignore]
+    fn seek_to_matches_a_fresh_open_on_mp3() {
+        let p = "../local/test.mp3";
+        let info = get_file_info(p).expect("get_file_info");
+        // Sample across the file, staying clear of the very end so every probe
+        // has a full read available.
+        let last = (info.duration_secs - 1.0).max(0.0);
+
+        let mut walked = PcmStream::open(p, 0.0).expect("open");
+        for i in 0..8 {
+            let t = last * (i as f64 / 8.0);
+            walked.seek_to(t, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
+            let (from_walk, n_walk) = walked.read(4096).expect("read");
+
+            let mut fresh = PcmStream::open(p, t).expect("open");
+            let (from_open, n_open) = fresh.read(4096).expect("read");
+
+            assert_eq!(
+                walked.position_frames(), fresh.position_frames(),
+                "position after reading at {t}s",
+            );
+            assert_eq!(n_walk, n_open, "frame count at {t}s");
+            assert_eq!(from_walk, from_open, "samples at {t}s");
+        }
+    }
+
+    /// Forward `skip_to` — the other way the pool advances a reused stream, used
+    /// when the target is already within the seek margin — must land identically.
+    ///
+    /// #[ignore]d: needs the same `<repo>/local/test.mp3` fixture.
+    #[test]
+    #[ignore]
+    fn skip_to_matches_a_fresh_open_on_mp3() {
+        let p = "../local/test.mp3";
+
+        let mut walked = PcmStream::open(p, 0.0).expect("open");
+        // Sub-margin forward hops, which is what stream_pool::acquire turns into
+        // skip_to rather than a backward seek.
+        for i in 1..8 {
+            let t = i as f64 * 0.25;
+            walked.skip_to(t).expect("skip_to");
+            let (from_skip, n_skip) = walked.read(4096).expect("read");
+
+            let mut fresh = PcmStream::open(p, t).expect("open");
+            let (from_open, n_open) = fresh.read(4096).expect("read");
+
+            assert_eq!(n_skip, n_open, "frame count at {t}s");
+            assert_eq!(from_skip, from_open, "samples at {t}s");
+        }
     }
 
     /// delay=0, seek overshoot of 10 frames:

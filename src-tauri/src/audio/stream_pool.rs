@@ -1,4 +1,4 @@
-//! Reuse of decoder streams across spectrogram chunk requests.
+//! Reuse of decoder streams across requests — spectrogram chunks and playback.
 //!
 //! ── The problem ──────────────────────────────────────────────────────────────
 //! Opening a `PcmStream` at time T scans the container from byte 0 to T, because
@@ -16,6 +16,13 @@
 //! used streams and hands out one positioned at or before the requested time,
 //! turning the common access patterns — panning, playback, successively loading
 //! a viewport's chunks — into short forward seeks instead of full re-scans.
+//!
+//! Playback goes through the pool too (`commands::audio::start_pcm_stream`), so
+//! pressing play at or after where the last stream stopped costs a forward seek
+//! rather than a full scan. Resuming from a pause is the one case it cannot
+//! serve: the prefetch loop reads ahead of the playhead, so the stream it hands
+//! back sits *past* the resume point and reaching it would be a backward seek.
+//! Those open fresh, exactly as before.
 //!
 //! A stream is only reused when its position is *at or before* the target: a
 //! backward seek would restart the scan from byte 0, which is what we are
@@ -41,14 +48,34 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// How long an unused stream stays reusable. Short enough that a file edited on
-/// disk is not served from a stale handle for long, long enough to cover the
-/// gaps between viewport loads while panning or playing.
-const POOL_TTL: Duration = Duration::from_secs(30);
+/// How long an unused stream stays reusable.
+///
+/// Sized for the gap between a user's plays, not the gap between a viewport's
+/// chunk loads. Annotating is play, pause, type a label, study the spectrogram,
+/// play the next passage — routinely minutes. At the original 30s the playback
+/// stream was reaped during almost every one of those pauses, so the next play
+/// paid the full container rescan anyway.
+///
+/// Costs nothing in handles: MAX_STREAMS_PER_PATH and MAX_PATHS bound those
+/// regardless of TTL. What it trades is the window in which a file rewritten on
+/// disk can still be served from a pooled handle. Kept finite so handles are
+/// released when the app is left idle rather than held until the process exits.
+const POOL_TTL: Duration = Duration::from_secs(300);
 
-/// Idle streams kept per file. Matches the frontend's concurrent-request limit
-/// so a viewport's worth of parallel requests can each find one next time.
-const MAX_STREAMS_PER_PATH: usize = 4;
+/// TTL for subprocess-backed streams (`.wma` via `ffmpeg_stream`).
+///
+/// Those idle as a live `ffmpeg` child rather than a file handle — blocked on a
+/// full pipe, so cheap in CPU, but tens of MB of RSS each. Letting several sit
+/// for the full POOL_TTL would leave hundreds of MB resident for a format that
+/// is a fallback, not the common path, so they expire on the original schedule.
+const POOL_TTL_SUBPROCESS: Duration = Duration::from_secs(30);
+
+/// Idle streams kept per file. Four for the frontend's concurrent spectrogram
+/// requests, so a viewport's worth of parallel requests can each find one next
+/// time, plus one for playback — otherwise the playback stream, returned to the
+/// pool on pause, is the oldest entry by the time the next viewport load
+/// finishes and gets evicted before it can be reused.
+const MAX_STREAMS_PER_PATH: usize = 5;
 
 /// Files tracked at once. Switching tracks should not strand handles.
 const MAX_PATHS: usize = 3;
@@ -68,7 +95,14 @@ fn pool() -> &'static Mutex<Pool> {
 fn reap(pool: &mut Pool) {
     let now = Instant::now();
     for streams in pool.values_mut() {
-        streams.retain(|idle| now.duration_since(idle.last_used) < POOL_TTL);
+        streams.retain(|idle| {
+            let ttl = if idle.stream.is_subprocess_backed() {
+                POOL_TTL_SUBPROCESS
+            } else {
+                POOL_TTL
+            };
+            now.duration_since(idle.last_used) < ttl
+        });
     }
     pool.retain(|_, streams| !streams.is_empty());
 }
@@ -250,6 +284,48 @@ mod tests {
         }
         clear();
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The same guarantee on a real MP3, through `acquire` itself — the entry
+    /// point playback now uses (`commands::audio::start_pcm_stream`).
+    ///
+    /// The WAV test above covers the pool's bookkeeping; this covers the case
+    /// the bookkeeping is *for*. MP3 has no seek index, carries an encoder delay
+    /// to skip, and needs a decoder reset across a seek, so a pooled stream
+    /// disagreeing with a fresh open would put audio at the wrong time under the
+    /// playhead. Walks forward the way playback does — repeated acquire/release
+    /// at increasing positions, each checked against a cold open — with a mix of
+    /// gaps so both the seek_to and skip_to branches of `acquire` are hit.
+    ///
+    /// #[ignore]d: needs a fixture at `<repo>/local/test.mp3` (gitignored).
+    /// Run with: cargo test -- --ignored pooled_mp3_streams_land_where_a_fresh_open_would
+    #[test]
+    #[ignore]
+    fn pooled_mp3_streams_land_where_a_fresh_open_would() {
+        clear();
+        let p = "../local/test.mp3";
+
+        for start_sec in [0.0, 0.2, 1.0, 1.1, 3.0, 3.25, 7.5] {
+            let (from_pool, n_pool) = {
+                let mut pooled =
+                    acquire(p, start_sec, super::super::decoder::DEFAULT_SEEK_MARGIN_SEC)
+                        .expect("acquire");
+                assert_eq!(
+                    pooled.position_frames(),
+                    (start_sec * pooled.sample_rate() as f64).round() as u64,
+                    "pooled stream position at {start_sec}s",
+                );
+                pooled.read(4096).expect("read")
+                // released back to the pool here, for the next iteration to reuse
+            };
+
+            let mut fresh = PcmStream::open(p, start_sec).expect("open");
+            let (from_open, n_open) = fresh.read(4096).expect("read");
+
+            assert_eq!(n_pool, n_open, "frame count at {start_sec}s");
+            assert_eq!(from_pool, from_open, "samples at {start_sec}s");
+        }
+        clear();
     }
 
     /// A stream is reusable only for targets at or after its position; seeking

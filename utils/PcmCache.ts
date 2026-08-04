@@ -9,6 +9,7 @@
 
 import { startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
 import { clamp } from './helpers';
+import { deinterleaveInto } from './pcm';
 
 /** Cached decoded PCM for a range, keyed by (filePath, startSec, endSec). */
 export interface PcmCacheEntry {
@@ -190,12 +191,7 @@ export class PcmCache {
       const channels: Float32Array[] = Array.from({ length: ch }, () => new Float32Array(cacheTotalFrames));
       let frameOffset = 0;
       for (const { samples, frames } of cacheChunks) {
-        for (let c = 0; c < ch; c++) {
-          const dest = channels[c];
-          for (let i = 0; i < frames; i++) {
-            dest[frameOffset + i] = samples[i * ch + c];
-          }
-        }
+        deinterleaveInto(samples, frames, channels, frameOffset);
         frameOffset += frames;
       }
       this.store(filePath, fileSampleRate, startSec, endSec, channels, cacheTotalFrames);

@@ -166,8 +166,13 @@ export function usePlaybackTransport({
       currentTimeRef.current = t;
       currentTimeStoreRef.current.set(t);
     };
+    // Every terminal callback clears isBuffering, not just onPlaying. onPlaying
+    // fires at most once per play(), so an underrun raised after it used to
+    // leave isBuffering stuck true for good — which shows a permanent spinner
+    // and, worse, makes togglePlay take its `isPlaying || isBuffering` pause
+    // branch, so the next space press does nothing instead of starting playback.
     const onPlaying = () => { setIsPlaying(true); setIsBuffering(false); };
-    const onPaused = () => setIsPlaying(false);
+    const onPaused = () => { setIsPlaying(false); setIsBuffering(false); };
     const onEnded = () => {
       // Return playhead to selection start. Do NOT auto-scroll — when playing
       // within a selection the user positioned the canvas intentionally; jumping
@@ -175,6 +180,7 @@ export function usePlaybackTransport({
       const sel = selectionRef.current;
       if (sel) seekRef.current?.(sel.start, false);
       setIsPlaying(false);
+      setIsBuffering(false);
     };
 
     engineRef.current = new AudioEngine({
@@ -196,6 +202,7 @@ export function usePlaybackTransport({
       onPaused,
       onEnded,
       onBufferUnderrun: () => setIsBuffering(true),
+      onBufferRecovered: () => setIsBuffering(false),
       onDebugLog: (msg, type = 'info') => addLog(msg, type),
     });
 

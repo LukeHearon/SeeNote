@@ -72,6 +72,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
       onPaused: () => setIsPlaying(false),
       onEnded: () => { setIsPlaying(false); storeRef.current.set(0); },
       onBufferUnderrun: () => {},
+      onBufferRecovered: () => {},
       onDebugLog: addLog,
     });
     engineRef.current = engine;

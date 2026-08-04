@@ -81,6 +81,7 @@ import { BandPassFilter, PlaybackTransport } from '../types';
 import { clamp } from './helpers';
 import { TimeStretchEngine } from './TimeStretchEngine';
 import { PcmCache, PcmCacheSlice } from './PcmCache';
+import { deinterleave } from './pcm';
 import { BandPassFilterGraph } from './BandPassFilterGraph';
 import { Timeline, identityTimeline } from './subsetTimeline';
 
@@ -94,6 +95,11 @@ export interface AudioEngineCallbacks {
   onEnded: () => void;
   /** Called when audio decoding can't keep up and there's a gap. */
   onBufferUnderrun: () => void;
+  /** Called once the chunk following an underrun has been scheduled — i.e. the
+   *  gap is closed and audio is flowing again. Pairs with onBufferUnderrun so a
+   *  "buffering" indicator can be cleared; without it the indicator raised
+   *  mid-play would stay up for the rest of the play. */
+  onBufferRecovered: () => void;
   /** Optional: emitted for notable engine events (opens, errors, slow-decode notices, etc.). */
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
 }
@@ -134,6 +140,11 @@ const SLEEP_MS = 250;
  *    so we never block on a fixed IPC budget — we start as soon as samples are
  *    ready, with just enough lead time to schedule precisely. */
 const START_MARGIN_SEC = 0.005;
+/** Lead time given to a chunk that missed its slot, so `source.start(when)` is
+ *  still scheduling into the future after the buffer work that follows it.
+ *  Whatever this is, it must be folded into the time origin along with the
+ *  overrun itself — see the underrun branch in _prefetchLoop. */
+const UNDERRUN_LEAD_SEC = 0.02;
 /** Longest gap between two subset spans that's cheaper to decode past than to
  *  seek over. A seek reopens the container; a couple of seconds of throwaway
  *  decode does not. See the span-advance in _prefetchLoop. */
@@ -200,7 +211,9 @@ export class AudioEngine implements PlaybackTransport {
   // if it changed — the end bound it was going to report no longer exists.
   private endBoundEpoch = 0;
 
-  // Scheduled nodes that haven't finished yet
+  // Scheduled nodes that haven't finished yet. Pruned every frame by
+  // _pruneQueue() — an entry keeps its AudioBufferSourceNode alive, and that
+  // keeps a second of decoded PCM alive with it.
   private queue: ScheduledNode[] = [];
   // Media cursor of the next byte the prefetch loop needs to schedule
   private schedCursor = 0;
@@ -808,12 +821,22 @@ export class AudioEngine implements PlaybackTransport {
     // exactly what makes the join inaudible.
     let expectedNextCtxStart = continueFromCtx ?? 0;
     let reachedEnd = false;
+    // Set when the branch below reports an underrun, cleared once the chunk that
+    // closes the gap is scheduled, so onBufferRecovered fires exactly once per
+    // underrun. `underruns` only gates the debug log (see there).
+    let underrunPending = false;
+    let underruns = 0;
 
     // Generation token: if a concurrent play() cancels this stream and opens a new
     // one, `this.streamId` will no longer match `handle.stream_id`.  Combined with
     // the `this.playId === myPlayId` guard, this prevents a stale loop from
     // scheduling onto the wrong generation's queue or state (finding 1).
     while (this.playId === myPlayId && this.streamId === handle.stream_id) {
+      // Also pruned here, not only on the rAF tick: rAF stops when the window
+      // is hidden or minimized while Web Audio plays straight on, and that is
+      // precisely a long unattended play — the case the queue grows worst in.
+      this._pruneQueue();
+
       // Don't over-buffer: wait while we have HORIZON_SEC of audio scheduled
       // ahead of the current play position.
       const currentMedia = this.isPlayingState
@@ -962,22 +985,31 @@ export class AudioEngine implements PlaybackTransport {
       // ── Underrun detection and correction ──────────────────────────────────
       // If we couldn't schedule the chunk in time, bump the time origin forward
       // so mediaTime() stays continuous instead of jumping.
+      //
+      // The shift must be the FULL displacement of the chunk — the overrun plus
+      // the lead time added on top of it. Compensating only the overrun (as this
+      // did) leaves the playhead permanently UNDERRUN_LEAD_SEC ahead of the
+      // audio, and since nothing re-anchors mid-play the error accumulates: a
+      // dozen underruns is a quarter second of sound trailing the cursor, which
+      // is exactly the window annotations get placed in.
       if (expectedNextCtxStart < ctx.currentTime) {
-        const gap = ctx.currentTime - expectedNextCtxStart;
-        this.playStartCtx += gap;
-        expectedNextCtxStart = ctx.currentTime + 0.02;
+        const resumeAt = ctx.currentTime + UNDERRUN_LEAD_SEC;
+        // Only the first underrun of a play is logged: every _log() is a React
+        // state update in the host window, and a storm of them during a play
+        // that is already failing to keep up would make it worse.
+        if (underruns === 0) {
+          this._log(`buffer underrun at ${chunkMediaStart.toFixed(3)}s `
+            + `(${((ctx.currentTime - expectedNextCtxStart) * 1000).toFixed(0)}ms late) — further ones not logged`);
+        }
+        underruns++;
+        this.playStartCtx += resumeAt - expectedNextCtxStart;
+        expectedNextCtxStart = resumeAt;
+        underrunPending = true;
         this.callbacks.onBufferUnderrun();
       }
 
       // ── Build deinterleaved input for this chunk ───────────────────────────
-      const inputChannels: Float32Array[] = [];
-      for (let c = 0; c < ch; c++) {
-        const cd = new Float32Array(inputFrames);
-        for (let i = 0; i < inputFrames; i++) {
-          cd[i] = chunk.samples[i * ch + c];
-        }
-        inputChannels.push(cd);
-      }
+      const inputChannels = deinterleave(chunk.samples, inputFrames, ch);
 
       // ── Apply time-stretch if needed and pick output channel layout ────────
       let outputChannels: Float32Array[];
@@ -1041,6 +1073,10 @@ export class AudioEngine implements PlaybackTransport {
       expectedNextCtxStart = ctxEnd;
       this.schedCursor = chunkMediaEnd;
       this.chunksScheduled++;
+      if (underrunPending) {
+        underrunPending = false;
+        this.callbacks.onBufferRecovered();
+      }
       if (this.chunksScheduled === 1) {
         const elapsedMs = Math.round(performance.now() - this.playStartedAtMs);
         this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f (${elapsedMs}ms after play)`);
@@ -1157,6 +1193,34 @@ export class AudioEngine implements PlaybackTransport {
     }, waitMs);
   }
 
+  /**
+   * Drop queue entries whose audio has finished rendering, so their buffers can
+   * be collected.
+   *
+   * Nothing used to leave this queue until the next play() or pause(), and each
+   * entry pins a one-second AudioBuffer through its source node: ~21 MB for
+   * every minute of uninterrupted 44.1 kHz stereo playback, over a gigabyte an
+   * hour. On the hours-long recordings this app is built for that is enough GC
+   * pressure to stall the main thread — which freezes the rAF-driven playhead
+   * while the audio thread plays straight on.
+   *
+   * A node is safe to drop once ctx.currentTime has passed its ctxEnd: the
+   * render clock runs ahead of what is audible, so every sample it will ever
+   * produce has already been handed downstream. The tail entry is always kept —
+   * clearEndSec() and _endAfterQueueDrains() both read it.
+   */
+  private _pruneQueue(): void {
+    if (!this.ctx || this.queue.length < 2) return;
+    const now = this.ctx.currentTime;
+    let done = 0;
+    while (done < this.queue.length - 1 && this.queue[done].ctxEnd <= now) done++;
+    if (done === 0) return;
+    for (let i = 0; i < done; i++) {
+      try { this.queue[i].source.disconnect(); } catch { /* already detached */ }
+    }
+    this.queue.splice(0, done);
+  }
+
   /** rAF loop: drives onTimeUpdate and fires onPlaying once audio starts. */
   private _rafLoop(myPlayId: number): void {
     const frame = () => {
@@ -1165,6 +1229,7 @@ export class AudioEngine implements PlaybackTransport {
       if (this.playId !== myPlayId) { this._raf.stop(); return; }
 
       if (this.ctx) {
+        this._pruneQueue();
         const ctxNow = this.ctx.currentTime;
 
         // Fire onPlaying the first time audio is actually being emitted. Guarded
