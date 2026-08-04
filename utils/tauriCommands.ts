@@ -237,20 +237,52 @@ export interface PcmStreamHandle {
 }
 
 export interface PcmChunkResult {
-  /** Interleaved f32 samples. length === frames_read * channels. */
-  samples: number[];
+  /** Interleaved f32 samples, native channel order. length === frames_read * channels. */
+  samples: Float32Array;
   frames_read: number;
+  /** Channel count of the stream the chunk came from. */
+  channels: number;
   /** Absolute frame index of samples[0] in the file. */
   start_frame: number;
+}
+
+// Header layout from Rust's build_pcm_chunk_response (16 bytes, little-endian):
+//   u32 frames_read, u32 channels, u64 start_frame
+// 16 bytes keeps the f32 payload 4-byte aligned, so it can be viewed in place.
+const PCM_CHUNK_HEADER_BYTES = 16;
+
+/** Raw command responses arrive as an ArrayBuffer; tolerate a view for safety. */
+function asArrayBuffer(raw: ArrayBuffer | ArrayBufferView): ArrayBuffer {
+  if (raw instanceof ArrayBuffer) return raw;
+  return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
 }
 
 /** Open a seeked PCM stream at start_sec. Returns a handle for subsequent reads. */
 export const startPcmStream = (path: string, startSec: number): Promise<PcmStreamHandle> =>
   invoke('start_pcm_stream', { path, startSec });
 
-/** Read up to maxFrames interleaved f32 frames. frames_read === 0 means EOF. */
-export const readPcmChunk = (streamId: number, maxFrames: number): Promise<PcmChunkResult> =>
-  invoke('read_pcm_chunk', { streamId, maxFrames });
+/**
+ * Read up to maxFrames interleaved f32 frames. frames_read === 0 means EOF.
+ *
+ * Binary transport: the samples come back as raw bytes rather than a JSON
+ * number array, so a second of stereo audio costs neither ~1.3MB of float
+ * formatting in Rust nor a JSON.parse of it on the webview's main thread —
+ * which is where the playhead's rAF loop also lives. See the Rust side's
+ * PCM_CHUNK_HEADER_BYTES doc.
+ */
+export const readPcmChunk = async (streamId: number, maxFrames: number): Promise<PcmChunkResult> => {
+  const buffer = asArrayBuffer(
+    await invoke<ArrayBuffer>('read_pcm_chunk', { streamId, maxFrames }),
+  );
+  const view = new DataView(buffer);
+  const frames_read = view.getUint32(0, true);
+  const channels = view.getUint32(4, true);
+  // Frame indices are exact in a double well past any real file (2^53 frames is
+  // ~6500 years at 44.1 kHz), so the BigInt is safe to narrow.
+  const start_frame = Number(view.getBigUint64(8, true));
+  const samples = new Float32Array(buffer, PCM_CHUNK_HEADER_BYTES);
+  return { samples, frames_read, channels, start_frame };
+};
 
 /** Close and discard the stream. */
 export const closePcmStream = (streamId: number): Promise<void> =>

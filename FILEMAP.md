@@ -35,12 +35,13 @@ Quick reference for agents. One phrase per file.
 - `components/spectrogram/AnnotationOverlay.tsx` — annotation boxes, labels, and text-input editing overlay
 - `src-tauri/src/audio/decoder.rs` — PCM decoder with seek-margin logic (canonical sample-accuracy contract)
 - `src-tauri/src/audio/fft.rs` — FFT / spectrogram chunk computation
-- `src-tauri/src/audio/stream_pool.rs` — reuses open decoder streams across chunk requests so repeated seeks into a long file dont rescan the container
+- `src-tauri/src/audio/stream_pool.rs` — reuses open decoder streams across chunk and playback requests so repeated seeks into a long file dont rescan the container
 - `src-tauri/src/audio/mod.rs` — audio module exports
 - `utils/AudioEngine.ts` — thin Web Audio playback engine; delegates time-stretch to TimeStretchEngine, PCM caching to PcmCache, and filtering to BandPassFilterGraph
 - `utils/audioProcessing.ts` — band-pass filter construction and group-delay compensation
 - `utils/TimeStretchEngine.ts` — pitch-preserving time-stretch for AudioEngine; picks between the two stretch engines by speed
 - `utils/PcmCache.ts` — LRU cache of decoded PCM ranges for instant selection replay (bypasses Rust IPC on hit)
+- `utils/pcm.ts` — interleaved→planar split for PCM chunks, shared by AudioEngine and PcmCache
 - `utils/BandPassFilterGraph.ts` — persistent Butterworth band-pass filter graph plus async group-delay measurement
 - `utils/PhaseVocoder.ts` — phase vocoder for time-stretching (slow-down playback)
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops

@@ -43,6 +43,7 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
         onPaused: () => {},
         onEnded: () => setPlayingToolId(null),
         onBufferUnderrun: () => {},
+        onBufferRecovered: () => {},
         onDebugLog: (msg, type) => onLogRef.current?.(msg, type),
       });
     }

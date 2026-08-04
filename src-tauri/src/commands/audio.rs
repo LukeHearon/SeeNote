@@ -19,7 +19,13 @@ pub(crate) struct StreamEntry {
     /// The actual stream, independently locked so reads on different streams
     /// don't serialize against each other (fixing the race from the old design
     /// where the global `streams` MutexGuard was held for the full read).
-    stream: Arc<Mutex<decoder::PcmStream>>,
+    ///
+    /// Held as a `PooledStream` so that dropping the entry — on
+    /// `close_pcm_stream`, or on idle-TTL eviction — hands the positioned
+    /// decoder back to `stream_pool` instead of discarding it. A later play or
+    /// seek at or after that position then reuses it rather than re-scanning
+    /// the container.
+    stream: Arc<Mutex<stream_pool::PooledStream>>,
     /// Wall-clock time of the last `read_pcm_chunk` call. Updated under the
     /// global `streams` lock; used to evict idle entries (Finding 4 TTL).
     last_used: Instant,
@@ -497,17 +503,54 @@ pub struct PcmStreamHandle {
     pub total_frames: u64,
 }
 
-#[derive(Serialize)]
-pub struct PcmChunkResult {
-    /// Interleaved f32 samples. len() == frames_read * channels.
-    pub samples: Vec<f32>,
-    pub frames_read: u32,
-    /// Absolute frame index of samples[0] in the file.
-    pub start_frame: u64,
+/// Binary layout of a `read_pcm_chunk` response (16-byte header, all
+/// little-endian):
+///   u32 frames_read
+///   u32 channels
+///   u64 start_frame   — absolute frame index of the first returned frame
+/// followed by `frames_read * channels` little-endian f32 samples, interleaved
+/// in the file's native channel order.
+///
+/// ── Why binary ──────────────────────────────────────────────────────────────
+/// This used to return a `Vec<f32>` through the default (JSON) command
+/// serializer. One second of 44.1 kHz stereo is 88,200 floats — about 1.3 MB of
+/// JSON text — encoded in Rust and then `JSON.parse`d on the webview's MAIN
+/// thread, once per second of playback, competing with the rAF loop that draws
+/// the playhead. That is what made the playhead stutter and the prefetch loop
+/// underrun on long MP3s. Raw bytes skip both the float formatting and the
+/// parse, and land in a `Float32Array` the audio path can use directly.
+///
+/// The header is 16 bytes so the f32 payload stays 4-byte aligned and the
+/// client can view it in place without copying.
+const PCM_CHUNK_HEADER_BYTES: usize = 16;
+
+fn build_pcm_chunk_response(
+    frames_read: u32,
+    channels: u16,
+    start_frame: u64,
+    samples: &[f32],
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(PCM_CHUNK_HEADER_BYTES + samples.len() * 4);
+    bytes.extend_from_slice(&frames_read.to_le_bytes());
+    bytes.extend_from_slice(&(channels as u32).to_le_bytes());
+    bytes.extend_from_slice(&start_frame.to_le_bytes());
+    for &s in samples {
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    bytes
 }
 
 /// Open a PCM stream at `start_sec` in the given file. Returns a handle the
 /// client uses for subsequent `read_pcm_chunk` / `close_pcm_stream` calls.
+///
+/// Goes through `stream_pool` rather than opening the decoder directly. An MP3
+/// carries no seek index, so `PcmStream::open` scans the container from byte 0
+/// to `start_sec` — 122–310 ms at depth in a long file (see `decoder::seek_bench`
+/// and `audio::stream_pool`). Playback opened a fresh stream on every play,
+/// resume and seek and paid that scan every time, which is the gap between
+/// pressing space and hearing audio. The pool hands back a stream already
+/// positioned at or before the target whenever one is idle, turning the scan
+/// into a short forward seek; when none is, it opens fresh exactly as before.
 #[tauri::command]
 pub async fn start_pcm_stream(
     path: String,
@@ -515,7 +558,8 @@ pub async fn start_pcm_stream(
     state: tauri::State<'_, PcmStreamState>,
 ) -> Result<PcmStreamHandle, String> {
     let info = decoder::get_file_info(&path).map_err(|e| e.to_string())?;
-    let stream = decoder::PcmStream::open(&path, start_sec).map_err(|e| e.to_string())?;
+    let stream = stream_pool::acquire(&path, start_sec, decoder::DEFAULT_SEEK_MARGIN_SEC)
+        .map_err(|e| e.to_string())?;
 
     let sample_rate = stream.sample_rate();
     let channels = stream.channels();
@@ -539,15 +583,15 @@ pub async fn start_pcm_stream(
 /// Read up to `max_frames` interleaved f32 frames from an open stream.
 /// Returns `frames_read == 0` when the stream has reached EOF.
 ///
-/// Note on transport size: 2s of 48kHz stereo f32 as JSON is ~1.5MB.
-/// Callers should use chunk sizes of 0.5–1s to keep individual responses
-/// manageable. A future optimization may switch to a binary transport.
+/// The response is raw bytes, not JSON — see `PCM_CHUNK_HEADER_BYTES` for the
+/// layout and for why. Callers should still use chunk sizes of 0.5–1s to keep
+/// individual responses manageable.
 #[tauri::command]
 pub async fn read_pcm_chunk(
     stream_id: u64,
     max_frames: u32,
     state: tauri::State<'_, PcmStreamState>,
-) -> Result<PcmChunkResult, String> {
+) -> Result<tauri::ipc::Response, String> {
     // Step 1: under the global lock, look up the per-stream Arc and update
     // `last_used`. We release the global lock immediately so other streams
     // can be accessed concurrently while this stream is reading.
@@ -567,13 +611,15 @@ pub async fn read_pcm_chunk(
     // different streams now run fully in parallel.
     let mut stream = stream_arc.lock().map_err(|e| e.to_string())?;
     let start_frame = stream.position_frames();
+    let channels = stream.channels();
     let (samples, frames_read) = stream.read(max_frames as usize).map_err(|e| e.to_string())?;
 
-    Ok(PcmChunkResult {
-        samples,
-        frames_read: frames_read as u32,
+    Ok(tauri::ipc::Response::new(build_pcm_chunk_response(
+        frames_read as u32,
+        channels,
         start_frame,
-    })
+        &samples,
+    )))
 }
 
 /// Close and drop a PCM stream. Safe to call even if the stream has reached EOF.

@@ -1,4 +1,4 @@
-//! Reuse of decoder streams across spectrogram chunk requests.
+//! Reuse of decoder streams across requests — spectrogram chunks and playback.
 //!
 //! ── The problem ──────────────────────────────────────────────────────────────
 //! Opening a `PcmStream` at time T scans the container from byte 0 to T, because
@@ -16,6 +16,13 @@
 //! used streams and hands out one positioned at or before the requested time,
 //! turning the common access patterns — panning, playback, successively loading
 //! a viewport's chunks — into short forward seeks instead of full re-scans.
+//!
+//! Playback goes through the pool too (`commands::audio::start_pcm_stream`), so
+//! pressing play somewhere at or after where the last stream stopped costs a
+//! forward seek rather than a full scan. Resuming from a pause is the one case
+//! it cannot serve: the prefetch loop reads ahead of the playhead, so the
+//! stream it hands back sits *past* the resume point, and moving back to it
+//! would be a backward seek. Those open fresh, exactly as before.
 //!
 //! A stream is only reused when its position is *at or before* the target: a
 //! backward seek would restart the scan from byte 0, which is what we are
@@ -46,9 +53,12 @@ use std::time::{Duration, Instant};
 /// gaps between viewport loads while panning or playing.
 const POOL_TTL: Duration = Duration::from_secs(30);
 
-/// Idle streams kept per file. Matches the frontend's concurrent-request limit
-/// so a viewport's worth of parallel requests can each find one next time.
-const MAX_STREAMS_PER_PATH: usize = 4;
+/// Idle streams kept per file. Four for the frontend's concurrent spectrogram
+/// requests, so a viewport's worth of parallel requests can each find one next
+/// time, plus one for playback — otherwise the playback stream, returned to the
+/// pool on pause, is the oldest entry by the time the next viewport load
+/// finishes and gets evicted before it can be reused.
+const MAX_STREAMS_PER_PATH: usize = 5;
 
 /// Files tracked at once. Switching tracks should not strand handles.
 const MAX_PATHS: usize = 3;

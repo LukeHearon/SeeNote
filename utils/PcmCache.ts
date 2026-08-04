@@ -9,6 +9,7 @@
 
 import { startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
 import { clamp } from './helpers';
+import { deinterleaveInto } from './pcm';
 
 /** Cached decoded PCM for a range, keyed by (filePath, startSec, endSec). */
 export interface PcmCacheEntry {
@@ -149,7 +150,7 @@ export class PcmCache {
       return;
     }
 
-    const cacheChunks: Array<{ samples: number[]; frames: number }> = [];
+    const cacheChunks: Array<{ samples: Float32Array; frames: number }> = [];
     let cacheTotalFrames = 0;
     let reachedEnd = false;
 
@@ -176,7 +177,9 @@ export class PcmCache {
       }
 
       if (framesToCache > 0) {
-        cacheChunks.push({ samples: chunk.samples.slice(0, framesToCache * ch), frames: framesToCache });
+        // subarray, not slice: deinterleaveInto reads only the first
+        // framesToCache frames, and the chunk's buffer is ours to keep.
+        cacheChunks.push({ samples: chunk.samples.subarray(0, framesToCache * ch), frames: framesToCache });
         cacheTotalFrames += framesToCache;
       }
 
@@ -190,12 +193,7 @@ export class PcmCache {
       const channels: Float32Array[] = Array.from({ length: ch }, () => new Float32Array(cacheTotalFrames));
       let frameOffset = 0;
       for (const { samples, frames } of cacheChunks) {
-        for (let c = 0; c < ch; c++) {
-          const dest = channels[c];
-          for (let i = 0; i < frames; i++) {
-            dest[frameOffset + i] = samples[i * ch + c];
-          }
-        }
+        deinterleaveInto(samples, frames, channels, frameOffset);
         frameOffset += frames;
       }
       this.store(filePath, fileSampleRate, startSec, endSec, channels, cacheTotalFrames);
