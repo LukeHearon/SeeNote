@@ -48,10 +48,21 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// How long an unused stream stays reusable. Short enough that a file edited on
-/// disk is not served from a stale handle for long, long enough to cover the
-/// gaps between viewport loads while panning or playing.
-const POOL_TTL: Duration = Duration::from_secs(30);
+/// How long an unused stream stays reusable.
+///
+/// Sized for the gap between a user's plays, not for the gap between a
+/// viewport's chunk loads. Annotating is play, pause, type a label, study the
+/// spectrogram, play the next passage — routinely minutes between one play and
+/// the next. At the original 30s the playback stream was reaped during almost
+/// every one of those pauses, so the next play paid the full container rescan
+/// anyway and the pooling bought nothing.
+///
+/// Raising it costs nothing in resources: MAX_STREAMS_PER_PATH and MAX_PATHS
+/// bound the open handles regardless of TTL. What it does trade is the window
+/// in which a file rewritten on disk can still be served from a pooled handle.
+/// The TTL is kept finite so handles are still released when the app is left
+/// idle, rather than held until the process exits.
+const POOL_TTL: Duration = Duration::from_secs(300);
 
 /// Idle streams kept per file. Four for the frontend's concurrent spectrogram
 /// requests, so a viewport's worth of parallel requests can each find one next
