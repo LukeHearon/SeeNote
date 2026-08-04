@@ -149,7 +149,7 @@ export class PcmCache {
       return;
     }
 
-    const cacheChunks: Array<{ samples: number[]; frames: number }> = [];
+    const cacheChunks: Array<{ samples: Float32Array; frames: number }> = [];
     let cacheTotalFrames = 0;
     let reachedEnd = false;
 

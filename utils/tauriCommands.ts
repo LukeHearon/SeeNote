@@ -244,7 +244,7 @@ export interface PcmStreamHandle {
 
 export interface PcmChunkResult {
   /** Interleaved f32 samples. length === frames_read * channels. */
-  samples: number[];
+  samples: Float32Array;
   frames_read: number;
   /** Absolute frame index of samples[0] in the file. */
   start_frame: number;
@@ -254,9 +254,28 @@ export interface PcmChunkResult {
 export const startPcmStream = (path: string, startSec: number): Promise<PcmStreamHandle> =>
   invoke('start_pcm_stream', { path, startSec });
 
-/** Read up to maxFrames interleaved f32 frames. frames_read === 0 means EOF. */
-export const readPcmChunk = (streamId: number, maxFrames: number): Promise<PcmChunkResult> =>
-  invoke('read_pcm_chunk', { streamId, maxFrames });
+// Header layout from Rust's build_pcm_chunk_response (12 bytes, little-endian):
+//   u32 frames_read, u64 start_frame
+const PCM_CHUNK_HEADER_BYTES = 12;
+
+/**
+ * Read up to maxFrames interleaved f32 frames. frames_read === 0 means EOF.
+ *
+ * Binary IPC (see build_pcm_chunk_response): this is called roughly once per
+ * second of played audio, plus back-to-back while PcmCache primes a
+ * selection, so JSON's per-call serialize/parse cost (measured ~2-4ms/call
+ * server-side alone, before the ~2.3x larger payload) is worth avoiding here
+ * the same way the spectrogram path already does.
+ */
+export const readPcmChunk = async (streamId: number, maxFrames: number): Promise<PcmChunkResult> => {
+  const buffer = await invoke<ArrayBuffer>('read_pcm_chunk', { streamId, maxFrames });
+  const view = new DataView(buffer);
+  const frames_read = view.getUint32(0, true);
+  const start_frame = view.getBigUint64(4, true);
+  // Slice the tail into a new ArrayBuffer so Float32Array alignment is guaranteed.
+  const samples = new Float32Array(buffer.slice(PCM_CHUNK_HEADER_BYTES));
+  return { samples, frames_read, start_frame: Number(start_frame) };
+};
 
 /** Close and discard the stream. */
 export const closePcmStream = (streamId: number): Promise<void> =>
