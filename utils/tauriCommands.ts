@@ -36,6 +36,12 @@ export interface DialogFilter {
 export const getFileInfo = (path: string): Promise<FileInfo> =>
   invoke('get_file_info', { path });
 
+/** Push the configured ffmpeg/ffprobe location (or `null` to clear it) to the
+ *  running app, so a change in Application Settings takes effect immediately
+ *  rather than on next launch. See `audio::ffmpeg_stream::set_ffmpeg_path_override`. */
+export const setFfmpegPath = (path: string | null): Promise<void> =>
+  invoke('set_ffmpeg_path', { path });
+
 /** Peak absolute sample amplitude (mono mixdown), in [0, 1] for float PCM. */
 export const audioPeak = (path: string): Promise<number> =>
   invoke('audio_peak', { path });

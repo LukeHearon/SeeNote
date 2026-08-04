@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { projectSettingsModal } from '../copy/ui';
 import { readAppSettings, writeAppSettings } from '../utils/projectCommands';
-import { openFileDialog } from '../utils/tauriCommands';
+import { openFileDialog, setFfmpegPath as pushFfmpegPath } from '../utils/tauriCommands';
 
 /**
  * System-wide settings, stored in `{appDataDir}/app_settings.json` rather
@@ -21,7 +21,9 @@ export default function ApplicationSettingsFields() {
   }, []);
 
   const commit = (path: string) => {
-    writeAppSettings({ ffmpegPath: path.trim() || undefined }).catch(() => {});
+    const trimmed = path.trim();
+    writeAppSettings({ ffmpegPath: trimmed || undefined }).catch(() => {});
+    pushFfmpegPath(trimmed || null).catch(() => {});
   };
 
   const handleBrowse = async () => {

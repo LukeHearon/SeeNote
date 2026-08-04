@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import LaunchScreen from './components/LaunchScreen';
 import AnnotationWindow from './AnnotationWindow';
 import SingleFileWindow from './SingleFileWindow';
@@ -9,10 +9,21 @@ import { useProjects } from './hooks/useProjects';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
 import { useOsOpenFile } from './hooks/useOsOpenFile';
-import { listDirectory } from './utils/tauriCommands';
+import { listDirectory, setFfmpegPath } from './utils/tauriCommands';
+import { readAppSettings } from './utils/projectCommands';
 
 export default function App() {
   useCopyEditorBridge();
+
+  // Push the configured ffmpeg/ffprobe location (Application Settings) into
+  // the Rust side once at startup. Later edits push their own update — see
+  // ApplicationSettingsFields.
+  useEffect(() => {
+    readAppSettings()
+      .then(s => setFfmpegPath(s.ffmpegPath ?? null))
+      .catch(() => {});
+  }, []);
+
   const {
     entries, isLoading, loadError, projectsFilePath,
     createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,

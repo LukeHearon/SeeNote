@@ -73,6 +73,16 @@ pub async fn get_file_info(path: String) -> Result<FileInfoResult, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Set (or clear, with `null`) the custom ffmpeg/ffprobe location used as a
+/// fallback decode backend for `.wma` (see `audio::ffmpeg_stream`). Called
+/// once at startup with the Application Settings value, and again whenever
+/// the user edits it, so a running app picks up the change immediately.
+#[tauri::command]
+pub async fn set_ffmpeg_path(path: Option<String>) -> Result<(), String> {
+    crate::audio::ffmpeg_stream::set_ffmpeg_path_override(path);
+    Ok(())
+}
+
 // ── Peak amplitude (for loudness normalization) ────────────────────────────────
 
 /// Peak absolute sample amplitude of the whole file, on the mono mixdown (the
@@ -793,6 +803,39 @@ mod coarse_bench {
         println!("{n_cols} cols: seek {t_seek:?}, read+mixdown {t_read:?}, fft {t_fft:?}");
         println!("=> per 1024-col chunk: seek {:?}, read {:?}, fft {:?}",
                  t_seek * 16, t_read * 16, t_fft * 16);
+    }
+
+    /// End-to-end cost of the whole-file overview — the one request a user
+    /// sits and waits on when a long file is first opened.
+    ///
+    /// Derives the hop from the fixture's own length instead of hardcoding one,
+    /// so it exercises the real coarsest tier for any file. That matters for
+    /// `.wma`, where the backend is a subprocess and the per-column seek
+    /// strategy (read forward vs. respawn ffmpeg) decides the whole cost:
+    ///
+    ///   SEEK_BENCH_FILE=/path/to/long.wma \
+    ///     cargo test --release overview_build_cost -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn overview_build_cost() {
+        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
+        let info = decoder::get_file_info(&path).expect("info");
+        let hop = ((info.duration_secs * info.sample_rate as f64) / 1024.0).max(1.0) as usize;
+        println!(
+            "dur={:.0}s sr={} hop={hop} (~1024 cols spanning the whole file)",
+            info.duration_secs, info.sample_rate
+        );
+
+        let t = Instant::now();
+        let blob = compute_spectrogram_chunk(&SpectrogramChunkRequest {
+            path,
+            start_sec: 0.0,
+            duration_sec: info.duration_secs,
+            fft_size: 2048,
+            hop_size: hop,
+        })
+        .expect("chunk");
+        println!("whole-file overview: {:?} ({} bytes)", t.elapsed(), blob.len());
     }
 
     #[test]
