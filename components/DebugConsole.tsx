@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Bug, Copy, Check, X } from 'lucide-react';
 import { tooltips } from '../copy/tooltips';
 import { debugConsole } from '../copy/ui';
+import { getDiagnosticInfo } from '../utils/tauriCommands';
 
 interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -13,6 +14,15 @@ interface DebugConsoleProps {
 
 export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps) {
   const [copied, setCopied] = useState(false);
+  const [diagLine, setDiagLine] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || diagLine) return;
+    getDiagnosticInfo()
+      .then((d) => setDiagLine(`SeeNote v${d.app_version} · ${d.os} ${d.arch} · ${d.build}`))
+      .catch(() => {});
+  }, [open, diagLine]);
+
   if (!open) return null;
   return (
     <div
@@ -28,14 +38,16 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const text = logs.map(l => `[${l.time}] ${l.msg}`).join('\n');
+                const text = [diagLine, ...logs.map(l => `[${l.time}] ${l.msg}`)]
+                  .filter((line): line is string => line !== null)
+                  .join('\n');
                 navigator.clipboard.writeText(text);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
               }}
               className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
               data-tooltip={tooltips.copyLogs}
-              disabled={logs.length === 0}
+              disabled={logs.length === 0 && !diagLine}
             >
               {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
             </button>
@@ -43,6 +55,9 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
           </div>
         </div>
         <div className="flex-1 bg-slate-900 rounded p-4 overflow-y-auto font-mono text-sm border border-slate-700">
+          {diagLine && (
+            <div className="mb-2 pb-2 border-b border-slate-700 text-slate-400">{diagLine}</div>
+          )}
           {logs.length === 0 ? <span className="text-slate-500 italic">{debugConsole.noLogs}</span> : (
             logs.map((log, i) => (
               <div key={i} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : 'text-slate-300'}`}>

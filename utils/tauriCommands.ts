@@ -232,6 +232,19 @@ export const isUpdateSupported = (): Promise<boolean> =>
 export const openReleasesPage = (url: string): Promise<void> =>
   invoke('open_releases_page', { url });
 
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+
+export interface DiagnosticInfo {
+  app_version: string;
+  os: string;
+  arch: string;
+  build: string;
+}
+
+/** App version, OS, and build info for the top of the debug log. */
+export const getDiagnosticInfo = (): Promise<DiagnosticInfo> =>
+  invoke('get_diagnostic_info');
+
 // ── PCM streaming ─────────────────────────────────────────────────────────────
 
 export interface PcmStreamHandle {

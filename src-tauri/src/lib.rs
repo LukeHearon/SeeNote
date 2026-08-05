@@ -173,6 +173,7 @@ pub fn run() {
             commands::credentials::get_git_credential,
             commands::credentials::set_git_credential,
             commands::credentials::delete_git_credential,
+            commands::diagnostics::get_diagnostic_info,
             commands::video_server::get_video_server_url,
             commands::updater::check_for_update,
             commands::updater::install_update,
