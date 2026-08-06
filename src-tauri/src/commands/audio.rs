@@ -89,6 +89,16 @@ pub async fn set_ffmpeg_path(path: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Full path of the `ffmpeg` binary currently in use — the configured one if
+/// Application Settings names a working location, otherwise whatever the
+/// automatic search found (PATH, then the usual install locations). `None`
+/// means nothing usable was found. Shown in the settings field so the user can
+/// see whether detection succeeded.
+#[tauri::command]
+pub async fn detect_ffmpeg() -> Result<Option<String>, String> {
+    Ok(crate::audio::ffmpeg_stream::detected_ffmpeg_path())
+}
+
 // ── Peak amplitude (for loudness normalization) ────────────────────────────────
 
 /// Peak absolute sample amplitude of the whole file, on the mono mixdown (the

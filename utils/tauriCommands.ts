@@ -42,6 +42,11 @@ export const getFileInfo = (path: string): Promise<FileInfo> =>
 export const setFfmpegPath = (path: string | null): Promise<void> =>
   invoke('set_ffmpeg_path', { path });
 
+/** Full path of the ffmpeg binary currently in use — the configured one, or
+ *  whatever the automatic search found. `null` if none was found. */
+export const detectFfmpeg = (): Promise<string | null> =>
+  invoke('detect_ffmpeg');
+
 /** Peak absolute sample amplitude (mono mixdown), in [0, 1] for float PCM. */
 export const audioPeak = (path: string): Promise<number> =>
   invoke('audio_peak', { path });

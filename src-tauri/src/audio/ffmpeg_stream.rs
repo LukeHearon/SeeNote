@@ -37,69 +37,189 @@ use super::decoder::FileInfo;
 
 /// Custom ffmpeg/ffprobe location from Application Settings (see
 /// `commands::audio::set_ffmpeg_path`), used in place of a PATH lookup when
-/// set. `None` means "use PATH", matching an empty/unset app setting.
+/// set. `None` means "search for one" (see `candidate_dirs`), matching an
+/// empty/unset app setting.
 static FFMPEG_PATH_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
 
-/// Cached result of the last `ffmpeg`/`ffprobe` availability probe, so
-/// repeated `.wma` opens don't re-spawn a version check each time. Reset by
-/// `set_ffmpeg_path_override` so a change takes effect without a restart.
-static AVAILABLE_CACHE: Mutex<Option<Result<(), String>>> = Mutex::new(None);
+/// Cached result of the last resolution attempt (see `resolve_dir`), so
+/// repeated `.wma` opens don't re-walk the candidate directories and re-spawn
+/// version checks each time. `Ok` holds the directory both binaries live in.
+/// Reset by `set_ffmpeg_path_override` so a change takes effect without a
+/// restart.
+static RESOLVED_CACHE: Mutex<Option<Result<PathBuf, String>>> = Mutex::new(None);
 
 /// Set (or clear, with `None`/empty) the configured ffmpeg/ffprobe location.
 /// Called once at startup with whatever Application Settings holds, and again
 /// whenever the user edits the setting.
 pub fn set_ffmpeg_path_override(path: Option<String>) {
     *FFMPEG_PATH_OVERRIDE.lock().unwrap() = path.filter(|p| !p.trim().is_empty());
-    *AVAILABLE_CACHE.lock().unwrap() = None;
+    *RESOLVED_CACHE.lock().unwrap() = None;
 }
 
-/// Resolve the `ffmpeg` or `ffprobe` binary to invoke. If a custom location is
-/// configured, `name` is looked up alongside it (as a sibling of the
-/// configured binary, or inside it if it's a directory); otherwise falls back
-/// to the bare name, resolved via PATH by `Command`.
-fn resolve_bin(name: &str) -> PathBuf {
-    if let Some(configured) = FFMPEG_PATH_OVERRIDE.lock().unwrap().as_deref() {
-        let configured_path = Path::new(configured);
-        if configured_path.is_dir() {
-            return configured_path.join(name);
-        }
-        if let Some(parent) = configured_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            return parent.join(name);
-        }
+/// Executable file name for one of the two binaries we need, with the
+/// platform's suffix (`.exe` on Windows, bare elsewhere).
+fn bin_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
     }
-    PathBuf::from(name)
 }
 
-/// Checked once (then cached — see `AVAILABLE_CACHE`): are `ffmpeg` *and*
-/// `ffprobe` available, either on PATH or at the configured location?
-fn ffmpeg_available() -> Result<()> {
-    if let Some(cached) = AVAILABLE_CACHE.lock().unwrap().clone() {
-        return cached.map_err(|e| anyhow::anyhow!(e));
-    }
-    let has = |name: &str| {
-        Command::new(resolve_bin(name))
+/// Does `dir` hold both `ffmpeg` and `ffprobe` as files? Cheap existence check
+/// used to shortlist candidates before paying for a `-version` spawn.
+fn dir_has_both(dir: &Path) -> bool {
+    dir.join(bin_name("ffmpeg")).is_file() && dir.join(bin_name("ffprobe")).is_file()
+}
+
+/// Do both binaries in `dir` actually run? The existence check above can be
+/// fooled by a broken symlink, a wrong-architecture build, or a quarantined
+/// download, so the directory we commit to is confirmed by running each.
+fn dir_works(dir: &Path) -> bool {
+    ["ffmpeg", "ffprobe"].iter().all(|name| {
+        Command::new(dir.join(bin_name(name)))
             .arg("-version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    };
-    let result: Result<(), String> = if has("ffmpeg") && has("ffprobe") {
-        Ok(())
-    } else if FFMPEG_PATH_OVERRIDE.lock().unwrap().is_some() {
-        Err("ffmpeg/ffprobe not found at the configured location — check it in \
-             Application Settings, or clear it to use PATH."
-            .to_string())
+    })
+}
+
+/// Directories to search, in order: everything on `PATH` first (so a user's own
+/// install/shell setup always wins), then the places the platform's usual
+/// installers put ffmpeg. Package managers are listed ahead of hand-unpacked
+/// locations since they're likelier to be kept up to date.
+///
+/// Searching these matters because a GUI app launched from Finder/Explorer does
+/// *not* inherit the login shell's `PATH` — on macOS an app bundle typically
+/// sees only `/usr/bin:/bin:/usr/sbin:/sbin`, so a perfectly good Homebrew
+/// ffmpeg is invisible to a bare `Command::new("ffmpeg")`.
+fn candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    // `None` when there's no home directory to anchor to, in which case the
+    // `extend` below adds nothing.
+    let in_home = |rel: &str| home.as_ref().map(|h| h.join(rel));
+
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/opt/homebrew/bin")); // Homebrew, Apple silicon
+        dirs.push(PathBuf::from("/usr/local/bin")); // Homebrew, Intel
+        dirs.push(PathBuf::from("/opt/homebrew/opt/ffmpeg/bin"));
+        dirs.push(PathBuf::from("/usr/local/opt/ffmpeg/bin"));
+        dirs.push(PathBuf::from("/opt/local/bin")); // MacPorts
+        dirs.push(PathBuf::from("/sw/bin")); // Fink
+        dirs.push(PathBuf::from("/usr/bin"));
+        dirs.extend(in_home(".local/bin"));
+        dirs.extend(in_home("bin"));
+        dirs.extend(in_home("Applications/ffmpeg"));
+        dirs.push(PathBuf::from("/Applications/ffmpeg"));
+    } else if cfg!(target_os = "windows") {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(pf) = std::env::var_os(var) {
+                let pf = PathBuf::from(pf);
+                dirs.push(pf.join("ffmpeg").join("bin"));
+                dirs.push(pf.join("ffmpeg"));
+            }
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let local = PathBuf::from(local);
+            dirs.push(local.join("Microsoft").join("WinGet").join("Links")); // winget shims
+            dirs.push(local.join("Programs").join("ffmpeg").join("bin"));
+        }
+        dirs.push(PathBuf::from(r"C:\ffmpeg\bin"));
+        dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
+        dirs.extend(in_home(r"scoop\shims"));
     } else {
-        Err(
-            "ffmpeg not found on PATH — install ffmpeg (e.g. `brew install ffmpeg`) or set a \
-             custom location in Application Settings to open .wma files."
-                .to_string(),
-        )
+        dirs.push(PathBuf::from("/usr/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/opt/ffmpeg/bin"));
+        dirs.push(PathBuf::from("/snap/bin"));
+        dirs.push(PathBuf::from("/var/lib/flatpak/exports/bin"));
+        dirs.extend(in_home(".local/bin"));
+        dirs.extend(in_home("bin"));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| !d.as_os_str().is_empty() && seen.insert(d.clone()));
+    dirs
+}
+
+/// The directory holding a working `ffmpeg`+`ffprobe` pair, or an error message
+/// explaining what to do about it. Uses the configured location when set (the
+/// user's choice is never second-guessed by a search), otherwise the first
+/// candidate directory that has both binaries and can run them.
+///
+/// Cached in `RESOLVED_CACHE`; the search only ever runs once per setting.
+fn resolve_dir() -> Result<PathBuf, String> {
+    if let Some(cached) = RESOLVED_CACHE.lock().unwrap().clone() {
+        return cached;
+    }
+
+    let configured = FFMPEG_PATH_OVERRIDE.lock().unwrap().clone();
+    let result = match configured {
+        Some(configured) => {
+            // The setting may name either binary or the directory holding them.
+            let p = PathBuf::from(configured.trim());
+            let dir = if p.is_dir() {
+                p
+            } else {
+                p.parent()
+                    .filter(|d| !d.as_os_str().is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or(p)
+            };
+            if dir_works(&dir) {
+                Ok(dir)
+            } else {
+                Err("ffmpeg/ffprobe not found at the configured location — check it in \
+                     Application Settings, or clear it to search your system automatically."
+                    .to_string())
+            }
+        }
+        None => candidate_dirs()
+            .into_iter()
+            .find(|d| dir_has_both(d) && dir_works(d))
+            .ok_or_else(|| {
+                "ffmpeg not found — install ffmpeg (e.g. `brew install ffmpeg`) or set a \
+                 custom location in Application Settings to open .wma files."
+                    .to_string()
+            }),
     };
-    *AVAILABLE_CACHE.lock().unwrap() = Some(result.clone());
-    result.map_err(|e| anyhow::anyhow!(e))
+
+    *RESOLVED_CACHE.lock().unwrap() = Some(result.clone());
+    result
+}
+
+/// Full path of the `ffmpeg` binary found by the search, if any. Backs the
+/// Application Settings field, which shows the auto-detected path so the user
+/// can see whether detection succeeded (see `commands::audio::detect_ffmpeg`).
+pub fn detected_ffmpeg_path() -> Option<String> {
+    resolve_dir()
+        .ok()
+        .map(|d| d.join(bin_name("ffmpeg")).to_string_lossy().into_owned())
+}
+
+/// Resolve the `ffmpeg` or `ffprobe` binary to invoke. Falls back to the bare
+/// name (PATH lookup by `Command`) only when resolution failed outright, so the
+/// resulting spawn error mentions the plain binary name.
+fn resolve_bin(name: &str) -> PathBuf {
+    match resolve_dir() {
+        Ok(dir) => dir.join(bin_name(name)),
+        Err(_) => PathBuf::from(name),
+    }
+}
+
+/// Checked once (then cached — see `RESOLVED_CACHE`): are `ffmpeg` *and*
+/// `ffprobe` available, at the configured location or anywhere we search?
+fn ffmpeg_available() -> Result<()> {
+    resolve_dir().map(|_| ()).map_err(|e| anyhow::anyhow!(e))
 }
 
 // ── Seek strategy: read forward vs. respawn ───────────────────────────────────
@@ -543,6 +663,30 @@ impl Drop for FfmpegStream {
 mod tests {
     use super::*;
     use std::process::Command as StdCommand;
+
+    /// Candidate list invariants: no duplicates (a directory on PATH that's
+    /// also a hardcoded fallback must not be probed twice) and no empty
+    /// entries (a trailing `:` in PATH yields one, which would resolve to a
+    /// bare relative `ffmpeg`).
+    #[test]
+    fn candidate_dirs_are_unique_and_nonempty() {
+        let dirs = candidate_dirs();
+        let unique: std::collections::HashSet<_> = dirs.iter().collect();
+        assert_eq!(unique.len(), dirs.len(), "duplicate candidate directories");
+        assert!(dirs.iter().all(|d| !d.as_os_str().is_empty()));
+    }
+
+    /// When ffmpeg is installed, detection must report an actual path to it —
+    /// this is what the settings field shows to prove detection worked.
+    #[test]
+    fn detects_installed_ffmpeg() {
+        if !have_ffmpeg() {
+            eprintln!("skipping: ffmpeg/ffprobe not found");
+            return;
+        }
+        let found = detected_ffmpeg_path().expect("detection found nothing");
+        assert!(Path::new(&found).is_file(), "detected path is not a file: {found}");
+    }
 
     /// True when both `ffmpeg` and `ffprobe` are on PATH. Tests skip (rather
     /// than fail) when absent, since this is an optional runtime dependency,
