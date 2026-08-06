@@ -150,6 +150,18 @@ const UNDERRUN_LEAD_SEC = 0.02;
  *  decode does not. See the span-advance in _prefetchLoop. */
 const GAP_READ_THROUGH_SEC = 2.0;
 
+/** Grace period added to the render check's due time (see _armRenderCheck), on
+ *  top of the reported output latency, before the device is judged late. */
+const RENDER_CHECK_MARGIN_SEC = 0.25;
+/** How far the device may trail `ctx.currentTime`, beyond the latency it
+ *  reports, before the render check logs. Sized to sit well above normal jitter
+ *  so the line means something when it appears. */
+const RENDER_LAG_ALERT_SEC = 0.15;
+/** Smallest change in reported output latency worth a log line. Below this it's
+ *  measurement noise; above it, the audio device or its buffer size changed
+ *  under us, which moves the delay before sound. */
+const LATENCY_CHANGE_LOG_SEC = 0.005;
+
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
@@ -226,6 +238,11 @@ export class AudioEngine implements PlaybackTransport {
   private chunksScheduled = 0;
   private slowDecodeTimer: ReturnType<typeof setInterval> | null = null;
   private playStartedAtMs = 0;
+  /** One-shot timer armed by the first scheduled chunk (see _armRenderCheck). */
+  private renderCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Last output latency reported to the log, so a change is only logged once.
+   *  Negative until the first sample. */
+  private lastLoggedLatencySec = -1;
 
   private callbacks: AudioEngineCallbacks;
 
@@ -346,6 +363,13 @@ export class AudioEngine implements PlaybackTransport {
       this.gainNode.gain.value = this._currentGain;
       this.gainNode.connect(this.ctx.destination);
       this._buildFilterGraph();
+      // A context that suspends or is interrupted mid-play keeps ctx.currentTime
+      // (and so the playhead) advancing on some implementations while nothing
+      // reaches the speakers. Logged for the whole life of the context, not just
+      // during a play, since the transition often lands between two plays.
+      this.ctx.addEventListener('statechange', () => {
+        this._log(`ctx.state -> ${this.ctx?.state ?? 'closed'}`);
+      });
     } else if (this.ctx.state === 'suspended') {
       // Context exists but was suspended (shouldn't happen if we create in
       // play(), but handle it defensively).
@@ -376,18 +400,7 @@ export class AudioEngine implements PlaybackTransport {
       + `speed=${this.playbackSpeed.toFixed(2)}x ctx.sr=${this.ctx.sampleRate} file.sr=${this.fileSampleRate} ch=${this.fileChannels} ctx.state=${this.ctx.state}`,
     );
 
-    // Only surface latency when it's high enough to perceptibly desync the
-    // playhead (>20ms). At that point _outputLatencySec() is actively shifting
-    // the cursor, and the log explains why. Stays silent on normal wired output.
-    const latencySec = this._outputLatencySec();
-    if (latencySec > 0.02) {
-      const ol = (this.ctx as { outputLatency?: number }).outputLatency;
-      this._log(
-        `output latency ${(latencySec * 1000).toFixed(0)}ms `
-        + `(outLatency=${typeof ol === 'number' ? ol.toFixed(3) : 'n/a'}s baseLatency=${this.ctx.baseLatency?.toFixed(3) ?? 'n/a'}s) `
-        + `— playhead compensated`,
-      );
-    }
+    this._logOutputLatency();
 
     // ── PCM cache fast path ───────────────────────────────────────────────────
     // For bounded plays, skip Rust IPC entirely if we have cached decoded PCM
@@ -655,6 +668,89 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
+   * Log the output latency when it is high enough to perceptibly desync the
+   * playhead (>20ms) or when it has changed since the last line. The change
+   * case matters more than the absolute value: the delay before sound moves
+   * with it, and a device swapping under a running app (Bluetooth connecting,
+   * output switching, a buffer-size change) is otherwise invisible — including
+   * across plays, which is why `lastLoggedLatencySec` is not reset per play.
+   */
+  private _logOutputLatency(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const latencySec = this._outputLatencySec();
+    const prev = this.lastLoggedLatencySec;
+    if (Math.abs(latencySec - prev) < LATENCY_CHANGE_LOG_SEC) return;
+    const first = prev < 0;
+    // Recorded even when not logged, so a later move off a normal value still
+    // reads as a change rather than as a first observation.
+    this.lastLoggedLatencySec = latencySec;
+    if (latencySec <= 0.02 && first) return;  // normal wired output, nothing to say
+
+    const ol = (ctx as { outputLatency?: number }).outputLatency;
+    const from = first ? '' : `(was ${(prev * 1000).toFixed(0)}ms) `;
+    this._log(
+      `output latency ${(latencySec * 1000).toFixed(0)}ms ${from}`
+      + `(outLatency=${typeof ol === 'number' ? ol.toFixed(3) : 'n/a'}s baseLatency=${ctx.baseLatency?.toFixed(3) ?? 'n/a'}s) `
+      + `— playhead compensated`,
+    );
+  }
+
+  /**
+   * How far the audio device trails the context clock, in seconds, or null when
+   * the browser doesn't report it.
+   *
+   * `ctx.currentTime` advances on the render thread whether or not the hardware
+   * is pulling the buffers we hand it, and the playhead is derived from it — so
+   * a device that stalls or starts slowly shows up as a cursor marching
+   * normally across silence. `getOutputTimestamp().contextTime` is the position
+   * actually played out, so the gap between the two is the one measurement that
+   * separates "the decoder was slow" from "the audio device was".
+   */
+  private _renderLagSec(): number | null {
+    const ctx = this.ctx as (AudioContext & { getOutputTimestamp?: () => AudioTimestamp }) | null;
+    if (!ctx || typeof ctx.getOutputTimestamp !== 'function') return null;
+    let ts: AudioTimestamp;
+    try { ts = ctx.getOutputTimestamp(); } catch { return null; }
+    const played = ts?.contextTime;
+    if (typeof played !== 'number' || !isFinite(played)) return null;
+    return ctx.currentTime - played;
+  }
+
+  /**
+   * Arm a one-shot check, run shortly after the first chunk should have become
+   * audible, that the device is really consuming what was scheduled.
+   *
+   * Silent in the normal case. It exists for the report it is named after: a
+   * long delay before sound while the playhead advanced on schedule — which the
+   * existing logs cannot distinguish from a healthy play, since every one of
+   * them (first-chunk latency, underruns) measures the decode/schedule side and
+   * that side was fine.
+   */
+  private _armRenderCheck(firstCtxStart: number, myPlayId: number): void {
+    if (this.renderCheckTimer !== null) clearTimeout(this.renderCheckTimer);
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const expectedLatency = this._outputLatencySec();
+    const dueInSec = firstCtxStart - ctx.currentTime + expectedLatency + RENDER_CHECK_MARGIN_SEC;
+    this.renderCheckTimer = setTimeout(() => {
+      this.renderCheckTimer = null;
+      if (this.playId !== myPlayId || !this.ctx) return;
+      const lag = this._renderLagSec();
+      if (lag === null) return;
+      const behindSec = lag - expectedLatency;
+      if (behindSec < RENDER_LAG_ALERT_SEC) return;
+      this._log(
+        `audio device ${(behindSec * 1000).toFixed(0)}ms behind the clock `
+        + `(played out to ${(this.ctx.currentTime - lag).toFixed(3)}s, ctx at ${this.ctx.currentTime.toFixed(3)}s, `
+        + `reported latency ${(expectedLatency * 1000).toFixed(0)}ms) `
+        + `— sound is late but the playhead is not`,
+        'error',
+      );
+    }, Math.max(0, dueInSec * 1000));
+  }
+
+  /**
    * @param compensated true (default) → the audible position, for the playhead.
    *   false → the scheduled position, for resuming playback (see getResumeTime).
    */
@@ -716,6 +812,10 @@ export class AudioEngine implements PlaybackTransport {
     if (this.slowDecodeTimer !== null) {
       clearInterval(this.slowDecodeTimer);
       this.slowDecodeTimer = null;
+    }
+    if (this.renderCheckTimer !== null) {
+      clearTimeout(this.renderCheckTimer);
+      this.renderCheckTimer = null;
     }
 
     this._raf.stop();
@@ -1080,6 +1180,7 @@ export class AudioEngine implements PlaybackTransport {
       if (this.chunksScheduled === 1) {
         const elapsedMs = Math.round(performance.now() - this.playStartedAtMs);
         this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f (${elapsedMs}ms after play)`);
+        this._armRenderCheck(ctxStart, myPlayId);
         if (this.slowDecodeTimer !== null) {
           clearInterval(this.slowDecodeTimer);
           this.slowDecodeTimer = null;
@@ -1175,6 +1276,9 @@ export class AudioEngine implements PlaybackTransport {
     });
     this.schedCursor = dispEnd;
     this.chunksScheduled = 1;
+    // Same check as the streamed path: a cache hit rules the decoder out
+    // entirely, so a delay before sound here can only be the device.
+    this._armRenderCheck(this.playStartCtx, myPlayId);
     // The cached slice covers exactly [startSec, endSec] and nothing follows it,
     // so the end bound is committed the moment it's scheduled.
     this.endBoundCommitted = true;
@@ -1230,6 +1334,9 @@ export class AudioEngine implements PlaybackTransport {
 
       if (this.ctx) {
         this._pruneQueue();
+        // Sampled per frame so a device change *during* a play is caught, not
+        // just one seen at the next play().
+        this._logOutputLatency();
         const ctxNow = this.ctx.currentTime;
 
         // Fire onPlaying the first time audio is actually being emitted. Guarded
