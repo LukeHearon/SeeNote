@@ -110,6 +110,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::audio::get_file_info,
             commands::audio::set_ffmpeg_path,
+            commands::audio::detect_ffmpeg,
             commands::audio::audio_peak,
             commands::audio::get_spectrogram_chunk_range,
             commands::audio::start_pcm_stream,
