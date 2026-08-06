@@ -461,7 +461,11 @@ impl FfmpegStream {
             ));
         }
         ffmpeg_available()?;
-        let info = get_file_info(path)?;
+        // Via the caching wrapper, not this module's `get_file_info` directly:
+        // every fresh open would otherwise spawn its own ffprobe, and on this
+        // backend a stream is opened per play and per pool-missing spectrogram
+        // chunk. See the info-cache comment in `decoder.rs`.
+        let info = super::decoder::get_file_info(path)?;
         let (child, stdout) = spawn_at(path, start_sec, info.sample_rate, info.channels)?;
         Ok(FfmpegStream {
             path: path.to_string(),
