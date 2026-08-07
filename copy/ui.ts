@@ -37,7 +37,7 @@ export const launchScreen = {
   get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
-  updateAvailable: (version: string) => `Version ${version} is available`,
+  updateAvailable: (bumpType: 'major' | 'minor' | 'patch', version: string) => `New ${bumpType} version available: v${version}`,
 };
 
 export const createProjectModal = {
