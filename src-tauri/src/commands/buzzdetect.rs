@@ -25,9 +25,10 @@ fn unquote(cell: &str) -> String {
     t.trim().to_string()
 }
 
-/// Read `{buzzdetect_dir}/{ident}_buzzdetect.csv` and parse it into
-/// [`BuzzdetectData`]. Returns `Ok(None)` when no file exists for this ident so
-/// the UI can simply show no panel rather than treating it as an error.
+/// Read `{buzzdetect_dir}/{ident}_buzzdetect.csv` (or, when a run is still in
+/// progress, `{ident}_buzzpart.csv`) and parse it into [`BuzzdetectData`].
+/// Returns `Ok(None)` when neither file exists for this ident so the UI can
+/// simply show no panel rather than treating it as an error.
 ///
 /// CSV contract (see local/buzzdetect.md): first column `start` is the time
 /// axis in seconds; every other column is a neuron, optionally prefixed with
@@ -43,16 +44,31 @@ pub async fn read_buzzdetect(
     frame_length: Option<f32>,
 ) -> Result<Option<BuzzdetectData>, String> {
     let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
-    let csv_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
-    if !csv_path.exists() {
+    let finished_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
+    let partial_path = Path::new(dir).join(format!("{}_buzzpart.csv", ident));
+    let (csv_path, is_partial) = if finished_path.exists() {
+        (finished_path, false)
+    } else if partial_path.exists() {
+        (partial_path, true)
+    } else {
         return Ok(None);
-    }
+    };
 
     let content = std::fs::read_to_string(&csv_path)
         .map_err(|e| format!("failed to read '{}': {}", csv_path.display(), e))?;
 
     // Non-empty lines only; tolerate both \n and \r\n.
-    let mut lines = content.lines().filter(|l| !l.trim().is_empty());
+    let mut lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    // A `_buzzpart.csv` is actively being appended to, so its final line may
+    // have been read mid-write and be truncated; drop it rather than failing
+    // the whole read.
+    if is_partial && lines.len() > 1 {
+        let cols = lines[0].split(',').count();
+        if lines[lines.len() - 1].split(',').count() != cols {
+            lines.pop();
+        }
+    }
+    let mut lines = lines.into_iter();
 
     let header = lines
         .next()
