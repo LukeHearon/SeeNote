@@ -9,6 +9,7 @@ import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
 import { launchScreen } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useAppUpdate } from '../hooks/useAppUpdate';
+import { versionBumpType } from '../utils/semver';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
@@ -284,7 +285,7 @@ export default function LaunchScreen({
         </div>
         {update && (
           <div className="flex items-center gap-2 pl-3 pr-2 py-1 bg-blue-950/60 border border-blue-800 rounded-full text-xs">
-            <span className="text-blue-200">{launchScreen.updateAvailable(update.version)}</span>
+            <span className="text-blue-200">{launchScreen.updateAvailable(versionBumpType(update.current_version, update.version), update.version)}</span>
             {updateState === 'error' && (
               <span className="text-red-400" data-tooltip={updateError ?? undefined}>
                 {launchScreen.updateErrorPrefix}
