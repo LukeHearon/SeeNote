@@ -27,7 +27,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { subsetTimelineFor, subsetBuzzdetectData, subsetCriteriaFrom, type SubsetCriteria } from './utils/buzzdetectSubset';
-import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
+import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay, sourceRangesForDisplayRange } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
@@ -344,6 +344,33 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // subset, and one that keeps nothing is still engaged.
   const subsetActive = subsetCriteria !== null;
 
+  // ── Subset ↔ spectrogram cache ─────────────────────────────────────────────
+  // Two things the chunk cache needs from the subset, and they change on
+  // different clocks:
+  //
+  //   grain   the bin width, which sizes the chunk grid (see buildTierLadder).
+  //           Changing it invalidates every cached chunk, so the cache is
+  //           rebuilt — but it only moves when the user changes bin width or
+  //           turns the subset on/off, not when they drag a threshold.
+  //   ranges  the kept spans, which cap each tier's LRU at the subset's own
+  //           footprint. These move on every threshold nudge and are applied to
+  //           the live cache without dropping anything.
+  const subsetGrainSec = subsetCriteria && subsetCriteria.binWidth > 0
+    ? subsetCriteria.binWidth
+    : undefined;
+  const subsetSourceRanges = useMemo(
+    () => (timeline.identity ? null : timeline.spans.map(s => ({ start: s.srcStart, end: s.srcEnd }))),
+    [timeline],
+  );
+  // Read by installChunkCache, which runs from callbacks that must not re-bind
+  // every time a threshold moves.
+  const subsetGrainRef = useRef(subsetGrainSec);
+  subsetGrainRef.current = subsetGrainSec;
+  const subsetSourceRangesRef = useRef(subsetSourceRanges);
+  subsetSourceRangesRef.current = subsetSourceRanges;
+  const timelineRef = useRef(timeline);
+  timelineRef.current = timeline;
+
   // Video is turned off outright while a subset is on. The picture can't follow
   // a timeline that jumps between distant parts of the file without stalling on
   // every join, and the point of the subset is to hear the detections back to
@@ -619,6 +646,30 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     addLog,
   });
 
+  // Build the spectrogram chunk cache for a file and kick off its first
+  // viewport. Shared by every path that has to (re)build one — opening a track,
+  // changing the FFT size, and engaging or re-graining a subset — so the tier
+  // grain and the subset footprint can't be wired up at one call site and
+  // forgotten at another.
+  const installChunkCache = useCallback((
+    path: string, sr: number, dur: number, zoom: number,
+  ) => {
+    const cache = new MultiTierSpectrogramCache(
+      path, settings.fftSize, sr, dur, bumpCacheVersion, subsetGrainRef.current,
+    );
+    cache.setSubsetRanges(subsetSourceRangesRef.current);
+    swapChunkCache(chunkCacheRef, cache);
+    bumpCacheVersion();
+    // The warm-up viewport is the first `zoom` seconds of the DISPLAY axis,
+    // which under a subset is several stretches scattered through the file, not
+    // the file's first `zoom` seconds — those may not be on the axis at all.
+    cache.prefetchRanges(
+      sourceRangesForDisplayRange(timelineRef.current, 0, zoom),
+      cache.selectTier(zoom, 1200).tier,
+    );
+    return cache;
+  }, [settings.fftSize, bumpCacheVersion]);
+
   // Open a track by absolute path (called from button or file panel)
   const handleOpenTrack = useCallback(async (absolutePath: string) => {
     // Guard: never attempt to open a file whose extension we can't decode.
@@ -715,19 +766,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
         if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
 
-        // Create new multi-tier chunk cache for this file
-        const cache = new MultiTierSpectrogramCache(
-            absolutePath,
-            settings.fftSize,
-            sr,
-            dur,
-            bumpCacheVersion,
-        );
-        swapChunkCache(chunkCacheRef, cache);
-        bumpCacheVersion();
-
-        // Kick off first viewport prefetch immediately
-        cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
+        // Create new multi-tier chunk cache for this file, and kick off its
+        // first viewport prefetch immediately.
+        installChunkCache(absolutePath, sr, dur, effectiveZoom);
         addLog('Spectrogram loading...');
 
         // Frame-perfect video path: MP4/MOV only. WebCodecs + mp4box.js
@@ -783,7 +824,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     } finally {
         setIsProcessing(false);
     }
-  }, [settings.fftSize]);
+  }, [settings.fftSize, installChunkCache]);
 
   // Mutual exclusion: whenever an example clip starts sounding, park the main
   // transport so the two files never play at once. The main play button shows
@@ -796,20 +837,30 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setIsPlaying(false);
   }, [exampleAudioActive, activeTransport]);
 
-  // Rebuild cache when FFT size changes while a track is open
+  // Rebuild the cache when what a cached chunk *is* changes underneath it while
+  // a track is open: the FFT size (the bins in a chunk) or the subset grain (the
+  // stretch of file a chunk covers — see buildTierLadder). Both make every
+  // chunk already held unusable, so the cache is replaced rather than trimmed.
+  // Threshold edits reshape the subset without changing the grain and are
+  // handled below, without discarding anything.
   useEffect(() => {
     if (!trackPath || !sampleRate || !duration) return;
-    const cache = new MultiTierSpectrogramCache(
-      trackPath,
-      settings.fftSize,
-      sampleRate,
-      duration,
-      bumpCacheVersion,
-    );
-    swapChunkCache(chunkCacheRef, cache);
-    bumpCacheVersion();
-    cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
-  }, [settings.fftSize]);
+    // Engaging a subset shrinks the axis, and the effect that fits the zoom
+    // window to it runs after this one — so fit it here too, or the warm-up
+    // prefetch picks a tier for a window wider than the whole subset and
+    // fetches chunks the very next draw supersedes.
+    const zoom = displayDuration > 0 ? Math.min(zoomSec, displayDuration) : zoomSec;
+    installChunkCache(trackPath, sampleRate, duration, zoom);
+  }, [settings.fftSize, subsetGrainSec]);
+
+  // Narrow the live cache to the subset's footprint as the spans move (a
+  // threshold drag), and widen it back when the subset is turned off.
+  useEffect(() => {
+    chunkCacheRef.current?.setSubsetRanges(subsetSourceRanges);
+    // Not keyed on the cache itself: every path that installs one already
+    // applies the current ranges (installChunkCache), so re-running this on a
+    // cache swap would only repeat the walk.
+  }, [subsetSourceRanges]);
 
   // The ordered list used for navigation (respects shuffle mode and fileFilter)
   const displayQueue = useMemo(() => {

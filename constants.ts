@@ -200,6 +200,14 @@ export const TIER_HOP_RATIO = 4;
 export const COLS_PER_CHUNK = 1024;
 
 /**
+ * Floor on columns per chunk when a subset shrinks the grid (see
+ * `buildTierLadder`'s `subsetGrainSec`). Below this the per-request overhead —
+ * one container open and seek each — starts to dominate the FFT work the
+ * request exists to do.
+ */
+export const MIN_COLS_PER_CHUNK = 64;
+
+/**
  * Columns the coarsest tier spends on the whole file. The ladder keeps stepping
  * coarser until one tier represents the entire file in this many columns.
  *
@@ -215,6 +223,20 @@ export const OVERVIEW_TARGET_COLS = 1024;
 
 /** Per-tier LRU budget in bytes; converted to a chunk count using fftSize. */
 export const TIER_CACHE_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Per-tier LRU budget while a subset is active.
+ *
+ * A contiguous view only ever needs the chunks around the playhead, so 16MB is
+ * generous. A subset viewport is scattered — one chunk per kept span, spans
+ * hours apart — and the material behind it is small and FIXED (a few hundred
+ * seconds of a long recording), so the useful thing to hold is the WHOLE
+ * subset. `MultiTierSpectrogramCache` caps each tier at exactly the chunks the
+ * subset occupies, so this is a ceiling for pathological subsets rather than an
+ * allocation: a typical hundred-detection subset settles well under it, and
+ * once it fits, scrolling back and forth costs nothing.
+ */
+export const SUBSET_TIER_CACHE_BYTES = 64 * 1024 * 1024;
 
 /** Safety bound on ladder length (a 4^n ladder reaches 50h in 8 steps). */
 const MAX_TIERS = 12;
@@ -238,15 +260,34 @@ export interface TierConfig {
  * Tier numbers are indices into the returned array, so lower is coarser — the
  * ordering `getChunkWithFallback` relies on when it walks toward coarser tiers
  * for a placeholder.
+ *
+ * `subsetGrainSec` is the length of the smallest piece of audio the view can
+ * show on its own — the subset's bin width — or undefined when no subset is
+ * active. It rescales the chunk grid, because the default grid is sized for
+ * contiguous viewing and is the wrong unit for a subset:
+ *
+ *   A 1024-column chunk at the finest tier is ~11.9s of audio at 44.1kHz. A 2s
+ *   detection sits inside one of them, so showing 2s decodes, FFTs, ships and
+ *   stores ~11.9s — ~6x the work and the bytes, per detection, none of the rest
+ *   ever drawn. Sizing a chunk at the grain instead brings that to ~2x (a span
+ *   straddles a boundary, so it costs about two chunks), which is close to the
+ *   floor for any fixed grid, and the leftover halves are audio adjacent to a
+ *   detection, i.e. the audio the user scrolls into.
+ *
+ * It's deliberately the BIN WIDTH and not the measured span lengths: the grid
+ * has to stay put while the user drags a threshold around, and bin width is the
+ * one input to a subset that doesn't move when the threshold does. Spans that
+ * merge several bins simply take several adjacent chunks, which the fetch queue
+ * batches back into one request anyway (see takeContiguousRun).
  */
 export function buildTierLadder(
   sampleRate: number,
   durationSec: number,
   fftSize: number,
+  subsetGrainSec?: number,
 ): TierConfig[] {
   const bins = Math.max(1, Math.floor(fftSize / 2));
-  const bytesPerChunk = COLS_PER_CHUNK * bins * 2;
-  const maxChunks = Math.max(4, Math.min(24, Math.round(TIER_CACHE_BYTES / bytesPerChunk)));
+  const subsetGrained = subsetGrainSec !== undefined && subsetGrainSec > 0 && sampleRate > 0;
 
   const hops: number[] = [];
   let hop = FINEST_HOP_SAMPLES;
@@ -260,13 +301,28 @@ export function buildTierLadder(
   }
   hops.reverse(); // coarsest first
 
-  return hops.map((hopSize, tier) => ({
-    tier,
-    hopSize,
-    colsPerSec: sampleRate / hopSize,
-    chunkDuration: (COLS_PER_CHUNK * hopSize) / sampleRate,
-    maxChunks,
-  }));
+  return hops.map((hopSize, tier) => {
+    const colsPerSec = sampleRate / hopSize;
+    // Chunk width is per-tier under a subset: the grain is a fixed number of
+    // SECONDS, so it buys fewer columns at every step down the ladder, and the
+    // coarse tiers bottom out at the floor.
+    const cols = subsetGrained
+      ? Math.min(COLS_PER_CHUNK, Math.max(MIN_COLS_PER_CHUNK, Math.ceil(subsetGrainSec! * colsPerSec)))
+      : COLS_PER_CHUNK;
+    const bytesPerChunk = cols * bins * 2;
+    const budget = subsetGrained ? SUBSET_TIER_CACHE_BYTES : TIER_CACHE_BYTES;
+    // The 24-chunk ceiling exists so a small fftSize can't turn the byte budget
+    // into an unbounded chunk count. A subset needs many more, much smaller
+    // chunks than that by design, so there the byte budget is the only bound.
+    const raw = Math.round(budget / bytesPerChunk);
+    return {
+      tier,
+      hopSize,
+      colsPerSec,
+      chunkDuration: (cols * hopSize) / sampleRate,
+      maxChunks: subsetGrained ? Math.max(4, raw) : Math.max(4, Math.min(24, raw)),
+    };
+  });
 }
 
 // Interpolate the Roseus/Magma colormap at position t in [0, 1] and return a hex color string.

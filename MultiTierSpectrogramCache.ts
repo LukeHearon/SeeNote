@@ -122,6 +122,8 @@ export class MultiTierSpectrogramCache {
   private pinnedIndices = new Set<number>();
   // Bumped on every invalidate() so in-flight fetches can detect staleness.
   private generationId: number = 0;
+  // Per-tier LRU capacity narrowed to the subset's own footprint (setSubsetRanges).
+  private capByTier = new Map<number, number>();
 
   constructor(
     private readonly filePath: string,
@@ -129,6 +131,13 @@ export class MultiTierSpectrogramCache {
     private readonly sampleRate: number,
     private readonly duration: number,
     private readonly onChunkLoaded: () => void,
+    /**
+     * Length of the subset's bins, or undefined when no subset is active. Sets
+     * the chunk grid's grain — see buildTierLadder. Fixed for the cache's
+     * lifetime: changing it changes the grid every cached chunk sits on, so the
+     * caller builds a new cache rather than mutating this one.
+     */
+    subsetGrainSec?: number,
   ) {
     // Build the ladder for THIS file: its length depends on the duration, so a
     // short clip gets only the fine tiers it can use and a long recording gets
@@ -139,7 +148,7 @@ export class MultiTierSpectrogramCache {
     // `chunk.actualDurationSec` / `chunk.nCols` rather than a reconstructed
     // column spacing, and annotations are stored in absolute seconds and never
     // round-trip through column indices.
-    this.tiers = buildTierLadder(sampleRate, duration, fftSize);
+    this.tiers = buildTierLadder(sampleRate, duration, fftSize, subsetGrainSec);
 
     // Index tiers by their tier number for O(1) lookup.
     this.tierByNumber = new Map(this.tiers.map(t => [t.tier, t]));
@@ -271,6 +280,41 @@ export class MultiTierSpectrogramCache {
   /** Single-range convenience wrapper (no subset in play). */
   isViewportResolved(startTime: number, endTime: number, tier: number): boolean {
     return this.isViewportResolvedForRanges([{ start: startTime, end: endTime }], tier);
+  }
+
+  // ── Subset footprint ────────────────────────────────────────────────────────
+
+  /**
+   * Tell the cache which stretches of the file the subset keeps, so each tier's
+   * LRU can be narrowed to exactly the chunks those stretches occupy (pass null
+   * when the subset is off).
+   *
+   * The point is the narrowing, not the capacity: the byte budget alone would
+   * happily hold a few hundred chunks of a tier the user has left, on a machine
+   * that would rather have the memory back. What the subset makes possible is a
+   * cache whose ceiling is the CONTENT rather than a guess — a hundred 2s
+   * detections are a fixed, small, fully-cacheable thing, so once every chunk is
+   * in, scrolling back over a detection never refetches it.
+   *
+   * Cheap enough to call on every timeline change (a threshold drag): it only
+   * recomputes counts, and never drops a chunk — the grid the chunks sit on is
+   * fixed by the grain, which a threshold doesn't move.
+   */
+  setSubsetRanges(ranges: readonly { start: number; end: number }[] | null): void {
+    this.capByTier.clear();
+    if (!ranges || ranges.length === 0) return;
+    for (const t of this.tiers) {
+      this.capByTier.set(
+        t.tier,
+        chunkIndicesForRanges(ranges, t.chunkDuration, this.duration, false).length,
+      );
+    }
+  }
+
+  /** A tier's LRU capacity: its byte budget, or the subset's footprint if smaller. */
+  private capacityOf(tierConfig: TierConfig): number {
+    const needed = this.capByTier.get(tierConfig.tier);
+    return needed === undefined ? tierConfig.maxChunks : Math.min(tierConfig.maxChunks, needed);
   }
 
   // ── Prefetching ─────────────────────────────────────────────────────────────
@@ -430,16 +474,17 @@ export class MultiTierSpectrogramCache {
     // delete+set, the first key in insertion order is always the true LRU.
     //
     // Chunks the current viewport needs are skipped. A subset viewport scattered
-    // across the file can require more chunks at once than the byte budget
-    // allows (a 16MB / 2MB-per-chunk tier holds 8; twenty visible segments in
-    // twenty different parts of the file need twenty). Evicting one of those to
+    // across the file can still require more chunks at once than the budget
+    // allows — less often now that a subset both shrinks the chunk and raises
+    // the budget, but a dense enough subset zoomed far enough out will do it.
+    // Evicting one of those to
     // fetch another only to have IT evicted on the next arrival is a loop with
     // no fixed point: every chunk lands, gets drawn, and is thrown out before the
     // next frame — segments blinking out and dropping to a coarser fallback tier
     // at random, changing with zoom because zoom changes how many segments fit.
     // So the cap yields to what is on screen; the ceiling is then the viewport,
     // which is bounded, and it drops back to the budget as soon as the pins move.
-    while (cache.size >= tierConfig.maxChunks) {
+    while (cache.size >= this.capacityOf(tierConfig)) {
       let victim: number | undefined;
       for (const key of cache.keys()) {
         if (!pinned?.has(key)) { victim = key; break; }

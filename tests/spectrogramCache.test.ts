@@ -9,7 +9,9 @@ import {
   buildTierLadder,
   COLS_PER_CHUNK,
   FINEST_HOP_SAMPLES,
+  MIN_COLS_PER_CHUNK,
   OVERVIEW_TARGET_COLS,
+  SUBSET_TIER_CACHE_BYTES,
   TIER_HOP_RATIO,
 } from '../constants';
 
@@ -120,6 +122,67 @@ describe('buildTierLadder', () => {
     const large = buildTierLadder(SAMPLE_RATE, DURATION, 4096)[0].maxChunks;
     expect(large).toBeLessThan(small);
     expect(large).toBeGreaterThanOrEqual(4); // never below the floor
+  });
+
+  it('sizes a subset-grained chunk at the grain, at the tiers that can', () => {
+    // 2s bins on the 1h/48kHz ladder. The finest tiers can spend a chunk on 2s
+    // and still clear the column floor; the coarse ones can't (2s of tier 0 is
+    // a fifth of a column) and bottom out there instead.
+    const grain = 2;
+    const ladder = buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE, grain);
+    for (const t of ladder) {
+      const cols = t.chunkDuration * t.colsPerSec;
+      expect(cols).toBeGreaterThanOrEqual(MIN_COLS_PER_CHUNK);
+      expect(cols).toBeLessThanOrEqual(COLS_PER_CHUNK);
+      // Either it hit a clamp, or the chunk is the grain (rounded up to a
+      // whole column).
+      if (cols > MIN_COLS_PER_CHUNK && cols < COLS_PER_CHUNK) {
+        expect(t.chunkDuration).toBeGreaterThanOrEqual(grain);
+        expect(t.chunkDuration - grain).toBeLessThan(1 / t.colsPerSec);
+      }
+    }
+    // The finest tier is the one the subset is actually read at.
+    expect(ladder[ladder.length - 1].chunkDuration).toBeCloseTo(grain, 1);
+  });
+
+  it('cuts the bytes a short detection costs, which is the point of the grain', () => {
+    // A 2s detection at the finest tier. Ungrained, it sits inside one ~11.9s
+    // (48kHz: 10.9s) chunk and drags all of it through decode, IPC and cache.
+    const grain = 2;
+    const span = { start: 1234.5, end: 1236.5 };
+    const bytesFor = (t: { chunkDuration: number; colsPerSec: number }) => {
+      const chunks = Math.floor(span.end / t.chunkDuration) - Math.floor(span.start / t.chunkDuration) + 1;
+      return chunks * t.chunkDuration * t.colsPerSec * (FFT_SIZE / 2) * 2;
+    };
+    const finest = (l: ReturnType<typeof buildTierLadder>) => l[l.length - 1];
+    const plain = bytesFor(finest(buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE)));
+    const grained = bytesFor(finest(buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE, grain)));
+    expect(grained).toBeLessThan(plain / 2);
+  });
+
+  it('holds far more chunks under a subset — smaller chunks and a bigger budget', () => {
+    const plain = buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE);
+    const grained = buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE, 2);
+    const finest = plain.length - 1;
+    expect(grained[finest].maxChunks).toBeGreaterThan(plain[finest].maxChunks);
+    // Still inside the byte budget it was derived from.
+    const bytes = grained[finest].maxChunks
+      * grained[finest].chunkDuration * grained[finest].colsPerSec * (FFT_SIZE / 2) * 2;
+    expect(bytes).toBeLessThanOrEqual(SUBSET_TIER_CACHE_BYTES * 1.05);
+  });
+
+  it('ignores a grain it cannot honour (no sample rate yet, or no bin width)', () => {
+    const plain = buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE);
+    for (const ladder of [
+      buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE, 0),
+      buildTierLadder(SAMPLE_RATE, DURATION, FFT_SIZE, undefined),
+    ]) {
+      expect(ladder.map(t => t.chunkDuration)).toEqual(plain.map(t => t.chunkDuration));
+    }
+    // A file we don't know the rate of yet must still yield a usable tier.
+    const unknown = buildTierLadder(0, 0, FFT_SIZE, 2);
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0].maxChunks).toBeGreaterThanOrEqual(4);
   });
 
   it('survives an unknown file (zero duration) with a usable single tier', () => {
