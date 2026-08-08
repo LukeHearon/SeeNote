@@ -237,19 +237,14 @@ export const neuronPalette = {
   get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
   get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
   get noData() { return getOverride('ui.neuronPalette.noData') ?? "No buzzdetect activations for this track"; },
-  get showInGraph() { return getOverride('ui.neuronPalette.showInGraph') ?? "Click to plot this neuron"; },
-  get hideFromGraph() { return getOverride('ui.neuronPalette.hideFromGraph') ?? "Click to hide this neuron"; },
   get customColorTitle() { return getOverride('ui.neuronPalette.customColorTitle') ?? "Custom color"; },
   // Right-click menu.
   get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin"; },
   get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
-  get menuShow() { return getOverride('ui.neuronPalette.menuShow') ?? "Show"; },
-  get menuHide() { return getOverride('ui.neuronPalette.menuHide') ?? "Hide"; },
   get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
-  get menuPlotAll() { return getOverride('ui.neuronPalette.menuPlotAll') ?? "Plot All"; },
   get menuSubset() { return getOverride('ui.neuronPalette.menuSubset') ?? "Subset detections"; },
   get menuUnsubset() { return getOverride('ui.neuronPalette.menuUnsubset') ?? "Stop subsetting"; },
-  get menuChangeColor() { return getOverride('ui.neuronPalette.menuChangeColor') ?? "Change color"; },
+  get menuSettings() { return getOverride('ui.neuronPalette.menuSettings') ?? "Settings…"; },
   // Graph-wide settings block.
   get settingsTitle() { return getOverride('ui.neuronPalette.settingsTitle') ?? "Graph settings"; },
   get seriesHeader() { return getOverride('ui.neuronPalette.seriesHeader') ?? "Series"; },
@@ -261,6 +256,21 @@ export const neuronPalette = {
   get subsetMinRateLabel() { return getOverride('ui.neuronPalette.subsetMinRateLabel') ?? "Min detection rate"; },
   get subsetNoNeurons() { return getOverride('ui.neuronPalette.subsetNoNeurons') ?? "Cut a neuron above to subset by it."; },
   get subsetPinBinWidth() { return getOverride('ui.neuronPalette.subsetPinBinWidth') ?? "Measured over the bin width above."; },
+  // What the cut came to. `of` separates kept audio from the file's length.
+  get statsKeptLabel() { return getOverride('ui.neuronPalette.statsKeptLabel') ?? "Kept"; },
+  statsKept: (kept: string, source: string, percent: string) => `${kept} of ${source} (${percent})`,
+  statsBreakdown: (regions: number, frames: number) =>
+    `${regions.toLocaleString('en-US')} region${regions === 1 ? '' : 's'} · ${frames.toLocaleString('en-US')} frame${frames === 1 ? '' : 's'}`,
+  // Per-neuron settings popover, and the picker that adds a neuron.
+  get settingsThreshold() { return getOverride('ui.neuronPalette.settingsThreshold') ?? "Detection at"; },
+  get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Cut at"; },
+  get settingsRemove() { return getOverride('ui.neuronPalette.settingsRemove') ?? "Remove"; },
+  get removeTooltip() { return getOverride('ui.neuronPalette.removeTooltip') ?? "Stop plotting this neuron (its settings are kept)"; },
+  get addNeuron() { return getOverride('ui.neuronPalette.addNeuron') ?? "Add neuron"; },
+  get addSearchPlaceholder() { return getOverride('ui.neuronPalette.addSearchPlaceholder') ?? "Search neurons…"; },
+  get addNoMatches() { return getOverride('ui.neuronPalette.addNoMatches') ?? "No matching neurons."; },
+  get addAllShown() { return getOverride('ui.neuronPalette.addAllShown') ?? "Every neuron is already plotted."; },
+  get noneShown() { return getOverride('ui.neuronPalette.noneShown') ?? "No neurons plotted. Add one below."; },
 };
 
 export const massRenameModal = {

@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, Palette, Pin, PinOff, RotateCcw, Scissors, Sliders } from 'lucide-react';
+import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings2, Sliders } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
-import { BUZZDETECT_PALETTE, DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
-import { clamp } from '../utils/helpers';
+import { DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
+import { SubsetStats } from '../utils/buzzdetectStats';
+import { clamp, formatTime } from '../utils/helpers';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
-import ColorSwatchPicker from './ColorSwatchPicker';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import DraftNumberInput from './DraftNumberInput';
+import NeuronSettingsPopover from './NeuronSettingsPopover';
 import { tooltips } from '../copy/tooltips';
 import { neuronPalette as copy } from '../copy/ui';
 
@@ -41,6 +42,8 @@ interface NeuronPaletteProps {
   autoYRange: { min: number; max: number } | null;
   yAxisOverride: { min: number; max: number } | null;
   minDetectionRate: number;
+  /** What the current subset came to, or null when nothing is subset. */
+  subsetStats: SubsetStats | null;
   settingsOpen: boolean;
   onSettingsOpenChange: (open: boolean) => void;
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
@@ -50,14 +53,21 @@ interface NeuronPaletteProps {
 }
 
 /**
- * The buzzdetect neuron palette — one cell per neuron, in the left sidebar
- * beside the annotation-tool palette it deliberately mirrors.
+ * The buzzdetect neuron palette — one cell per PLOTTED neuron, in the left
+ * sidebar beside the annotation-tool palette it deliberately mirrors.
  *
- * The cell carries only what's worth reading at a glance across every neuron
- * at once: whether it's plotted (the cell's own active state, exactly the tool
- * palette's convention), its color, its threshold, and whether the track is
- * subset to it. Everything rarer is on the right-click menu, where there's room
- * for a full label instead of an unlabelled control competing for the row.
+ * Only plotted neurons get a row. A model carries a dozen or more neurons and
+ * a given investigation uses two or three, so listing them all spent most of
+ * the sidebar on rows whose only job was to be ignored. The rest live behind
+ * the picker at the foot of the list, and removing a neuron only takes its row
+ * away — its color and thresholds are kept, so putting it back restores what
+ * it was.
+ *
+ * The row carries what's worth comparing ACROSS neurons at a glance: color,
+ * name, detection threshold, and whether the track is subset to it. Everything
+ * chosen once per neuron is in its settings popover (NeuronSettingsPopover),
+ * reached from the color dot — one surface, whether the neuron was just added
+ * or has been there all along.
  *
  * The graph-wide settings sit in a disclosure above the list rather than in a
  * popover over the graph: the series being plotted and the bin width decide
@@ -91,6 +101,7 @@ function NeuronPalette({
   autoYRange,
   yAxisOverride,
   minDetectionRate,
+  subsetStats,
   settingsOpen,
   onSettingsOpenChange,
   onSeriesModeChange,
@@ -98,63 +109,77 @@ function NeuronPalette({
   onYAxisOverrideChange,
   onMinDetectionRateChange,
 }: NeuronPaletteProps) {
-  // Which neuron's color popover is open (null = none). Closed on outside click.
-  const [openColorNeuron, setOpenColorNeuron] = useState<string | null>(null);
-  const colorPopoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openColorNeuron) return;
-    const handler = (e: MouseEvent) => {
-      if (colorPopoverRef.current && !colorPopoverRef.current.contains(e.target as Node)) {
-        setOpenColorNeuron(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openColorNeuron]);
-
+  // Which neuron's settings popover is open (null = none). The popover closes
+  // itself on an outside click or Escape.
+  const [openSettingsNeuron, setOpenSettingsNeuron] = useState<string | null>(null);
   const [contextNeuron, setContextNeuron] = useState<{ neuron: string; x: number; y: number } | null>(null);
+  // The add-neuron picker, and its search box.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addQuery, setAddQuery] = useState('');
+  const addRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!addOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) setAddOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAddOpen(false); };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [addOpen]);
+  // Reopening the picker should offer the whole list again, not the last search.
+  useEffect(() => { if (!addOpen) setAddQuery(''); }, [addOpen]);
 
   const neurons = useMemo(() => data?.neurons ?? [], [data]);
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
+  // Colors are indexed against the FILE's neuron order, not the plotted list,
+  // so removing a neuron never recolors the ones left behind.
   const colorOf = useCallback(
     (n: string) => neuronColorOverrides[n] ?? buzzdetectNeuronColor(neurons.indexOf(n)),
     [neuronColorOverrides, neurons],
   );
 
-  // Pinned first, in the order they were pinned; the rest in the file's own
-  // order. Pins are persisted per project and outlive the file, so a pin naming
-  // a neuron this file doesn't have simply drops out here rather than showing
-  // an empty row.
+  // Plotted neurons only: pinned first, in the order they were pinned, then the
+  // rest in the file's own order. Pins are persisted per project and outlive
+  // the file, so a pin naming a neuron this file doesn't have (or one that's
+  // been removed from the graph) simply drops out here rather than showing an
+  // empty row.
   const { pinned, unpinned } = useMemo(() => {
+    const plotted = neurons.filter(n => !hidden.has(n));
     const pinnedSet = new Set(pinnedNeurons);
     return {
-      pinned: pinnedNeurons.filter(n => neurons.includes(n)),
-      unpinned: neurons.filter(n => !pinnedSet.has(n)),
+      pinned: pinnedNeurons.filter(n => plotted.includes(n)),
+      unpinned: plotted.filter(n => !pinnedSet.has(n)),
     };
-  }, [neurons, pinnedNeurons]);
+  }, [neurons, hidden, pinnedNeurons]);
+  const plottedCount = pinned.length + unpinned.length;
+
+  // What the picker can offer, filtered by its search box.
+  const addable = useMemo(() => {
+    const q = addQuery.trim().toLowerCase();
+    const rest = neurons.filter(n => hidden.has(n));
+    return q ? rest.filter(n => n.toLowerCase().includes(q)) : rest;
+  }, [neurons, hidden, addQuery]);
+  const anyAddable = neurons.some(n => hidden.has(n));
 
   // One button whose action flips with the current state: while every neuron is
-  // plotted the only useful next step is hiding them all, so the label always
+  // plotted the only useful next step is clearing them all, so the label always
   // names what a click is about to do.
-  const allShown = neurons.length > 0 && neurons.every(n => !hidden.has(n));
+  const allShown = neurons.length > 0 && !anyAddable;
 
   const menuItems = (n: string): ContextMenuItem[] => {
     const isPinned = pinnedNeurons.includes(n);
     const isSubset = subsetNeurons.includes(n);
-    const plotted = !hidden.has(n);
     return [
       {
         label: isPinned ? copy.menuUnpin : copy.menuPin,
         icon: isPinned ? <PinOff size={12} /> : <Pin size={12} />,
         onSelect: () => onTogglePinNeuron(n),
       },
-      {
-        label: plotted ? copy.menuHide : copy.menuShow,
-        icon: plotted ? <EyeOff size={12} /> : <Eye size={12} />,
-        onSelect: () => onToggleNeuron(n, plotted),
-      },
-      { label: copy.menuIsolate, icon: <Eye size={12} />, onSelect: () => onSoloNeuron(n) },
-      { label: copy.menuPlotAll, icon: <Eye size={12} />, onSelect: () => onSetAllNeuronsHidden(false) },
+      { label: copy.menuIsolate, icon: <Scissors size={12} />, onSelect: () => onSoloNeuron(n) },
       {
         label: isSubset ? copy.menuUnsubset : copy.menuSubset,
         icon: <Scissors size={12} />,
@@ -162,17 +187,21 @@ function NeuronPalette({
         separatorBefore: true,
       },
       {
-        label: copy.menuChangeColor,
-        icon: <Palette size={12} />,
-        onSelect: () => setOpenColorNeuron(n),
+        label: copy.menuSettings,
+        icon: <Settings2 size={12} />,
+        onSelect: () => setOpenSettingsNeuron(n),
         separatorBefore: true,
+      },
+      {
+        label: copy.settingsRemove,
+        icon: <EyeOff size={12} />,
+        onSelect: () => onToggleNeuron(n, true),
       },
     ];
   };
 
   const renderCell = (n: string) => {
     const color = colorOf(n);
-    const plotted = !hidden.has(n);
     const isSubset = subsetNeurons.includes(n);
     const isPinned = pinnedNeurons.includes(n);
     return (
@@ -181,15 +210,20 @@ function NeuronPalette({
         className="relative"
         onContextMenu={(e) => { e.preventDefault(); setContextNeuron({ neuron: n, x: e.clientX, y: e.clientY }); }}
       >
+        {/* Every row here is plotted, so the cell's active state carries the
+            thing that actually varies between them: whether this neuron is
+            cutting the subset. The scissors stays as its own control too —
+            it's what the state means, and the cell is a wide, forgiving
+            target for a toggle flipped this often. */}
         <ToolCell
-          isActive={plotted}
+          isActive={isSubset}
           color={color}
           dotColor={color}
           label={n}
-          onClick={() => onToggleNeuron(n, plotted)}
-          tooltip={plotted ? copy.hideFromGraph : copy.showInGraph}
-          onDotClick={() => setOpenColorNeuron(v => (v === n ? null : n))}
-          dotTooltip={tooltips.buzzdetectNeuronColor}
+          onClick={() => onToggleSubsetNeuron(n, !isSubset)}
+          tooltip={tooltips.buzzdetectSubsetNeuron}
+          onDotClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
+          dotTooltip={tooltips.buzzdetectNeuronSettings}
           trailing={(
             <span className="flex items-center gap-1 flex-none pointer-events-auto">
               {isPinned && <Pin size={9} className="text-slate-500 flex-none" />}
@@ -198,46 +232,35 @@ function NeuronPalette({
                 onCommit={(v) => { if (v !== null) onThresholdChange(n, v); }}
                 className="w-11 bg-slate-900/70 border border-slate-700/70 rounded px-1 py-px text-[11px] text-right font-mono outline-none focus:border-[#e65161] hover:border-slate-500 transition-colors"
                 style={{ color }}
+                tooltip={tooltips.buzzdetectThreshold}
               />
               <button
-                onClick={() => onToggleSubsetNeuron(n, !isSubset)}
-                className={`p-0.5 rounded transition-colors ${isSubset ? 'text-[#e65161] bg-[#e65161]/15' : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60'}`}
-                data-tooltip={tooltips.buzzdetectSubsetNeuron}
+                onClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
+                className={`p-0.5 rounded transition-colors ${openSettingsNeuron === n ? 'text-[#e65161] bg-[#e65161]/15' : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60'}`}
+                data-tooltip={tooltips.buzzdetectNeuronSettings}
               >
-                <Scissors size={11} />
+                <Settings2 size={11} />
               </button>
-              {/* The cut threshold, shown only where it applies: on a neuron
-                  the subset is keyed to, in activation mode. Blank means it
-                  follows the detection threshold to its left — the placeholder
-                  shows which value that is — so the field only ever holds a
-                  number once the two have deliberately been pulled apart. */}
-              {isSubset && seriesMode === 'activation' && (
-                <DraftNumberInput
-                  value={subsetThresholds[n] ?? null}
-                  onCommit={(v) => onSubsetThresholdChange(n, v)}
-                  allowEmpty
-                  placeholder={String(thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD)}
-                  className="w-11 bg-slate-900/70 border border-[#e65161]/40 rounded px-1 py-px text-[11px] text-right font-mono text-[#e65161] placeholder:text-[#e65161]/40 outline-none focus:border-[#e65161] transition-colors"
-                  tooltip={tooltips.buzzdetectSubsetThreshold}
-                />
-              )}
             </span>
           )}
         />
-        {openColorNeuron === n && (
-          <div
-            ref={colorPopoverRef}
-            className="absolute left-0 top-full mt-1.5 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-2 w-40"
-          >
-            <ColorSwatchPicker
-              value={color}
-              swatchColors={BUZZDETECT_PALETTE}
-              onChange={(c) => onNeuronColorChange(n, c)}
-              customColorTitle={copy.customColorTitle}
-              size={14}
-              popoverPosition="bottom"
-            />
-          </div>
+        {openSettingsNeuron === n && (
+          <NeuronSettingsPopover
+            neuron={n}
+            color={color}
+            threshold={thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD}
+            subsetThreshold={subsetThresholds[n] ?? null}
+            isSubset={isSubset}
+            isPinned={isPinned}
+            seriesMode={seriesMode}
+            onColorChange={(c) => onNeuronColorChange(n, c)}
+            onThresholdChange={(v) => onThresholdChange(n, v)}
+            onSubsetThresholdChange={(v) => onSubsetThresholdChange(n, v)}
+            onToggleSubset={() => onToggleSubsetNeuron(n, !isSubset)}
+            onTogglePin={() => onTogglePinNeuron(n)}
+            onRemove={() => onToggleNeuron(n, true)}
+            onClose={() => setOpenSettingsNeuron(null)}
+          />
         )}
       </div>
     );
@@ -325,6 +348,24 @@ function NeuronPalette({
                 silently redefine the subset every time the view moved. A bin is
                 kept whole, on the pinned width instead. */}
             <p className="text-slate-500 text-[10px]">{copy.subsetPinBinWidth}</p>
+            {/* What the cut actually came to. This is the number the user is
+                steering by while dragging a threshold — and it has nowhere
+                else to live: the spectrogram shows the kept audio but not how
+                much of the file that is, and the graph is already full. */}
+            {subsetStats && (
+              <div className="pt-0.5">
+                <div className="font-mono text-[11px] text-slate-200">
+                  {copy.statsKept(
+                    formatTime(subsetStats.keptSeconds, 0),
+                    formatTime(subsetStats.sourceSeconds, 0),
+                    `${(subsetStats.fraction * 100).toFixed(subsetStats.fraction < 0.01 ? 2 : 1)}%`,
+                  )}
+                </div>
+                <div className="text-slate-500 text-[10px]">
+                  {copy.statsBreakdown(subsetStats.regions, subsetStats.frames)}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -363,11 +404,73 @@ function NeuronPalette({
         {neurons.length === 0 && (
           <p className="text-slate-600 text-[11px] px-1 py-2">{copy.noData}</p>
         )}
+        {neurons.length > 0 && plottedCount === 0 && (
+          <p className="text-slate-600 text-[11px] px-1 py-2">{copy.noneShown}</p>
+        )}
         {pinned.map(renderCell)}
         {pinned.length > 0 && unpinned.length > 0 && (
           <div className="border-t border-slate-700 mx-1 my-0.5" />
         )}
         {unpinned.map(renderCell)}
+
+        {/* The model's other neurons, one click away rather than occupying a
+            row each. Adding one opens its settings straight away, so the
+            thresholds and color can be set while the neuron is still the thing
+            being thought about. */}
+        {neurons.length > 0 && (
+          <div className="relative mt-0.5" ref={addRef}>
+            <button
+              onClick={() => setAddOpen(v => !v)}
+              disabled={!anyAddable}
+              className={`w-full flex items-center justify-center gap-1 px-1.5 py-1 rounded border border-dashed text-[11px] transition-colors ${
+                anyAddable
+                  ? 'border-slate-600 text-slate-400 hover:border-slate-500 hover:text-slate-200 hover:bg-slate-800/60'
+                  : 'border-slate-800 text-slate-700 cursor-default'
+              }`}
+              data-tooltip={anyAddable ? tooltips.buzzdetectAddNeuron : copy.addAllShown}
+            >
+              <Plus size={11} className="flex-none" />
+              <span>{copy.addNeuron}</span>
+            </button>
+            {/* Downward, like every other popover here: the list scrolls, and
+                overflow BELOW a scroll container is reachable by scrolling
+                while overflow above it is simply clipped away. */}
+            {addOpen && anyAddable && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-1.5">
+                <div className="relative mb-1">
+                  <Search size={11} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                  <input
+                    autoFocus
+                    value={addQuery}
+                    onChange={(e) => setAddQuery(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    placeholder={copy.addSearchPlaceholder}
+                    className="w-full bg-slate-900 border border-slate-700 rounded pl-6 pr-1.5 py-0.5 text-[11px] text-slate-200 placeholder:text-slate-600 outline-none focus:border-[#e65161]"
+                  />
+                </div>
+                <div className="max-h-48 overflow-y-auto flex flex-col gap-0.5">
+                  {addable.length === 0 && (
+                    <p className="text-slate-600 text-[10px] px-1 py-1">{copy.addNoMatches}</p>
+                  )}
+                  {addable.map(n => (
+                    <button
+                      key={n}
+                      onClick={() => {
+                        onToggleNeuron(n, false);
+                        setAddOpen(false);
+                        setOpenSettingsNeuron(n);
+                      }}
+                      className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] text-slate-300 hover:bg-slate-700/70 hover:text-slate-100 transition-colors"
+                    >
+                      <span className="w-2 h-2 rounded-full flex-none" style={{ backgroundColor: colorOf(n) }} />
+                      <span className="flex-1 min-w-0 truncate text-left">{n}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {contextNeuron && (

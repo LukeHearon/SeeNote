@@ -27,6 +27,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { subsetTimelineFor, subsetBuzzdetectData, subsetCriteriaFrom, type SubsetCriteria } from './utils/buzzdetectSubset';
+import { subsetStats } from './utils/buzzdetectStats';
 import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay, sourceRangesForDisplayRange } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
@@ -375,6 +376,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const subsetSourceRanges = useMemo(
     () => (timeline.identity ? null : timeline.spans.map(s => ({ start: s.srcStart, end: s.srcEnd }))),
     [timeline],
+  );
+  // How much audio the cut came to, for the palette's readout. Walks the frames
+  // once per timeline — i.e. per threshold nudge, on the same clock the
+  // timeline itself is rebuilt on, so it costs nothing the subset didn't.
+  const buzzdetectSubsetStats = useMemo(
+    () => subsetStats(buzzdetectData, timeline, duration),
+    [buzzdetectData, timeline, duration],
   );
   // Read by installChunkCache, which runs from callbacks that must not re-bind
   // every time a threshold moves.
@@ -2096,6 +2104,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   autoYRange={buzzdetectAutoYRange}
                   yAxisOverride={buzzdetectYAxisOverride}
                   minDetectionRate={buzzdetectMinDetectionRate}
+                  subsetStats={buzzdetectSubsetStats}
                   settingsOpen={buzzdetectSettingsOpen}
                   onSettingsOpenChange={setBuzzdetectSettingsOpen}
                   onSeriesModeChange={setBuzzdetectSeriesMode}
