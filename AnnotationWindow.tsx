@@ -304,6 +304,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const {
     buzzdetectEnabled, setBuzzdetectEnabled,
     buzzdetectThresholds, setBuzzdetectThresholds,
+    buzzdetectSubsetThresholds, setBuzzdetectSubsetThresholds,
     buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
     buzzdetectNeuronColors, setBuzzdetectNeuronColors,
     buzzdetectSeriesMode, setBuzzdetectSeriesMode,
@@ -319,6 +320,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
     buzzdetectAutoYRange, setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
+    handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectToggleSubsetNeuron,
@@ -336,11 +338,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     neurons: buzzdetectSubsetNeurons,
     mode: buzzdetectSeriesMode,
     thresholds: buzzdetectThresholds,
+    subsetThresholds: buzzdetectSubsetThresholds,
     minDetectionRate: buzzdetectMinDetectionRate,
     binWidthOverride: buzzdetectBinWidthOverride,
     frameLength: buzzdetectData?.binWidth ?? 0,
   }), [buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectSeriesMode, buzzdetectThresholds,
-      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
+      buzzdetectSubsetThresholds, buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
 
   // The display axis. Identity (i.e. the whole file, unchanged) whenever the
   // subset is off. `duration` here is the file's own length; `displayDuration`
@@ -1053,6 +1056,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     buzzdetectEnabled,
     buzzdetectThresholds,
+    buzzdetectSubsetThresholds,
     buzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
     buzzdetectSeriesMode,
@@ -1169,6 +1173,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setVideoContrast(ui.videoContrast);
     setBuzzdetectEnabled(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
     setBuzzdetectThresholds(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
+    setBuzzdetectSubsetThresholds(project.preferences.uiSettings?.buzzdetectSubsetThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
     setBuzzdetectNeuronColors(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
     setBuzzdetectSeriesMode(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
@@ -2070,6 +2075,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 <NeuronPalette
                   data={buzzdetectData}
                   thresholds={buzzdetectThresholds}
+                  subsetThresholds={buzzdetectSubsetThresholds}
                   hiddenNeurons={buzzdetectHiddenNeurons}
                   neuronColors={buzzdetectNeuronColors}
                   subsetNeurons={buzzdetectSubsetNeurons}
@@ -2081,6 +2087,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onSoloNeuron={(n) => handleBuzzdetectSoloNeuron(buzzdetectData?.neurons ?? [], n)}
                   onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                   onThresholdChange={handleBuzzdetectThresholdChange}
+                  onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
                   onToggleSubsetNeuron={handleBuzzdetectToggleSubsetNeuron}
                   onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
                   seriesMode={buzzdetectSeriesMode}

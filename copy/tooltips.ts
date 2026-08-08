@@ -74,6 +74,7 @@ export const tooltips = {
   get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
   get buzzdetectSubsetNeuron() { return getOverride('tooltips.buzzdetectSubsetNeuron') ?? "Subset the track to this neuron's detections"; },
+  get buzzdetectSubsetThreshold() { return getOverride('tooltips.buzzdetectSubsetThreshold') ?? "Threshold the subset is cut at.\nLeave blank to cut at the detection threshold; set it lower to keep the audio around each detection while the graph still marks detections strictly."; },
   get buzzdetectSubset() { return getOverride('tooltips.buzzdetectSubset') ?? "Subset track to detections (Shift+S)"; },
   get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
   get showAllFiles() { return getOverride('tooltips.showAllFiles') ?? "Showing: all files"; },

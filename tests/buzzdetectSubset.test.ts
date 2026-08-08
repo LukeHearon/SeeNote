@@ -205,6 +205,7 @@ describe('subsetCriteriaFrom', () => {
     neurons: ['bee'],
     mode: 'activation' as const,
     thresholds: { bee: 1.5 },
+    subsetThresholds: {},
     minDetectionRate: 0.4,
     binWidthOverride: 2,
     frameLength: 0.5,
@@ -231,5 +232,24 @@ describe('subsetCriteriaFrom', () => {
   it('uses the pinned bin width, falling back to the frame length', () => {
     expect(subsetCriteriaFrom(inputs)!.binWidth).toBe(2);
     expect(subsetCriteriaFrom({ ...inputs, binWidthOverride: null })!.binWidth).toBe(0.5);
+  });
+
+  // The point of the separate subset threshold: cut liberally, mark strictly.
+  it('cuts at the subset threshold in activation mode, where one is set', () => {
+    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: -1.5 } })!;
+    expect(c.thresholdOf('bee')).toBe(-1.5);
+    // A neuron with no subset override still cuts at its detection threshold.
+    expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+  });
+
+  it('ignores the subset threshold in detection-rate mode', () => {
+    const c = subsetCriteriaFrom({
+      ...inputs,
+      mode: 'detectionRate' as const,
+      subsetThresholds: { bee: -1.5 },
+    })!;
+    // A detection rate counts frames that ARE detections, so loosening what a
+    // detection means would change the measurement rather than widen the cut.
+    expect(c.thresholdOf('bee')).toBe(1.5);
   });
 });

@@ -194,6 +194,7 @@ export function ExampleBuzzdetectPanel() {
       neurons: subsetNeurons,
       mode: seriesMode,
       thresholds,
+      subsetThresholds: {},
       minDetectionRate,
       binWidthOverride,
       frameLength: DEMO_BIN_WIDTH,

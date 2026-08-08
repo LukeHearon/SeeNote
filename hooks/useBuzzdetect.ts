@@ -8,6 +8,14 @@ export interface BuzzdetectApi {
   setBuzzdetectEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   buzzdetectThresholds: Record<string, number>;
   setBuzzdetectThresholds: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  /**
+   * Per-neuron threshold the SUBSET is cut at, where it differs from the
+   * detection threshold above. Absent = the same value; the setting exists to
+   * be set looser, so the cut keeps the audio around a detection while the
+   * graph still marks detections strictly. activation mode only.
+   */
+  buzzdetectSubsetThresholds: Record<string, number>;
+  setBuzzdetectSubsetThresholds: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   buzzdetectHiddenNeurons: string[];
   setBuzzdetectHiddenNeurons: React.Dispatch<React.SetStateAction<string[]>>;
   buzzdetectNeuronColors: Record<string, string>;
@@ -52,6 +60,8 @@ export interface BuzzdetectApi {
   buzzdetectData: BuzzdetectData | null;
   setBuzzdetectData: React.Dispatch<React.SetStateAction<BuzzdetectData | null>>;
   handleBuzzdetectThresholdChange: (neuron: string, value: number) => void;
+  /** null clears the override, putting the cut back on the detection threshold. */
+  handleBuzzdetectSubsetThresholdChange: (neuron: string, value: number | null) => void;
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
   handleBuzzdetectToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
@@ -87,6 +97,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   // buzzdetect activations panel — UI fields persisted in uiSettings.
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
   const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
+  const [buzzdetectSubsetThresholds, setBuzzdetectSubsetThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectSubsetThresholds ?? {});
   const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
   const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
   const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<BuzzdetectSeriesMode>(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
@@ -137,6 +148,17 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
     setBuzzdetectThresholds(prev => ({ ...prev, [neuron]: value }));
   }, []);
+  const handleBuzzdetectSubsetThresholdChange = useCallback((neuron: string, value: number | null) => {
+    setBuzzdetectSubsetThresholds(prev => {
+      if (value === null) {
+        if (!(neuron in prev)) return prev;
+        const next = { ...prev };
+        delete next[neuron];
+        return next;
+      }
+      return { ...prev, [neuron]: value };
+    });
+  }, []);
   const handleBuzzdetectToggleNeuron = useCallback((neuron: string, wasEnabled: boolean) => {
     setBuzzdetectHiddenNeurons(prev => wasEnabled ? [...prev, neuron] : prev.filter(n => n !== neuron));
   }, []);
@@ -178,6 +200,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectEnabled,
     buzzdetectThresholds,
     setBuzzdetectThresholds,
+    buzzdetectSubsetThresholds,
+    setBuzzdetectSubsetThresholds,
     buzzdetectHiddenNeurons,
     setBuzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
@@ -207,6 +231,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     buzzdetectAutoYRange,
     setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
+    handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectToggleSubsetNeuron,

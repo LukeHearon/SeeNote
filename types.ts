@@ -116,6 +116,9 @@ export interface ProjectUiSettings {
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
   buzzdetectEnabled?: boolean;             // panel shown/hidden
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
+  // Per-neuron threshold the SUBSET is cut at, where it differs from the
+  // detection threshold above (activation mode only). Absent = the same value.
+  buzzdetectSubsetThresholds?: Record<string, number>;
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
   buzzdetectSeriesMode?: BuzzdetectSeriesMode; // which series the panel plots

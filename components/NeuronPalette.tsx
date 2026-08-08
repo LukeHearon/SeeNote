@@ -16,6 +16,8 @@ const FIELD_CLASS = 'w-full bg-slate-900 border border-slate-700 rounded px-1 py
 interface NeuronPaletteProps {
   data: BuzzdetectData | null;
   thresholds: Record<string, number>;
+  /** Per-neuron subset threshold override; absent entries follow `thresholds`. */
+  subsetThresholds: Record<string, number>;
   hiddenNeurons: string[];
   neuronColors: Record<string, string>;
   subsetNeurons: string[];
@@ -27,6 +29,8 @@ interface NeuronPaletteProps {
   onSoloNeuron: (neuron: string) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
   onThresholdChange: (neuron: string, value: number) => void;
+  /** null clears the override, putting the cut back on the detection threshold. */
+  onSubsetThresholdChange: (neuron: string, value: number | null) => void;
   onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
   onTogglePinNeuron: (neuron: string) => void;
   // ── Graph-wide settings ────────────────────────────────────────────────────
@@ -66,6 +70,7 @@ interface NeuronPaletteProps {
 function NeuronPalette({
   data,
   thresholds,
+  subsetThresholds,
   hiddenNeurons,
   neuronColors: neuronColorOverrides,
   subsetNeurons,
@@ -77,6 +82,7 @@ function NeuronPalette({
   onSoloNeuron,
   onNeuronColorChange,
   onThresholdChange,
+  onSubsetThresholdChange,
   onToggleSubsetNeuron,
   onTogglePinNeuron,
   seriesMode,
@@ -200,6 +206,21 @@ function NeuronPalette({
               >
                 <Scissors size={11} />
               </button>
+              {/* The cut threshold, shown only where it applies: on a neuron
+                  the subset is keyed to, in activation mode. Blank means it
+                  follows the detection threshold to its left — the placeholder
+                  shows which value that is — so the field only ever holds a
+                  number once the two have deliberately been pulled apart. */}
+              {isSubset && seriesMode === 'activation' && (
+                <DraftNumberInput
+                  value={subsetThresholds[n] ?? null}
+                  onCommit={(v) => onSubsetThresholdChange(n, v)}
+                  allowEmpty
+                  placeholder={String(thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD)}
+                  className="w-11 bg-slate-900/70 border border-[#e65161]/40 rounded px-1 py-px text-[11px] text-right font-mono text-[#e65161] placeholder:text-[#e65161]/40 outline-none focus:border-[#e65161] transition-colors"
+                  tooltip={tooltips.buzzdetectSubsetThreshold}
+                />
+              )}
             </span>
           )}
         />

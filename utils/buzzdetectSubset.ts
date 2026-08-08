@@ -8,7 +8,13 @@
 // means the same thing as what the panel is drawing:
 //
 //   activation      a bin is kept when ANY subset neuron's MEAN activation
-//                    over the bin's frames clears its own threshold.
+//                    over the bin's frames clears its own SUBSET threshold,
+//                    which defaults to its detection threshold but can be set
+//                    looser on its own. Keeping the two apart is the point: a
+//                    liberal cut keeps the audio around a detection in view
+//                    while the graph still marks detections at the strict
+//                    threshold, so the context of a call is audible without
+//                    restating what counts as a call.
 //   detectionRate   a bin is kept when the fraction of its frames where ANY
 //                    subset neuron fires reaches `minDetectionRate`.
 //
@@ -44,7 +50,11 @@ export interface SubsetCriteria {
   /** Neuron labels the subset is keyed to. Empty means "no subset". */
   neurons: readonly string[];
   mode: BuzzdetectSeriesMode;
-  /** Per-neuron threshold lookup, same one the panel plots against. */
+  /**
+   * Per-neuron threshold a bin is judged against. Resolved by mode in
+   * subsetCriteriaFrom: the neuron's subset threshold in activation mode, its
+   * plain detection threshold in detectionRate mode (see below).
+   */
   thresholdOf: (neuron: string) => number;
   /** Minimum fraction of a bin's frames that must fire. detectionRate mode only. */
   minDetectionRate: number;
@@ -64,8 +74,13 @@ export interface SubsetInputs {
   /** Neuron labels ticked to subset by (OR'd). Empty means "no subset". */
   neurons: readonly string[];
   mode: BuzzdetectSeriesMode;
-  /** Per-neuron threshold overrides, as the panel stores them. */
+  /** Per-neuron detection thresholds, as the palette stores them. */
   thresholds: Record<string, number>;
+  /**
+   * Per-neuron subset thresholds. An absent entry means "same as this neuron's
+   * detection threshold" — the setting only exists to be looser than it.
+   */
+  subsetThresholds: Record<string, number>;
   minDetectionRate: number;
   /** User-pinned bin width (seconds), or null for auto. */
   binWidthOverride: number | null;
@@ -85,7 +100,16 @@ export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null 
   return {
     neurons: inputs.neurons,
     mode: inputs.mode,
-    thresholdOf: (n: string) => inputs.thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD,
+    // Only activation mode gets the separate subset threshold. A detection
+    // RATE is a fraction of frames that count as detections, so loosening what
+    // "detection" means there would change the number being measured rather
+    // than widen the cut around it — the loose knob in that mode is
+    // minDetectionRate, which is about how much of a bin has to fire.
+    thresholdOf: (n: string) => {
+      const detection = inputs.thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD;
+      if (inputs.mode !== 'activation') return detection;
+      return inputs.subsetThresholds[n] ?? detection;
+    },
     minDetectionRate: inputs.minDetectionRate,
     // The panel's auto bin width follows the zoom, so subsetting by it would
     // redefine the subset every time the view moved. Only a pinned width

@@ -14,6 +14,8 @@ interface Props {
    */
   allowEmpty?: boolean;
   placeholder?: string;
+  /** Hover tooltip text (see components/TooltipLayer.tsx). */
+  tooltip?: string;
 }
 
 /**
@@ -22,7 +24,7 @@ interface Props {
  * Enter. Validating on every keystroke (e.g. rejecting an empty string as
  * NaN) makes it impossible to backspace and re-enter a value.
  */
-export default function DraftNumberInput({ value, onCommit, className, style, min, allowEmpty, placeholder }: Props) {
+export default function DraftNumberInput({ value, onCommit, className, style, min, allowEmpty, placeholder, tooltip }: Props) {
   const asText = (v: number | null) => (v === null ? '' : String(v));
   const [draft, setDraft] = useState(asText(value));
   useEffect(() => { setDraft(asText(value)); }, [value]);
@@ -46,6 +48,7 @@ export default function DraftNumberInput({ value, onCommit, className, style, mi
       placeholder={placeholder}
       className={className}
       style={style}
+      data-tooltip={tooltip}
     />
   );
 }

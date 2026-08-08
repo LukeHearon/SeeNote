@@ -122,7 +122,7 @@ export function sidebarSectionsFromUiSettings(
 
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
-  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
+  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectSubsetThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
   'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectPinnedNeurons' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
   'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
