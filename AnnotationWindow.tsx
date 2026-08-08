@@ -341,7 +341,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     subsetThresholds: buzzdetectSubsetThresholds,
     minDetectionRate: buzzdetectMinDetectionRate,
     binWidthOverride: buzzdetectBinWidthOverride,
-    frameLength: buzzdetectData?.binWidth ?? 0,
+    frameHop: buzzdetectData?.frameHop ?? 0,
   }), [buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectSeriesMode, buzzdetectThresholds,
       buzzdetectSubsetThresholds, buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
 

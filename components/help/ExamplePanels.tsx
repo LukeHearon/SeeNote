@@ -197,7 +197,7 @@ export function ExampleBuzzdetectPanel() {
       subsetThresholds: {},
       minDetectionRate,
       binWidthOverride,
-      frameLength: DEMO_BIN_WIDTH,
+      frameHop: DEMO_BIN_WIDTH,
     }),
     DEMO_DURATION,
   ), [data, subsetNeurons, seriesMode, thresholds, minDetectionRate, binWidthOverride]);

@@ -159,18 +159,31 @@ export interface ProjectUiSettings {
 }
 
 /**
- * Parsed buzzdetect activations for one track, returned by `read_buzzdetect`.
- * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
- * `activation_` prefix already stripped. `binWidth` is inferred from `starts`.
- */
-/**
  * Which series the buzzdetect panel plots: the raw per-frame activation, or
  * the fraction of each bin's frames clearing the neuron's threshold.
  */
 export type BuzzdetectSeriesMode = 'activation' | 'detectionRate';
 
+/**
+ * Parsed buzzdetect activations for one track, returned by `read_buzzdetect`.
+ * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
+ * `activation_` prefix already stripped.
+ *
+ * The frame grid takes two numbers, because the model's `framelength` and
+ * `framehop` are independent and only one of them is visible in the CSV:
+ *
+ *   frameHop     spacing between consecutive `starts`, inferred from the data.
+ *   frameLength  how much audio one frame DESCRIBES — the project's frame
+ *                length setting, defaulting to the hop. When it exceeds the
+ *                hop the frames overlap, and a frame's audio runs past where
+ *                the next one begins.
+ *
+ * A frame's source extent is always `[start, start + frameLength)`. Anything
+ * asking "which frames sit on this grid" wants `frameHop` instead.
+ */
 export interface BuzzdetectData {
-  binWidth: number;
+  frameLength: number;
+  frameHop: number;
   neurons: string[];
   starts: number[];
   values: number[][];

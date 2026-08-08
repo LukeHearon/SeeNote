@@ -311,7 +311,7 @@ export default function BuzzdetectPanel({
   // bin is 4s and that's what was selected.
   const selectionUnit = useMemo<FrameUnit | null>(() => {
     if (!selection || !data) return null;
-    const r = frameRangeForTimeSpan(data.starts, data.binWidth, selection.start, selection.end);
+    const r = frameRangeForTimeSpan(data.starts, data.frameLength, selection.start, selection.end);
     return r && { ...r, tStart: selection.start, tEnd: selection.end };
   }, [data, selection]);
 
@@ -339,7 +339,7 @@ export default function BuzzdetectPanel({
     // bucket. Nothing is drawn there either, so there's nothing to select. A
     // bin wider than a subset segment resolves to the piece cut at the
     // segment's edges, same as the drawn band (see utils/binIndex).
-    return unitAtTime(activeTimeline, data.starts, data.binWidth, effectiveBinWidthRef.current, t);
+    return unitAtTime(activeTimeline, data, effectiveBinWidthRef.current, t);
   }, [data, timeAtClientX, activeTimeline]);
 
   // A unit's own time extent, end clamped to EOF — the same span the panel
@@ -398,15 +398,16 @@ export default function BuzzdetectPanel({
     }
 
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
-    const { starts, binWidth, neurons, values } = data;
+    const { starts, frameLength, frameHop, neurons, values } = data;
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + width / pixelsPerSecond;
     const xOf = (t: number) => timeToX(t, scrollLeft, pixelsPerSecond);
 
     // Visible bin index range (with a one-bin margin so partial edges connect).
-    // Searched over `starts` rather than derived arithmetically: frames may be
-    // non-contiguous when binWidth is overridden shorter than the frame spacing.
-    const visible = visibleBinRange(starts, binWidth, startTime, endTime);
+    // Searched over `starts` rather than derived arithmetically: frames are only
+    // contiguous when the frame length equals the hop, and the frame-length
+    // setting can leave gaps between them or make them overlap.
+    const visible = visibleBinRange(starts, frameLength, startTime, endTime);
     if (!visible) { ctx.restore(); clearYAxis(); return; }
     const { iLeft, iRight } = visible;
 
@@ -416,12 +417,15 @@ export default function BuzzdetectPanel({
     // auto width outright. Everything downstream — the bands, the darken pass,
     // the boundary marks, the polyline, and the cursor's hit-testing — works in
     // units of this width.
-    const binPx = binWidth * pixelsPerSecond;
+    // Density is a question about the HOP — how far apart the frames sit on
+    // screen — not about how far each one reaches. Overlapping frames are
+    // exactly as crowded as their spacing says, however long they are.
+    const hopPx = frameHop * pixelsPerSecond;
     const visibleCount = iRight - iLeft + 1;
-    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : binWidth;
-    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, binWidth);
-    const grouped = isGroupedUnitWidth(binWidth, effectiveBinWidthSec);
-    const drawDots = binPx >= MIN_DOT_PX && !grouped;
+    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : frameHop;
+    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, frameHop);
+    const grouped = isGroupedUnitWidth(frameHop, effectiveBinWidthSec);
+    const drawDots = hopPx >= MIN_DOT_PX && !grouped;
     // The width that decides what a unit is (utils/binIndex) — published for
     // the hover/click handlers, which resolve units by time through the same
     // functions this draw enumerates them with.
@@ -487,14 +491,14 @@ export default function BuzzdetectPanel({
     // materialising them would mean tens of thousands of entries on a long
     // recording, hundreds landing in the same pixel column, so each column's
     // frames stand in for the frames inside it — at most one entry per column.
-    const subPixelFrames = binPx < 1 && !grouped;
+    const subPixelFrames = hopPx < 1 && !grouped;
     const units: { start: number; end: number; xStart: number; xEnd: number; xMid: number; tMid: number }[] = [];
     if (subPixelFrames) {
       const cols = Math.ceil(width);
       for (let c = 0; c < cols; c++) {
         const r = frameRangeForTimeSpan(
           starts,
-          binWidth,
+          frameLength,
           xToTime(c, scrollLeft, pixelsPerSecond),
           xToTime(c + 1, scrollLeft, pixelsPerSecond),
         );
@@ -506,7 +510,7 @@ export default function BuzzdetectPanel({
       // becomes one drawn unit per segment, so no band, point or wash reaches
       // across a cut into audio from elsewhere in the file. Hit-testing cuts
       // the same way, so what's painted stays what the cursor can pick.
-      forEachUnitInSpan(activeTimeline, starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
+      forEachUnitInSpan(activeTimeline, data, effectiveBinWidthSec, startTime, endTime, u => {
         units.push({
           start: u.start,
           end: u.end,
@@ -519,7 +523,7 @@ export default function BuzzdetectPanel({
     }
     // Width of one unit on screen, for the "is this too tight to draw?" gates —
     // and, published below, the "is this too tight to click?" one.
-    const unitPx = grouped ? effectiveBinWidthSec * pixelsPerSecond : binPx;
+    const unitPx = grouped ? effectiveBinWidthSec * pixelsPerSecond : hopPx;
     unitPxRef.current = unitPx;
 
     // Full-height wash over every unit satisfying `keep`. Adjacent painted
@@ -684,7 +688,7 @@ export default function BuzzdetectPanel({
       };
       if (!grouped) {
         for (let i = iLeft; i <= iRight; i++) {
-          const t = starts[i] + binWidth / 2;
+          const t = starts[i] + frameLength / 2;
           lineTo(t, xOf(t), yOf(perFrameValue(i)));
         }
       } else {
@@ -720,7 +724,7 @@ export default function BuzzdetectPanel({
 
       if (drawDots) {
         for (let i = iLeft; i <= iRight; i++) {
-          const cx = xOf(starts[i] + binWidth / 2);
+          const cx = xOf(starts[i] + frameLength / 2);
           if (cx < -4 || cx > width + 4) continue;
           const isPositive = values[n][i] >= th;
           const cy = yOf(perFrameValue(i));

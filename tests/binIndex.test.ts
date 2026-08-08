@@ -24,6 +24,11 @@ const FULL = 0.96;
 // the timeline's own file-length bound.
 const ID = identityTimeline(1000);
 
+// The unit functions take the whole frame grid (BuzzdetectData satisfies it
+// structurally). Frame length and hop coincide unless a test says otherwise.
+const grid = (frameLength: number, frameHop = frameLength, ss = starts) =>
+  ({ starts: ss, frameLength, frameHop });
+
 describe('lastStartAtOrBefore', () => {
   it('returns -1 before the first start', () => {
     expect(lastStartAtOrBefore(starts, -0.1)).toBe(-1);
@@ -55,7 +60,7 @@ describe('binAtTime', () => {
   it('finds the covering frame with contiguous bins', () => {
     expect(binAtTime(starts, FULL, 1.5)).toBe(1);
   });
-  it('returns null in the gaps left by a shortened binWidth', () => {
+  it('returns null in the gaps left by a shortened frame length', () => {
     expect(binAtTime(starts, NARROW, 1.0)).toBe(1);   // just inside frame 1
     expect(binAtTime(starts, NARROW, 1.5)).toBeNull(); // in the gap
     expect(binAtTime(starts, NARROW, 1.36)).toBeNull(); // half-open at the end
@@ -180,7 +185,7 @@ describe('bucketFrameRange', () => {
 });
 
 describe('isGroupedUnitWidth', () => {
-  it('reads a unit width at the frame length as ungrouped, round-off included', () => {
+  it('reads a unit width at the frame hop as ungrouped, round-off included', () => {
     expect(isGroupedUnitWidth(FULL, FULL)).toBe(false);
     expect(isGroupedUnitWidth(FULL, FULL * 1.00005)).toBe(false);
     expect(isGroupedUnitWidth(FULL, FULL * 1.001)).toBe(true);
@@ -191,35 +196,35 @@ describe('isGroupedUnitWidth', () => {
 describe('unitAtTime', () => {
   it('resolves single frames when ungrouped, and nothing in the gaps', () => {
     // A frame's unit spans the frame's own extent, not the gap to the next one.
-    expect(unitAtTime(ID, starts, NARROW, NARROW, 0.1)).toEqual({ start: 0, end: 0, tStart: 0, tEnd: NARROW });
-    expect(unitAtTime(ID, starts, NARROW, NARROW, 0.5)).toBeNull();
-    expect(unitAtTime(ID, starts, NARROW, NARROW, 1.0)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + NARROW });
+    expect(unitAtTime(ID, grid(NARROW), NARROW, 0.1)).toEqual({ start: 0, end: 0, tStart: 0, tEnd: NARROW });
+    expect(unitAtTime(ID, grid(NARROW), NARROW, 0.5)).toBeNull();
+    expect(unitAtTime(ID, grid(NARROW), NARROW, 1.0)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + NARROW });
   });
 
   it('resolves the whole bucket when grouped', () => {
     // 2s buckets: [0,2) holds frames 0–2, [2,4) holds 3–4. The unit's extent is
     // the bucket's, not the frames' — that's the span the panel washes.
-    expect(unitAtTime(ID, starts, FULL, 2, 0.5)).toEqual({ start: 0, end: 2, tStart: 0, tEnd: 2 });
-    expect(unitAtTime(ID, starts, FULL, 2, 3.9)).toEqual({ start: 3, end: 4, tStart: 2, tEnd: 4 });
+    expect(unitAtTime(ID, grid(FULL), 2, 0.5)).toEqual({ start: 0, end: 2, tStart: 0, tEnd: 2 });
+    expect(unitAtTime(ID, grid(FULL), 2, 3.9)).toEqual({ start: 3, end: 4, tStart: 2, tEnd: 4 });
   });
 
   it('returns null for a bucket holding no frames', () => {
-    expect(unitAtTime(ID, starts, FULL, 2, 100)).toBeNull();
+    expect(unitAtTime(ID, grid(FULL), 2, 100)).toBeNull();
   });
 
   // The whole point of the unit abstraction: the panel draws units and hit-tests
   // units, so a lookup at any time inside a drawn unit must return that unit.
   it('agrees with the units the draw loop enumerates', () => {
     for (const unitWidth of [NARROW, FULL, 1.3, 2, 5]) {
-      const binWidth = unitWidth === NARROW ? NARROW : FULL;
+      const g = unitWidth === NARROW ? grid(NARROW) : grid(FULL);
       const drawn: FrameUnit[] = [];
-      forEachUnitInSpan(ID, starts, binWidth, unitWidth, 0, 4, u => drawn.push(u));
+      forEachUnitInSpan(ID, g, unitWidth, 0, 4, u => drawn.push(u));
       expect(drawn.length).toBeGreaterThan(0);
       for (const u of drawn) {
         for (const frac of [0.01, 0.5, 0.99]) {
           const t = u.tStart + (u.tEnd - u.tStart) * frac;
           if (t < 0 || t > 4) continue;
-          expect(unitAtTime(ID, starts, binWidth, unitWidth, t)).toEqual(u);
+          expect(unitAtTime(ID, g, unitWidth, t)).toEqual(u);
         }
       }
     }
@@ -229,7 +234,7 @@ describe('unitAtTime', () => {
 describe('forEachUnitInSpan', () => {
   it('emits one unit per frame when ungrouped', () => {
     const out: FrameUnit[] = [];
-    forEachUnitInSpan(ID, starts, FULL, FULL, 1.0, 2.0, u => out.push(u));
+    forEachUnitInSpan(ID, grid(FULL), FULL, 1.0, 2.0, u => out.push(u));
     // visibleBinRange widens by one frame each side.
     expect(out.map(u => u.start)).toEqual([0, 1, 2, 3]);
     expect(out.every(u => u.start === u.end)).toBe(true);
@@ -240,7 +245,7 @@ describe('forEachUnitInSpan', () => {
   it('emits time-anchored buckets that do not re-partition as the span scrolls', () => {
     const bucketsFor = (t0: number, t1: number) => {
       const out: FrameUnit[] = [];
-      forEachUnitInSpan(ID, starts, FULL, 2, t0, t1, u => out.push(u));
+      forEachUnitInSpan(ID, grid(FULL), 2, t0, t1, u => out.push(u));
       return out;
     };
     const a = bucketsFor(0, 4);
@@ -253,13 +258,13 @@ describe('forEachUnitInSpan', () => {
 
   it('skips buckets with no frames rather than emitting empty ones', () => {
     const out: FrameUnit[] = [];
-    forEachUnitInSpan(identityTimeline(200), [0, 100], 1, 1, 40, 60, u => out.push(u));
+    forEachUnitInSpan(identityTimeline(200), grid(1, 1, [0, 100]), 1, 40, 60, u => out.push(u));
     expect(out.every(u => u.end >= u.start)).toBe(true);
   });
 
   it('emits nothing without data', () => {
     const out: FrameUnit[] = [];
-    forEachUnitInSpan(ID, [], 1, 1, 0, 10, u => out.push(u));
+    forEachUnitInSpan(ID, grid(1, 1, []), 1, 0, 10, u => out.push(u));
     expect(out).toEqual([]);
   });
 
@@ -268,9 +273,9 @@ describe('forEachUnitInSpan', () => {
   // a division by zero.
   it('falls back to per-frame units for a zero unit width', () => {
     const out: FrameUnit[] = [];
-    forEachUnitInSpan(ID, starts, FULL, 0, 0, 4, u => out.push(u));
+    forEachUnitInSpan(ID, grid(FULL), 0, 0, 4, u => out.push(u));
     expect(out.every(u => u.start === u.end)).toBe(true);
-    expect(unitAtTime(ID, starts, FULL, 0, 1.5)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + FULL });
+    expect(unitAtTime(ID, grid(FULL), 0, 1.5)).toEqual({ start: 1, end: 1, tStart: starts[1], tEnd: starts[1] + FULL });
   });
 });
 
@@ -282,7 +287,7 @@ describe('sourceBucketPieces / grouped units under a subset', () => {
   const tl = buildSubsetTimeline([{ start: 1, end: 2 }, { start: 4, end: 5 }, { start: 6, end: 7 }], 300);
 
   it('passes a unit through untouched with no subset', () => {
-    expect(sourceBucketPieces(identityTimeline(300), dispStarts, 1, 3, 0)).toEqual([
+    expect(sourceBucketPieces(identityTimeline(300), dispStarts, 3, 0)).toEqual([
       { start: 0, end: 2, tStart: 0, tEnd: 3 },
     ]);
   });
@@ -291,7 +296,7 @@ describe('sourceBucketPieces / grouped units under a subset', () => {
     // Bucket 0 of width 10 is source [0,10) — all three detections fall
     // inside it — so this is the "one bin, several kept segments" case, cut
     // into one piece per segment rather than one band spanning all of them.
-    const pieces = sourceBucketPieces(tl, dispStarts, 1, 10, 0);
+    const pieces = sourceBucketPieces(tl, dispStarts, 10, 0);
     expect(pieces).toEqual([
       { start: 0, end: 0, tStart: 0, tEnd: 1 },
       { start: 1, end: 1, tStart: 1, tEnd: 2 },
@@ -301,7 +306,7 @@ describe('sourceBucketPieces / grouped units under a subset', () => {
 
   it('drops pieces holding no frame', () => {
     // Bucket source [30,40): past every segment, nothing to draw or select.
-    expect(sourceBucketPieces(tl, dispStarts, 1, 10, 3)).toEqual([]);
+    expect(sourceBucketPieces(tl, dispStarts, 10, 3)).toEqual([]);
   });
 
   // The regression this whole module exists to prevent: a subset's display
@@ -324,7 +329,7 @@ describe('sourceBucketPieces / grouped units under a subset', () => {
     // pairing two frames from the same detection into one unit here.
     const twoSeg = buildSubsetTimeline([{ start: 1, end: 3 }, { start: 5, end: 7 }], 300);
     const twoSegStarts = [0, 1, 2, 3]; // display times for source 1, 2, 5, 6
-    const atBucket = (b: number) => sourceBucketPieces(twoSeg, twoSegStarts, 1, 2, b);
+    const atBucket = (b: number) => sourceBucketPieces(twoSeg, twoSegStarts, 2, b);
     expect(atBucket(0)).toEqual([{ start: 0, end: 0, tStart: 0, tEnd: 1 }]);
     expect(atBucket(1)).toEqual([{ start: 1, end: 1, tStart: 1, tEnd: 2 }]);
     expect(atBucket(2)).toEqual([{ start: 2, end: 2, tStart: 2, tEnd: 3 }]);
@@ -332,12 +337,12 @@ describe('sourceBucketPieces / grouped units under a subset', () => {
 
     // unitAtTime/forEachUnitInSpan must agree with this bucket-by-bucket view.
     for (const t of [0.5, 1.5, 2.5, 3.5]) {
-      const viaLookup = unitAtTime(twoSeg, twoSegStarts, 1, 2, t);
+      const viaLookup = unitAtTime(twoSeg, grid(1, 1, twoSegStarts), 2, t);
       expect(viaLookup).not.toBeNull();
       expect(viaLookup!.tEnd - viaLookup!.tStart).toBe(1);
     }
     const drawn: FrameUnit[] = [];
-    forEachUnitInSpan(twoSeg, twoSegStarts, 1, 2, 0, 4, u => drawn.push(u));
+    forEachUnitInSpan(twoSeg, grid(1, 1, twoSegStarts), 2, 0, 4, u => drawn.push(u));
     expect(drawn.map(u => [u.tStart, u.tEnd])).toEqual([[0, 1], [1, 2], [2, 3], [3, 4]]);
   });
 });

@@ -12,7 +12,8 @@ import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
 
 // Ten 1s frames at 0,1,...,9. `bee` fires at 1,2,3 and 7; `fly` fires at 5.
 const data: BuzzdetectData = {
-  binWidth: 1,
+  frameLength: 1,
+  frameHop: 1,
   neurons: ['bee', 'fly'],
   starts: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   values: [
@@ -126,7 +127,8 @@ describe('detectionRanges — bin partition', () => {
   const frame = 0.96;
   const n = 500;
   const noisy: BuzzdetectData = {
-    binWidth: frame,
+    frameLength: frame,
+    frameHop: frame,
     neurons: ['bee'],
     starts: Array.from({ length: n }, (_, i) => i * frame),
     values: [Array.from({ length: n }, (_, i) => (i % 7 === 0 ? 2 : -1))],
@@ -161,6 +163,55 @@ describe('detectionRanges — bin partition', () => {
   });
 });
 
+// Overlapping frames: buzzdetect's `framelength 3, framehop 0.96` produces
+// rows 0.96s apart that each speak for 3s of audio. Setting the frame length
+// used to be routed into the bin width, which grouped ~3 frames per bin and
+// judged their MEAN — so a longer frame made the subset SMALLER, the opposite
+// of what the setting reads as. The length now moves only the frames' extent.
+describe('detectionRanges — frames longer than the hop', () => {
+  const hop = 1;
+  // Frames every 1s; only frame 3 fires.
+  const overlapped = (frameLength: number): BuzzdetectData => ({
+    frameLength,
+    frameHop: hop,
+    neurons: ['bee'],
+    starts: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    values: [[-1, -1, -1, 2, -1, -1, -1, -1, -1, -1]],
+  });
+
+  it('judges per frame regardless of the frame length', () => {
+    // One kept bin either way — the neighbours never get averaged in.
+    for (const len of [hop, 3, 5]) {
+      expect(detectionRanges(overlapped(len), criteria({ binWidth: hop }))).toHaveLength(1);
+    }
+  });
+
+  it('extends a kept bin by the overhang, so a longer frame keeps more audio', () => {
+    expect(detectionRanges(overlapped(hop), criteria({ binWidth: hop })))
+      .toEqual([{ start: 3, end: 4 }]);
+    // The firing frame at 3 covers [3,6): its bin's far edge moves out by the
+    // 2s the frame reaches past the next frame's start.
+    expect(detectionRanges(overlapped(3), criteria({ binWidth: hop })))
+      .toEqual([{ start: 3, end: 6 }]);
+  });
+
+  it('grows the kept audio monotonically with the frame length', () => {
+    const kept = (len: number) => subsetTimelineFor(overlapped(len), criteria({ binWidth: hop }), 10).duration;
+    expect(kept(1)).toBe(1);
+    expect(kept(3)).toBe(3);
+    expect(kept(5)).toBe(5);
+  });
+
+  it('merges the overlapping ranges neighbouring detections produce', () => {
+    // Frames 3 and 5 fire; at length 3 they cover [3,6) and [5,8), which
+    // overlap and must come out as one span rather than two.
+    const d = overlapped(3);
+    d.values[0][5] = 2;
+    const tl = subsetTimelineFor(d, criteria({ binWidth: hop }), 10);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([[3, 8]]);
+  });
+});
+
 describe('subsetTimelineFor', () => {
   it('merges contiguous firing frames into one span', () => {
     const tl = subsetTimelineFor(data, criteria({}), 10);
@@ -184,7 +235,8 @@ describe('subsetBuzzdetectData', () => {
     expect(sub.values[0]).toEqual([2, 2, 2, 2]);
     expect(sub.values[1]).toEqual([-1, -1, -1, -1]);
     expect(sub.neurons).toEqual(['bee', 'fly']);
-    expect(sub.binWidth).toBe(1);
+    expect(sub.frameLength).toBe(1);
+    expect(sub.frameHop).toBe(1);
   });
 
   it('returns the same object on the identity timeline', () => {
@@ -208,7 +260,7 @@ describe('subsetCriteriaFrom', () => {
     subsetThresholds: {},
     minDetectionRate: 0.4,
     binWidthOverride: 2,
-    frameLength: 0.5,
+    frameHop: 0.5,
   };
 
   it('is null when disabled or nothing is ticked', () => {
@@ -229,7 +281,10 @@ describe('subsetCriteriaFrom', () => {
     expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
   });
 
-  it('uses the pinned bin width, falling back to the frame length', () => {
+  // The hop, never the frame length: how much audio a frame covers is not a
+  // statement about how frames should be grouped for judging, and routing the
+  // frame length in here is what made a longer frame SHRINK the subset.
+  it('uses the pinned bin width, falling back to the frame hop', () => {
     expect(subsetCriteriaFrom(inputs)!.binWidth).toBe(2);
     expect(subsetCriteriaFrom({ ...inputs, binWidthOverride: null })!.binWidth).toBe(0.5);
   });

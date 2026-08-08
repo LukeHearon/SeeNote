@@ -278,7 +278,7 @@ function NeuronPalette({
         <DraftNumberInput
           value={binWidthOverride ?? autoBinWidth}
           onCommit={(v) => { if (v !== null) onBinWidthOverrideChange(v); }}
-          min={data.binWidth}
+          min={data.frameHop}
           className={FIELD_CLASS}
         />
       </div>
