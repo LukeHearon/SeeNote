@@ -61,6 +61,8 @@ export function ExampleFilePanel() {
         onFileSelect={setCurrentTrack}
         collapsed={false}
         onToggleCollapse={() => {}}
+        sectionCollapsed={false}
+        onToggleSectionCollapsed={() => {}}
         onNavigatePrev={() => step(-1)}
         onNavigateNext={() => step(1)}
         canNavigatePrev={index > 0}
@@ -245,15 +247,8 @@ export function ExampleBuzzdetectPanel() {
         subsetNeurons={subsetNeurons}
         minDetectionRate={minDetectionRate}
         height={height}
-        onThresholdChange={(neuron, value) => setThresholds(t => ({ ...t, [neuron]: value }))}
-        onToggleNeuron={(neuron, hidden) => setHiddenNeurons(list =>
-          hidden ? [...list, neuron] : list.filter(n => n !== neuron))}
-        onSetAllNeuronsHidden={hidden => setHiddenNeurons(hidden ? [...DEMO_NEURONS] : [])}
-        onNeuronColorChange={(neuron, color) => setNeuronColors(c => ({ ...c, [neuron]: color }))}
         onSeriesModeChange={setSeriesMode}
         onBinWidthOverrideChange={setBinWidthOverride}
-        onToggleSubsetNeuron={(neuron, willSubset) => setSubsetNeurons(list =>
-          willSubset ? [...list, neuron] : list.filter(n => n !== neuron))}
         onMinDetectionRateChange={setMinDetectionRate}
         onHeightChange={setHeight}
         onSelectionChange={setSelection}

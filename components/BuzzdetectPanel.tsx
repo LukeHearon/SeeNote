@@ -6,7 +6,6 @@ import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
 import {
   buzzdetectNeuronColor,
-  BUZZDETECT_PALETTE,
   DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
@@ -35,7 +34,6 @@ import {
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import DraftNumberInput from './DraftNumberInput';
-import ColorSwatchPicker from './ColorSwatchPicker';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -107,14 +105,8 @@ interface BuzzdetectPanelProps {
   minDetectionRate: number;
   height: number;
   // Callbacks.
-  onThresholdChange: (neuron: string, value: number) => void;
-  onToggleNeuron: (neuron: string, hidden: boolean) => void;
-  // Show/hide every neuron in the graph at once (distinct from subsetting).
-  onSetAllNeuronsHidden: (hidden: boolean) => void;
-  onNeuronColorChange: (neuron: string, color: string) => void;
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
-  onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
   onMinDetectionRateChange: (rate: number) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
@@ -142,13 +134,8 @@ export default function BuzzdetectPanel({
   subsetNeurons,
   minDetectionRate,
   height,
-  onThresholdChange,
-  onToggleNeuron,
-  onSetAllNeuronsHidden,
-  onNeuronColorChange,
   onSeriesModeChange,
   onBinWidthOverrideChange,
-  onToggleSubsetNeuron,
   onMinDetectionRateChange,
   onHeightChange,
   onSelectionChange,
@@ -169,21 +156,6 @@ export default function BuzzdetectPanel({
   // readout — updated through `setHover` below, which drops no-op moves.
   const hoverRangeRef = useRef<FrameUnit | null>(null);
   const [hoverRange, setHoverRange] = useState<FrameUnit | null>(null);
-
-  // Which neuron's color-swatch popover is open in the settings panel (null =
-  // none). Closed on outside click below.
-  const [openColorNeuron, setOpenColorNeuron] = useState<string | null>(null);
-  const colorPopoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openColorNeuron) return;
-    const handler = (e: MouseEvent) => {
-      if (colorPopoverRef.current && !colorPopoverRef.current.contains(e.target as Node)) {
-        setOpenColorNeuron(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openColorNeuron]);
 
   // Drag-to-select across hit units. `dragging` gates the window listeners; the
   // anchor unit lives in a ref so the listener effect attaches once per drag
@@ -1296,7 +1268,7 @@ export default function BuzzdetectPanel({
                   </div>
                 )}
                 {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
+                  <div className="space-y-1">
                     <div className="text-[10px] uppercase tracking-wider text-slate-400">
                       {buzzdetectCopy.subsetHeader}
                     </div>
@@ -1327,88 +1299,13 @@ export default function BuzzdetectPanel({
                     )}
                   </div>
                 )}
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
-                  <span className="flex items-center gap-1.5">
-                    {buzzdetectCopy.neuronHeader}
-                    {data && data.neurons.length > 0 && (() => {
-                      // One button whose action flips with the current state: while
-                      // every neuron is shown, the only useful next step is hiding
-                      // them all; otherwise (some or none shown) it's showing them
-                      // all — so the label always names what a click is about to do.
-                      const allShown = data.neurons.every(n => !hidden.has(n));
-                      return (
-                        <button
-                          onClick={() => onSetAllNeuronsHidden(allShown)}
-                          className="normal-case tracking-normal text-slate-400 hover:text-[#e65161] underline decoration-dotted"
-                        >
-                          {allShown ? buzzdetectCopy.selectNoneNeurons : buzzdetectCopy.selectAllNeurons}
-                        </button>
-                      );
-                    })()}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <span>{buzzdetectCopy.subsetColumnHeader}</span>
-                    <span>{buzzdetectCopy.thresholdHeader}</span>
-                  </span>
-                </div>
-                {!data && <p className="text-slate-500 text-xs py-2">{buzzdetectCopy.noDataLoaded}</p>}
-                {data && data.neurons.map((n, i) => {
-                  const isOn = !hidden.has(n);
-                  return (
-                    <div key={n} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={isOn}
-                        onChange={() => onToggleNeuron(n, isOn)}
-                        className="accent-[#e65161] flex-none"
-                      />
-                      <div className="relative flex-none">
-                        <button
-                          onClick={() => setOpenColorNeuron(v => v === n ? null : n)}
-                          className="block w-3 h-3 rounded-sm ring-1 ring-white/20"
-                          style={{ background: neuronColors[i] }}
-                          data-tooltip={tooltips.buzzdetectNeuronColor}
-                        />
-                        {openColorNeuron === n && (
-                          <div
-                            ref={colorPopoverRef}
-                            className="absolute left-0 top-full mt-1.5 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-2 w-40"
-                          >
-                            <ColorSwatchPicker
-                              value={neuronColors[i]}
-                              swatchColors={BUZZDETECT_PALETTE}
-                              onChange={(c) => onNeuronColorChange(n, c)}
-                              customColorTitle={buzzdetectCopy.customColorTitle}
-                              size={14}
-                              popoverPosition="bottom"
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <span className="flex-1 text-xs text-slate-200 truncate" title={n}>{n}</span>
-                      {/* Subsetting is deliberately independent of the plot
-                          checkbox on the left: a neuron can define which frames
-                          are kept while another is merely plotted alongside it
-                          to see what it did there. Several ticked here are
-                          OR'd — a frame survives if any of them fired. */}
-                      <input
-                        type="checkbox"
-                        checked={subsetNeurons.includes(n)}
-                        onChange={() => onToggleSubsetNeuron(n, !subsetNeurons.includes(n))}
-                        className="accent-[#e65161] flex-none"
-                        data-tooltip={tooltips.buzzdetectSubsetNeuron}
-                      />
-                      <DraftNumberInput
-                        value={thresholdOf(n)}
-                        onCommit={(v) => onThresholdChange(n, v)}
-                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right outline-none focus:border-[#e65161]"
-                        style={{ color: neuronColors[i] }}
-                      />
-                    </div>
-                  );
-                })}
+                {!data && <p className="text-slate-500 text-xs py-1">{buzzdetectCopy.noDataLoaded}</p>}
+                {/* Per-neuron controls — plot, color, threshold, subset — live
+                    in the neuron palette in the left sidebar (NeuronPalette),
+                    beside the annotation-tool palette. This popover keeps only
+                    the settings that describe the graph as a whole. */}
                 {data && enabledNeurons.length === 0 && (
-                  <p className="text-slate-500 text-[11px] pt-1">{buzzdetectCopy.allNeuronsHidden}</p>
+                  <p className="text-slate-500 text-[11px] pt-1 border-t border-slate-700">{buzzdetectCopy.allNeuronsHidden}</p>
                 )}
               </div>
             </div>

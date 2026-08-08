@@ -85,7 +85,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const {
     splitRatio, videoCollapsed, setVideoCollapsed,
     hideLabels, VIDEO_COLLAPSED_BAR_PX, handleSplitDrag,
-  } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, leftPanelRatio: 0, leftPanelWidth: 0 });
+  } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, sidebarSections: {}, leftPanelWidth: 0 });
 
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();

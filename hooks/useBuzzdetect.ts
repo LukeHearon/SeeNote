@@ -22,6 +22,9 @@ export interface BuzzdetectApi {
   setBuzzdetectSubsetNeurons: React.Dispatch<React.SetStateAction<string[]>>;
   buzzdetectMinDetectionRate: number;
   setBuzzdetectMinDetectionRate: React.Dispatch<React.SetStateAction<number>>;
+  /** Neuron labels pinned to the top of the palette, in the order they were pinned. */
+  buzzdetectPinnedNeurons: string[];
+  setBuzzdetectPinnedNeurons: React.Dispatch<React.SetStateAction<string[]>>;
   buzzdetectPanelHeight: number;
   setBuzzdetectPanelHeight: React.Dispatch<React.SetStateAction<number>>;
   buzzdetectData: BuzzdetectData | null;
@@ -30,6 +33,10 @@ export interface BuzzdetectApi {
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
   handleBuzzdetectToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
+  /** Pin a neuron to the top of the palette, or unpin it. Newly pinned goes last among the pinned. */
+  handleBuzzdetectTogglePinNeuron: (neuron: string) => void;
+  /** Plot only this neuron, hiding every other one in `neurons`. */
+  handleBuzzdetectSoloNeuron: (neurons: string[], neuron: string) => void;
   /** Toggle subset mode. No-op when no neuron is picked — there'd be nothing to subset by. */
   toggleBuzzdetectSubset: () => void;
   /**
@@ -67,6 +74,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled] = useState(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
   const [buzzdetectSubsetNeurons, setBuzzdetectSubsetNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectSubsetNeurons ?? []);
   const [buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate] = useState<number>(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+  const [buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
 
@@ -107,6 +115,16 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const handleBuzzdetectSetAllNeuronsHidden = useCallback((neurons: string[], hidden: boolean) => {
     setBuzzdetectHiddenNeurons(hidden ? neurons : []);
   }, []);
+  // Appended rather than prepended, so the pinned block reads in the order the
+  // user built it up rather than reshuffling every time they pin one more.
+  const handleBuzzdetectTogglePinNeuron = useCallback((neuron: string) => {
+    setBuzzdetectPinnedNeurons(prev => prev.includes(neuron) ? prev.filter(n => n !== neuron) : [...prev, neuron]);
+  }, []);
+  // Hides exactly the file's own neurons, so a label from a previously loaded
+  // file never lingers in hiddenNeurons (same reason as setAllNeuronsHidden).
+  const handleBuzzdetectSoloNeuron = useCallback((neurons: string[], neuron: string) => {
+    setBuzzdetectHiddenNeurons(neurons.filter(n => n !== neuron));
+  }, []);
   const toggleBuzzdetectSubset = useCallback(() => {
     setBuzzdetectSubsetEnabled(prev => {
       if (!prev && buzzdetectSubsetNeurons.length === 0) return false;
@@ -133,6 +151,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectSubsetNeurons,
     buzzdetectMinDetectionRate,
     setBuzzdetectMinDetectionRate,
+    buzzdetectPinnedNeurons,
+    setBuzzdetectPinnedNeurons,
     buzzdetectPanelHeight,
     setBuzzdetectPanelHeight,
     buzzdetectData,
@@ -141,6 +161,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectToggleSubsetNeuron,
+    handleBuzzdetectTogglePinNeuron,
+    handleBuzzdetectSoloNeuron,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
   };

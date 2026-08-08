@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { startDragSession, useCollapsibleSidebar } from './useCollapsibleSidebar';
+import { useSidebarSections, SidebarSectionsApi, SidebarSectionsState } from './useSidebarSections';
 
 export interface PanelLayoutInitial {
   splitRatio: number;
-  leftPanelRatio: number;
+  sidebarSections: SidebarSectionsState;
   leftPanelWidth: number;
 }
 
 export interface PanelLayoutApi {
   splitRatio: number;
   setSplitRatio: React.Dispatch<React.SetStateAction<number>>;
-  leftPanelRatio: number;
-  setLeftPanelRatio: React.Dispatch<React.SetStateAction<number>>;
+  /** Height weights + collapse state for the sidebar's stack of sections. */
+  sidebarSections: SidebarSectionsApi;
   leftPanelWidth: number;
   setLeftPanelWidth: React.Dispatch<React.SetStateAction<number>>;
   filePanelCollapsed: boolean;
@@ -23,7 +24,6 @@ export interface PanelLayoutApi {
   /** Pixel height of the collapsed video bar — consumed by the render. */
   VIDEO_COLLAPSED_BAR_PX: number;
   handleSplitDrag: (e: React.MouseEvent) => void;
-  handleLeftPanelDrag: (e: React.MouseEvent) => void;
   handleLeftPanelWidthDrag: (e: React.MouseEvent) => void;
 }
 
@@ -39,17 +39,18 @@ const LEFT_PANEL_MAX_WIDTH = 480;
 const LEFT_PANEL_COLLAPSED_PX = 40;
 
 /**
- * Panel sizing + drag handling for AnnotationWindow's three resizable
- * dividers (video/spectrogram split, left-panel height, left-panel width),
+ * Panel sizing + drag handling for AnnotationWindow's resizable dividers (the
+ * video/spectrogram split, the left panel's width, and — via
+ * useSidebarSections — the dividers between the sidebar's stacked sections),
  * plus the H-held "hide labels" keyboard toggle. Initial sizes are passed in
- * by the owner (same DEFAULT_* values as before).
+ * by the owner.
  */
 export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
   const [videoCollapsed, setVideoCollapsed] = useState(false);
   const [hideLabels, setHideLabels] = useState(false);
 
   const [splitRatio, setSplitRatio] = useState(initial.splitRatio);
-  const [leftPanelRatio, setLeftPanelRatio] = useState(initial.leftPanelRatio);
+  const sidebarSections = useSidebarSections(initial.sidebarSections);
 
   // The file panel's width + drag-to-collapse is the generic sidebar behaviour,
   // shared with the help guide's section rail.
@@ -109,26 +110,10 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
       });
   };
 
-  const handleLeftPanelDrag = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startY = e.clientY;
-      const startRatio = leftPanelRatio;
-      startDragSession((moveEvent) => {
-          const delta = moveEvent.clientY - startY;
-          const totalHeight = window.innerHeight - 64;
-          let newRatio = Math.max(0.15, Math.min(0.85, startRatio + (delta / totalHeight)));
-          // Soft snap: shift up by one divider height (h-2 = 8px) so tops align visually
-          const dividerOffset = 8 / totalHeight;
-          if (Math.abs(newRatio - (splitRatio - dividerOffset)) < 0.025) newRatio = splitRatio - dividerOffset;
-          setLeftPanelRatio(newRatio);
-      });
-  };
-
   return {
     splitRatio,
     setSplitRatio,
-    leftPanelRatio,
-    setLeftPanelRatio,
+    sidebarSections,
     leftPanelWidth,
     setLeftPanelWidth,
     filePanelCollapsed,
@@ -139,7 +124,6 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     setHideLabels,
     VIDEO_COLLAPSED_BAR_PX,
     handleSplitDrag,
-    handleLeftPanelDrag,
     handleLeftPanelWidthDrag,
   };
 }

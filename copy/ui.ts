@@ -227,6 +227,32 @@ export const annotationToolsPanel = {
   get contextDelete() { return getOverride('ui.annotationToolsPanel.contextDelete') ?? "Delete"; },
 };
 
+export const sidebarSection = {
+  get collapseSection() { return getOverride('ui.sidebarSection.collapseSection') ?? "Collapse"; },
+  get expandSection() { return getOverride('ui.sidebarSection.expandSection') ?? "Expand"; },
+};
+
+export const neuronPalette = {
+  get header() { return getOverride('ui.neuronPalette.header') ?? "Neurons"; },
+  get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
+  get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
+  get noData() { return getOverride('ui.neuronPalette.noData') ?? "No buzzdetect activations for this track"; },
+  get showInGraph() { return getOverride('ui.neuronPalette.showInGraph') ?? "Click to plot this neuron"; },
+  get hideFromGraph() { return getOverride('ui.neuronPalette.hideFromGraph') ?? "Click to hide this neuron"; },
+  get customColorTitle() { return getOverride('ui.neuronPalette.customColorTitle') ?? "Custom color"; },
+  // Right-click menu.
+  get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin to top"; },
+  get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
+  get menuShow() { return getOverride('ui.neuronPalette.menuShow') ?? "Plot in graph"; },
+  get menuHide() { return getOverride('ui.neuronPalette.menuHide') ?? "Hide from graph"; },
+  get menuSolo() { return getOverride('ui.neuronPalette.menuSolo') ?? "Plot only this"; },
+  get menuShowAll() { return getOverride('ui.neuronPalette.menuShowAll') ?? "Plot all neurons"; },
+  get menuSubset() { return getOverride('ui.neuronPalette.menuSubset') ?? "Subset to detections"; },
+  get menuUnsubset() { return getOverride('ui.neuronPalette.menuUnsubset') ?? "Stop subsetting by this"; },
+  get menuChangeColor() { return getOverride('ui.neuronPalette.menuChangeColor') ?? "Change color…"; },
+  get menuResetThreshold() { return getOverride('ui.neuronPalette.menuResetThreshold') ?? "Reset threshold"; },
+};
+
 export const massRenameModal = {
   get title() { return getOverride('ui.massRenameModal.title') ?? "Mass Rename"; },
   get oldLabelField() { return getOverride('ui.massRenameModal.oldLabelField') ?? "Label to rename"; },

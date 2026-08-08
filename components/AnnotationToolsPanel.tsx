@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Settings, Trash2, Play, Square, TextCursorInput, Search } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Settings, Trash2, Play, Square, TextCursorInput, Search, Images } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
+import SidebarSection from './SidebarSection';
+import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import { tooltips } from '../copy/tooltips';
 import { annotationToolsPanel as copy } from '../copy/ui';
 
@@ -27,6 +29,8 @@ interface AnnotationToolsPanelProps {
   playingExampleToolId: string | null;
   onPlayExample: (tool: AnnotationTool) => void;
   onShowExamples: (toolIndex: number) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 function AnnotationToolsPanel({
@@ -42,6 +46,8 @@ function AnnotationToolsPanel({
   playingExampleToolId,
   onPlayExample,
   onShowExamples,
+  collapsed,
+  onToggleCollapsed,
 }: AnnotationToolsPanelProps) {
   const custom = annotationTools[0];
   // Defined (non-custom, keyed) tools sorted by key — memoized so this doesn't
@@ -52,37 +58,39 @@ function AnnotationToolsPanel({
   );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [hoveredToolKey, setHoveredToolKey] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [contextMenu]);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [contextMenu]);
-
   const openContextMenu = (e: React.MouseEvent, toolIndex: number, canDelete: boolean) => {
     e.preventDefault();
     setContextMenu({ toolIndex, x: e.clientX, y: e.clientY, canDelete });
   };
 
+  const menuItems = (state: ContextMenuState): ContextMenuItem[] => {
+    const tool = annotationTools[state.toolIndex];
+    const items: ContextMenuItem[] = [
+      { label: copy.contextEdit, icon: <Settings size={12} />, onSelect: () => onEditTool(state.toolIndex) },
+    ];
+    if ((tool?.exampleFiles?.length ?? 0) > 0) {
+      items.push({ label: copy.showExamples, icon: <Images size={12} />, onSelect: () => onShowExamples(state.toolIndex) });
+    }
+    if (state.canDelete) {
+      items.push({
+        label: copy.contextDelete,
+        icon: <Trash2 size={12} />,
+        danger: true,
+        separatorBefore: true,
+        onSelect: () => onRequestDeleteTool(state.toolIndex),
+      });
+    }
+    return items;
+  };
+
   return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-hidden" data-help-target="tool-palette">
-      {/* Header */}
-      <div className="flex items-center justify-between px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-none">
-        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>
-        <div className="flex items-center gap-0.5">
+    <SidebarSection
+      helpTarget="tool-palette"
+      collapsed={collapsed}
+      onToggleCollapsed={onToggleCollapsed}
+      title={<span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>}
+      actions={(
+        <div className="flex items-center gap-0.5 flex-none">
           <button
             onClick={onOpenFindLabel}
             className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
@@ -105,8 +113,8 @@ function AnnotationToolsPanel({
             <Settings size={12} />
           </button>
         </div>
-      </div>
-
+      )}
+    >
       {/* Tool Grid */}
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
 
@@ -217,36 +225,15 @@ function AnnotationToolsPanel({
       </div>
 
       {contextMenu && (
-        <div
-          ref={menuRef}
-          className="fixed z-[100] bg-slate-800 border border-slate-600 rounded shadow-xl py-1 min-w-[110px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            className="w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
-            onClick={() => { onEditTool(contextMenu.toolIndex); setContextMenu(null); }}
-          >
-            {copy.contextEdit}
-          </button>
-          {(annotationTools[contextMenu.toolIndex]?.exampleFiles?.length ?? 0) > 0 && (
-            <button
-              className="w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
-              onClick={() => { onShowExamples(contextMenu.toolIndex); setContextMenu(null); }}
-            >
-              {copy.showExamples}
-            </button>
-          )}
-          {contextMenu.canDelete && (
-            <button
-              className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-slate-700 transition-colors"
-              onClick={() => { onRequestDeleteTool(contextMenu.toolIndex); setContextMenu(null); }}
-            >
-              {copy.contextDelete}
-            </button>
-          )}
-        </div>
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={menuItems(contextMenu)}
+          onClose={() => setContextMenu(null)}
+          minWidth={130}
+        />
       )}
-    </div>
+    </SidebarSection>
   );
 }
 

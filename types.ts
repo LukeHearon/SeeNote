@@ -125,13 +125,25 @@ export interface ProjectUiSettings {
   buzzdetectSubsetEnabled?: boolean;       // master toggle; the neuron picks survive turning it off
   buzzdetectSubsetNeurons?: string[];      // neuron labels the subset is keyed to, OR'd
   buzzdetectMinDetectionRate?: number;     // 0-1; detection-rate mode's minimum per bin
+  buzzdetectPinnedNeurons?: string[];      // neuron labels pinned to the top of the palette, in pin order
 
   // Panel layout (see hooks/usePanelLayout.ts).
   playheadLocked?: boolean;
   filePanelCollapsed?: boolean;
   videoCollapsed?: boolean;
   splitRatio?: number;              // video/spectrogram vertical split, 0–1
+  /**
+   * @deprecated Superseded by `sidebarSections`, which sizes an arbitrary
+   * number of sections. Still read on load to seed the file-tree and
+   * annotation-tool weights for projects saved before the neuron palette.
+   */
   leftPanelRatio?: number;          // file-tree vs tool-palette split within left panel, 0–1
+  /**
+   * Per-section height weight and collapse state for the left sidebar's stack,
+   * keyed by section id (see SIDEBAR_SECTION_IDS in constants.ts). Weights are
+   * relative shares, not pixels or fractions of the window.
+   */
+  sidebarSections?: Record<string, { weight: number; collapsed: boolean }>;
   leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
 
   // Running-time readout format in the toolbar (see components/Toolbar.tsx).
