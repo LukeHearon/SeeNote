@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
+import { GripHorizontal } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -32,8 +32,6 @@ import {
   rangeMean,
 } from '../utils/prefixSums';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
-import { tooltips } from '../copy/tooltips';
-import DraftNumberInput from './DraftNumberInput';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -100,14 +98,22 @@ interface BuzzdetectPanelProps {
   // Neuron labels the subset is keyed to (OR'd). Independent of `hiddenNeurons`:
   // a neuron can drive the subset while another is merely plotted alongside it.
   subsetNeurons: string[];
-  // Minimum fraction of a bin's frames that must fire for the bin to be kept.
-  // detection-rate mode only.
-  minDetectionRate: number;
+  /**
+   * User-pinned Y-axis range, or null for the auto range. Owned by
+   * useBuzzdetect so the neuron palette's fields and this graph read the same
+   * value — the palette is where it's typed, this is where it's drawn.
+   */
+  yAxisOverride: { min: number; max: number } | null;
+  /**
+   * While true, the auto bin width and auto Y-range are reported upward at draw
+   * time (they change with zoom). The palette sets it only while its settings
+   * block is open, so a closed block costs no renders.
+   */
+  reportAutoValues: boolean;
   height: number;
   // Callbacks.
-  onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
-  onBinWidthOverrideChange: (binWidth: number | null) => void;
-  onMinDetectionRateChange: (rate: number) => void;
+  onAutoBinWidthChange: (binWidth: number) => void;
+  onAutoYRangeChange: (range: { min: number; max: number } | null) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -132,11 +138,11 @@ export default function BuzzdetectPanel({
   subsetActive,
   timeline,
   subsetNeurons,
-  minDetectionRate,
+  yAxisOverride,
+  reportAutoValues,
   height,
-  onSeriesModeChange,
-  onBinWidthOverrideChange,
-  onMinDetectionRateChange,
+  onAutoBinWidthChange,
+  onAutoYRangeChange,
   onHeightChange,
   onSelectionChange,
   onBoundAnnotationChange,
@@ -147,7 +153,6 @@ export default function BuzzdetectPanel({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
-  const [showSettings, setShowSettings] = useState(false);
   // Hovered unit, as a frame-index range (inclusive) — one frame, or the whole
   // bucket frames are grouped into (see unitAtClientX).
   // Lives in a ref as well as state: the ref is what the overlay canvas paints
@@ -172,33 +177,6 @@ export default function BuzzdetectPanel({
   const dragAnchorRef = useRef<
     { unit: FrameUnit; pending: boolean; startX: number; startTime: number } | null
   >(null);
-
-  // User-editable Y-axis range. Null means "use the auto-calculated range"
-  // (activeAutoYRange, below); typing into either settings text box pins it.
-  // Reset whenever a new file's data loads, so each file starts from its own
-  // auto-calculated range rather than inheriting a stale manual override.
-  const [yAxisOverride, setYAxisOverride] = useState<{ min: number; max: number } | null>(null);
-  useEffect(() => { setYAxisOverride(null); }, [data]);
-
-  // binWidthOverride is a persisted prop (deliberately NOT reset per track —
-  // see its prop doc), but a series-mode flip still needs to reset both it
-  // and the Y-axis override, since the two modes plot in entirely different
-  // units and their auto-calculated ranges/widths aren't comparable. Skips
-  // the reset on mount so loading a project with a persisted override doesn't
-  // immediately wipe it.
-  const seriesModeMountedRef = useRef(false);
-  useEffect(() => {
-    if (!seriesModeMountedRef.current) { seriesModeMountedRef.current = true; return; }
-    setYAxisOverride(null);
-    onBinWidthOverrideChange(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seriesMode]);
-
-  // Live-updated (only while the settings popover is open, to avoid
-  // re-rendering every draw tick for no visible benefit) auto-calculated bin
-  // width, so the settings text box shows "the current auto-binning
-  // binwidth" per the spec, even as it changes with zoom.
-  const [autoBinWidthDisplay, setAutoBinWidthDisplay] = useState(0);
 
   // The bin width (seconds) currently in effect — auto or overridden — set at
   // draw time. It's what decides whether a unit is one frame or a whole bucket
@@ -317,6 +295,13 @@ export default function BuzzdetectPanel({
   // Whichever range applies to the current series mode — the base (pre
   // override, pre-threshold-widening) auto Y-range.
   const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
+
+  // Mirror the auto range up to useBuzzdetect, so the palette's Y-axis fields
+  // can show what the graph is actually using. Effect rather than draw-time, so
+  // it only fires when the memoised range genuinely changes.
+  useEffect(() => {
+    if (reportAutoValues) onAutoYRangeChange(activeAutoYRange);
+  }, [reportAutoValues, activeAutoYRange, onAutoYRangeChange]);
 
   // The current selection as a unit, for the persistent selection readout
   // below: the frames it covers (half-open on the right, so selecting exactly
@@ -441,8 +426,8 @@ export default function BuzzdetectPanel({
     // the hover/click handlers, which resolve units by time through the same
     // functions this draw enumerates them with.
     effectiveBinWidthRef.current = effectiveBinWidthSec;
-    if (showSettings) {
-      setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
+    if (reportAutoValues) {
+      onAutoBinWidthChange(Math.round(autoBinWidthSec * 10000) / 10000);
     }
 
     // With individual frames visible, detection rate is a binary per-frame
@@ -791,7 +776,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, activeTimeline, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1171,145 +1156,6 @@ export default function BuzzdetectPanel({
           {data && (selectionUnit ?? hoverRange) !== null &&
             renderBinRangeReadout((selectionUnit ?? hoverRange)!)}
 
-          {/* Settings popover trigger */}
-          <button
-            data-buzz-ui
-            onClick={() => setShowSettings(s => !s)}
-            className={`absolute top-1.5 right-1.5 p-1 rounded transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700/70'}`}
-            data-tooltip={tooltips.buzzdetectSettings}
-          >
-            <Sliders size={14} />
-          </button>
-
-          {showSettings && (
-            <div
-              data-buzz-ui
-              className="absolute top-9 right-1.5 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-64 max-h-[calc(100%-2.5rem)] overflow-y-auto custom-scrollbar"
-              onMouseDown={(e) => e.stopPropagation()}
-              onWheel={(e) => e.stopPropagation()}
-            >
-              <div className="p-3 space-y-2">
-                {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                      {buzzdetectCopy.seriesHeader}
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => onSeriesModeChange('activation')}
-                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'activation' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                      >
-                        {buzzdetectCopy.seriesActivation}
-                      </button>
-                      <button
-                        onClick={() => onSeriesModeChange('detectionRate')}
-                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'detectionRate' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                      >
-                        {buzzdetectCopy.seriesDetectionRate}
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
-                      <span>{buzzdetectCopy.binWidthHeader}</span>
-                      {binWidthOverride !== null && (
-                        <button
-                          onClick={() => onBinWidthOverrideChange(null)}
-                          className="text-slate-400 hover:text-[#e65161]"
-                          data-tooltip={tooltips.buzzdetectBinWidthReset}
-                        >
-                          <RotateCcw size={11} />
-                        </button>
-                      )}
-                    </div>
-                    <DraftNumberInput
-                      value={binWidthOverride ?? autoBinWidthDisplay}
-                      onCommit={(v) => { if (v === null) return; onBinWidthOverrideChange(v); }}
-                      min={data.binWidth}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                    />
-                  </div>
-                )}
-                {data && activeAutoYRange && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
-                      <span>{buzzdetectCopy.yAxisHeader}</span>
-                      {yAxisOverride && (yAxisOverride.min !== activeAutoYRange.min || yAxisOverride.max !== activeAutoYRange.max) && (
-                        <button
-                          onClick={() => setYAxisOverride(null)}
-                          className="text-slate-400 hover:text-[#e65161]"
-                          data-tooltip={tooltips.buzzdetectYAxisReset}
-                        >
-                          <RotateCcw size={11} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <DraftNumberInput
-                        value={yAxisOverride?.min ?? activeAutoYRange.min}
-                        onCommit={(v) => {
-                          if (v === null) return;
-                          setYAxisOverride({ min: v, max: yAxisOverride?.max ?? activeAutoYRange.max });
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                      />
-                      <span className="text-slate-500 text-xs flex-none">–</span>
-                      <DraftNumberInput
-                        value={yAxisOverride?.max ?? activeAutoYRange.max}
-                        onCommit={(v) => {
-                          if (v === null) return;
-                          setYAxisOverride({ min: yAxisOverride?.min ?? activeAutoYRange.min, max: v });
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                      />
-                    </div>
-                  </div>
-                )}
-                {data && (
-                  <div className="space-y-1">
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                      {buzzdetectCopy.subsetHeader}
-                    </div>
-                    {subsetNeurons.length === 0 ? (
-                      <p className="text-slate-500 text-[11px]">{buzzdetectCopy.subsetNoNeurons}</p>
-                    ) : (
-                      <>
-                        {seriesMode === 'detectionRate' && (
-                          <div className="flex items-center gap-2">
-                            <span className="flex-1 text-[11px] text-slate-300">{buzzdetectCopy.subsetMinRateLabel}</span>
-                            <DraftNumberInput
-                              value={minDetectionRate}
-                              onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
-                              min={0}
-                              className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right text-slate-200 outline-none focus:border-[#e65161]"
-                            />
-                          </div>
-                        )}
-                        {/* The auto bin width changes with zoom, so subsetting by
-                            it would silently redefine the subset every time the
-                            view moved. A bin is kept whole, on the pinned width
-                            instead (the file's frame length until one is
-                            pinned, where a bin is just one frame) — its mean
-                            activation in activation mode, its detection rate in
-                            detection rate mode. */}
-                        <p className="text-slate-500 text-[10px]">{buzzdetectCopy.subsetPinBinWidth}</p>
-                      </>
-                    )}
-                  </div>
-                )}
-                {!data && <p className="text-slate-500 text-xs py-1">{buzzdetectCopy.noDataLoaded}</p>}
-                {/* Per-neuron controls — plot, color, threshold, subset — live
-                    in the neuron palette in the left sidebar (NeuronPalette),
-                    beside the annotation-tool palette. This popover keeps only
-                    the settings that describe the graph as a whole. */}
-                {data && enabledNeurons.length === 0 && (
-                  <p className="text-slate-500 text-[11px] pt-1 border-t border-slate-700">{buzzdetectCopy.allNeuronsHidden}</p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

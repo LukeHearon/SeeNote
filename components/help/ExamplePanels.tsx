@@ -245,11 +245,11 @@ export function ExampleBuzzdetectPanel() {
         subsetActive={subsetActive}
         timeline={timeline}
         subsetNeurons={subsetNeurons}
-        minDetectionRate={minDetectionRate}
+        yAxisOverride={null}
+        reportAutoValues={false}
         height={height}
-        onSeriesModeChange={setSeriesMode}
-        onBinWidthOverrideChange={setBinWidthOverride}
-        onMinDetectionRateChange={setMinDetectionRate}
+        onAutoBinWidthChange={() => {}}
+        onAutoYRangeChange={() => {}}
         onHeightChange={setHeight}
         onSelectionChange={setSelection}
         onBoundAnnotationChange={() => {}}

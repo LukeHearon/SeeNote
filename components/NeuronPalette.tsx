@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, Palette, Pin, PinOff, RotateCcw, Scissors } from 'lucide-react';
-import { BuzzdetectData } from '../types';
+import { Eye, EyeOff, Palette, Pin, PinOff, RotateCcw, Scissors, Sliders } from 'lucide-react';
+import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { BUZZDETECT_PALETTE, DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
+import { clamp } from '../utils/helpers';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
 import ColorSwatchPicker from './ColorSwatchPicker';
@@ -9,6 +10,8 @@ import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import DraftNumberInput from './DraftNumberInput';
 import { tooltips } from '../copy/tooltips';
 import { neuronPalette as copy } from '../copy/ui';
+
+const FIELD_CLASS = 'w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200 outline-none focus:border-[#e65161]';
 
 interface NeuronPaletteProps {
   data: BuzzdetectData | null;
@@ -26,6 +29,20 @@ interface NeuronPaletteProps {
   onThresholdChange: (neuron: string, value: number) => void;
   onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
   onTogglePinNeuron: (neuron: string) => void;
+  // ── Graph-wide settings ────────────────────────────────────────────────────
+  seriesMode: BuzzdetectSeriesMode;
+  binWidthOverride: number | null;
+  /** Bin width / Y-range the graph picked for itself, shown when nothing is pinned. */
+  autoBinWidth: number;
+  autoYRange: { min: number; max: number } | null;
+  yAxisOverride: { min: number; max: number } | null;
+  minDetectionRate: number;
+  settingsOpen: boolean;
+  onSettingsOpenChange: (open: boolean) => void;
+  onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
+  onBinWidthOverrideChange: (binWidth: number | null) => void;
+  onYAxisOverrideChange: (range: { min: number; max: number } | null) => void;
+  onMinDetectionRateChange: (rate: number) => void;
 }
 
 /**
@@ -37,6 +54,10 @@ interface NeuronPaletteProps {
  * palette's convention), its color, its threshold, and whether the track is
  * subset to it. Everything rarer is on the right-click menu, where there's room
  * for a full label instead of an unlabelled control competing for the row.
+ *
+ * The graph-wide settings sit in a disclosure above the list rather than in a
+ * popover over the graph: the series being plotted and the bin width decide
+ * what a threshold below even means, so they belong next to the thresholds.
  *
  * Plotting and subsetting stay independent, as they were in the old settings
  * popover: a neuron can define which frames survive while another is merely
@@ -58,6 +79,18 @@ function NeuronPalette({
   onThresholdChange,
   onToggleSubsetNeuron,
   onTogglePinNeuron,
+  seriesMode,
+  binWidthOverride,
+  autoBinWidth,
+  autoYRange,
+  yAxisOverride,
+  minDetectionRate,
+  settingsOpen,
+  onSettingsOpenChange,
+  onSeriesModeChange,
+  onBinWidthOverrideChange,
+  onYAxisOverrideChange,
+  onMinDetectionRateChange,
 }: NeuronPaletteProps) {
   // Which neuron's color popover is open (null = none). Closed on outside click.
   const [openColorNeuron, setOpenColorNeuron] = useState<string | null>(null);
@@ -113,10 +146,9 @@ function NeuronPalette({
         label: plotted ? copy.menuHide : copy.menuShow,
         icon: plotted ? <EyeOff size={12} /> : <Eye size={12} />,
         onSelect: () => onToggleNeuron(n, plotted),
-        separatorBefore: true,
       },
-      { label: copy.menuSolo, icon: <Eye size={12} />, onSelect: () => onSoloNeuron(n) },
-      { label: copy.menuShowAll, icon: <Eye size={12} />, onSelect: () => onSetAllNeuronsHidden(false) },
+      { label: copy.menuIsolate, icon: <Eye size={12} />, onSelect: () => onSoloNeuron(n) },
+      { label: copy.menuPlotAll, icon: <Eye size={12} />, onSelect: () => onSetAllNeuronsHidden(false) },
       {
         label: isSubset ? copy.menuUnsubset : copy.menuSubset,
         icon: <Scissors size={12} />,
@@ -128,12 +160,6 @@ function NeuronPalette({
         icon: <Palette size={12} />,
         onSelect: () => setOpenColorNeuron(n),
         separatorBefore: true,
-      },
-      {
-        label: copy.menuResetThreshold,
-        icon: <RotateCcw size={12} />,
-        onSelect: () => onThresholdChange(n, DEFAULT_BUZZDETECT_THRESHOLD),
-        disabled: (thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD) === DEFAULT_BUZZDETECT_THRESHOLD,
       },
     ];
   };
@@ -196,21 +222,122 @@ function NeuronPalette({
     );
   };
 
+  const fieldLabel = (text: string, reset?: { onReset: () => void; tooltip: string }) => (
+    <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500">
+      <span>{text}</span>
+      {reset && (
+        <button onClick={reset.onReset} className="text-slate-500 hover:text-[#e65161]" data-tooltip={reset.tooltip}>
+          <RotateCcw size={10} />
+        </button>
+      )}
+    </div>
+  );
+
+  const settingsBlock = data && (
+    <div className="px-1.5 pt-1.5 pb-2 space-y-2 border-b border-slate-700 bg-slate-800/40">
+      <div className="space-y-1">
+        {fieldLabel(copy.seriesHeader)}
+        <div className="flex gap-1">
+          {(['activation', 'detectionRate'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => onSeriesModeChange(mode)}
+              className={`flex-1 px-1 py-0.5 rounded text-[10px] transition-colors ${seriesMode === mode ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >
+              {mode === 'activation' ? copy.seriesActivation : copy.seriesDetectionRate}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        {fieldLabel(copy.binWidthHeader, binWidthOverride !== null
+          ? { onReset: () => onBinWidthOverrideChange(null), tooltip: tooltips.buzzdetectBinWidthReset }
+          : undefined)}
+        <DraftNumberInput
+          value={binWidthOverride ?? autoBinWidth}
+          onCommit={(v) => { if (v !== null) onBinWidthOverrideChange(v); }}
+          min={data.binWidth}
+          className={FIELD_CLASS}
+        />
+      </div>
+
+      {autoYRange && (
+        <div className="space-y-1">
+          {fieldLabel(copy.yAxisHeader, yAxisOverride
+            ? { onReset: () => onYAxisOverrideChange(null), tooltip: tooltips.buzzdetectYAxisReset }
+            : undefined)}
+          <div className="flex items-center gap-1">
+            <DraftNumberInput
+              value={yAxisOverride?.min ?? autoYRange.min}
+              onCommit={(v) => { if (v !== null) onYAxisOverrideChange({ min: v, max: yAxisOverride?.max ?? autoYRange.max }); }}
+              className={FIELD_CLASS}
+            />
+            <span className="text-slate-500 text-[10px] flex-none">–</span>
+            <DraftNumberInput
+              value={yAxisOverride?.max ?? autoYRange.max}
+              onCommit={(v) => { if (v !== null) onYAxisOverrideChange({ min: yAxisOverride?.min ?? autoYRange.min, max: v }); }}
+              className={FIELD_CLASS}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        {fieldLabel(copy.subsetHeader)}
+        {subsetNeurons.length === 0 ? (
+          <p className="text-slate-500 text-[10px]">{copy.subsetNoNeurons}</p>
+        ) : (
+          <>
+            {seriesMode === 'detectionRate' && (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 text-[10px] text-slate-300">{copy.subsetMinRateLabel}</span>
+                <DraftNumberInput
+                  value={minDetectionRate}
+                  onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
+                  min={0}
+                  className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-right text-slate-200 outline-none focus:border-[#e65161]"
+                />
+              </div>
+            )}
+            {/* The auto bin width changes with zoom, so subsetting by it would
+                silently redefine the subset every time the view moved. A bin is
+                kept whole, on the pinned width instead. */}
+            <p className="text-slate-500 text-[10px]">{copy.subsetPinBinWidth}</p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <SidebarSection
       title={<span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
       helpTarget="neuron-palette"
-      actions={neurons.length > 0 && (
-        <button
-          onClick={() => onSetAllNeuronsHidden(allShown)}
-          className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors underline decoration-dotted flex-none"
-        >
-          {allShown ? copy.selectNone : copy.selectAll}
-        </button>
+      actions={(
+        <div className="flex items-center gap-1.5 flex-none">
+          {neurons.length > 0 && (
+            <button
+              onClick={() => onSetAllNeuronsHidden(allShown)}
+              className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors underline decoration-dotted"
+            >
+              {allShown ? copy.selectNone : copy.selectAll}
+            </button>
+          )}
+          <button
+            onClick={() => onSettingsOpenChange(!settingsOpen)}
+            className={`p-0.5 rounded transition-colors ${settingsOpen ? 'bg-slate-700 text-[#e65161]' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700'}`}
+            data-tooltip={copy.settingsTitle}
+          >
+            <Sliders size={12} />
+          </button>
+        </div>
       )}
     >
+      {settingsOpen && settingsBlock}
+
       <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-1">
         {neurons.length === 0 && (
           <p className="text-slate-600 text-[11px] px-1 py-2">{copy.noData}</p>

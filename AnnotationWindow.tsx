@@ -314,6 +314,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons,
     buzzdetectPanelHeight, setBuzzdetectPanelHeight,
     buzzdetectData, setBuzzdetectData,
+    buzzdetectSettingsOpen, setBuzzdetectSettingsOpen,
+    buzzdetectYAxisOverride, setBuzzdetectYAxisOverride,
+    buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
+    buzzdetectAutoYRange, setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
@@ -2079,6 +2083,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onThresholdChange={handleBuzzdetectThresholdChange}
                   onToggleSubsetNeuron={handleBuzzdetectToggleSubsetNeuron}
                   onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
+                  seriesMode={buzzdetectSeriesMode}
+                  binWidthOverride={buzzdetectBinWidthOverride}
+                  autoBinWidth={buzzdetectAutoBinWidth}
+                  autoYRange={buzzdetectAutoYRange}
+                  yAxisOverride={buzzdetectYAxisOverride}
+                  minDetectionRate={buzzdetectMinDetectionRate}
+                  settingsOpen={buzzdetectSettingsOpen}
+                  onSettingsOpenChange={setBuzzdetectSettingsOpen}
+                  onSeriesModeChange={setBuzzdetectSeriesMode}
+                  onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
+                  onYAxisOverrideChange={setBuzzdetectYAxisOverride}
+                  onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
                 />
               ),
             });
@@ -2296,11 +2312,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  subsetActive={subsetActive}
                  timeline={timeline}
                  subsetNeurons={buzzdetectSubsetNeurons}
-                 minDetectionRate={buzzdetectMinDetectionRate}
+                 yAxisOverride={buzzdetectYAxisOverride}
+                 reportAutoValues={buzzdetectSettingsOpen}
                  height={buzzdetectPanelHeight}
-                 onSeriesModeChange={setBuzzdetectSeriesMode}
-                 onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
-                 onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
+                 onAutoBinWidthChange={setBuzzdetectAutoBinWidth}
+                 onAutoYRangeChange={setBuzzdetectAutoYRange}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
                  onBoundAnnotationChange={setBoundAnnotationId}

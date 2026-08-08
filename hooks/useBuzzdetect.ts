@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Project } from '../types';
 import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE } from '../constants';
 import { readBuzzdetect } from '../utils/tauriCommands';
@@ -27,6 +27,28 @@ export interface BuzzdetectApi {
   setBuzzdetectPinnedNeurons: React.Dispatch<React.SetStateAction<string[]>>;
   buzzdetectPanelHeight: number;
   setBuzzdetectPanelHeight: React.Dispatch<React.SetStateAction<number>>;
+  // ── Graph-wide settings shown in the neuron palette ────────────────────────
+  /** Whether the palette's settings block is open. Gates the panel's reporting below. */
+  buzzdetectSettingsOpen: boolean;
+  setBuzzdetectSettingsOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /**
+   * User-pinned Y-axis range, or null to use the auto range. Transient, not
+   * persisted: it's reset per file (each file gets its own auto range rather
+   * than inheriting a stale override) and on a series-mode flip, since the two
+   * modes plot in units that aren't comparable.
+   */
+  buzzdetectYAxisOverride: { min: number; max: number } | null;
+  setBuzzdetectYAxisOverride: React.Dispatch<React.SetStateAction<{ min: number; max: number } | null>>;
+  /**
+   * The auto values the graph is currently drawing with, reported back up by
+   * BuzzdetectPanel at draw time so the palette's fields can show them as
+   * placeholders. Both change with zoom, so the panel only reports while the
+   * settings block is open.
+   */
+  buzzdetectAutoBinWidth: number;
+  setBuzzdetectAutoBinWidth: React.Dispatch<React.SetStateAction<number>>;
+  buzzdetectAutoYRange: { min: number; max: number } | null;
+  setBuzzdetectAutoYRange: React.Dispatch<React.SetStateAction<{ min: number; max: number } | null>>;
   buzzdetectData: BuzzdetectData | null;
   setBuzzdetectData: React.Dispatch<React.SetStateAction<BuzzdetectData | null>>;
   handleBuzzdetectThresholdChange: (neuron: string, value: number) => void;
@@ -77,6 +99,25 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
+  const [buzzdetectSettingsOpen, setBuzzdetectSettingsOpen] = useState(false);
+  const [buzzdetectYAxisOverride, setBuzzdetectYAxisOverride] = useState<{ min: number; max: number } | null>(null);
+  const [buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth] = useState(0);
+  const [buzzdetectAutoYRange, setBuzzdetectAutoYRange] = useState<{ min: number; max: number } | null>(null);
+
+  // Each file starts from its own auto Y-range rather than inheriting a manual
+  // override typed against a different file's activations.
+  useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectData]);
+
+  // A series-mode flip resets both overrides: an activation and a detection
+  // rate aren't in comparable units, so neither a pinned Y-range nor a pinned
+  // bin width carries over meaningfully. Skipped on mount, so loading a project
+  // with a persisted bin width doesn't immediately wipe it.
+  const seriesModeMountedRef = useRef(false);
+  useEffect(() => {
+    if (!seriesModeMountedRef.current) { seriesModeMountedRef.current = true; return; }
+    setBuzzdetectYAxisOverride(null);
+    setBuzzdetectBinWidthOverride(null);
+  }, [buzzdetectSeriesMode]);
 
   // Load buzzdetect activations for the current track, located by ident under
   // the configured buzzdetect directory. `cancelled` guards against the track
@@ -157,6 +198,14 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     setBuzzdetectPanelHeight,
     buzzdetectData,
     setBuzzdetectData,
+    buzzdetectSettingsOpen,
+    setBuzzdetectSettingsOpen,
+    buzzdetectYAxisOverride,
+    setBuzzdetectYAxisOverride,
+    buzzdetectAutoBinWidth,
+    setBuzzdetectAutoBinWidth,
+    buzzdetectAutoYRange,
+    setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,

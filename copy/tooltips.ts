@@ -70,7 +70,6 @@ export const tooltips = {
   get syncUnpushed() { return getOverride('tooltips.syncUnpushed') ?? "You have unsynced annotations"; },
   get syncUnpulled() { return getOverride('tooltips.syncUnpulled') ?? "New annotations are available to download"; },
   get syncWithMessage() { return getOverride('tooltips.syncWithMessage') ?? "Sync with a commit message…"; },
-  get buzzdetectSettings() { return getOverride('tooltips.buzzdetectSettings') ?? "buzzdetect settings"; },
   get buzzdetectYAxisReset() { return getOverride('tooltips.buzzdetectYAxisReset') ?? "Reset to auto-calculated range"; },
   get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
