@@ -16,8 +16,8 @@ Quick reference for agents. One phrase per file.
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
-- `components/NeuronPalette.tsx` — sidebar list of the PLOTTED neurons, the add-neuron picker, and the graph-wide settings (series, bin width, Y range, subset readout)
-- `components/NeuronSettingsPopover.tsx` — one neuron's color, thresholds, subsetting, pin and remove; same surface whether the neuron was just added or edited
+- `components/NeuronPalette.tsx` — sidebar list of the PLOTTED neurons, the add-neuron picker, and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
+- `components/NeuronSettingsPopover.tsx` — one neuron's color (pip opens a hex picker), its subset + detection thresholds, pin and remove; same surface whether the neuron was just added or edited
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 

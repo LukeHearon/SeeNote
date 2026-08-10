@@ -24,8 +24,8 @@ interface UseProjectPersistenceArgs {
   buzzdetectSeriesMode: BuzzdetectSeriesMode;
   buzzdetectBinWidthOverride: number | null;
   buzzdetectSubsetEnabled: boolean;
-  buzzdetectSubsetNeurons: string[];
   buzzdetectMinDetectionRate: number;
+  buzzdetectSubsetBuffer: number;
   buzzdetectPinnedNeurons: string[];
   videoMode: VideoMode;
   videoBrightness: number;
@@ -66,8 +66,8 @@ export function useProjectPersistence({
   buzzdetectSeriesMode,
   buzzdetectBinWidthOverride,
   buzzdetectSubsetEnabled,
-  buzzdetectSubsetNeurons,
   buzzdetectMinDetectionRate,
+  buzzdetectSubsetBuffer,
   buzzdetectPinnedNeurons,
   videoMode,
   videoBrightness,
@@ -125,8 +125,8 @@ export function useProjectPersistence({
         buzzdetectSeriesMode,
         buzzdetectBinWidthOverride,
         buzzdetectSubsetEnabled,
-        buzzdetectSubsetNeurons,
         buzzdetectMinDetectionRate,
+        buzzdetectSubsetBuffer,
         buzzdetectPinnedNeurons,
         videoMode,
         videoBrightness,
@@ -145,5 +145,5 @@ export function useProjectPersistence({
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectMinDetectionRate, buzzdetectPinnedNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, sidebarSections, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectMinDetectionRate, buzzdetectSubsetBuffer, buzzdetectPinnedNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, sidebarSections, leftPanelWidth]);
 }

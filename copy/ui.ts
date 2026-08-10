@@ -242,8 +242,6 @@ export const neuronPalette = {
   get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin"; },
   get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
   get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
-  get menuSubset() { return getOverride('ui.neuronPalette.menuSubset') ?? "Subset detections"; },
-  get menuUnsubset() { return getOverride('ui.neuronPalette.menuUnsubset') ?? "Stop subsetting"; },
   get menuSettings() { return getOverride('ui.neuronPalette.menuSettings') ?? "Settings…"; },
   // Graph-wide settings block.
   get settingsTitle() { return getOverride('ui.neuronPalette.settingsTitle') ?? "Graph settings"; },
@@ -254,7 +252,8 @@ export const neuronPalette = {
   get yAxisHeader() { return getOverride('ui.neuronPalette.yAxisHeader') ?? "Y-axis range"; },
   get subsetHeader() { return getOverride('ui.neuronPalette.subsetHeader') ?? "Subset to detections"; },
   get subsetMinRateLabel() { return getOverride('ui.neuronPalette.subsetMinRateLabel') ?? "Min detection rate"; },
-  get subsetNoNeurons() { return getOverride('ui.neuronPalette.subsetNoNeurons') ?? "Cut a neuron above to subset by it."; },
+  get subsetNoNeurons() { return getOverride('ui.neuronPalette.subsetNoNeurons') ?? "Type a Subset at value on a neuron above to subset by it."; },
+  get subsetBufferLabel() { return getOverride('ui.neuronPalette.subsetBufferLabel') ?? "Buffer (s)"; },
   get subsetPinBinWidth() { return getOverride('ui.neuronPalette.subsetPinBinWidth') ?? "Measured over the bin width above."; },
   // What the cut came to. `of` separates kept audio from the file's length.
   get statsKeptLabel() { return getOverride('ui.neuronPalette.statsKeptLabel') ?? "Kept"; },
@@ -263,7 +262,9 @@ export const neuronPalette = {
     `${regions.toLocaleString('en-US')} region${regions === 1 ? '' : 's'} · ${frames.toLocaleString('en-US')} frame${frames === 1 ? '' : 's'}`,
   // Per-neuron settings popover, and the picker that adds a neuron.
   get settingsThreshold() { return getOverride('ui.neuronPalette.settingsThreshold') ?? "Detection at"; },
-  get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Cut at"; },
+  get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Subset at"; },
+  // Placeholder in an empty "Subset at" box: this neuron isn't cutting at all.
+  get settingsSubsetOff() { return getOverride('ui.neuronPalette.settingsSubsetOff') ?? "off"; },
   get settingsRemove() { return getOverride('ui.neuronPalette.settingsRemove') ?? "Remove"; },
   get removeTooltip() { return getOverride('ui.neuronPalette.removeTooltip') ?? "Stop plotting this neuron (its settings are kept)"; },
   get addNeuron() { return getOverride('ui.neuronPalette.addNeuron') ?? "Add neuron"; },

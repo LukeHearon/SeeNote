@@ -123,7 +123,7 @@ export function sidebarSectionsFromUiSettings(
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectSubsetThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
-  'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectPinnedNeurons' |
+  'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectSubsetBuffer' | 'buzzdetectPinnedNeurons' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
   'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
@@ -169,6 +169,10 @@ export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
 // A middling default — high enough that one stray frame doesn't keep a bin,
 // low enough that a real burst isn't thrown away for not being unanimous.
 export const DEFAULT_BUZZDETECT_MIN_DETECTION_RATE = 0.5;
+// Seconds of context a subset keeps either side of each kept bin. Zero: the
+// buffer is opt-in, so a cut means exactly what the thresholds said until the
+// user asks for room around it.
+export const DEFAULT_BUZZDETECT_SUBSET_BUFFER = 0;
 // Categorical palette for neuron polylines, assigned by neuron order. Chosen to
 // read clearly on the slate-900 panel background and stay distinct from the
 // magma spectrogram colormap.

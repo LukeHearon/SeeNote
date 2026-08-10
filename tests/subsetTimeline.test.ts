@@ -5,6 +5,7 @@ import {
   displayOfNearestKept,
   projectIntervalToDisplay,
   segmentJoins,
+  minSegmentDuration,
   sourceIntervalOf,
 } from '../utils/subsetTimeline';
 
@@ -223,6 +224,23 @@ describe('segmentJoins', () => {
       100,
     );
     expect(segmentJoins(tl)).toEqual([2, 5]);
+  });
+});
+
+// What the draw loops gate the gold seam lines on: below a couple of pixels
+// per segment the seams merge into a wall and are dropped instead.
+describe('minSegmentDuration', () => {
+  it('is Infinity when there are no seams to space out', () => {
+    expect(minSegmentDuration(identityTimeline(100))).toBe(Infinity);
+    expect(minSegmentDuration(buildSubsetTimeline([{ start: 10, end: 20 }], 100))).toBe(Infinity);
+  });
+
+  it('is the shortest span, not the first or the average', () => {
+    const tl = buildSubsetTimeline(
+      [{ start: 10, end: 15 }, { start: 50, end: 51 }, { start: 80, end: 83 }],
+      100,
+    );
+    expect(minSegmentDuration(tl)).toBeCloseTo(1);
   });
 });
 

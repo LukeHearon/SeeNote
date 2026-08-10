@@ -118,6 +118,8 @@ export interface ProjectUiSettings {
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
   // Per-neuron threshold the SUBSET is cut at, where it differs from the
   // detection threshold above (activation mode only). Absent = the same value.
+  // Per-neuron threshold the SUBSET is cut at. An entry here is what makes a
+  // neuron part of the subset — the keys ARE the picked neurons.
   buzzdetectSubsetThresholds?: Record<string, number>;
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
@@ -126,8 +128,15 @@ export interface ProjectUiSettings {
   // Subset mode (see utils/subsetTimeline.ts): show only the time where the
   // chosen neurons fired, with the rest removed from the time axis.
   buzzdetectSubsetEnabled?: boolean;       // master toggle; the neuron picks survive turning it off
-  buzzdetectSubsetNeurons?: string[];      // neuron labels the subset is keyed to, OR'd
+  /**
+   * Legacy: neuron labels the subset was keyed to. Superseded by the keys of
+   * `buzzdetectSubsetThresholds` — still read once, on load, to carry an older
+   * project's picks across (useBuzzdetect's migrateSubsetThresholds), and no
+   * longer written.
+   */
+  buzzdetectSubsetNeurons?: string[];
   buzzdetectMinDetectionRate?: number;     // 0-1; detection-rate mode's minimum per bin
+  buzzdetectSubsetBuffer?: number;         // seconds of context kept either side of each subset bin
   buzzdetectPinnedNeurons?: string[];      // neuron labels pinned to the top of the palette, in pin order
 
   // Panel layout (see hooks/usePanelLayout.ts).

@@ -20,10 +20,17 @@ export function BuzzdetectToggle({ enabled, onToggle }: { enabled: boolean; onTo
 }
 
 /**
- * Collapses the track to the ticked neurons' detections (utils/subsetTimeline.ts).
- * Only rendered when at least one neuron has been ticked to subset by — without
- * one there's nothing the button could do, so it isn't shown rather than
+ * Collapses the track to the picked neurons' detections (utils/subsetTimeline.ts)
+ * — "subset by everything the palette's Subset at boxes name" vs "by nothing".
+ * Only rendered when at least one neuron has a Subset at value: without one
+ * there's nothing the button could do, so it isn't shown rather than
  * shown-and-inert.
+ *
+ * Unlike its neighbours here it is NOT in the toolbar — it lives on the
+ * buzzdetect panel (components/BuzzdetectPanel.tsx), beside the thresholds that
+ * key it. It stays in this module because the help guide renders it live from
+ * here alongside the other toggles, and it has the same shape: state in,
+ * callback out.
  */
 export function SubsetToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
   return (

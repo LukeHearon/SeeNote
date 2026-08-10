@@ -75,7 +75,7 @@ An optional line graph docked below the spectrogram, plotting per-frame neuron *
 
 # Subset Mode
 
-Showing only the time where chosen buzzdetect **neurons** fired, with everything else removed from the time axis rather than merely dimmed. The kept stretches are butted together, so they play back end to end with no gap — as if the detections had been extracted into a new file. Toggled from the toolbar's scissors button or `Shift+S`; keyed to whichever neurons are ticked in the buzzdetect panel's settings popover (several are OR'd). Implemented by `utils/subsetTimeline.ts` and `utils/buzzdetectSubset.ts`.
+Showing only the time where chosen buzzdetect **neurons** fired, with everything else removed from the time axis rather than merely dimmed. The kept stretches are butted together, so they play back end to end with no gap — as if the detections had been extracted into a new file. Toggled from the scissors button at the top right of the buzzdetect panel, or `Shift+S`; keyed to whichever neurons have a **Subset at** threshold in the neuron palette (several are OR'd). An optional **buffer** widens every kept stretch by a fixed number of seconds on each side. Implemented by `utils/subsetTimeline.ts` and `utils/buzzdetectSubset.ts`.
 
 ## Source Time
 A position in the media file on disk. What Rust decodes, what **Annotations** are stored and exported in, what buzzdetect frame starts mean.

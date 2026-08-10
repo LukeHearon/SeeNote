@@ -9,7 +9,7 @@ import { TimeReadout } from './controls/TimeReadout';
 import { SelectionTimeFields } from './controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from './controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from './controls/FilterControls';
-import { BuzzdetectToggle, SubsetToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
+import { BuzzdetectToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { DateTimeFormat } from '../utils/datetimeDisplay';
 import { Timeline } from '../utils/subsetTimeline';
@@ -59,14 +59,6 @@ interface ToolbarProps {
   buzzdetectAvailable?: boolean;
   buzzdetectEnabled?: boolean;
   onToggleBuzzdetect?: () => void;
-  /**
-   * Subset mode (utils/subsetTimeline.ts). `subsetAvailable` is whether any
-   * neuron has been ticked to subset by — without one there's nothing the
-   * button could do, so it isn't shown rather than shown-and-inert.
-   */
-  subsetAvailable?: boolean;
-  subsetActive?: boolean;
-  onToggleSubset?: () => void;
   /**
    * The display↔source map. Every time in this toolbar is READ and WRITTEN in
    * source time — the seek/selection callbacks still speak display time, so the
@@ -134,9 +126,6 @@ function Toolbar({
   buzzdetectAvailable,
   buzzdetectEnabled,
   onToggleBuzzdetect,
-  subsetAvailable,
-  subsetActive,
-  onToggleSubset,
   timeline,
   onRestartAudio,
   playheadLocked = false,
@@ -268,12 +257,10 @@ function Toolbar({
         />
       </div>
 
-      {/* Right-aligned controls: subset + buzzdetect toggles, spectrogram settings */}
-      {(onToggleSettings !== undefined || buzzdetectAvailable || subsetAvailable) && (
+      {/* Right-aligned controls: buzzdetect toggle, spectrogram settings. The
+          subset scissors lives on the buzzdetect panel itself. */}
+      {(onToggleSettings !== undefined || buzzdetectAvailable) && (
         <div className="ml-auto flex items-center gap-1">
-          {subsetAvailable && (
-            <SubsetToggle active={!!subsetActive} onToggle={() => onToggleSubset?.()} />
-          )}
           {buzzdetectAvailable && (
             <BuzzdetectToggle enabled={!!buzzdetectEnabled} onToggle={() => onToggleBuzzdetect?.()} />
           )}

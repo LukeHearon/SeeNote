@@ -64,7 +64,7 @@ export interface LiveSnapshot {
   bandPassFilter: BandPassFilter | null;
   buzzdetectAvailable: boolean;
   buzzdetectEnabled: boolean;
-  /** Whether any neuron is ticked to subset by — gates the scissors button. */
+  /** Whether any neuron has a Subset at value — gates the scissors button. */
   subsetAvailable: boolean;
   subsetActive: boolean;
   spectrogramSettings: SpectrogramSettings;

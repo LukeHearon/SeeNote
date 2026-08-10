@@ -30,9 +30,8 @@ interface NeuronPaletteProps {
   onSoloNeuron: (neuron: string) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
   onThresholdChange: (neuron: string, value: number) => void;
-  /** null clears the override, putting the cut back on the detection threshold. */
+  /** null clears the value, taking the neuron out of the subset entirely. */
   onSubsetThresholdChange: (neuron: string, value: number | null) => void;
-  onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
   onTogglePinNeuron: (neuron: string) => void;
   // ── Graph-wide settings ────────────────────────────────────────────────────
   seriesMode: BuzzdetectSeriesMode;
@@ -42,6 +41,8 @@ interface NeuronPaletteProps {
   autoYRange: { min: number; max: number } | null;
   yAxisOverride: { min: number; max: number } | null;
   minDetectionRate: number;
+  /** Seconds of context the subset keeps either side of each kept bin. */
+  subsetBuffer: number;
   /** What the current subset came to, or null when nothing is subset. */
   subsetStats: SubsetStats | null;
   settingsOpen: boolean;
@@ -50,6 +51,7 @@ interface NeuronPaletteProps {
   onBinWidthOverrideChange: (binWidth: number | null) => void;
   onYAxisOverrideChange: (range: { min: number; max: number } | null) => void;
   onMinDetectionRateChange: (rate: number) => void;
+  onSubsetBufferChange: (seconds: number) => void;
 }
 
 /**
@@ -64,18 +66,22 @@ interface NeuronPaletteProps {
  * it was.
  *
  * The row carries what's worth comparing ACROSS neurons at a glance: color,
- * name, detection threshold, and whether the track is subset to it. Everything
- * chosen once per neuron is in its settings popover (NeuronSettingsPopover),
- * reached from the color dot — one surface, whether the neuron was just added
- * or has been there all along.
+ * name, and the two thresholds — what counts as a detection, and what the
+ * track is subset at. Everything chosen once per neuron is in its settings
+ * popover (NeuronSettingsPopover), reached from the color dot — one surface,
+ * whether the neuron was just added or has been there all along.
  *
  * The graph-wide settings sit in a disclosure above the list rather than in a
  * popover over the graph: the series being plotted and the bin width decide
  * what a threshold below even means, so they belong next to the thresholds.
  *
- * Plotting and subsetting stay independent, as they were in the old settings
- * popover: a neuron can define which frames survive while another is merely
- * plotted alongside it to see what it did there. Several scissors OR together.
+ * Plotting and subsetting stay independent: a neuron can define which frames
+ * survive while another is merely plotted alongside it to see what it did
+ * there. Which neurons cut is said by the "Subset at" boxes — a number in one
+ * picks that neuron, an empty one doesn't — and several picks OR together.
+ * There is no separate tick: the threshold and the pick are the same statement,
+ * so they're the same control. The scissors that turns the whole cut on and off
+ * lives on the graph itself (BuzzdetectPanel), where its effect is visible.
  */
 function NeuronPalette({
   data,
@@ -93,7 +99,6 @@ function NeuronPalette({
   onNeuronColorChange,
   onThresholdChange,
   onSubsetThresholdChange,
-  onToggleSubsetNeuron,
   onTogglePinNeuron,
   seriesMode,
   binWidthOverride,
@@ -101,6 +106,7 @@ function NeuronPalette({
   autoYRange,
   yAxisOverride,
   minDetectionRate,
+  subsetBuffer,
   subsetStats,
   settingsOpen,
   onSettingsOpenChange,
@@ -108,6 +114,7 @@ function NeuronPalette({
   onBinWidthOverrideChange,
   onYAxisOverrideChange,
   onMinDetectionRateChange,
+  onSubsetBufferChange,
 }: NeuronPaletteProps) {
   // Which neuron's settings popover is open (null = none). The popover closes
   // itself on an outside click or Escape.
@@ -172,7 +179,6 @@ function NeuronPalette({
 
   const menuItems = (n: string): ContextMenuItem[] => {
     const isPinned = pinnedNeurons.includes(n);
-    const isSubset = subsetNeurons.includes(n);
     return [
       {
         label: isPinned ? copy.menuUnpin : copy.menuPin,
@@ -180,12 +186,6 @@ function NeuronPalette({
         onSelect: () => onTogglePinNeuron(n),
       },
       { label: copy.menuIsolate, icon: <Scissors size={12} />, onSelect: () => onSoloNeuron(n) },
-      {
-        label: isSubset ? copy.menuUnsubset : copy.menuSubset,
-        icon: <Scissors size={12} />,
-        onSelect: () => onToggleSubsetNeuron(n, !isSubset),
-        separatorBefore: true,
-      },
       {
         label: copy.menuSettings,
         icon: <Settings2 size={12} />,
@@ -212,25 +212,37 @@ function NeuronPalette({
       >
         {/* Every row here is plotted, so the cell's active state carries the
             thing that actually varies between them: whether this neuron is
-            cutting the subset. The scissors stays as its own control too —
-            it's what the state means, and the cell is a wide, forgiving
-            target for a toggle flipped this often. */}
+            cutting the subset — which is now said by its "Subset at" box
+            holding a number, not by a separate toggle. The cell body opens the
+            neuron's settings, the same place its dot and gear go. */}
         <ToolCell
           isActive={isSubset}
           color={color}
           dotColor={color}
           label={n}
-          onClick={() => onToggleSubsetNeuron(n, !isSubset)}
-          tooltip={tooltips.buzzdetectSubsetNeuron}
+          onClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
+          tooltip={tooltips.buzzdetectNeuronSettings}
           onDotClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
           dotTooltip={tooltips.buzzdetectNeuronSettings}
           trailing={(
             <span className="flex items-center gap-1 flex-none pointer-events-auto">
               {isPinned && <Pin size={9} className="text-slate-500 flex-none" />}
+              {/* Subset threshold first, in the accent colour, so the field
+                  that decides what the TRACK shows reads apart from the one
+                  that only decides how the graph is drawn. Blank = this neuron
+                  doesn't cut; typing a number is what picks it. */}
+              <DraftNumberInput
+                value={subsetThresholds[n] ?? null}
+                onCommit={(v) => onSubsetThresholdChange(n, v)}
+                allowEmpty
+                placeholder={copy.settingsSubsetOff}
+                className={`w-10 bg-slate-900/70 border rounded px-1 py-px text-[11px] text-right font-mono text-[#e65161] placeholder:text-[#e65161]/40 outline-none focus:border-[#e65161] transition-colors ${isSubset ? 'border-[#e65161]/50' : 'border-slate-700/70 hover:border-slate-500'}`}
+                tooltip={tooltips.buzzdetectSubsetThreshold}
+              />
               <DraftNumberInput
                 value={thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD}
                 onCommit={(v) => { if (v !== null) onThresholdChange(n, v); }}
-                className="w-11 bg-slate-900/70 border border-slate-700/70 rounded px-1 py-px text-[11px] text-right font-mono outline-none focus:border-[#e65161] hover:border-slate-500 transition-colors"
+                className="w-10 bg-slate-900/70 border border-slate-700/70 rounded px-1 py-px text-[11px] text-right font-mono outline-none focus:border-[#e65161] hover:border-slate-500 transition-colors"
                 style={{ color }}
                 tooltip={tooltips.buzzdetectThreshold}
               />
@@ -250,13 +262,10 @@ function NeuronPalette({
             color={color}
             threshold={thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD}
             subsetThreshold={subsetThresholds[n] ?? null}
-            isSubset={isSubset}
             isPinned={isPinned}
-            seriesMode={seriesMode}
             onColorChange={(c) => onNeuronColorChange(n, c)}
             onThresholdChange={(v) => onThresholdChange(n, v)}
             onSubsetThresholdChange={(v) => onSubsetThresholdChange(n, v)}
-            onToggleSubset={() => onToggleSubsetNeuron(n, !isSubset)}
             onTogglePin={() => onTogglePinNeuron(n)}
             onRemove={() => onToggleNeuron(n, true)}
             onClose={() => setOpenSettingsNeuron(null)}
@@ -344,6 +353,19 @@ function NeuronPalette({
                 />
               </div>
             )}
+            {/* Context around each kept bin. Global rather than per-neuron:
+                bins are judged with the picked neurons OR'd together, so what
+                gets padded is the kept REGION, which no single neuron owns. */}
+            <div className="flex items-center gap-2">
+              <span className="flex-1 text-[10px] text-slate-300">{copy.subsetBufferLabel}</span>
+              <DraftNumberInput
+                value={subsetBuffer}
+                onCommit={(v) => { if (v !== null) onSubsetBufferChange(Math.max(0, v)); }}
+                min={0}
+                className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-right text-slate-200 outline-none focus:border-[#e65161]"
+                tooltip={tooltips.buzzdetectSubsetBuffer}
+              />
+            </div>
             {/* The auto bin width changes with zoom, so subsetting by it would
                 silently redefine the subset every time the view moved. A bin is
                 kept whole, on the pinned width instead. */}

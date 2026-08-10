@@ -28,6 +28,7 @@ const criteria = (over: Partial<SubsetCriteria>): SubsetCriteria => ({
   thresholdOf: () => 0,
   minDetectionRate: 0.5,
   binWidth: 1,
+  buffer: 0,
   ...over,
 });
 
@@ -254,31 +255,36 @@ describe('subsetBuzzdetectData', () => {
 describe('subsetCriteriaFrom', () => {
   const inputs = {
     enabled: true,
-    neurons: ['bee'],
+    subsetThresholds: { bee: 1.5 },
     mode: 'activation' as const,
-    thresholds: { bee: 1.5 },
-    subsetThresholds: {},
     minDetectionRate: 0.4,
     binWidthOverride: 2,
     frameHop: 0.5,
+    buffer: 0,
   };
 
-  it('is null when disabled or nothing is ticked', () => {
+  it('is null when disabled or nothing is picked', () => {
     expect(subsetCriteriaFrom({ ...inputs, enabled: false })).toBeNull();
-    expect(subsetCriteriaFrom({ ...inputs, neurons: [] })).toBeNull();
+    expect(subsetCriteriaFrom({ ...inputs, subsetThresholds: {} })).toBeNull();
   });
 
-  it('carries the picks, mode and rate straight through', () => {
-    const c = subsetCriteriaFrom(inputs)!;
-    expect(c.neurons).toEqual(['bee']);
+  // The picks ARE the threshold map's keys — there's no second list that could
+  // name a neuron the thresholds don't, or vice versa.
+  it('takes the picks from the subset thresholds', () => {
+    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: 1.5, fly: -1 } })!;
+    expect(c.neurons).toEqual(['bee', 'fly']);
     expect(c.mode).toBe('activation');
     expect(c.minDetectionRate).toBeCloseTo(0.4);
   });
 
-  it('falls back to the default threshold for neurons with no override', () => {
-    const c = subsetCriteriaFrom(inputs)!;
-    expect(c.thresholdOf('bee')).toBe(1.5);
-    expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+  it('cuts at the subset threshold, in either mode', () => {
+    for (const mode of ['activation', 'detectionRate'] as const) {
+      const c = subsetCriteriaFrom({ ...inputs, mode, subsetThresholds: { bee: -1.5 } })!;
+      expect(c.thresholdOf('bee')).toBe(-1.5);
+      // A neuron with no subset threshold isn't picked at all, so nothing asks
+      // for its value; the default is only a guard against a stale lookup.
+      expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+    }
   });
 
   // The hop, never the frame length: how much audio a frame covers is not a
@@ -289,22 +295,34 @@ describe('subsetCriteriaFrom', () => {
     expect(subsetCriteriaFrom({ ...inputs, binWidthOverride: null })!.binWidth).toBe(0.5);
   });
 
-  // The point of the separate subset threshold: cut liberally, mark strictly.
-  it('cuts at the subset threshold in activation mode, where one is set', () => {
-    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: -1.5 } })!;
-    expect(c.thresholdOf('bee')).toBe(-1.5);
-    // A neuron with no subset override still cuts at its detection threshold.
-    expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+  it('never lets a negative buffer shrink the cut', () => {
+    expect(subsetCriteriaFrom({ ...inputs, buffer: 3 })!.buffer).toBe(3);
+    expect(subsetCriteriaFrom({ ...inputs, buffer: -3 })!.buffer).toBe(0);
+  });
+});
+
+// A buffer widens every kept region by the same amount on each side, without
+// changing which bins were kept.
+describe('detectionRanges — buffer', () => {
+  it('pads each kept bin on both sides', () => {
+    const r = detectionRanges(data, criteria({ neurons: ['fly'], buffer: 3 }));
+    // `fly` fires only in the 1s bin starting at 5.
+    expect(r).toEqual([{ start: 2, end: 9 }]);
   });
 
-  it('ignores the subset threshold in detection-rate mode', () => {
-    const c = subsetCriteriaFrom({
-      ...inputs,
-      mode: 'detectionRate' as const,
-      subsetThresholds: { bee: -1.5 },
-    })!;
-    // A detection rate counts frames that ARE detections, so loosening what a
-    // detection means would change the measurement rather than widen the cut.
-    expect(c.thresholdOf('bee')).toBe(1.5);
+  it('leaves the padding to be clamped and merged by the timeline', () => {
+    // Adjacent detections at 1,2,3 pad into overlapping ranges; the timeline
+    // merges them, and clamps the first one's negative start to the file.
+    const tl = subsetTimelineFor(data, criteria({ buffer: 3 }), 10);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([[0, 10]]);
+  });
+
+  it('keeps separate detections separate when the buffer does not reach', () => {
+    const tl = subsetTimelineFor(data, criteria({ neurons: ['bee', 'fly'], buffer: 0.25 }), 20);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([
+      [0.75, 4.25],
+      [4.75, 6.25],
+      [6.75, 8.25],
+    ]);
   });
 });

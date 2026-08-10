@@ -8,15 +8,20 @@
 // means the same thing as what the panel is drawing:
 //
 //   activation      a bin is kept when ANY subset neuron's MEAN activation
-//                    over the bin's frames clears its own SUBSET threshold,
-//                    which defaults to its detection threshold but can be set
-//                    looser on its own. Keeping the two apart is the point: a
-//                    liberal cut keeps the audio around a detection in view
-//                    while the graph still marks detections at the strict
-//                    threshold, so the context of a call is audible without
-//                    restating what counts as a call.
+//                    over the bin's frames clears that neuron's SUBSET
+//                    threshold.
 //   detectionRate   a bin is kept when the fraction of its frames where ANY
-//                    subset neuron fires reaches `minDetectionRate`.
+//                    subset neuron clears its subset threshold reaches
+//                    `minDetectionRate`.
+//
+// The subset threshold is a neuron's "Subset at" box in the palette, and it is
+// what makes a neuron part of the subset at all: typing a number there picks
+// the neuron, clearing it un-picks it. It is deliberately separate from the
+// neuron's DETECTION threshold, which stays a statement about the graph — which
+// dots draw filled, where the dashed line sits. Keeping the two apart is the
+// point: a liberal cut keeps the audio around a detection in view while the
+// graph still marks detections strictly, so the context of a call is audible
+// without restating what counts as a call.
 //
 // Both are the same shape: aggregate each neuron over the bin, OR the neurons
 // together. Multiple neurons are OR'd so "show me buzzes" means bee OR fly
@@ -48,9 +53,15 @@
 // one frame and this degenerates to per-frame behaviour, whatever the frame
 // length happens to be.
 //
+// Finally, a BUFFER (seconds, zero by default) is added to each side of every
+// kept bin — context around the detection, so what's kept is audible as the
+// thing it is rather than as a clipped fragment. It widens the cut without
+// changing what counted as a detection.
+//
 // Contiguous kept bins are merged into one span by buildSubsetTimeline, so a
 // run of detections reads (and can be selected) as a single stretch of audio
-// rather than a chain of bin-sized pieces.
+// rather than a chain of bin-sized pieces — and so buffers that overlap their
+// neighbours produce one span rather than a chain of padded ones.
 
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
@@ -62,11 +73,7 @@ export interface SubsetCriteria {
   /** Neuron labels the subset is keyed to. Empty means "no subset". */
   neurons: readonly string[];
   mode: BuzzdetectSeriesMode;
-  /**
-   * Per-neuron threshold a bin is judged against. Resolved by mode in
-   * subsetCriteriaFrom: the neuron's subset threshold in activation mode, its
-   * plain detection threshold in detectionRate mode (see below).
-   */
+  /** The threshold a bin is judged against, per neuron — its "Subset at" value. */
   thresholdOf: (neuron: string) => number;
   /** Minimum fraction of a bin's frames that must fire. detectionRate mode only. */
   minDetectionRate: number;
@@ -77,27 +84,36 @@ export interface SubsetCriteria {
    * back to the file's frame hop (where a bin is just one frame).
    */
   binWidth: number;
+  /**
+   * Seconds of context added to EACH side of every kept bin. Zero by default.
+   * A detection is rarely the whole of the thing that produced it, and the
+   * moments either side are what make it identifiable by ear — so this widens
+   * what the cut keeps without touching what counts as a detection. Overlapping
+   * buffers merge into one span (buildSubsetTimeline), so a run of near-misses
+   * reads as one stretch rather than a chain of padded pieces.
+   */
+  buffer: number;
 }
 
 /** The panel/window state a subset is derived from. */
 export interface SubsetInputs {
   /** The master toggle. False builds no criteria at all. */
   enabled: boolean;
-  /** Neuron labels ticked to subset by (OR'd). Empty means "no subset". */
-  neurons: readonly string[];
-  mode: BuzzdetectSeriesMode;
-  /** Per-neuron detection thresholds, as the palette stores them. */
-  thresholds: Record<string, number>;
   /**
-   * Per-neuron subset thresholds. An absent entry means "same as this neuron's
-   * detection threshold" — the setting only exists to be looser than it.
+   * Per-neuron subset thresholds — the "Subset at" box in the palette. A
+   * neuron with an entry here is a neuron the subset is keyed to; the map's
+   * keys ARE the picked neurons, so there is no separate list that could
+   * disagree with the thresholds. Empty means "no subset". Picks are OR'd.
    */
   subsetThresholds: Record<string, number>;
+  mode: BuzzdetectSeriesMode;
   minDetectionRate: number;
   /** User-pinned bin width (seconds), or null for auto. */
   binWidthOverride: number | null;
   /** The file's own frame hop — what an unpinned bin width falls back to. */
   frameHop: number;
+  /** Seconds of context kept either side of each kept bin. */
+  buffer: number;
 }
 
 /**
@@ -108,21 +124,18 @@ export interface SubsetInputs {
  * demo subsets by exactly the rule the real thing does.
  */
 export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null {
-  if (!inputs.enabled || inputs.neurons.length === 0) return null;
+  const neurons = Object.keys(inputs.subsetThresholds);
+  if (!inputs.enabled || neurons.length === 0) return null;
   return {
-    neurons: inputs.neurons,
+    neurons,
     mode: inputs.mode,
-    // Only activation mode gets the separate subset threshold. A detection
-    // RATE is a fraction of frames that count as detections, so loosening what
-    // "detection" means there would change the number being measured rather
-    // than widen the cut around it — the loose knob in that mode is
-    // minDetectionRate, which is about how much of a bin has to fire.
-    thresholdOf: (n: string) => {
-      const detection = inputs.thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD;
-      if (inputs.mode !== 'activation') return detection;
-      return inputs.subsetThresholds[n] ?? detection;
-    },
+    // The subset threshold is the ONLY threshold the cut is judged against, in
+    // either mode — it's what the user typed to say "subset to this neuron".
+    // The detection threshold beside it stays a statement about the graph:
+    // which dots are drawn filled, and where the dashed line sits.
+    thresholdOf: (n: string) => inputs.subsetThresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD,
     minDetectionRate: inputs.minDetectionRate,
+    buffer: Math.max(0, inputs.buffer),
     // The panel's auto bin width follows the zoom, so subsetting by it would
     // redefine the subset every time the view moved. Only a pinned width
     // counts; without one the rate is measured per frame, where it's just the
@@ -156,6 +169,10 @@ export function detectionRanges(
   // How far the last frames in a bin reach past its far edge. Zero unless the
   // frames overlap; see the header note.
   const overhang = Math.max(0, frameLength - frameHop);
+  // Context either side of a kept bin. Ranges may run negative or past EOF
+  // here; buildSubsetTimeline clamps them to the file and merges the overlaps
+  // this creates between neighbouring detections.
+  const buffer = Math.max(0, criteria.buffer);
 
   // Per-neuron mean-activation prefix sums (activation mode), or one shared
   // "did any picked neuron fire this frame" prefix (detectionRate mode) — built
@@ -193,7 +210,7 @@ export function detectionRanges(
       // `>=` so a minimum of 0 keeps every bin holding frames, and a minimum
       // of 1 keeps only bins where every frame fired.
       : rangeSum(anyFiredPrefix!, i, end) / (end - i + 1) >= criteria.minDetectionRate;
-    if (keep) out.push({ start: b * bin, end: binEnd + overhang });
+    if (keep) out.push({ start: b * bin - buffer, end: binEnd + overhang + buffer });
     i = end + 1;
   }
   return out;

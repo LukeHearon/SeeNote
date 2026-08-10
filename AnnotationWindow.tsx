@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
@@ -311,8 +311,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectSeriesMode, setBuzzdetectSeriesMode,
     buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
     buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled,
-    buzzdetectSubsetNeurons, setBuzzdetectSubsetNeurons,
+    buzzdetectSubsetNeurons,
     buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate,
+    buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer,
     buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons,
     buzzdetectPanelHeight, setBuzzdetectPanelHeight,
     buzzdetectData, setBuzzdetectData,
@@ -324,7 +325,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
-    handleBuzzdetectToggleSubsetNeuron,
     handleBuzzdetectTogglePinNeuron,
     handleBuzzdetectSoloNeuron,
     toggleBuzzdetectSubset,
@@ -336,15 +336,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // what makes every path below run the whole-file case unchanged.
   const subsetCriteria = useMemo<SubsetCriteria | null>(() => subsetCriteriaFrom({
     enabled: buzzdetectSubsetEnabled,
-    neurons: buzzdetectSubsetNeurons,
-    mode: buzzdetectSeriesMode,
-    thresholds: buzzdetectThresholds,
     subsetThresholds: buzzdetectSubsetThresholds,
+    mode: buzzdetectSeriesMode,
     minDetectionRate: buzzdetectMinDetectionRate,
     binWidthOverride: buzzdetectBinWidthOverride,
     frameHop: buzzdetectData?.frameHop ?? 0,
-  }), [buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectSeriesMode, buzzdetectThresholds,
-      buzzdetectSubsetThresholds, buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
+    buffer: buzzdetectSubsetBuffer,
+  }), [buzzdetectSubsetEnabled, buzzdetectSeriesMode, buzzdetectSubsetThresholds,
+      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData, buzzdetectSubsetBuffer]);
 
   // The display axis. Identity (i.e. the whole file, unchanged) whenever the
   // subset is off. `duration` here is the file's own length; `displayDuration`
@@ -1070,8 +1069,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectSeriesMode,
     buzzdetectBinWidthOverride,
     buzzdetectSubsetEnabled,
-    buzzdetectSubsetNeurons,
     buzzdetectMinDetectionRate,
+    buzzdetectSubsetBuffer,
     buzzdetectPinnedNeurons,
     videoMode,
     videoBrightness,
@@ -1187,8 +1186,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setBuzzdetectSeriesMode(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
     setBuzzdetectBinWidthOverride(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
     setBuzzdetectSubsetEnabled(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
-    setBuzzdetectSubsetNeurons(project.preferences.uiSettings?.buzzdetectSubsetNeurons ?? []);
     setBuzzdetectMinDetectionRate(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+    setBuzzdetectSubsetBuffer(project.preferences.uiSettings?.buzzdetectSubsetBuffer ?? DEFAULT_BUZZDETECT_SUBSET_BUFFER);
     setBuzzdetectPinnedNeurons(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
@@ -2039,9 +2038,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           }
 
           // The sidebar's stack, top to bottom. The neuron palette is only in
-          // it while the buzzdetect panel is showing — with no graph on screen
-          // there is nothing for its controls to act on — and the two remaining
-          // sections reflow into the space by themselves (see SidebarStack).
+          // it when the project names a buzzdetect directory — that's what
+          // decides whether this project has neurons at all — and the two
+          // remaining sections reflow into the space by themselves when it's
+          // absent (see SidebarStack). Deliberately NOT gated on the graph
+          // being open: the palette's thresholds drive the subset, which is a
+          // thing you can want without the graph taking up the window.
           const stackItems = [
             {
               id: SIDEBAR_SECTION_FILES,
@@ -2076,7 +2078,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               ),
             },
           ];
-          if (buzzdetectEnabled) {
+          if (project.buzzdetectDirectoryAbs !== null) {
             stackItems.push({
               id: SIDEBAR_SECTION_NEURONS,
               node: (
@@ -2096,7 +2098,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                   onThresholdChange={handleBuzzdetectThresholdChange}
                   onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
-                  onToggleSubsetNeuron={handleBuzzdetectToggleSubsetNeuron}
                   onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
                   seriesMode={buzzdetectSeriesMode}
                   binWidthOverride={buzzdetectBinWidthOverride}
@@ -2104,6 +2105,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   autoYRange={buzzdetectAutoYRange}
                   yAxisOverride={buzzdetectYAxisOverride}
                   minDetectionRate={buzzdetectMinDetectionRate}
+                  subsetBuffer={buzzdetectSubsetBuffer}
                   subsetStats={buzzdetectSubsetStats}
                   settingsOpen={buzzdetectSettingsOpen}
                   onSettingsOpenChange={setBuzzdetectSettingsOpen}
@@ -2111,6 +2113,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
                   onYAxisOverrideChange={setBuzzdetectYAxisOverride}
                   onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
+                  onSubsetBufferChange={setBuzzdetectSubsetBuffer}
                 />
               ),
             });
@@ -2239,9 +2242,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
                buzzdetectEnabled={buzzdetectEnabled}
                onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
-               subsetAvailable={buzzdetectSubsetNeurons.length > 0}
-               subsetActive={subsetActive}
-               onToggleSubset={toggleBuzzdetectSubset}
                onRestartAudio={() => { engineRef.current?.restart(); }}
                playheadLocked={playheadLocked}
                onTogglePlayheadLock={() => {
@@ -2327,7 +2327,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  binWidthOverride={buzzdetectBinWidthOverride}
                  subsetActive={subsetActive}
                  timeline={timeline}
-                 subsetNeurons={buzzdetectSubsetNeurons}
+                 subsetAvailable={buzzdetectSubsetNeurons.length > 0}
+                 onToggleSubset={toggleBuzzdetectSubset}
                  yAxisOverride={buzzdetectYAxisOverride}
                  reportAutoValues={buzzdetectSettingsOpen}
                  height={buzzdetectPanelHeight}
