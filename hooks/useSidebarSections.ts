@@ -18,6 +18,15 @@ export type SidebarSectionsState = Record<string, SidebarSectionState>;
  */
 const MIN_SECTION_PX = 72;
 
+/**
+ * How far a divider has to be dragged TOWARD a collapsed neighbour's side
+ * before that neighbour re-opens. The gesture is the mirror of the one that
+ * collapsed it (drag past the minimum), so a section can be closed and reopened
+ * without going near its chevron — but it needs a deliberate pull rather than
+ * the pixel of travel a click sometimes carries.
+ */
+const EXPAND_SECTION_PX = 24;
+
 export interface SidebarSectionsApi {
   states: SidebarSectionsState;
   setStates: React.Dispatch<React.SetStateAction<SidebarSectionsState>>;
@@ -78,50 +87,100 @@ export function useSidebarSections(initial: SidebarSectionsState): SidebarSectio
     const container = (e.currentTarget as HTMLElement).parentElement;
     if (!container) return;
 
+    const heightOf = (id: string) =>
+      container.querySelector<HTMLElement>(`[data-sidebar-section="${id}"]`)?.getBoundingClientRect().height ?? 0;
+
+    // Live section state for the drag. `states` is the snapshot from mousedown
+    // and React's updates land after the handler has run, so the drag keeps its
+    // own copy — otherwise a section it just collapsed (or re-opened), or a
+    // weight it just wrote, would still read the old way on the next mousemove.
+    const live: SidebarSectionsState = {};
+    for (const id of ids) live[id] = { ...(states[id] ?? defaultState()) };
+
     // The sections a drag here actually resizes: the nearest expanded one above
     // the divider and the nearest below. Collapsed sections in between are
     // fixed-height headers, so they neither give nor take space.
     const findExpanded = (from: number, step: number): string | null => {
       for (let i = from; i >= 0 && i < ids.length; i += step) {
-        if (!(states[ids[i]] ?? defaultState()).collapsed) return ids[i];
+        if (!live[ids[i]].collapsed) return ids[i];
       }
       return null;
     };
-    const aboveId = findExpanded(dividerIndex, -1);
-    const belowId = findExpanded(dividerIndex + 1, 1);
-    if (!aboveId || !belowId) return;
 
-    // Current pixel heights, read once at mousedown. The two sections trade a
-    // fixed pool of space between them, so the rest of the stack is untouched.
-    const heightOf = (id: string) =>
-      container.querySelector<HTMLElement>(`[data-sidebar-section="${id}"]`)?.getBoundingClientRect().height ?? 0;
-    const startAbove = heightOf(aboveId);
-    const startBelow = heightOf(belowId);
-    const pool = startAbove + startBelow;
-    if (pool <= 0) return;
-    const startY = e.clientY;
-    const startWeightSum = (states[aboveId] ?? defaultState()).weight + (states[belowId] ?? defaultState()).weight;
+    // The sections the divider sits directly between. These — not the nearest
+    // expanded ones — are what a pull toward a collapsed side re-opens: the
+    // handle you grab under a closed section is the handle that should open it.
+    const upNeighbour = ids[dividerIndex];
+    const downNeighbour = ids[dividerIndex + 1];
+
+    // The pair being resized, and the pixel/weight baseline the drag measures
+    // from. Re-derived whenever a section opens or closes mid-drag, because
+    // both the pair and every height in the stack change at that moment.
+    let aboveId: string | null = null;
+    let belowId: string | null = null;
+    let startAbove = 0;
+    let startBelow = 0;
+    let pool = 0;
+    let startWeightSum = 0;
+    let startY = e.clientY;
+    // Set when a collapse/expand has been dispatched but the DOM hasn't caught
+    // up yet: the next mousemove re-measures before doing anything else.
+    let needsRebase = true;
+
+    const rebase = (clientY: number) => {
+      needsRebase = false;
+      aboveId = findExpanded(dividerIndex, -1);
+      belowId = findExpanded(dividerIndex + 1, 1);
+      startY = clientY;
+      if (!aboveId || !belowId) { pool = 0; return; }
+      startAbove = heightOf(aboveId);
+      startBelow = heightOf(belowId);
+      pool = startAbove + startBelow;
+      startWeightSum = live[aboveId].weight + live[belowId].weight;
+    };
+
+    const setCollapsed = (id: string, collapsed: boolean) => {
+      live[id] = { ...live[id], collapsed };
+      setStates(prev => ({ ...prev, [id]: { ...(prev[id] ?? defaultState()), collapsed } }));
+      needsRebase = true;
+    };
 
     startDragSession((moveEvent) => {
+      if (needsRebase) { rebase(moveEvent.clientY); return; }
       const delta = moveEvent.clientY - startY;
+
+      // Pulling toward a collapsed neighbour re-opens it — up for the section
+      // below the divider, down for the one above — so the same handle that
+      // closed a section brings it back. Checked before the resize arithmetic,
+      // which has nothing to trade with while that side is only a header.
+      if (delta <= -EXPAND_SECTION_PX && live[downNeighbour].collapsed) {
+        setCollapsed(downNeighbour, false);
+        return;
+      }
+      if (delta >= EXPAND_SECTION_PX && live[upNeighbour].collapsed) {
+        setCollapsed(upNeighbour, false);
+        return;
+      }
+      if (!aboveId || !belowId || pool <= 0) return;
+
       const nextAbove = startAbove + delta;
       const nextBelow = startBelow - delta;
       // Dragged past a section's minimum: collapse it rather than pinning the
       // drag at the minimum, so the divider stays under the cursor.
-      if (nextAbove < MIN_SECTION_PX) {
-        setStates(prev => ({ ...prev, [aboveId]: { ...(prev[aboveId] ?? defaultState()), collapsed: true } }));
-        return;
-      }
-      if (nextBelow < MIN_SECTION_PX) {
-        setStates(prev => ({ ...prev, [belowId]: { ...(prev[belowId] ?? defaultState()), collapsed: true } }));
-        return;
-      }
+      if (nextAbove < MIN_SECTION_PX) { setCollapsed(aboveId, true); return; }
+      if (nextBelow < MIN_SECTION_PX) { setCollapsed(belowId, true); return; }
       // Weights are relative, so scale the new pixel split back onto the pair's
       // existing weight sum — that leaves every other section's share alone.
+      const a = aboveId;
+      const b = belowId;
+      const wAbove = (nextAbove / pool) * startWeightSum;
+      const wBelow = (nextBelow / pool) * startWeightSum;
+      live[a] = { collapsed: false, weight: wAbove };
+      live[b] = { collapsed: false, weight: wBelow };
       setStates(prev => ({
         ...prev,
-        [aboveId]: { ...(prev[aboveId] ?? defaultState()), collapsed: false, weight: (nextAbove / pool) * startWeightSum },
-        [belowId]: { ...(prev[belowId] ?? defaultState()), collapsed: false, weight: (nextBelow / pool) * startWeightSum },
+        [a]: { ...(prev[a] ?? defaultState()), collapsed: false, weight: wAbove },
+        [b]: { ...(prev[b] ?? defaultState()), collapsed: false, weight: wBelow },
       }));
     });
   }, [states]);

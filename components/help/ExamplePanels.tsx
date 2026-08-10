@@ -194,6 +194,7 @@ export function ExampleBuzzdetectPanel() {
     subsetCriteriaFrom({
       enabled: true,
       subsetThresholds,
+      thresholds,
       mode: seriesMode,
       minDetectionRate,
       binWidthOverride,
@@ -201,7 +202,7 @@ export function ExampleBuzzdetectPanel() {
       buffer: DEFAULT_BUZZDETECT_SUBSET_BUFFER,
     }),
     DEMO_DURATION,
-  ), [data, subsetThresholds, seriesMode, minDetectionRate, binWidthOverride]);
+  ), [data, subsetThresholds, thresholds, seriesMode, minDetectionRate, binWidthOverride]);
   const shownData = useMemo(() => subsetBuzzdetectData(data, timeline), [data, timeline]);
   const subsetActive = Object.keys(subsetThresholds).length > 0;
 
@@ -246,8 +247,6 @@ export function ExampleBuzzdetectPanel() {
         binWidthOverride={binWidthOverride}
         subsetActive={subsetActive}
         timeline={timeline}
-        subsetAvailable={subsetActive}
-        onToggleSubset={() => setSubsetThresholds({})}
         yAxisOverride={null}
         reportAutoValues={false}
         height={height}

@@ -265,6 +265,8 @@ export const neuronPalette = {
   get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Subset at"; },
   // Placeholder in an empty "Subset at" box: this neuron isn't cutting at all.
   get settingsSubsetOff() { return getOverride('ui.neuronPalette.settingsSubsetOff') ?? "off"; },
+  // Its counterpart where the pick is a switch rather than a number (detection-rate mode).
+  get settingsSubsetOn() { return getOverride('ui.neuronPalette.settingsSubsetOn') ?? "on"; },
   get settingsRemove() { return getOverride('ui.neuronPalette.settingsRemove') ?? "Remove"; },
   get removeTooltip() { return getOverride('ui.neuronPalette.removeTooltip') ?? "Stop plotting this neuron (its settings are kept)"; },
   get addNeuron() { return getOverride('ui.neuronPalette.addNeuron') ?? "Add neuron"; },

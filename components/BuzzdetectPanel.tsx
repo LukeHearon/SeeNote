@@ -11,7 +11,6 @@ import {
   segmentJoins,
   sourceIntervalOf,
 } from '../utils/subsetTimeline';
-import { SubsetToggle } from './controls/ToolbarToggles';
 import {
   buzzdetectNeuronColor,
   DEFAULT_BUZZDETECT_THRESHOLD,
@@ -103,11 +102,6 @@ interface BuzzdetectPanelProps {
   // only to mark the seams between spliced-together spans (see subsetJoins
   // below) — everything else about drawing stays in display time already.
   timeline?: Timeline;
-  // Whether any neuron is picked to subset by — gates the scissors button
-  // below, which has nothing to act on without one.
-  subsetAvailable: boolean;
-  /** Flips the whole cut on and off ("subset by everything" / "by nothing"). */
-  onToggleSubset: () => void;
   /**
    * User-pinned Y-axis range, or null for the auto range. Owned by
    * useBuzzdetect so the neuron palette's fields and this graph read the same
@@ -147,8 +141,6 @@ export default function BuzzdetectPanel({
   binWidthOverride,
   subsetActive,
   timeline,
-  subsetAvailable,
-  onToggleSubset,
   yAxisOverride,
   reportAutoValues,
   height,
@@ -1129,18 +1121,6 @@ export default function BuzzdetectPanel({
       >
         <GripHorizontal size={12} className="text-slate-600" />
       </div>
-
-      {/* The whole cut, on or off — "subset by everything the Subset at boxes
-          name" vs "by nothing". It sits on the graph rather than the toolbar
-          because this is where its effect is legible: the neurons that key it,
-          their thresholds, and the seams it produces are all on this panel.
-          Only shown once a neuron has a Subset at value, since without one
-          there's nothing for it to do. */}
-      {subsetAvailable && (
-        <div className="absolute top-3 right-2 z-10 scale-90 origin-top-right" data-buzz-ui>
-          <SubsetToggle active={subsetActive} onToggle={onToggleSubset} />
-        </div>
-      )}
 
       <div className="flex-1 flex min-h-0 relative">
         {/* Y-axis gutter, aligned to the spectrogram's 50px gutter */}

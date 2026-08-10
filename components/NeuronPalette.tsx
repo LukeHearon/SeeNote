@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings2, Sliders } from 'lucide-react';
+import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings2, Sliders, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
 import { clamp, formatTime } from '../utils/helpers';
 import ToolCell from './ToolCell';
+import { BuzzdetectToggle, SubsetToggle } from './controls/ToolbarToggles';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import DraftNumberInput from './DraftNumberInput';
@@ -17,7 +18,7 @@ const FIELD_CLASS = 'w-full bg-slate-900 border border-slate-700 rounded px-1 py
 interface NeuronPaletteProps {
   data: BuzzdetectData | null;
   thresholds: Record<string, number>;
-  /** Per-neuron subset threshold override; absent entries follow `thresholds`. */
+  /** Per-neuron "Subset at" values. An entry here is what picks a neuron for the subset. */
   subsetThresholds: Record<string, number>;
   hiddenNeurons: string[];
   neuronColors: Record<string, string>;
@@ -41,6 +42,12 @@ interface NeuronPaletteProps {
   autoYRange: { min: number; max: number } | null;
   yAxisOverride: { min: number; max: number } | null;
   minDetectionRate: number;
+  /** Master subset toggle — "subset by everything the boxes name" vs "by nothing". */
+  subsetEnabled: boolean;
+  onToggleSubset: () => void;
+  /** Whether the buzzdetect results panel is showing below the spectrogram. */
+  panelOpen: boolean;
+  onTogglePanel: () => void;
   /** Seconds of context the subset keeps either side of each kept bin. */
   subsetBuffer: number;
   /** What the current subset came to, or null when nothing is subset. */
@@ -80,8 +87,11 @@ interface NeuronPaletteProps {
  * there. Which neurons cut is said by the "Subset at" boxes — a number in one
  * picks that neuron, an empty one doesn't — and several picks OR together.
  * There is no separate tick: the threshold and the pick are the same statement,
- * so they're the same control. The scissors that turns the whole cut on and off
- * lives on the graph itself (BuzzdetectPanel), where its effect is visible.
+ * so they're the same control. In detection-rate mode there is no threshold to
+ * type — the cut is judged at the DETECTION threshold and loosened by the min
+ * rate — so the same slot becomes a plain scissors that only picks. The
+ * scissors that turns the whole cut on and off is in this section's header,
+ * beside the rows that key it.
  */
 function NeuronPalette({
   data,
@@ -106,6 +116,10 @@ function NeuronPalette({
   autoYRange,
   yAxisOverride,
   minDetectionRate,
+  subsetEnabled,
+  onToggleSubset,
+  panelOpen,
+  onTogglePanel,
   subsetBuffer,
   subsetStats,
   settingsOpen,
@@ -200,6 +214,36 @@ function NeuronPalette({
     ];
   };
 
+  // How a neuron says it cuts. In activation mode that's a threshold to type,
+  // and typing one IS the pick. In detection-rate mode there's no second
+  // threshold to set (see utils/buzzdetectSubset.ts), so the same slot is a
+  // plain scissors — picking still writes the neuron's detection threshold into
+  // the map, so the pick lives in one place either way and switching back to
+  // activation mode finds a sensible starting value already there.
+  const renderSubsetControl = (n: string, isSubset: boolean) => {
+    if (seriesMode === 'detectionRate') {
+      return (
+        <button
+          onClick={() => onSubsetThresholdChange(n, isSubset ? null : (thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD))}
+          className={`p-0.5 rounded transition-colors ${isSubset ? 'text-[#e65161] bg-[#e65161]/15' : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60'}`}
+          data-tooltip={tooltips.buzzdetectSubsetPick}
+        >
+          <Scissors size={11} />
+        </button>
+      );
+    }
+    return (
+      <DraftNumberInput
+        value={subsetThresholds[n] ?? null}
+        onCommit={(v) => onSubsetThresholdChange(n, v)}
+        allowEmpty
+        placeholder={copy.settingsSubsetOff}
+        className={`w-10 bg-slate-900/70 border rounded px-1 py-px text-[11px] text-right font-mono text-[#e65161] placeholder:text-[#e65161]/40 outline-none focus:border-[#e65161] transition-colors ${isSubset ? 'border-[#e65161]/50' : 'border-slate-700/70 hover:border-slate-500'}`}
+        tooltip={tooltips.buzzdetectSubsetThreshold}
+      />
+    );
+  };
+
   const renderCell = (n: string) => {
     const color = colorOf(n);
     const isSubset = subsetNeurons.includes(n);
@@ -227,18 +271,10 @@ function NeuronPalette({
           trailing={(
             <span className="flex items-center gap-1 flex-none pointer-events-auto">
               {isPinned && <Pin size={9} className="text-slate-500 flex-none" />}
-              {/* Subset threshold first, in the accent colour, so the field
-                  that decides what the TRACK shows reads apart from the one
-                  that only decides how the graph is drawn. Blank = this neuron
-                  doesn't cut; typing a number is what picks it. */}
-              <DraftNumberInput
-                value={subsetThresholds[n] ?? null}
-                onCommit={(v) => onSubsetThresholdChange(n, v)}
-                allowEmpty
-                placeholder={copy.settingsSubsetOff}
-                className={`w-10 bg-slate-900/70 border rounded px-1 py-px text-[11px] text-right font-mono text-[#e65161] placeholder:text-[#e65161]/40 outline-none focus:border-[#e65161] transition-colors ${isSubset ? 'border-[#e65161]/50' : 'border-slate-700/70 hover:border-slate-500'}`}
-                tooltip={tooltips.buzzdetectSubsetThreshold}
-              />
+              {/* The subset control first, in the accent colour, so what
+                  decides the TRACK reads apart from what only decides how the
+                  graph is drawn. */}
+              {renderSubsetControl(n, isSubset)}
               <DraftNumberInput
                 value={thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD}
                 onCommit={(v) => { if (v !== null) onThresholdChange(n, v); }}
@@ -262,6 +298,7 @@ function NeuronPalette({
             color={color}
             threshold={thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD}
             subsetThreshold={subsetThresholds[n] ?? null}
+            seriesMode={seriesMode}
             isPinned={isPinned}
             onColorChange={(c) => onNeuronColorChange(n, c)}
             onThresholdChange={(v) => onThresholdChange(n, v)}
@@ -342,6 +379,24 @@ function NeuronPalette({
           <p className="text-slate-500 text-[10px]">{copy.subsetNoNeurons}</p>
         ) : (
           <>
+            {/* Exactly which neurons are cutting, with a way to drop each. The
+                picks outlive a file and a neuron can be picked while not
+                plotted — so without this the cut could be keyed to a neuron
+                with no row anywhere in the palette, and nothing on screen would
+                say so or offer a way to clear it. */}
+            <div className="flex flex-wrap gap-1">
+              {subsetNeurons.map(n => (
+                <button
+                  key={n}
+                  onClick={() => onSubsetThresholdChange(n, null)}
+                  className="flex items-center gap-1 max-w-full pl-1.5 pr-1 py-px rounded bg-[#e65161]/15 text-[#e65161] text-[10px] hover:bg-[#e65161]/25 transition-colors"
+                  data-tooltip={tooltips.buzzdetectSubsetUnpick}
+                >
+                  <span className="truncate">{n}</span>
+                  <X size={9} className="flex-none" />
+                </button>
+              ))}
+            </div>
             {seriesMode === 'detectionRate' && (
               <div className="flex items-center gap-2">
                 <span className="flex-1 text-[10px] text-slate-300">{copy.subsetMinRateLabel}</span>
@@ -355,7 +410,11 @@ function NeuronPalette({
             )}
             {/* Context around each kept bin. Global rather than per-neuron:
                 bins are judged with the picked neurons OR'd together, so what
-                gets padded is the kept REGION, which no single neuron owns. */}
+                gets padded is the kept REGION, which no single neuron owns.
+                Activation mode only — in detection-rate mode the kept thing is
+                a bin the user sized themselves, and padding it by some other
+                amount would blur the boundary they set. */}
+            {seriesMode === 'activation' && (
             <div className="flex items-center gap-2">
               <span className="flex-1 text-[10px] text-slate-300">{copy.subsetBufferLabel}</span>
               <DraftNumberInput
@@ -366,6 +425,7 @@ function NeuronPalette({
                 tooltip={tooltips.buzzdetectSubsetBuffer}
               />
             </div>
+            )}
             {/* The auto bin width changes with zoom, so subsetting by it would
                 silently redefine the subset every time the view moved. A bin is
                 kept whole, on the pinned width instead. */}
@@ -401,15 +461,24 @@ function NeuronPalette({
       onToggleCollapsed={onToggleCollapsed}
       helpTarget="neuron-palette"
       actions={(
-        <div className="flex items-center gap-1.5 flex-none">
+        <div className="flex items-center gap-1 flex-none">
           {neurons.length > 0 && (
             <button
               onClick={() => onSetAllNeuronsHidden(allShown)}
-              className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors underline decoration-dotted"
+              className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors underline decoration-dotted mr-0.5"
             >
               {allShown ? copy.selectNone : copy.selectAll}
             </button>
           )}
+          {/* The two buzzdetect switches sit with the neurons rather than in
+              the toolbar: the scissors is keyed to the Subset at boxes right
+              below it, and the graph the other one opens is what these rows
+              describe. Both are reachable exactly when this section is — i.e.
+              when the project names a buzzdetect directory. */}
+          {subsetNeurons.length > 0 && (
+            <SubsetToggle compact active={subsetEnabled} onToggle={onToggleSubset} />
+          )}
+          <BuzzdetectToggle compact enabled={panelOpen} onToggle={onTogglePanel} />
           <button
             onClick={() => onSettingsOpenChange(!settingsOpen)}
             className={`p-0.5 rounded transition-colors ${settingsOpen ? 'bg-slate-700 text-[#e65161]' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700'}`}

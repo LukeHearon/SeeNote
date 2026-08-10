@@ -9,7 +9,7 @@ import { TimeReadout } from './controls/TimeReadout';
 import { SelectionTimeFields } from './controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from './controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from './controls/FilterControls';
-import { BuzzdetectToggle, SpectrogramSettingsButton } from './controls/ToolbarToggles';
+import { SpectrogramSettingsButton } from './controls/ToolbarToggles';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { DateTimeFormat } from '../utils/datetimeDisplay';
 import { Timeline } from '../utils/subsetTimeline';
@@ -56,9 +56,6 @@ interface ToolbarProps {
    *  only apply when a <video> element is actually driving playback. */
   isAudioTrack?: boolean;
   /** Whether a buzzdetect directory is configured (gates the toggle button). */
-  buzzdetectAvailable?: boolean;
-  buzzdetectEnabled?: boolean;
-  onToggleBuzzdetect?: () => void;
   /**
    * The display↔source map. Every time in this toolbar is READ and WRITTEN in
    * source time — the seek/selection callbacks still speak display time, so the
@@ -123,9 +120,6 @@ function Toolbar({
   setFilterStrength,
   videoMode,
   isAudioTrack,
-  buzzdetectAvailable,
-  buzzdetectEnabled,
-  onToggleBuzzdetect,
   timeline,
   onRestartAudio,
   playheadLocked = false,
@@ -257,16 +251,12 @@ function Toolbar({
         />
       </div>
 
-      {/* Right-aligned controls: buzzdetect toggle, spectrogram settings. The
-          subset scissors lives on the buzzdetect panel itself. */}
-      {(onToggleSettings !== undefined || buzzdetectAvailable) && (
+      {/* Right-aligned controls: spectrogram settings. The buzzdetect panel
+          toggle and the subset scissors live in the Neurons section header,
+          beside the neurons they act on. */}
+      {onToggleSettings !== undefined && (
         <div className="ml-auto flex items-center gap-1">
-          {buzzdetectAvailable && (
-            <BuzzdetectToggle enabled={!!buzzdetectEnabled} onToggle={() => onToggleBuzzdetect?.()} />
-          )}
-          {onToggleSettings !== undefined && (
-            <SpectrogramSettingsButton open={!!showSettings} onToggle={onToggleSettings} />
-          )}
+          <SpectrogramSettingsButton open={!!showSettings} onToggle={onToggleSettings} />
         </div>
       )}
     </div>

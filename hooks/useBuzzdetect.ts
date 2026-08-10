@@ -178,6 +178,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   // making the user then find a second switch would be a step with nothing in
   // it. Clearing the box un-picks the neuron.
   const handleBuzzdetectSubsetThresholdChange = useCallback((neuron: string, value: number | null) => {
+    if (value !== null) setBuzzdetectSubsetEnabled(true);
     setBuzzdetectSubsetThresholds(prev => {
       if (value === null) {
         if (!(neuron in prev)) return prev;
@@ -185,7 +186,6 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
         delete next[neuron];
         return next;
       }
-      setBuzzdetectSubsetEnabled(true);
       return { ...prev, [neuron]: value };
     });
   }, []);

@@ -11,17 +11,23 @@
 //                    over the bin's frames clears that neuron's SUBSET
 //                    threshold.
 //   detectionRate   a bin is kept when the fraction of its frames where ANY
-//                    subset neuron clears its subset threshold reaches
-//                    `minDetectionRate`.
+//                    subset neuron fires reaches `minDetectionRate`, where
+//                    "fires" is the neuron's own DETECTION threshold.
 //
-// The subset threshold is a neuron's "Subset at" box in the palette, and it is
-// what makes a neuron part of the subset at all: typing a number there picks
-// the neuron, clearing it un-picks it. It is deliberately separate from the
-// neuron's DETECTION threshold, which stays a statement about the graph — which
-// dots draw filled, where the dashed line sits. Keeping the two apart is the
-// point: a liberal cut keeps the audio around a detection in view while the
-// graph still marks detections strictly, so the context of a call is audible
-// without restating what counts as a call.
+// A neuron is part of the subset when it has an entry in `subsetThresholds` —
+// the palette's "Subset at" box. In activation mode the value there is the
+// threshold the cut is judged at, deliberately separate from the neuron's
+// DETECTION threshold (which stays a statement about the graph: which dots draw
+// filled, where the dashed line sits). Keeping the two apart is the point: a
+// liberal cut keeps the audio around a detection in view while the graph still
+// marks detections strictly, so the context of a call is audible without
+// restating what counts as a call.
+//
+// In detectionRate mode there is no second threshold to set. The measurement is
+// already "what fraction of this bin's frames were detections", so the only
+// threshold in play is the one that decides what a detection IS, and the knob
+// for how liberal the cut should be is `minDetectionRate`. An entry in
+// `subsetThresholds` there records only the PICK; its value is ignored.
 //
 // Both are the same shape: aggregate each neuron over the bin, OR the neurons
 // together. Multiple neurons are OR'd so "show me buzzes" means bee OR fly
@@ -73,7 +79,11 @@ export interface SubsetCriteria {
   /** Neuron labels the subset is keyed to. Empty means "no subset". */
   neurons: readonly string[];
   mode: BuzzdetectSeriesMode;
-  /** The threshold a bin is judged against, per neuron — its "Subset at" value. */
+  /**
+   * The threshold a bin is judged against, per neuron: its "Subset at" value in
+   * activation mode, its detection threshold in detectionRate mode (where the
+   * rate, not a second threshold, is what loosens the cut).
+   */
   thresholdOf: (neuron: string) => number;
   /** Minimum fraction of a bin's frames that must fire. detectionRate mode only. */
   minDetectionRate: number;
@@ -85,7 +95,8 @@ export interface SubsetCriteria {
    */
   binWidth: number;
   /**
-   * Seconds of context added to EACH side of every kept bin. Zero by default.
+   * Seconds of context added to EACH side of every kept bin. Zero by default,
+   * and always zero outside activation mode — see subsetCriteriaFrom.
    * A detection is rarely the whole of the thing that produced it, and the
    * moments either side are what make it identifiable by ear — so this widens
    * what the cut keeps without touching what counts as a detection. Overlapping
@@ -106,6 +117,8 @@ export interface SubsetInputs {
    * disagree with the thresholds. Empty means "no subset". Picks are OR'd.
    */
   subsetThresholds: Record<string, number>;
+  /** Per-neuron detection thresholds — what the cut is judged at in detectionRate mode. */
+  thresholds: Record<string, number>;
   mode: BuzzdetectSeriesMode;
   minDetectionRate: number;
   /** User-pinned bin width (seconds), or null for auto. */
@@ -129,13 +142,23 @@ export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null 
   return {
     neurons,
     mode: inputs.mode,
-    // The subset threshold is the ONLY threshold the cut is judged against, in
-    // either mode — it's what the user typed to say "subset to this neuron".
-    // The detection threshold beside it stays a statement about the graph:
-    // which dots are drawn filled, and where the dashed line sits.
-    thresholdOf: (n: string) => inputs.subsetThresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD,
+    // Activation mode judges the cut at the Subset at value — the whole reason
+    // it's a separate number from the detection threshold. A detection RATE
+    // already counts frames that ARE detections, so there the only threshold
+    // that means anything is the one defining a detection, and the pick's
+    // stored value is ignored.
+    thresholdOf: (n: string) => (
+      inputs.mode === 'activation'
+        ? inputs.subsetThresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD
+        : inputs.thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD
+    ),
     minDetectionRate: inputs.minDetectionRate,
-    buffer: Math.max(0, inputs.buffer),
+    // Padding a kept region is a statement about a frame's surroundings, and
+    // that only reads straight when the thing kept is the frame — activation
+    // mode with its per-frame bins. A detection rate is deliberately a summary
+    // over a whole bin the user sized themselves; widening it by some other
+    // amount would blur the boundary they set.
+    buffer: inputs.mode === 'activation' ? Math.max(0, inputs.buffer) : 0,
     // The panel's auto bin width follows the zoom, so subsetting by it would
     // redefine the subset every time the view moved. Only a pinned width
     // counts; without one the rate is measured per frame, where it's just the

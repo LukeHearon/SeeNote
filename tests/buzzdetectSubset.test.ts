@@ -256,6 +256,7 @@ describe('subsetCriteriaFrom', () => {
   const inputs = {
     enabled: true,
     subsetThresholds: { bee: 1.5 },
+    thresholds: { bee: 0.25, fly: 0.75 },
     mode: 'activation' as const,
     minDetectionRate: 0.4,
     binWidthOverride: 2,
@@ -277,14 +278,19 @@ describe('subsetCriteriaFrom', () => {
     expect(c.minDetectionRate).toBeCloseTo(0.4);
   });
 
-  it('cuts at the subset threshold, in either mode', () => {
-    for (const mode of ['activation', 'detectionRate'] as const) {
-      const c = subsetCriteriaFrom({ ...inputs, mode, subsetThresholds: { bee: -1.5 } })!;
-      expect(c.thresholdOf('bee')).toBe(-1.5);
-      // A neuron with no subset threshold isn't picked at all, so nothing asks
-      // for its value; the default is only a guard against a stale lookup.
-      expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
-    }
+  // The point of the separate subset threshold: cut liberally, mark strictly.
+  it('cuts at the subset threshold in activation mode', () => {
+    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: -1.5 } })!;
+    expect(c.thresholdOf('bee')).toBe(-1.5);
+  });
+
+  // A detection RATE already counts frames that ARE detections, so the only
+  // threshold that means anything there is the one defining a detection; the
+  // pick's stored value is just a marker.
+  it('cuts at the detection threshold in detection-rate mode', () => {
+    const c = subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', subsetThresholds: { bee: -1.5 } })!;
+    expect(c.thresholdOf('bee')).toBe(0.25);
+    expect(c.thresholdOf('wasp')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
   });
 
   // The hop, never the frame length: how much audio a frame covers is not a
@@ -298,6 +304,13 @@ describe('subsetCriteriaFrom', () => {
   it('never lets a negative buffer shrink the cut', () => {
     expect(subsetCriteriaFrom({ ...inputs, buffer: 3 })!.buffer).toBe(3);
     expect(subsetCriteriaFrom({ ...inputs, buffer: -3 })!.buffer).toBe(0);
+  });
+
+  // Padding a kept region reads as "the moments either side of this frame", and
+  // that only holds where the kept thing IS a frame. A detection rate is a
+  // summary over a bin the user sized themselves.
+  it('drops the buffer outside activation mode', () => {
+    expect(subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', buffer: 3 })!.buffer).toBe(0);
   });
 });
 

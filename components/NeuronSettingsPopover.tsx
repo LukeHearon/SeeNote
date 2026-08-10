@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HexColorPicker } from 'react-colorful';
-import { Pin, PinOff, Trash2 } from 'lucide-react';
+import { Pin, PinOff, Scissors, Trash2 } from 'lucide-react';
+import { BuzzdetectSeriesMode } from '../types';
 import DraftNumberInput from './DraftNumberInput';
 import { tooltips } from '../copy/tooltips';
 import { neuronPalette as copy } from '../copy/ui';
@@ -11,6 +12,7 @@ interface NeuronSettingsPopoverProps {
   threshold: number;
   /** null = this neuron isn't part of the subset at all. */
   subsetThreshold: number | null;
+  seriesMode: BuzzdetectSeriesMode;
   isPinned: boolean;
   onColorChange: (color: string) => void;
   onThresholdChange: (value: number) => void;
@@ -47,6 +49,7 @@ function NeuronSettingsPopover({
   color,
   threshold,
   subsetThreshold,
+  seriesMode,
   isPinned,
   onColorChange,
   onThresholdChange,
@@ -107,14 +110,30 @@ function NeuronSettingsPopover({
             means this neuron doesn't cut. */}
         <div className={ROW}>
           <span className={LABEL}>{copy.settingsSubsetThreshold}</span>
-          <DraftNumberInput
-            value={subsetThreshold}
-            onCommit={onSubsetThresholdChange}
-            allowEmpty
-            placeholder={copy.settingsSubsetOff}
-            className={`${NUMBER_FIELD} border-[#e65161]/40 text-[#e65161] placeholder:text-[#e65161]/40`}
-            tooltip={tooltips.buzzdetectSubsetThreshold}
-          />
+          {/* Detection-rate mode has no second threshold to set — the cut is
+              judged at the detection threshold below and loosened by the min
+              rate — so the field becomes a plain pick (see NeuronPalette). */}
+          {seriesMode === 'detectionRate' ? (
+            <button
+              onClick={() => onSubsetThresholdChange(subsetThreshold === null ? threshold : null)}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                subsetThreshold !== null ? 'bg-[#e65161]/15 text-[#e65161]' : 'text-slate-400 hover:bg-slate-700/60 hover:text-slate-200'
+              }`}
+              data-tooltip={tooltips.buzzdetectSubsetPick}
+            >
+              <Scissors size={10} />
+              <span>{subsetThreshold !== null ? copy.settingsSubsetOn : copy.settingsSubsetOff}</span>
+            </button>
+          ) : (
+            <DraftNumberInput
+              value={subsetThreshold}
+              onCommit={onSubsetThresholdChange}
+              allowEmpty
+              placeholder={copy.settingsSubsetOff}
+              className={`${NUMBER_FIELD} border-[#e65161]/40 text-[#e65161] placeholder:text-[#e65161]/40`}
+              tooltip={tooltips.buzzdetectSubsetThreshold}
+            />
+          )}
         </div>
 
         <div className={ROW}>

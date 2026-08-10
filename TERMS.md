@@ -69,13 +69,13 @@ The control strip above the spectrogram. Contains transport controls, time field
 Display settings for the spectrogram: frequency range, intensity, FFT size, and frequency scale.
 
 ### buzzdetect panel
-An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below). Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the toolbar. Implemented by `BuzzdetectPanel`.
+An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below). Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the activity icon in the Neurons section header. Implemented by `BuzzdetectPanel`.
 
 ---
 
 # Subset Mode
 
-Showing only the time where chosen buzzdetect **neurons** fired, with everything else removed from the time axis rather than merely dimmed. The kept stretches are butted together, so they play back end to end with no gap — as if the detections had been extracted into a new file. Toggled from the scissors button at the top right of the buzzdetect panel, or `Shift+S`; keyed to whichever neurons have a **Subset at** threshold in the neuron palette (several are OR'd). An optional **buffer** widens every kept stretch by a fixed number of seconds on each side. Implemented by `utils/subsetTimeline.ts` and `utils/buzzdetectSubset.ts`.
+Showing only the time where chosen buzzdetect **neurons** fired, with everything else removed from the time axis rather than merely dimmed. The kept stretches are butted together, so they play back end to end with no gap — as if the detections had been extracted into a new file. Toggled from the scissors button in the Neurons section header, or `Shift+S`; keyed to whichever neurons have a **Subset at** threshold in the neuron palette (several are OR'd). An optional **buffer** widens every kept stretch by a fixed number of seconds on each side (activation mode only). Implemented by `utils/subsetTimeline.ts` and `utils/buzzdetectSubset.ts`.
 
 ## Source Time
 A position in the media file on disk. What Rust decodes, what **Annotations** are stored and exported in, what buzzdetect frame starts mean.

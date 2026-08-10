@@ -337,12 +337,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const subsetCriteria = useMemo<SubsetCriteria | null>(() => subsetCriteriaFrom({
     enabled: buzzdetectSubsetEnabled,
     subsetThresholds: buzzdetectSubsetThresholds,
+    thresholds: buzzdetectThresholds,
     mode: buzzdetectSeriesMode,
     minDetectionRate: buzzdetectMinDetectionRate,
     binWidthOverride: buzzdetectBinWidthOverride,
     frameHop: buzzdetectData?.frameHop ?? 0,
     buffer: buzzdetectSubsetBuffer,
-  }), [buzzdetectSubsetEnabled, buzzdetectSeriesMode, buzzdetectSubsetThresholds,
+  }), [buzzdetectSubsetEnabled, buzzdetectSeriesMode, buzzdetectSubsetThresholds, buzzdetectThresholds,
       buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData, buzzdetectSubsetBuffer]);
 
   // The display axis. Identity (i.e. the whole file, unchanged) whenever the
@@ -2105,6 +2106,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   autoYRange={buzzdetectAutoYRange}
                   yAxisOverride={buzzdetectYAxisOverride}
                   minDetectionRate={buzzdetectMinDetectionRate}
+                  subsetEnabled={subsetActive}
+                  onToggleSubset={toggleBuzzdetectSubset}
+                  panelOpen={buzzdetectEnabled}
+                  onTogglePanel={() => setBuzzdetectEnabled(v => !v)}
                   subsetBuffer={buzzdetectSubsetBuffer}
                   subsetStats={buzzdetectSubsetStats}
                   settingsOpen={buzzdetectSettingsOpen}
@@ -2239,9 +2244,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                setFilterStrength={setFilterStrength}
                videoMode={effectiveVideoMode}
                isAudioTrack={isAudioTrack}
-               buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
-               buzzdetectEnabled={buzzdetectEnabled}
-               onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
                onRestartAudio={() => { engineRef.current?.restart(); }}
                playheadLocked={playheadLocked}
                onTogglePlayheadLock={() => {
@@ -2310,7 +2312,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              )}
              </div>
 
-             {buzzdetectEnabled && (
+             {/* Same gate as the Neurons palette (and its toggle button): the
+                 project has to name a buzzdetect directory for there to be
+                 results at all, whatever the persisted open/closed flag says. */}
+             {project.buzzdetectDirectoryAbs !== null && buzzdetectEnabled && (
                <BuzzdetectPanel
                  data={displayBuzzdetectData}
                  viewportStore={viewportStoreRef.current}
@@ -2327,8 +2332,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  binWidthOverride={buzzdetectBinWidthOverride}
                  subsetActive={subsetActive}
                  timeline={timeline}
-                 subsetAvailable={buzzdetectSubsetNeurons.length > 0}
-                 onToggleSubset={toggleBuzzdetectSubset}
                  yAxisOverride={buzzdetectYAxisOverride}
                  reportAutoValues={buzzdetectSettingsOpen}
                  height={buzzdetectPanelHeight}
