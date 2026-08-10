@@ -58,22 +58,15 @@ On Debian/Ubuntu, the `.deb` is the recommended download.
 sudo apt install ./SeeNote-Linux.deb
 ```
 
-### Direct download (.AppImage)
-<div style="text-align:left;">
-  <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage">
-    <img src="https://img.shields.io/badge/Download-AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download AppImage">
-  </a>
-</div>
+Note that the in-app updater can only replace an AppImage in place. On a `.deb` install the update banner offers **View** instead, which opens the releases page for you to download the new version manually.
 
-Download the `.AppImage` above, make it executable, and run it:
+### Other distros
+
+Download the [AppImage](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage), make it executable, and run it:
 
 ```sh
 chmod +x SeeNote-Linux.AppImage
 ./SeeNote-Linux.AppImage
 ```
 
-### Which one?
-
-The AppImage bundles its own glib, which clashes with the system gvfs modules on newer distros and can crash SeeNote at launch (`undefined symbol: g_task_set_static_name`). The `.deb` links against system libraries instead, so it avoids that.
-
-The tradeoff is updates: the in-app updater can only replace an AppImage in place. On a `.deb` install the update banner offers **View** instead, which opens the releases page for you to download the new version manually.
+The AppImage bundles its own glib, which clashes with the system gvfs modules on some newer distros and can crash SeeNote at launch (`undefined symbol: g_task_set_static_name`). Where the `.deb` is an option, prefer it — it links against system libraries instead.
