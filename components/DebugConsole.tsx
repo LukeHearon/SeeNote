@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Bug, Copy, Check, X } from 'lucide-react';
 import { tooltips } from '../copy/tooltips';
 import { debugConsole } from '../copy/ui';
-import { getDiagnosticInfo } from '../utils/tauriCommands';
+import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
 
 interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -14,14 +14,8 @@ interface DebugConsoleProps {
 
 export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps) {
   const [copied, setCopied] = useState(false);
-  const [diagLine, setDiagLine] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open || diagLine) return;
-    getDiagnosticInfo()
-      .then((d) => setDiagLine(`SeeNote v${d.app_version} · ${d.os} ${d.arch} · ${d.build}`))
-      .catch(() => {});
-  }, [open, diagLine]);
+  const diag = useDiagnosticInfo(open);
+  const diagLine = diag && `SeeNote v${diag.app_version} · ${diag.os} ${diag.arch} · ${diag.build}`;
 
   if (!open) return null;
   return (

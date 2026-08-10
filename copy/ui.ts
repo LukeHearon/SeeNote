@@ -35,6 +35,7 @@ export const launchScreen = {
   get updatingButton() { return getOverride('ui.launchScreen.updatingButton') ?? "Updating…"; },
   get viewButton() { return getOverride('ui.launchScreen.viewButton') ?? "View"; },
   get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
+  currentVersion: (version: string) => `v${version}`,
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
   updateAvailable: (bumpType: 'major' | 'minor' | 'patch', version: string) => `New ${bumpType} version available: v${version}`,
