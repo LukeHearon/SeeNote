@@ -44,10 +44,24 @@ You will only have to do this once. Each time you open a project, you'll need to
 
 
 ## Linux
+
+On Debian/Ubuntu, the `.deb` is the recommended download.
+
+### Direct download (.deb)
+<div style="text-align:left;">
+  <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.deb">
+    <img src="https://img.shields.io/badge/Download-.deb-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download .deb">
+  </a>
+</div>
+
+```sh
+sudo apt install ./SeeNote-Linux.deb
+```
+
 ### Direct download (.AppImage)
 <div style="text-align:left;">
   <a href="https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage">
-    <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download Linux">
+    <img src="https://img.shields.io/badge/Download-AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download AppImage">
   </a>
 </div>
 
@@ -57,3 +71,9 @@ Download the `.AppImage` above, make it executable, and run it:
 chmod +x SeeNote-Linux.AppImage
 ./SeeNote-Linux.AppImage
 ```
+
+### Which one?
+
+The AppImage bundles its own glib, which clashes with the system gvfs modules on newer distros and can crash SeeNote at launch (`undefined symbol: g_task_set_static_name`). The `.deb` links against system libraries instead, so it avoids that.
+
+The tradeoff is updates: the in-app updater can only replace an AppImage in place. On a `.deb` install the update banner offers **View** instead, which opens the releases page for you to download the new version manually.

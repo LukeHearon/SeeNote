@@ -14,7 +14,7 @@ I'm creating SeeNote pretty much entirely via LLMs. I don't know typescript, rus
 
 ## Install
 
-[![Download for macOS](https://img.shields.io/badge/Download-macOS-000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-macOS.dmg) [![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Windows.exe) [![Download for Linux (AppImage)](https://img.shields.io/badge/Download-AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage) [![Download for Linux (.deb)](https://img.shields.io/badge/Download-.deb-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.deb)
+[![Download for macOS](https://img.shields.io/badge/Download-macOS-000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-macOS.dmg) [![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Windows.exe) [![Download for Linux (.deb)](https://img.shields.io/badge/Download-.deb-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.deb) [![Download for Linux (AppImage)](https://img.shields.io/badge/Download-AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/LukeHearon/SeeNote/releases/latest/download/SeeNote-Linux.AppImage)
 
 On macOS, you can also install via [Homebrew](https://brew.sh/):
 
@@ -24,11 +24,13 @@ brew install --cask LukeHearon/seenote/seenote
 
 Mac users will have to fight against macOS to open SeeNote. More on that [below](#macos-woes).
 
-On Debian/Ubuntu, the AppImage can crash on newer distros due to a glib/gvfs mismatch. Prefer the `.deb` over the AppImage.
+On Debian/Ubuntu, use the `.deb`:
 
 ``` sh
 sudo apt install ./SeeNote-Linux.deb
 ```
+
+The AppImage bundles its own glib, which clashes with the system gvfs modules on newer distros and can crash SeeNote at launch. The `.deb` links against system libraries instead. The tradeoff: the in-app updater can only replace an AppImage in place, so `.deb` installs are pointed at the releases page to download new versions manually.
 
 ## Overview
 
