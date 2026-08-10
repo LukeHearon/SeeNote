@@ -243,6 +243,9 @@ export interface DiagnosticInfo {
   app_version: string;
   os: string;
   arch: string;
+  /** System webview version — WebView2 / WKWebView / WebKitGTK. */
+  webview: string;
+  /** "release" in any installed build; "debug" only under `tauri dev`. */
   build: string;
 }
 

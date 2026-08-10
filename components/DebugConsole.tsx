@@ -3,6 +3,7 @@ import { Bug, Copy, Check, X } from 'lucide-react';
 import { tooltips } from '../copy/tooltips';
 import { debugConsole } from '../copy/ui';
 import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
+import { APP_VERSION } from '../utils/appVersion';
 
 interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -14,8 +15,20 @@ interface DebugConsoleProps {
 
 export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps) {
   const [copied, setCopied] = useState(false);
-  const diag = useDiagnosticInfo(open);
-  const diagLine = diag && `SeeNote v${diag.app_version} · ${diag.os} ${diag.arch} · ${diag.build}`;
+  const { info, error: diagError } = useDiagnosticInfo(open);
+  // The version comes from the build, not from `info`, so this line renders
+  // even when the invoke fails — and says so when it does, rather than
+  // quietly dropping to nothing.
+  const diagLine = `SeeNote v${APP_VERSION} · ${
+    info ? [
+      `${info.os} ${info.arch}`,
+      `webview ${info.webview}`,
+      // Constant in anything a user is running, so it's noise unless it isn't.
+      ...(info.build === 'release' ? [] : [info.build]),
+    ].join(' · ')
+    : diagError ? `system info unavailable: ${diagError}`
+    : 'reading system info…'
+  }`;
 
   if (!open) return null;
   return (
@@ -32,16 +45,13 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const text = [diagLine, ...logs.map(l => `[${l.time}] ${l.msg}`)]
-                  .filter((line): line is string => line !== null)
-                  .join('\n');
+                const text = [diagLine, ...logs.map(l => `[${l.time}] ${l.msg}`)].join('\n');
                 navigator.clipboard.writeText(text);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
               }}
               className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
               data-tooltip={tooltips.copyLogs}
-              disabled={logs.length === 0 && !diagLine}
             >
               {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
             </button>
@@ -49,9 +59,9 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
           </div>
         </div>
         <div className="flex-1 bg-slate-900 rounded p-4 overflow-y-auto font-mono text-sm border border-slate-700">
-          {diagLine && (
-            <div className="mb-2 pb-2 border-b border-slate-700 text-slate-400">{diagLine}</div>
-          )}
+          <div className={`mb-2 pb-2 border-b border-slate-700 ${diagError ? 'text-amber-400' : 'text-slate-400'}`}>
+            {diagLine}
+          </div>
           {logs.length === 0 ? <span className="text-slate-500 italic">{debugConsole.noLogs}</span> : (
             logs.map((log, i) => (
               <div key={i} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : 'text-slate-300'}`}>

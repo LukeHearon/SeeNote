@@ -9,7 +9,7 @@ import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
 import { launchScreen } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useAppUpdate } from '../hooks/useAppUpdate';
-import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
+import { APP_VERSION } from '../utils/appVersion';
 import { versionBumpType } from '../utils/semver';
 import CreateProjectModal from './CreateProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
@@ -72,7 +72,6 @@ export default function LaunchScreen({
   removeRecentFile,
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
-  const diag = useDiagnosticInfo();
   const [showCreate, setShowCreate] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [showAppSettings, setShowAppSettings] = useState(false);
@@ -285,9 +284,7 @@ export default function LaunchScreen({
           <AudioWaveform size={36} className="text-blue-400" />
           <span className="text-white text-3xl font-semibold tracking-tight">{launchScreen.appName}</span>
         </div>
-        {diag && (
-          <span className="text-gray-500 text-xs">{launchScreen.currentVersion(diag.app_version)}</span>
-        )}
+        <span className="text-gray-500 text-xs">{launchScreen.currentVersion(APP_VERSION)}</span>
         {update && (
           <div className="flex items-center gap-2 pl-3 pr-2 py-1 bg-blue-950/60 border border-blue-800 rounded-full text-xs">
             <span className="text-blue-200">{launchScreen.updateAvailable(versionBumpType(update.current_version, update.version), update.version)}</span>

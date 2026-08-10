@@ -728,7 +728,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setVideoSrc(videoElementUrl);
 
     addLog(`Opening: ${fileName}`);
-    addLog(`Video mode: ${videoModeRef.current}`);
+    // Only meaningful for a video track — the mode selects how frames are
+    // decoded, and an audio-only track never mounts the video pane.
+    if (!isAudio) addLog(`Video mode: ${videoModeRef.current}`);
     // Drop the outgoing track's spectrogram now, not when the new one finishes
     // decoding. Held any longer, the canvas keeps drawing the previous file's
     // chunks for the whole (potentially multi-second) load, so two different
