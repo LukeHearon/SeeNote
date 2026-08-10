@@ -323,8 +323,10 @@ function NeuronPalette({
     </div>
   );
 
+  // Capped at half the section so a long settings block can never squeeze the
+  // neuron list out of existence — past that it scrolls on its own.
   const settingsBlock = data && (
-    <div className="px-1.5 pt-1.5 pb-2 space-y-2 border-b border-slate-700 bg-slate-800/40">
+    <div className="flex-none max-h-[50%] overflow-y-auto px-1.5 pt-1.5 pb-2 space-y-2 border-b border-slate-700 bg-slate-800/40">
       <div className="space-y-1">
         {fieldLabel(copy.seriesHeader)}
         <div className="flex gap-1">
@@ -491,7 +493,10 @@ function NeuronPalette({
     >
       {settingsOpen && settingsBlock}
 
-      <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-1">
+      {/* min-h-0 is what makes this scroll rather than push past the section:
+          a flex item's automatic minimum size is its content, so without it the
+          list refuses to shrink and overflow-y-auto never engages. */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-1.5 flex flex-col gap-1">
         {neurons.length === 0 && (
           <p className="text-slate-600 text-[11px] px-1 py-2">{copy.noData}</p>
         )}
