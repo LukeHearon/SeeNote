@@ -48,8 +48,29 @@ pub fn set_window_bounds(app: tauri::AppHandle, bounds: WindowBounds) -> Result<
     Ok(())
 }
 
+// The three window-creating commands below MUST stay `async`.
+//
+// A sync #[tauri::command] runs inline on the thread that received the IPC
+// message, which on Windows is the main/UI thread (wry serves the ipc protocol
+// straight from WebView2's WebResourceRequested handler). Building a webview
+// from there deadlocks: WebView2 controller creation runs a nested message pump
+// that never gets its completion callback, because WebView2 won't deliver
+// events re-entrantly while one of its own handlers is on the stack. Tauri
+// documents this on WebviewWindowBuilder::new — "On Windows, this function
+// deadlocks when used in a synchronous command".
+//
+// The symptom is not a crash: the OS window and title bar appear, the client
+// area stays blank, and every later invoke from any window hangs forever, so
+// the app looks alive but stops loading spectrograms until it's restarted.
+// Reported against v0.16.1, which was the first release where opening the
+// guide (its own window since d4ab9b2) made most Windows users create a second
+// webview at all.
+//
+// Marking them async moves the body onto the async runtime, so the window
+// request reaches the event loop through the proxy instead of being handled
+// inside the WebView2 callback.
 #[tauri::command]
-pub fn open_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("sync-guide") {
         win.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
@@ -81,7 +102,7 @@ pub fn close_sync_guide_window(app: tauri::AppHandle) -> Result<(), String> {
 /// on; when the window already exists the frontend is told to navigate there
 /// over the `seenote-help` BroadcastChannel, so we only need to focus it here.
 #[tauri::command]
-pub fn open_help_window(app: tauri::AppHandle, page: Option<String>) -> Result<(), String> {
+pub async fn open_help_window(app: tauri::AppHandle, page: Option<String>) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("help") {
         win.unminimize().ok();
         win.show().map_err(|e| e.to_string())?;
@@ -112,7 +133,7 @@ pub fn close_help_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_copy_editor_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_copy_editor_window(app: tauri::AppHandle) -> Result<(), String> {
     if app.get_webview_window("copy-editor").is_some() {
         return Ok(());
     }
