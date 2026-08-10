@@ -3,6 +3,7 @@ import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings2, Slid
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
+import { pickedNeuronsIn } from '../utils/buzzdetectSubset';
 import { clamp, formatTime } from '../utils/helpers';
 import ToolCell from './ToolCell';
 import { BuzzdetectToggle, SubsetToggle } from './controls/ToolbarToggles';
@@ -177,6 +178,14 @@ function NeuronPalette({
     };
   }, [neurons, hidden, pinnedNeurons]);
   const plottedCount = pinned.length + unpinned.length;
+
+  // The picks that are actually cutting: the ones this file's results have a
+  // column for. The rest stay in the list below, marked, so a setting that
+  // isn't doing anything here says so rather than looking like it is.
+  const cuttingNeurons = useMemo(
+    () => pickedNeuronsIn(subsetThresholds, data?.neurons ?? null),
+    [subsetThresholds, data],
+  );
 
   // What the picker can offer, filtered by its search box.
   const addable = useMemo(() => {
@@ -387,17 +396,24 @@ function NeuronPalette({
                 with no row anywhere in the palette, and nothing on screen would
                 say so or offer a way to clear it. */}
             <div className="flex flex-wrap gap-1">
-              {subsetNeurons.map(n => (
-                <button
-                  key={n}
-                  onClick={() => onSubsetThresholdChange(n, null)}
-                  className="flex items-center gap-1 max-w-full pl-1.5 pr-1 py-px rounded bg-[#e65161]/15 text-[#e65161] text-[10px] hover:bg-[#e65161]/25 transition-colors"
-                  data-tooltip={tooltips.buzzdetectSubsetUnpick}
-                >
-                  <span className="truncate">{n}</span>
-                  <X size={9} className="flex-none" />
-                </button>
-              ))}
+              {subsetNeurons.map(n => {
+                const cutting = cuttingNeurons.includes(n);
+                return (
+                  <button
+                    key={n}
+                    onClick={() => onSubsetThresholdChange(n, null)}
+                    className={`flex items-center gap-1 max-w-full pl-1.5 pr-1 py-px rounded text-[10px] transition-colors ${
+                      cutting
+                        ? 'bg-[#e65161]/15 text-[#e65161] hover:bg-[#e65161]/25'
+                        : 'bg-slate-700/40 text-slate-500 line-through hover:bg-slate-700/70'
+                    }`}
+                    data-tooltip={cutting ? tooltips.buzzdetectSubsetUnpick : tooltips.buzzdetectSubsetAbsent}
+                  >
+                    <span className="truncate">{n}</span>
+                    <X size={9} className="flex-none" />
+                  </button>
+                );
+              })}
             </div>
             {seriesMode === 'detectionRate' && (
               <div className="flex items-center gap-2">
@@ -477,7 +493,7 @@ function NeuronPalette({
               below it, and the graph the other one opens is what these rows
               describe. Both are reachable exactly when this section is — i.e.
               when the project names a buzzdetect directory. */}
-          {subsetNeurons.length > 0 && (
+          {cuttingNeurons.length > 0 && (
             <SubsetToggle compact active={subsetEnabled} onToggle={onToggleSubset} />
           )}
           <BuzzdetectToggle compact enabled={panelOpen} onToggle={onTogglePanel} />

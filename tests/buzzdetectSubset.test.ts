@@ -262,11 +262,29 @@ describe('subsetCriteriaFrom', () => {
     binWidthOverride: 2,
     frameHop: 0.5,
     buffer: 0,
+    availableNeurons: ['bee', 'fly'],
   };
 
   it('is null when disabled or nothing is picked', () => {
     expect(subsetCriteriaFrom({ ...inputs, enabled: false })).toBeNull();
     expect(subsetCriteriaFrom({ ...inputs, subsetThresholds: {} })).toBeNull();
+  });
+
+  // Picks are saved per project and keyed by neuron label, so a track scored by
+  // a different model carries picks naming columns it hasn't got. Cutting by
+  // those would match nothing and blank the track.
+  it('ignores picks this file has no column for', () => {
+    const c = subsetCriteriaFrom({
+      ...inputs,
+      subsetThresholds: { bee: 1.5, wasp: 1.5 },
+    })!;
+    expect(c.neurons).toEqual(['bee']);
+  });
+
+  it('is null when no pick survives, rather than cutting to nothing', () => {
+    expect(subsetCriteriaFrom({ ...inputs, subsetThresholds: { wasp: 1.5 } })).toBeNull();
+    // No results loaded at all — same story.
+    expect(subsetCriteriaFrom({ ...inputs, availableNeurons: null })).toBeNull();
   });
 
   // The picks ARE the threshold map's keys — there's no second list that could

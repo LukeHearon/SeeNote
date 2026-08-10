@@ -79,6 +79,7 @@ export const tooltips = {
   get buzzdetectSubsetThreshold() { return getOverride('tooltips.buzzdetectSubsetThreshold') ?? "Threshold the subset is cut at.\nLeave blank and this neuron doesn't cut at all; set it lower than the detection threshold to keep the audio around each detection while the graph still marks detections strictly."; },
   get buzzdetectSubsetPick() { return getOverride('tooltips.buzzdetectSubsetPick') ?? "Subset the track by this neuron.\nIn detection-rate mode the cut is judged at the detection threshold and loosened by the minimum rate, so there is no separate value to set."; },
   get buzzdetectSubsetUnpick() { return getOverride('tooltips.buzzdetectSubsetUnpick') ?? "Stop subsetting by this neuron"; },
+  get buzzdetectSubsetAbsent() { return getOverride('tooltips.buzzdetectSubsetAbsent') ?? "This track's results have no column for this neuron, so it isn't cutting here.\nClick to drop it from the subset entirely."; },
   get buzzdetectSubsetBuffer() { return getOverride('tooltips.buzzdetectSubsetBuffer') ?? "Seconds of audio kept either side of every subset region, for context around each detection."; },
   get buzzdetectSubset() { return getOverride('tooltips.buzzdetectSubset') ?? "Subset track to detections (Shift+S)"; },
   get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },

@@ -119,6 +119,15 @@ export interface SubsetInputs {
   subsetThresholds: Record<string, number>;
   /** Per-neuron detection thresholds — what the cut is judged at in detectionRate mode. */
   thresholds: Record<string, number>;
+  /**
+   * The neuron labels THIS file's results actually contain, or null when no
+   * results are loaded. Picks are saved per project and keyed by label, so a
+   * track scored by a different model carries picks naming columns it doesn't
+   * have — and a cut keyed only to those would match nothing and blank the
+   * track. Picks not in this list are ignored (never deleted: the same project
+   * may hold tracks from both models, and going back should restore them).
+   */
+  availableNeurons: readonly string[] | null;
   mode: BuzzdetectSeriesMode;
   minDetectionRate: number;
   /** User-pinned bin width (seconds), or null for auto. */
@@ -130,6 +139,23 @@ export interface SubsetInputs {
 }
 
 /**
+ * The picked neurons that this file's results actually have a column for, in
+ * the order the picks were made. Exported so the palette can mark the picks
+ * that aren't cutting here — nothing should silently ignore a setting the user
+ * can see without saying so.
+ *
+ * `available === null` means no results are loaded, so nothing is cutting.
+ */
+export function pickedNeuronsIn(
+  subsetThresholds: Record<string, number>,
+  available: readonly string[] | null,
+): string[] {
+  if (!available) return [];
+  const have = new Set(available);
+  return Object.keys(subsetThresholds).filter(n => have.has(n));
+}
+
+/**
  * The criteria a subset is keyed to, or null when it's off — null is what makes
  * every downstream path run the whole-file case unchanged.
  *
@@ -137,7 +163,7 @@ export interface SubsetInputs {
  * demo subsets by exactly the rule the real thing does.
  */
 export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null {
-  const neurons = Object.keys(inputs.subsetThresholds);
+  const neurons = pickedNeuronsIn(inputs.subsetThresholds, inputs.availableNeurons);
   if (!inputs.enabled || neurons.length === 0) return null;
   return {
     neurons,
