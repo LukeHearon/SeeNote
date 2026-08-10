@@ -1,12 +1,18 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import { Sliders, GripHorizontal, RotateCcw } from 'lucide-react';
+import { GripHorizontal } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
-import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
+import {
+  MIN_SEGMENT_JOIN_PX,
+  Timeline,
+  identityTimeline,
+  minSegmentDuration,
+  segmentJoins,
+  sourceIntervalOf,
+} from '../utils/subsetTimeline';
 import {
   buzzdetectNeuronColor,
-  BUZZDETECT_PALETTE,
   DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
@@ -33,9 +39,6 @@ import {
   rangeMean,
 } from '../utils/prefixSums';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
-import { tooltips } from '../copy/tooltips';
-import DraftNumberInput from './DraftNumberInput';
-import ColorSwatchPicker from './ColorSwatchPicker';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -99,23 +102,22 @@ interface BuzzdetectPanelProps {
   // only to mark the seams between spliced-together spans (see subsetJoins
   // below) — everything else about drawing stays in display time already.
   timeline?: Timeline;
-  // Neuron labels the subset is keyed to (OR'd). Independent of `hiddenNeurons`:
-  // a neuron can drive the subset while another is merely plotted alongside it.
-  subsetNeurons: string[];
-  // Minimum fraction of a bin's frames that must fire for the bin to be kept.
-  // detection-rate mode only.
-  minDetectionRate: number;
+  /**
+   * User-pinned Y-axis range, or null for the auto range. Owned by
+   * useBuzzdetect so the neuron palette's fields and this graph read the same
+   * value — the palette is where it's typed, this is where it's drawn.
+   */
+  yAxisOverride: { min: number; max: number } | null;
+  /**
+   * While true, the auto bin width and auto Y-range are reported upward at draw
+   * time (they change with zoom). The palette sets it only while its settings
+   * block is open, so a closed block costs no renders.
+   */
+  reportAutoValues: boolean;
   height: number;
   // Callbacks.
-  onThresholdChange: (neuron: string, value: number) => void;
-  onToggleNeuron: (neuron: string, hidden: boolean) => void;
-  // Show/hide every neuron in the graph at once (distinct from subsetting).
-  onSetAllNeuronsHidden: (hidden: boolean) => void;
-  onNeuronColorChange: (neuron: string, color: string) => void;
-  onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
-  onBinWidthOverrideChange: (binWidth: number | null) => void;
-  onToggleSubsetNeuron: (neuron: string, willSubset: boolean) => void;
-  onMinDetectionRateChange: (rate: number) => void;
+  onAutoBinWidthChange: (binWidth: number) => void;
+  onAutoYRangeChange: (range: { min: number; max: number } | null) => void;
   onHeightChange: (height: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -139,17 +141,11 @@ export default function BuzzdetectPanel({
   binWidthOverride,
   subsetActive,
   timeline,
-  subsetNeurons,
-  minDetectionRate,
+  yAxisOverride,
+  reportAutoValues,
   height,
-  onThresholdChange,
-  onToggleNeuron,
-  onSetAllNeuronsHidden,
-  onNeuronColorChange,
-  onSeriesModeChange,
-  onBinWidthOverrideChange,
-  onToggleSubsetNeuron,
-  onMinDetectionRateChange,
+  onAutoBinWidthChange,
+  onAutoYRangeChange,
   onHeightChange,
   onSelectionChange,
   onBoundAnnotationChange,
@@ -160,7 +156,6 @@ export default function BuzzdetectPanel({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
-  const [showSettings, setShowSettings] = useState(false);
   // Hovered unit, as a frame-index range (inclusive) — one frame, or the whole
   // bucket frames are grouped into (see unitAtClientX).
   // Lives in a ref as well as state: the ref is what the overlay canvas paints
@@ -169,21 +164,6 @@ export default function BuzzdetectPanel({
   // readout — updated through `setHover` below, which drops no-op moves.
   const hoverRangeRef = useRef<FrameUnit | null>(null);
   const [hoverRange, setHoverRange] = useState<FrameUnit | null>(null);
-
-  // Which neuron's color-swatch popover is open in the settings panel (null =
-  // none). Closed on outside click below.
-  const [openColorNeuron, setOpenColorNeuron] = useState<string | null>(null);
-  const colorPopoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openColorNeuron) return;
-    const handler = (e: MouseEvent) => {
-      if (colorPopoverRef.current && !colorPopoverRef.current.contains(e.target as Node)) {
-        setOpenColorNeuron(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openColorNeuron]);
 
   // Drag-to-select across hit units. `dragging` gates the window listeners; the
   // anchor unit lives in a ref so the listener effect attaches once per drag
@@ -200,33 +180,6 @@ export default function BuzzdetectPanel({
   const dragAnchorRef = useRef<
     { unit: FrameUnit; pending: boolean; startX: number; startTime: number } | null
   >(null);
-
-  // User-editable Y-axis range. Null means "use the auto-calculated range"
-  // (activeAutoYRange, below); typing into either settings text box pins it.
-  // Reset whenever a new file's data loads, so each file starts from its own
-  // auto-calculated range rather than inheriting a stale manual override.
-  const [yAxisOverride, setYAxisOverride] = useState<{ min: number; max: number } | null>(null);
-  useEffect(() => { setYAxisOverride(null); }, [data]);
-
-  // binWidthOverride is a persisted prop (deliberately NOT reset per track —
-  // see its prop doc), but a series-mode flip still needs to reset both it
-  // and the Y-axis override, since the two modes plot in entirely different
-  // units and their auto-calculated ranges/widths aren't comparable. Skips
-  // the reset on mount so loading a project with a persisted override doesn't
-  // immediately wipe it.
-  const seriesModeMountedRef = useRef(false);
-  useEffect(() => {
-    if (!seriesModeMountedRef.current) { seriesModeMountedRef.current = true; return; }
-    setYAxisOverride(null);
-    onBinWidthOverrideChange(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seriesMode]);
-
-  // Live-updated (only while the settings popover is open, to avoid
-  // re-rendering every draw tick for no visible benefit) auto-calculated bin
-  // width, so the settings text box shows "the current auto-binning
-  // binwidth" per the spec, even as it changes with zoom.
-  const [autoBinWidthDisplay, setAutoBinWidthDisplay] = useState(0);
 
   // The bin width (seconds) currently in effect — auto or overridden — set at
   // draw time. It's what decides whether a unit is one frame or a whole bucket
@@ -245,6 +198,10 @@ export default function BuzzdetectPanel({
   // Display-time seams between spliced-together spans (see Spectrogram, which
   // marks the same positions) — empty whenever there's no subset to seam.
   const subsetJoins = useMemo(() => (timeline ? segmentJoins(timeline) : []), [timeline]);
+  // Shortest segment on the axis, for the "are these seams still telling apart?"
+  // gate at draw time. Memoised: it's a scan over the spans and the draw runs
+  // every frame.
+  const minSegmentSec = useMemo(() => (timeline ? minSegmentDuration(timeline) : Infinity), [timeline]);
 
   // The timeline every unit below is cut against. Memoised even in the identity
   // case so `draw` doesn't get a fresh dep object on every render.
@@ -346,6 +303,13 @@ export default function BuzzdetectPanel({
   // override, pre-threshold-widening) auto Y-range.
   const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
 
+  // Mirror the auto range up to useBuzzdetect, so the palette's Y-axis fields
+  // can show what the graph is actually using. Effect rather than draw-time, so
+  // it only fires when the memoised range genuinely changes.
+  useEffect(() => {
+    if (reportAutoValues) onAutoYRangeChange(activeAutoYRange);
+  }, [reportAutoValues, activeAutoYRange, onAutoYRangeChange]);
+
   // The current selection as a unit, for the persistent selection readout
   // below: the frames it covers (half-open on the right, so selecting exactly
   // one frame reads as one frame rather than spilling into its neighbour) and
@@ -354,7 +318,7 @@ export default function BuzzdetectPanel({
   // bin is 4s and that's what was selected.
   const selectionUnit = useMemo<FrameUnit | null>(() => {
     if (!selection || !data) return null;
-    const r = frameRangeForTimeSpan(data.starts, data.binWidth, selection.start, selection.end);
+    const r = frameRangeForTimeSpan(data.starts, data.frameLength, selection.start, selection.end);
     return r && { ...r, tStart: selection.start, tEnd: selection.end };
   }, [data, selection]);
 
@@ -382,7 +346,7 @@ export default function BuzzdetectPanel({
     // bucket. Nothing is drawn there either, so there's nothing to select. A
     // bin wider than a subset segment resolves to the piece cut at the
     // segment's edges, same as the drawn band (see utils/binIndex).
-    return unitAtTime(activeTimeline, data.starts, data.binWidth, effectiveBinWidthRef.current, t);
+    return unitAtTime(activeTimeline, data, effectiveBinWidthRef.current, t);
   }, [data, timeAtClientX, activeTimeline]);
 
   // A unit's own time extent, end clamped to EOF — the same span the panel
@@ -441,15 +405,16 @@ export default function BuzzdetectPanel({
     }
 
     const { scrollLeft, pixelsPerSecond } = viewportStore.get();
-    const { starts, binWidth, neurons, values } = data;
+    const { starts, frameLength, frameHop, neurons, values } = data;
     const startTime = scrollLeft / pixelsPerSecond;
     const endTime = startTime + width / pixelsPerSecond;
     const xOf = (t: number) => timeToX(t, scrollLeft, pixelsPerSecond);
 
     // Visible bin index range (with a one-bin margin so partial edges connect).
-    // Searched over `starts` rather than derived arithmetically: frames may be
-    // non-contiguous when binWidth is overridden shorter than the frame spacing.
-    const visible = visibleBinRange(starts, binWidth, startTime, endTime);
+    // Searched over `starts` rather than derived arithmetically: frames are only
+    // contiguous when the frame length equals the hop, and the frame-length
+    // setting can leave gaps between them or make them overlap.
+    const visible = visibleBinRange(starts, frameLength, startTime, endTime);
     if (!visible) { ctx.restore(); clearYAxis(); return; }
     const { iLeft, iRight } = visible;
 
@@ -459,18 +424,21 @@ export default function BuzzdetectPanel({
     // auto width outright. Everything downstream — the bands, the darken pass,
     // the boundary marks, the polyline, and the cursor's hit-testing — works in
     // units of this width.
-    const binPx = binWidth * pixelsPerSecond;
+    // Density is a question about the HOP — how far apart the frames sit on
+    // screen — not about how far each one reaches. Overlapping frames are
+    // exactly as crowded as their spacing says, however long they are.
+    const hopPx = frameHop * pixelsPerSecond;
     const visibleCount = iRight - iLeft + 1;
-    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : binWidth;
-    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, binWidth);
-    const grouped = isGroupedUnitWidth(binWidth, effectiveBinWidthSec);
-    const drawDots = binPx >= MIN_DOT_PX && !grouped;
+    const autoBinWidthSec = visibleCount > MAX_LINE_POINTS ? (endTime - startTime) / MAX_LINE_POINTS : frameHop;
+    const effectiveBinWidthSec = Math.max(binWidthOverride ?? autoBinWidthSec, frameHop);
+    const grouped = isGroupedUnitWidth(frameHop, effectiveBinWidthSec);
+    const drawDots = hopPx >= MIN_DOT_PX && !grouped;
     // The width that decides what a unit is (utils/binIndex) — published for
     // the hover/click handlers, which resolve units by time through the same
     // functions this draw enumerates them with.
     effectiveBinWidthRef.current = effectiveBinWidthSec;
-    if (showSettings) {
-      setAutoBinWidthDisplay(Math.round(autoBinWidthSec * 10000) / 10000);
+    if (reportAutoValues) {
+      onAutoBinWidthChange(Math.round(autoBinWidthSec * 10000) / 10000);
     }
 
     // With individual frames visible, detection rate is a binary per-frame
@@ -530,14 +498,14 @@ export default function BuzzdetectPanel({
     // materialising them would mean tens of thousands of entries on a long
     // recording, hundreds landing in the same pixel column, so each column's
     // frames stand in for the frames inside it — at most one entry per column.
-    const subPixelFrames = binPx < 1 && !grouped;
+    const subPixelFrames = hopPx < 1 && !grouped;
     const units: { start: number; end: number; xStart: number; xEnd: number; xMid: number; tMid: number }[] = [];
     if (subPixelFrames) {
       const cols = Math.ceil(width);
       for (let c = 0; c < cols; c++) {
         const r = frameRangeForTimeSpan(
           starts,
-          binWidth,
+          frameLength,
           xToTime(c, scrollLeft, pixelsPerSecond),
           xToTime(c + 1, scrollLeft, pixelsPerSecond),
         );
@@ -549,7 +517,7 @@ export default function BuzzdetectPanel({
       // becomes one drawn unit per segment, so no band, point or wash reaches
       // across a cut into audio from elsewhere in the file. Hit-testing cuts
       // the same way, so what's painted stays what the cursor can pick.
-      forEachUnitInSpan(activeTimeline, starts, binWidth, effectiveBinWidthSec, startTime, endTime, u => {
+      forEachUnitInSpan(activeTimeline, data, effectiveBinWidthSec, startTime, endTime, u => {
         units.push({
           start: u.start,
           end: u.end,
@@ -562,7 +530,7 @@ export default function BuzzdetectPanel({
     }
     // Width of one unit on screen, for the "is this too tight to draw?" gates —
     // and, published below, the "is this too tight to click?" one.
-    const unitPx = grouped ? effectiveBinWidthSec * pixelsPerSecond : binPx;
+    const unitPx = grouped ? effectiveBinWidthSec * pixelsPerSecond : hopPx;
     unitPxRef.current = unitPx;
 
     // Full-height wash over every unit satisfying `keep`. Adjacent painted
@@ -610,7 +578,7 @@ export default function BuzzdetectPanel({
     // Subset segment joins — the same seams the spectrogram marks, drawn the
     // same way (gold, dashed), so a cut reads identically on both: a splice,
     // not a marker unique to one panel.
-    if (subsetJoins.length > 0) {
+    if (subsetJoins.length > 0 && minSegmentSec * pixelsPerSecond >= MIN_SEGMENT_JOIN_PX) {
       ctx.save();
       ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
       ctx.lineWidth = 1;
@@ -727,7 +695,7 @@ export default function BuzzdetectPanel({
       };
       if (!grouped) {
         for (let i = iLeft; i <= iRight; i++) {
-          const t = starts[i] + binWidth / 2;
+          const t = starts[i] + frameLength / 2;
           lineTo(t, xOf(t), yOf(perFrameValue(i)));
         }
       } else {
@@ -763,7 +731,7 @@ export default function BuzzdetectPanel({
 
       if (drawDots) {
         for (let i = iLeft; i <= iRight; i++) {
-          const cx = xOf(starts[i] + binWidth / 2);
+          const cx = xOf(starts[i] + frameLength / 2);
           if (cx < -4 || cx > width + 4) continue;
           const isPositive = values[n][i] >= th;
           const cy = yOf(perFrameValue(i));
@@ -819,7 +787,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, activeTimeline, showSettings, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1060,8 +1028,6 @@ export default function BuzzdetectPanel({
     window.addEventListener('mouseup', onUp);
   };
 
-  const enabledNeurons = data ? data.neurons.filter(n => !hidden.has(n)) : [];
-
   // Renders the small top-left readout for a unit: its time span, and each
   // enabled neuron's value. One call site — it shows the selection's span when
   // there is a selection, else the hovered unit's.
@@ -1199,220 +1165,6 @@ export default function BuzzdetectPanel({
           {data && (selectionUnit ?? hoverRange) !== null &&
             renderBinRangeReadout((selectionUnit ?? hoverRange)!)}
 
-          {/* Settings popover trigger */}
-          <button
-            data-buzz-ui
-            onClick={() => setShowSettings(s => !s)}
-            className={`absolute top-1.5 right-1.5 p-1 rounded transition-colors ${showSettings ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:text-white hover:bg-slate-700/70'}`}
-            data-tooltip={tooltips.buzzdetectSettings}
-          >
-            <Sliders size={14} />
-          </button>
-
-          {showSettings && (
-            <div
-              data-buzz-ui
-              className="absolute top-9 right-1.5 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-64 max-h-[calc(100%-2.5rem)] overflow-y-auto custom-scrollbar"
-              onMouseDown={(e) => e.stopPropagation()}
-              onWheel={(e) => e.stopPropagation()}
-            >
-              <div className="p-3 space-y-2">
-                {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                      {buzzdetectCopy.seriesHeader}
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => onSeriesModeChange('activation')}
-                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'activation' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                      >
-                        {buzzdetectCopy.seriesActivation}
-                      </button>
-                      <button
-                        onClick={() => onSeriesModeChange('detectionRate')}
-                        className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${seriesMode === 'detectionRate' ? 'bg-[#e65161] text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                      >
-                        {buzzdetectCopy.seriesDetectionRate}
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
-                      <span>{buzzdetectCopy.binWidthHeader}</span>
-                      {binWidthOverride !== null && (
-                        <button
-                          onClick={() => onBinWidthOverrideChange(null)}
-                          className="text-slate-400 hover:text-[#e65161]"
-                          data-tooltip={tooltips.buzzdetectBinWidthReset}
-                        >
-                          <RotateCcw size={11} />
-                        </button>
-                      )}
-                    </div>
-                    <DraftNumberInput
-                      value={binWidthOverride ?? autoBinWidthDisplay}
-                      onCommit={(v) => { if (v === null) return; onBinWidthOverrideChange(v); }}
-                      min={data.binWidth}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                    />
-                  </div>
-                )}
-                {data && activeAutoYRange && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400">
-                      <span>{buzzdetectCopy.yAxisHeader}</span>
-                      {yAxisOverride && (yAxisOverride.min !== activeAutoYRange.min || yAxisOverride.max !== activeAutoYRange.max) && (
-                        <button
-                          onClick={() => setYAxisOverride(null)}
-                          className="text-slate-400 hover:text-[#e65161]"
-                          data-tooltip={tooltips.buzzdetectYAxisReset}
-                        >
-                          <RotateCcw size={11} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <DraftNumberInput
-                        value={yAxisOverride?.min ?? activeAutoYRange.min}
-                        onCommit={(v) => {
-                          if (v === null) return;
-                          setYAxisOverride({ min: v, max: yAxisOverride?.max ?? activeAutoYRange.max });
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                      />
-                      <span className="text-slate-500 text-xs flex-none">–</span>
-                      <DraftNumberInput
-                        value={yAxisOverride?.max ?? activeAutoYRange.max}
-                        onCommit={(v) => {
-                          if (v === null) return;
-                          setYAxisOverride({ min: yAxisOverride?.min ?? activeAutoYRange.min, max: v });
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-slate-200 outline-none focus:border-[#e65161]"
-                      />
-                    </div>
-                  </div>
-                )}
-                {data && (
-                  <div className="pb-2 border-b border-slate-700 space-y-1">
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                      {buzzdetectCopy.subsetHeader}
-                    </div>
-                    {subsetNeurons.length === 0 ? (
-                      <p className="text-slate-500 text-[11px]">{buzzdetectCopy.subsetNoNeurons}</p>
-                    ) : (
-                      <>
-                        {seriesMode === 'detectionRate' && (
-                          <div className="flex items-center gap-2">
-                            <span className="flex-1 text-[11px] text-slate-300">{buzzdetectCopy.subsetMinRateLabel}</span>
-                            <DraftNumberInput
-                              value={minDetectionRate}
-                              onCommit={(v) => { if (v !== null) onMinDetectionRateChange(clamp(v, 0, 1)); }}
-                              min={0}
-                              className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right text-slate-200 outline-none focus:border-[#e65161]"
-                            />
-                          </div>
-                        )}
-                        {/* The auto bin width changes with zoom, so subsetting by
-                            it would silently redefine the subset every time the
-                            view moved. A bin is kept whole, on the pinned width
-                            instead (the file's frame length until one is
-                            pinned, where a bin is just one frame) — its mean
-                            activation in activation mode, its detection rate in
-                            detection rate mode. */}
-                        <p className="text-slate-500 text-[10px]">{buzzdetectCopy.subsetPinBinWidth}</p>
-                      </>
-                    )}
-                  </div>
-                )}
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 pb-1 border-b border-slate-700">
-                  <span className="flex items-center gap-1.5">
-                    {buzzdetectCopy.neuronHeader}
-                    {data && data.neurons.length > 0 && (() => {
-                      // One button whose action flips with the current state: while
-                      // every neuron is shown, the only useful next step is hiding
-                      // them all; otherwise (some or none shown) it's showing them
-                      // all — so the label always names what a click is about to do.
-                      const allShown = data.neurons.every(n => !hidden.has(n));
-                      return (
-                        <button
-                          onClick={() => onSetAllNeuronsHidden(allShown)}
-                          className="normal-case tracking-normal text-slate-400 hover:text-[#e65161] underline decoration-dotted"
-                        >
-                          {allShown ? buzzdetectCopy.selectNoneNeurons : buzzdetectCopy.selectAllNeurons}
-                        </button>
-                      );
-                    })()}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <span>{buzzdetectCopy.subsetColumnHeader}</span>
-                    <span>{buzzdetectCopy.thresholdHeader}</span>
-                  </span>
-                </div>
-                {!data && <p className="text-slate-500 text-xs py-2">{buzzdetectCopy.noDataLoaded}</p>}
-                {data && data.neurons.map((n, i) => {
-                  const isOn = !hidden.has(n);
-                  return (
-                    <div key={n} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={isOn}
-                        onChange={() => onToggleNeuron(n, isOn)}
-                        className="accent-[#e65161] flex-none"
-                      />
-                      <div className="relative flex-none">
-                        <button
-                          onClick={() => setOpenColorNeuron(v => v === n ? null : n)}
-                          className="block w-3 h-3 rounded-sm ring-1 ring-white/20"
-                          style={{ background: neuronColors[i] }}
-                          data-tooltip={tooltips.buzzdetectNeuronColor}
-                        />
-                        {openColorNeuron === n && (
-                          <div
-                            ref={colorPopoverRef}
-                            className="absolute left-0 top-full mt-1.5 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-2 w-40"
-                          >
-                            <ColorSwatchPicker
-                              value={neuronColors[i]}
-                              swatchColors={BUZZDETECT_PALETTE}
-                              onChange={(c) => onNeuronColorChange(n, c)}
-                              customColorTitle={buzzdetectCopy.customColorTitle}
-                              size={14}
-                              popoverPosition="bottom"
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <span className="flex-1 text-xs text-slate-200 truncate" title={n}>{n}</span>
-                      {/* Subsetting is deliberately independent of the plot
-                          checkbox on the left: a neuron can define which frames
-                          are kept while another is merely plotted alongside it
-                          to see what it did there. Several ticked here are
-                          OR'd — a frame survives if any of them fired. */}
-                      <input
-                        type="checkbox"
-                        checked={subsetNeurons.includes(n)}
-                        onChange={() => onToggleSubsetNeuron(n, !subsetNeurons.includes(n))}
-                        className="accent-[#e65161] flex-none"
-                        data-tooltip={tooltips.buzzdetectSubsetNeuron}
-                      />
-                      <DraftNumberInput
-                        value={thresholdOf(n)}
-                        onCommit={(v) => onThresholdChange(n, v)}
-                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-right outline-none focus:border-[#e65161]"
-                        style={{ color: neuronColors[i] }}
-                      />
-                    </div>
-                  );
-                })}
-                {data && enabledNeurons.length === 0 && (
-                  <p className="text-slate-500 text-[11px] pt-1">{buzzdetectCopy.allNeuronsHidden}</p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

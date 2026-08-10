@@ -80,14 +80,52 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
 // Panel layout defaults — used when no saved layout exists yet in preferences.json.
 export const DEFAULT_LEFT_PANEL_WIDTH = 224; // px
 export const DEFAULT_SPLIT_RATIO = 0.5;      // vertical video/spectrogram split
-export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // file-tree vs tool-palette split
+export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // legacy file-tree vs tool-palette split; seeds sidebarSections on load
+
+/**
+ * The left sidebar's stack, top to bottom. `neurons` is only rendered while
+ * buzzdetect data is loaded; the stack reflows around it (see SidebarStack).
+ */
+export const SIDEBAR_SECTION_FILES = 'files';
+export const SIDEBAR_SECTION_LABELS = 'labels';
+export const SIDEBAR_SECTION_NEURONS = 'neurons';
+
+/**
+ * Starting weights for a project with nothing persisted. `files` and `labels`
+ * reproduce DEFAULT_LEFT_PANEL_RATIO; `neurons` starts at the tool palette's
+ * share, since the two palettes hold comparable numbers of rows.
+ */
+export const DEFAULT_SIDEBAR_SECTIONS: Record<string, { weight: number; collapsed: boolean }> = {
+  [SIDEBAR_SECTION_FILES]: { weight: DEFAULT_LEFT_PANEL_RATIO, collapsed: false },
+  [SIDEBAR_SECTION_LABELS]: { weight: 1 - DEFAULT_LEFT_PANEL_RATIO, collapsed: false },
+  [SIDEBAR_SECTION_NEURONS]: { weight: 1 - DEFAULT_LEFT_PANEL_RATIO, collapsed: false },
+};
+
+/**
+ * Sidebar section layout for a project, falling back to the legacy
+ * `leftPanelRatio` two-way split when this project predates the neuron palette
+ * — so an existing project opens with the file tree / tool palette proportions
+ * its user last set, rather than snapping back to the default.
+ */
+export function sidebarSectionsFromUiSettings(
+  saved: Record<string, { weight: number; collapsed: boolean }> | undefined,
+  legacyRatio: number | undefined,
+): Record<string, { weight: number; collapsed: boolean }> {
+  if (saved) return { ...DEFAULT_SIDEBAR_SECTIONS, ...saved };
+  if (legacyRatio === undefined) return { ...DEFAULT_SIDEBAR_SECTIONS };
+  return {
+    ...DEFAULT_SIDEBAR_SECTIONS,
+    [SIDEBAR_SECTION_FILES]: { weight: legacyRatio, collapsed: false },
+    [SIDEBAR_SECTION_LABELS]: { weight: 1 - legacyRatio, collapsed: false },
+  };
+}
 
 export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'activeTrackPath' |
-  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
-  'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' |
+  'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectSubsetThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
+  'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectSubsetBuffer' | 'buzzdetectPinnedNeurons' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
-  'splitRatio' | 'leftPanelRatio' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
+  'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,
@@ -131,6 +169,10 @@ export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
 // A middling default — high enough that one stray frame doesn't keep a bin,
 // low enough that a real burst isn't thrown away for not being unanimous.
 export const DEFAULT_BUZZDETECT_MIN_DETECTION_RATE = 0.5;
+// Seconds of context a subset keeps either side of each kept bin. Zero: the
+// buffer is opt-in, so a cut means exactly what the thresholds said until the
+// user asks for room around it.
+export const DEFAULT_BUZZDETECT_SUBSET_BUFFER = 0;
 // Categorical palette for neuron polylines, assigned by neuron order. Chosen to
 // read clearly on the slate-900 panel background and stay distinct from the
 // magma spectrogram colormap.

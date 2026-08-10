@@ -115,5 +115,5 @@ export function makeDemoBuzzdetectData(): BuzzdetectData {
     }
   }));
 
-  return { binWidth: DEMO_BIN_WIDTH, neurons: DEMO_NEURONS, starts, values };
+  return { frameLength: DEMO_BIN_WIDTH, frameHop: DEMO_BIN_WIDTH, neurons: DEMO_NEURONS, starts, values };
 }

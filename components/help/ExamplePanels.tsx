@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { BuzzdetectSeriesMode, Selection } from '../../types';
-import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, Y_AXIS_WIDTH } from '../../constants';
+import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, Y_AXIS_WIDTH } from '../../constants';
 import { createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { createViewportStore } from '../../utils/viewportStore';
 import {
@@ -61,6 +61,8 @@ export function ExampleFilePanel() {
         onFileSelect={setCurrentTrack}
         collapsed={false}
         onToggleCollapse={() => {}}
+        sectionCollapsed={false}
+        onToggleSectionCollapsed={() => {}}
         onNavigatePrev={() => step(-1)}
         onNavigateNext={() => step(1)}
         canNavigatePrev={index > 0}
@@ -178,28 +180,32 @@ export function ExampleBuzzdetectPanel() {
   const [binWidthOverride, setBinWidthOverride] = useState<number | null>(null);
   const [height, setHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [subsetNeurons, setSubsetNeurons] = useState<string[]>([]);
+  // Subset picks ARE the subset thresholds, exactly as in the app: a neuron
+  // with an entry here is one the example track is cut by.
+  const [subsetThresholds, setSubsetThresholds] = useState<Record<string, number>>({});
   const [minDetectionRate, setMinDetectionRate] = useState(DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
 
   // Subsetting for real, through the same two calls the annotation window
-  // makes: tick a Sub box here and the example track genuinely collapses to
-  // those detections. The panel is handed the re-expressed data, so — exactly
-  // as in the app — it plots the subset without knowing one exists.
+  // makes: give a neuron a Subset at value here and the example track genuinely
+  // collapses to those detections. The panel is handed the re-expressed data,
+  // so — exactly as in the app — it plots the subset without knowing one exists.
   const timeline = useMemo(() => subsetTimelineFor(
     data,
     subsetCriteriaFrom({
       enabled: true,
-      neurons: subsetNeurons,
-      mode: seriesMode,
+      subsetThresholds,
       thresholds,
+      mode: seriesMode,
       minDetectionRate,
       binWidthOverride,
-      frameLength: DEMO_BIN_WIDTH,
+      frameHop: DEMO_BIN_WIDTH,
+      buffer: DEFAULT_BUZZDETECT_SUBSET_BUFFER,
+      availableNeurons: DEMO_NEURONS,
     }),
     DEMO_DURATION,
-  ), [data, subsetNeurons, seriesMode, thresholds, minDetectionRate, binWidthOverride]);
+  ), [data, subsetThresholds, thresholds, seriesMode, minDetectionRate, binWidthOverride]);
   const shownData = useMemo(() => subsetBuzzdetectData(data, timeline), [data, timeline]);
-  const subsetActive = subsetNeurons.length > 0;
+  const subsetActive = Object.keys(subsetThresholds).length > 0;
 
   // No spectrogram is driving the viewport here, so fit the whole track to the
   // panel's plot area and keep it fitted as the guide window resizes. Under a
@@ -242,19 +248,11 @@ export function ExampleBuzzdetectPanel() {
         binWidthOverride={binWidthOverride}
         subsetActive={subsetActive}
         timeline={timeline}
-        subsetNeurons={subsetNeurons}
-        minDetectionRate={minDetectionRate}
+        yAxisOverride={null}
+        reportAutoValues={false}
         height={height}
-        onThresholdChange={(neuron, value) => setThresholds(t => ({ ...t, [neuron]: value }))}
-        onToggleNeuron={(neuron, hidden) => setHiddenNeurons(list =>
-          hidden ? [...list, neuron] : list.filter(n => n !== neuron))}
-        onSetAllNeuronsHidden={hidden => setHiddenNeurons(hidden ? [...DEMO_NEURONS] : [])}
-        onNeuronColorChange={(neuron, color) => setNeuronColors(c => ({ ...c, [neuron]: color }))}
-        onSeriesModeChange={setSeriesMode}
-        onBinWidthOverrideChange={setBinWidthOverride}
-        onToggleSubsetNeuron={(neuron, willSubset) => setSubsetNeurons(list =>
-          willSubset ? [...list, neuron] : list.filter(n => n !== neuron))}
-        onMinDetectionRateChange={setMinDetectionRate}
+        onAutoBinWidthChange={() => {}}
+        onAutoYRangeChange={() => {}}
         onHeightChange={setHeight}
         onSelectionChange={setSelection}
         onBoundAnnotationChange={() => {}}

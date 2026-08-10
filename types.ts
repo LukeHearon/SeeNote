@@ -116,6 +116,11 @@ export interface ProjectUiSettings {
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
   buzzdetectEnabled?: boolean;             // panel shown/hidden
   buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
+  // Per-neuron threshold the SUBSET is cut at, where it differs from the
+  // detection threshold above (activation mode only). Absent = the same value.
+  // Per-neuron threshold the SUBSET is cut at. An entry here is what makes a
+  // neuron part of the subset — the keys ARE the picked neurons.
+  buzzdetectSubsetThresholds?: Record<string, number>;
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
   buzzdetectSeriesMode?: BuzzdetectSeriesMode; // which series the panel plots
@@ -123,15 +128,34 @@ export interface ProjectUiSettings {
   // Subset mode (see utils/subsetTimeline.ts): show only the time where the
   // chosen neurons fired, with the rest removed from the time axis.
   buzzdetectSubsetEnabled?: boolean;       // master toggle; the neuron picks survive turning it off
-  buzzdetectSubsetNeurons?: string[];      // neuron labels the subset is keyed to, OR'd
+  /**
+   * Legacy: neuron labels the subset was keyed to. Superseded by the keys of
+   * `buzzdetectSubsetThresholds` — still read once, on load, to carry an older
+   * project's picks across (useBuzzdetect's migrateSubsetThresholds), and no
+   * longer written.
+   */
+  buzzdetectSubsetNeurons?: string[];
   buzzdetectMinDetectionRate?: number;     // 0-1; detection-rate mode's minimum per bin
+  buzzdetectSubsetBuffer?: number;         // seconds of context kept either side of each subset bin
+  buzzdetectPinnedNeurons?: string[];      // neuron labels pinned to the top of the palette, in pin order
 
   // Panel layout (see hooks/usePanelLayout.ts).
   playheadLocked?: boolean;
   filePanelCollapsed?: boolean;
   videoCollapsed?: boolean;
   splitRatio?: number;              // video/spectrogram vertical split, 0–1
+  /**
+   * @deprecated Superseded by `sidebarSections`, which sizes an arbitrary
+   * number of sections. Still read on load to seed the file-tree and
+   * annotation-tool weights for projects saved before the neuron palette.
+   */
   leftPanelRatio?: number;          // file-tree vs tool-palette split within left panel, 0–1
+  /**
+   * Per-section height weight and collapse state for the left sidebar's stack,
+   * keyed by section id (see SIDEBAR_SECTION_IDS in constants.ts). Weights are
+   * relative shares, not pixels or fractions of the window.
+   */
+  sidebarSections?: Record<string, { weight: number; collapsed: boolean }>;
   leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
 
   // Running-time readout format in the toolbar (see components/Toolbar.tsx).
@@ -144,18 +168,31 @@ export interface ProjectUiSettings {
 }
 
 /**
- * Parsed buzzdetect activations for one track, returned by `read_buzzdetect`.
- * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
- * `activation_` prefix already stripped. `binWidth` is inferred from `starts`.
- */
-/**
  * Which series the buzzdetect panel plots: the raw per-frame activation, or
  * the fraction of each bin's frames clearing the neuron's threshold.
  */
 export type BuzzdetectSeriesMode = 'activation' | 'detectionRate';
 
+/**
+ * Parsed buzzdetect activations for one track, returned by `read_buzzdetect`.
+ * `values` is indexed `[neuron][frame]`; `neurons` are display labels with any
+ * `activation_` prefix already stripped.
+ *
+ * The frame grid takes two numbers, because the model's `framelength` and
+ * `framehop` are independent and only one of them is visible in the CSV:
+ *
+ *   frameHop     spacing between consecutive `starts`, inferred from the data.
+ *   frameLength  how much audio one frame DESCRIBES — the project's frame
+ *                length setting, defaulting to the hop. When it exceeds the
+ *                hop the frames overlap, and a frame's audio runs past where
+ *                the next one begins.
+ *
+ * A frame's source extent is always `[start, start + frameLength)`. Anything
+ * asking "which frames sit on this grid" wants `frameHop` instead.
+ */
 export interface BuzzdetectData {
-  binWidth: number;
+  frameLength: number;
+  frameHop: number;
   neurons: string[];
   starts: number[];
   values: number[][];

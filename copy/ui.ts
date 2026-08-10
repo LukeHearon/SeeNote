@@ -228,6 +228,55 @@ export const annotationToolsPanel = {
   get contextDelete() { return getOverride('ui.annotationToolsPanel.contextDelete') ?? "Delete"; },
 };
 
+export const sidebarSection = {
+  get collapseSection() { return getOverride('ui.sidebarSection.collapseSection') ?? "Collapse"; },
+  get expandSection() { return getOverride('ui.sidebarSection.expandSection') ?? "Expand"; },
+};
+
+export const neuronPalette = {
+  get header() { return getOverride('ui.neuronPalette.header') ?? "Neurons"; },
+  get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
+  get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
+  get noData() { return getOverride('ui.neuronPalette.noData') ?? "No buzzdetect activations for this track"; },
+  get customColorTitle() { return getOverride('ui.neuronPalette.customColorTitle') ?? "Custom color"; },
+  // Right-click menu.
+  get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin"; },
+  get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
+  get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
+  get menuSettings() { return getOverride('ui.neuronPalette.menuSettings') ?? "Settings…"; },
+  // Graph-wide settings block.
+  get settingsTitle() { return getOverride('ui.neuronPalette.settingsTitle') ?? "Graph settings"; },
+  get seriesHeader() { return getOverride('ui.neuronPalette.seriesHeader') ?? "Series"; },
+  get seriesActivation() { return getOverride('ui.neuronPalette.seriesActivation') ?? "Activation"; },
+  get seriesDetectionRate() { return getOverride('ui.neuronPalette.seriesDetectionRate') ?? "Detection rate"; },
+  get binWidthHeader() { return getOverride('ui.neuronPalette.binWidthHeader') ?? "Bin width (s)"; },
+  get yAxisHeader() { return getOverride('ui.neuronPalette.yAxisHeader') ?? "Y-axis range"; },
+  get subsetHeader() { return getOverride('ui.neuronPalette.subsetHeader') ?? "Subset to detections"; },
+  get subsetMinRateLabel() { return getOverride('ui.neuronPalette.subsetMinRateLabel') ?? "Min detection rate"; },
+  get subsetNoNeurons() { return getOverride('ui.neuronPalette.subsetNoNeurons') ?? "Type a Subset at value on a neuron above to subset by it."; },
+  get subsetBufferLabel() { return getOverride('ui.neuronPalette.subsetBufferLabel') ?? "Buffer (s)"; },
+  get subsetPinBinWidth() { return getOverride('ui.neuronPalette.subsetPinBinWidth') ?? "Measured over the bin width above."; },
+  // What the cut came to. `of` separates kept audio from the file's length.
+  get statsKeptLabel() { return getOverride('ui.neuronPalette.statsKeptLabel') ?? "Kept"; },
+  statsKept: (kept: string, source: string, percent: string) => `${kept} of ${source} (${percent})`,
+  statsBreakdown: (regions: number, frames: number) =>
+    `${regions.toLocaleString('en-US')} region${regions === 1 ? '' : 's'} · ${frames.toLocaleString('en-US')} frame${frames === 1 ? '' : 's'}`,
+  // Per-neuron settings popover, and the picker that adds a neuron.
+  get settingsThreshold() { return getOverride('ui.neuronPalette.settingsThreshold') ?? "Detection at"; },
+  get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Subset at"; },
+  // Placeholder in an empty "Subset at" box: this neuron isn't cutting at all.
+  get settingsSubsetOff() { return getOverride('ui.neuronPalette.settingsSubsetOff') ?? "off"; },
+  // Its counterpart where the pick is a switch rather than a number (detection-rate mode).
+  get settingsSubsetOn() { return getOverride('ui.neuronPalette.settingsSubsetOn') ?? "on"; },
+  get settingsRemove() { return getOverride('ui.neuronPalette.settingsRemove') ?? "Remove"; },
+  get removeTooltip() { return getOverride('ui.neuronPalette.removeTooltip') ?? "Stop plotting this neuron (its settings are kept)"; },
+  get addNeuron() { return getOverride('ui.neuronPalette.addNeuron') ?? "Add neuron"; },
+  get addSearchPlaceholder() { return getOverride('ui.neuronPalette.addSearchPlaceholder') ?? "Search neurons…"; },
+  get addNoMatches() { return getOverride('ui.neuronPalette.addNoMatches') ?? "No matching neurons."; },
+  get addAllShown() { return getOverride('ui.neuronPalette.addAllShown') ?? "Every neuron is already plotted."; },
+  get noneShown() { return getOverride('ui.neuronPalette.noneShown') ?? "No neurons plotted. Add one below."; },
+};
+
 export const massRenameModal = {
   get title() { return getOverride('ui.massRenameModal.title') ?? "Mass Rename"; },
   get oldLabelField() { return getOverride('ui.massRenameModal.oldLabelField') ?? "Label to rename"; },
@@ -291,30 +340,13 @@ export const videoPlayer = {
 };
 
 export const buzzdetectPanel = {
-  get neuronHeader() { return getOverride('ui.buzzdetectPanel.neuronHeader') ?? "Neuron"; },
-  get thresholdHeader() { return getOverride('ui.buzzdetectPanel.thresholdHeader') ?? "Threshold"; },
-  get noDataLoaded() { return getOverride('ui.buzzdetectPanel.noDataLoaded') ?? "No data loaded."; },
-  get allNeuronsHidden() { return getOverride('ui.buzzdetectPanel.allNeuronsHidden') ?? "All neurons hidden."; },
   get noActivations() { return getOverride('ui.buzzdetectPanel.noActivations') ?? "No buzzdetect activations for this track"; },
-  get yAxisHeader() { return getOverride('ui.buzzdetectPanel.yAxisHeader') ?? "Y-axis range"; },
-  get customColorTitle() { return getOverride('ui.buzzdetectPanel.customColorTitle') ?? "Custom color"; },
-  get seriesHeader() { return getOverride('ui.buzzdetectPanel.seriesHeader') ?? "Series"; },
-  get seriesActivation() { return getOverride('ui.buzzdetectPanel.seriesActivation') ?? "Activation"; },
-  get seriesDetectionRate() { return getOverride('ui.buzzdetectPanel.seriesDetectionRate') ?? "Detection rate"; },
-  get binWidthHeader() { return getOverride('ui.buzzdetectPanel.binWidthHeader') ?? "Bin width (s)"; },
-  get subsetHeader() { return getOverride('ui.buzzdetectPanel.subsetHeader') ?? "Subset to detections"; },
-  get subsetColumnHeader() { return getOverride('ui.buzzdetectPanel.subsetColumnHeader') ?? "Sub"; },
-  get subsetMinRateLabel() { return getOverride('ui.buzzdetectPanel.subsetMinRateLabel') ?? "Min detection rate"; },
-  get subsetNoNeurons() { return getOverride('ui.buzzdetectPanel.subsetNoNeurons') ?? "Tick a neuron below to subset by it."; },
-  get subsetPinBinWidth() { return getOverride('ui.buzzdetectPanel.subsetPinBinWidth') ?? "Measured over the bin width above."; },
   get subsetEmpty() { return getOverride('ui.buzzdetectPanel.subsetEmpty') ?? "No frames meet the subset criteria"; },
   get detection() { return getOverride('ui.buzzdetectPanel.detection') ?? "Detection"; },
   get noDetection() { return getOverride('ui.buzzdetectPanel.noDetection') ?? "No Detection"; },
   get timeReadoutHeader() { return getOverride('ui.buzzdetectPanel.timeReadoutHeader') ?? "Time"; },
   get rawActivationsHeader() { return getOverride('ui.buzzdetectPanel.rawActivationsHeader') ?? "Activations"; },
   get avgActivationsHeader() { return getOverride('ui.buzzdetectPanel.avgActivationsHeader') ?? "Mean Activations"; },
-  get selectAllNeurons() { return getOverride('ui.buzzdetectPanel.selectAllNeurons') ?? "All"; },
-  get selectNoneNeurons() { return getOverride('ui.buzzdetectPanel.selectNoneNeurons') ?? "None"; },
 };
 
 export const debugConsole = {

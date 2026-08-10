@@ -6,12 +6,26 @@ use std::path::Path;
 /// `values` is indexed `[neuron][frame]` so the frontend can plot one polyline
 /// per neuron without transposing. `neurons` holds display labels (the optional
 /// `activation_` column prefix is stripped here so old and new CSVs render the
-/// same). Times come from the CSV `start` column; `bin_width` is inferred from
-/// the spacing between the first few starts.
+/// same). Times come from the CSV `start` column.
+///
+/// Two separate numbers describe the frame grid, because the model's two
+/// parameters are separate and a CSV only reveals one of them:
+///
+///   `frame_hop`     the spacing between consecutive `starts`, inferred from
+///                    the data. This is the grid the rows sit on.
+///   `frame_length`  how much audio one row DESCRIBES. Not derivable from the
+///                    CSV at all — it equals the hop only when the model ran
+///                    without overlap — so it comes from the project's
+///                    `frame_length` setting, defaulting to the hop.
+///
+/// A model run with `framelength 3, framehop 0.96` produces rows 0.96s apart
+/// that each speak for 3s of audio, overlapping their neighbours by 2/3. Only
+/// keeping the two apart lets the UI say where a detection's audio actually is.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuzzdetectData {
-    pub bin_width: f32,
+    pub frame_length: f32,
+    pub frame_hop: f32,
     pub neurons: Vec<String>,
     pub starts: Vec<f32>,
     pub values: Vec<Vec<f32>>,
@@ -32,11 +46,12 @@ fn unquote(cell: &str) -> String {
 ///
 /// CSV contract (see local/buzzdetect.md): first column `start` is the time
 /// axis in seconds; every other column is a neuron, optionally prefixed with
-/// `activation_`. Values are raw logits. By default the bin width is inferred
-/// from the spacing of the first few `start` values and the parse fails if
-/// that spacing is inconsistent — we never silently assume a fixed bin width.
-/// `frame_length`, when set (the project's buzzdetect override setting),
-/// bypasses inference entirely and is used verbatim as the bin width.
+/// `activation_`. Values are raw logits. The frame HOP is inferred from the
+/// spacing of the first few `start` values and the parse fails if that spacing
+/// is inconsistent — we never silently assume a fixed spacing. `frame_length`,
+/// when set (the project's buzzdetect override setting), is the frame's extent;
+/// it does not change the hop, and only stands in for it when the CSV is too
+/// short or too noisy to infer one.
 #[tauri::command]
 pub async fn read_buzzdetect(
     buzzdetect_dir: String,
@@ -116,28 +131,31 @@ pub async fn read_buzzdetect(
         }
     }
 
-    // An explicitly configured frame length overrides CSV inference entirely
-    // (it's the user asserting the true value, e.g. when a file has too few
-    // rows to infer from, or the CSV's spacing is noisy).
-    let bin_width = match frame_length {
-        Some(w) => w,
-        None => infer_bin_width(&starts).map_err(|e| format!("'{}': {}", csv_path.display(), e))?,
+    // The hop is always what the rows say it is. A configured frame length is
+    // the user asserting how much audio a row covers, which the CSV cannot
+    // show — so it never overrides the hop, and only stands in for it when
+    // inference is impossible (too few rows, or noisy spacing).
+    let hop = match (infer_frame_hop(&starts), frame_length) {
+        (Ok(h), _) => h,
+        (Err(_), Some(w)) => w,
+        (Err(e), None) => return Err(format!("'{}': {}", csv_path.display(), e)),
     };
 
     Ok(Some(BuzzdetectData {
-        bin_width,
+        frame_length: frame_length.unwrap_or(hop),
+        frame_hop: hop,
         neurons,
         starts,
         values,
     }))
 }
 
-/// Infer the bin width from the spacing between the first few `start` values,
+/// Infer the frame hop from the spacing between the first few `start` values,
 /// erroring if that spacing is inconsistent. Uses a small relative tolerance so
 /// floating-point round-off in the CSV (e.g. 0, 0.96, 1.92 …) is accepted.
-fn infer_bin_width(starts: &[f32]) -> Result<f32, String> {
+fn infer_frame_hop(starts: &[f32]) -> Result<f32, String> {
     if starts.len() < 2 {
-        return Err("cannot infer bin width from fewer than 2 rows".to_string());
+        return Err("cannot infer frame hop from fewer than 2 rows".to_string());
     }
     let width = starts[1] - starts[0];
     if width <= 0.0 {
@@ -150,7 +168,7 @@ fn infer_bin_width(starts: &[f32]) -> Result<f32, String> {
         let delta = starts[i] - starts[i - 1];
         if (delta - width).abs() > tol {
             return Err(format!(
-                "inconsistent bin spacing: expected {:.6}s but found {:.6}s between rows {} and {}",
+                "inconsistent frame spacing: expected {:.6}s but found {:.6}s between rows {} and {}",
                 width, delta, i, i + 1
             ));
         }

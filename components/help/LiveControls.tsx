@@ -329,6 +329,8 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
         return (
           <div className="w-56 h-72 flex flex-col bg-slate-900 rounded border border-slate-700 overflow-hidden">
             <AnnotationToolsPanel
+              collapsed={false}
+              onToggleCollapsed={() => {}}
               annotationTools={tp.tools}
               activeToolKey={tp.activeToolKey}
               onToolActivate={key => act(() => client.call('activateTool', key), () => setTp({ activeToolKey: key }))}

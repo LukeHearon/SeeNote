@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
 import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
+import SidebarSection from './SidebarSection';
+import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import { fileTree as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 
@@ -19,8 +21,12 @@ interface FileTreeProps {
   allFilesUnfiltered: string[];
   currentTrack: string | null;
   onFileSelect: (path: string) => void;
+  /** Whole sidebar collapsed to its rail — FileTree renders only the reopen button. */
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** This section collapsed to its header within the sidebar's stack. */
+  sectionCollapsed: boolean;
+  onToggleSectionCollapsed: () => void;
   onNavigatePrev: () => void;
   onNavigateNext: () => void;
   canNavigatePrev: boolean;
@@ -321,6 +327,8 @@ function FileTree({
   onFileSelect,
   collapsed,
   onToggleCollapse,
+  sectionCollapsed,
+  onToggleSectionCollapsed,
   onNavigatePrev,
   onNavigateNext,
   canNavigatePrev,
@@ -342,7 +350,6 @@ function FileTree({
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const [enteredPath, setEnteredPath] = useState<string | null>(initialEnteredFolderPath ?? null);
   const scrollToFolderRef = useRef<string | null>(null);
   const [expandedNonMedia, setExpandedNonMedia] = useState<Set<string>>(new Set());
@@ -456,18 +463,6 @@ function FileTree({
       return next;
     });
   }, [currentTrack, effectiveRoot]);
-
-  // Close context menu on outside click
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    window.addEventListener('mousedown', handler);
-    return () => window.removeEventListener('mousedown', handler);
-  }, [contextMenu]);
 
   const toggleDir = (path: string) => {
     setExpandedDirs(prev => {
@@ -640,6 +635,34 @@ function FileTree({
 
   const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : 'No folder');
 
+  const menuItems = (m: ContextMenuState): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [
+      { label: `Show media in ${finderLabel}`, onSelect: () => onRevealInFinder(m.path) },
+    ];
+    if (rootDirectory && m.path !== rootDirectory &&
+        ((!m.isDir && isSupportedMediaFile(m.path)) || (m.isDir && !m.isAudioRoot))) {
+      items.push({
+        label: copy.copyIdent,
+        onSelect: () => {
+          // Ident = path relative to the audio root, '/'-separated. Files drop
+          // their extension; folders keep their full relative path.
+          const rel = m.path.substring(rootDirectory.length + 1).replace(/\\/g, '/');
+          navigator.clipboard.writeText(m.isDir ? rel : stripExt(rel));
+        },
+      });
+    }
+    if (!m.isDir && isSupportedMediaFile(m.path)) {
+      items.push({ label: copy.importAnnotations, onSelect: () => onImportAnnotations(m.path) });
+    }
+    const showsAnnotations = (!m.isDir && annotatedTracks.has(m.path)) || (m.isDir && !m.isAudioRoot);
+    if (showsAnnotations) {
+      items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: () => onRevealAnnotations(m.path) });
+    } else if (m.isAudioRoot && onRevealAnnotationsRoot) {
+      items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: onRevealAnnotationsRoot });
+    }
+    return items;
+  };
+
   if (collapsed) {
     return (
       <div className="flex flex-col items-center pt-2 gap-2 flex-none">
@@ -655,13 +678,12 @@ function FileTree({
   }
 
   return (
-    <div className="grid grid-rows-[auto_1fr_auto] select-none h-full bg-slate-900 w-full">
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-2 py-2 bg-slate-800 border-b border-slate-700 flex-none gap-1"
-        onContextMenu={handleRootContextMenu}
-      >
-        <div className="flex items-center gap-1 min-w-0 flex-1">
+    <SidebarSection
+      collapsed={sectionCollapsed}
+      onToggleCollapsed={onToggleSectionCollapsed}
+      onHeaderContextMenu={handleRootContextMenu}
+      title={(
+        <>
           {enteredPath && (
             <>
               <button
@@ -685,7 +707,9 @@ function FileTree({
             {dirName}
           </span>
           <span className="text-[10px] text-slate-600 flex-none">({effectiveFiles.length})</span>
-        </div>
+        </>
+      )}
+      actions={(
         <FilePanelHeaderButtons
           shuffleMode={shuffleMode}
           anyExpanded={isAnyExpanded}
@@ -695,10 +719,10 @@ function FileTree({
           onToggleFileFilter={onToggleFileFilter}
           onToggleShuffle={onToggleShuffle}
         />
-      </div>
-
-      {/* File list — grid row; inner flex row keeps scrollbar track a true sibling, not an overlay */}
-      <div className="min-h-0 flex overflow-hidden">
+      )}
+    >
+      {/* File list — inner flex row keeps the scrollbar track a true sibling, not an overlay */}
+      <div className="flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
         <div
           ref={scrollContainerRef}
           className="flex-1 min-w-0 overflow-y-scroll no-scrollbar"
@@ -890,90 +914,21 @@ function FileTree({
       </div>
 
       {fileFilter !== 'all' && rootDirectory && effectiveFiles.length < effectiveTotalFiles.length && (
-        <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-800">
+        <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-800 flex-none bg-slate-900">
           {copy.showingCount(effectiveFiles.length, effectiveTotalFiles.length)}
         </div>
       )}
 
-      {/* Context menu */}
       {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="fixed z-[100] bg-slate-800 border border-slate-600 rounded-lg shadow-2xl py-1 min-w-[180px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-            onClick={() => {
-              onRevealInFinder(contextMenu.path);
-              setContextMenu(null);
-            }}
-          >
-            {`Show media in ${finderLabel}`}
-          </button>
-          {rootDirectory && contextMenu.path !== rootDirectory &&
-           ((!contextMenu.isDir && isSupportedMediaFile(contextMenu.path)) || (contextMenu.isDir && !contextMenu.isAudioRoot)) && (
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-              onClick={() => {
-                // Ident = path relative to the audio root, '/'-separated. Files
-                // drop their extension; folders keep their full relative path.
-                const rel = contextMenu.path.substring(rootDirectory.length + 1).replace(/\\/g, '/');
-                const ident = contextMenu.isDir ? rel : stripExt(rel);
-                navigator.clipboard.writeText(ident);
-                setContextMenu(null);
-              }}
-            >
-              {copy.copyIdent}
-            </button>
-          )}
-          {!contextMenu.isDir && isSupportedMediaFile(contextMenu.path) && (
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-              onClick={() => {
-                onImportAnnotations(contextMenu.path);
-                setContextMenu(null);
-              }}
-            >
-              {copy.importAnnotations}
-            </button>
-          )}
-          {!contextMenu.isDir && annotatedTracks.has(contextMenu.path) && (
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-              onClick={() => {
-                onRevealAnnotations(contextMenu.path);
-                setContextMenu(null);
-              }}
-            >
-              {`Show Annotations in ${finderLabel}`}
-            </button>
-          )}
-          {contextMenu.isDir && !contextMenu.isAudioRoot && (
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-              onClick={() => {
-                onRevealAnnotations(contextMenu.path);
-                setContextMenu(null);
-              }}
-            >
-              {`Show Annotations in ${finderLabel}`}
-            </button>
-          )}
-          {contextMenu.isAudioRoot && onRevealAnnotationsRoot && (
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 text-left"
-              onClick={() => {
-                onRevealAnnotationsRoot();
-                setContextMenu(null);
-              }}
-            >
-              {`Show Annotations in ${finderLabel}`}
-            </button>
-          )}
-        </div>
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={menuItems(contextMenu)}
+          onClose={() => setContextMenu(null)}
+          minWidth={180}
+        />
       )}
-    </div>
+    </SidebarSection>
   );
 }
 

@@ -12,7 +12,8 @@ import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
 
 // Ten 1s frames at 0,1,...,9. `bee` fires at 1,2,3 and 7; `fly` fires at 5.
 const data: BuzzdetectData = {
-  binWidth: 1,
+  frameLength: 1,
+  frameHop: 1,
   neurons: ['bee', 'fly'],
   starts: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   values: [
@@ -27,6 +28,7 @@ const criteria = (over: Partial<SubsetCriteria>): SubsetCriteria => ({
   thresholdOf: () => 0,
   minDetectionRate: 0.5,
   binWidth: 1,
+  buffer: 0,
   ...over,
 });
 
@@ -126,7 +128,8 @@ describe('detectionRanges — bin partition', () => {
   const frame = 0.96;
   const n = 500;
   const noisy: BuzzdetectData = {
-    binWidth: frame,
+    frameLength: frame,
+    frameHop: frame,
     neurons: ['bee'],
     starts: Array.from({ length: n }, (_, i) => i * frame),
     values: [Array.from({ length: n }, (_, i) => (i % 7 === 0 ? 2 : -1))],
@@ -161,6 +164,55 @@ describe('detectionRanges — bin partition', () => {
   });
 });
 
+// Overlapping frames: buzzdetect's `framelength 3, framehop 0.96` produces
+// rows 0.96s apart that each speak for 3s of audio. Setting the frame length
+// used to be routed into the bin width, which grouped ~3 frames per bin and
+// judged their MEAN — so a longer frame made the subset SMALLER, the opposite
+// of what the setting reads as. The length now moves only the frames' extent.
+describe('detectionRanges — frames longer than the hop', () => {
+  const hop = 1;
+  // Frames every 1s; only frame 3 fires.
+  const overlapped = (frameLength: number): BuzzdetectData => ({
+    frameLength,
+    frameHop: hop,
+    neurons: ['bee'],
+    starts: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    values: [[-1, -1, -1, 2, -1, -1, -1, -1, -1, -1]],
+  });
+
+  it('judges per frame regardless of the frame length', () => {
+    // One kept bin either way — the neighbours never get averaged in.
+    for (const len of [hop, 3, 5]) {
+      expect(detectionRanges(overlapped(len), criteria({ binWidth: hop }))).toHaveLength(1);
+    }
+  });
+
+  it('extends a kept bin by the overhang, so a longer frame keeps more audio', () => {
+    expect(detectionRanges(overlapped(hop), criteria({ binWidth: hop })))
+      .toEqual([{ start: 3, end: 4 }]);
+    // The firing frame at 3 covers [3,6): its bin's far edge moves out by the
+    // 2s the frame reaches past the next frame's start.
+    expect(detectionRanges(overlapped(3), criteria({ binWidth: hop })))
+      .toEqual([{ start: 3, end: 6 }]);
+  });
+
+  it('grows the kept audio monotonically with the frame length', () => {
+    const kept = (len: number) => subsetTimelineFor(overlapped(len), criteria({ binWidth: hop }), 10).duration;
+    expect(kept(1)).toBe(1);
+    expect(kept(3)).toBe(3);
+    expect(kept(5)).toBe(5);
+  });
+
+  it('merges the overlapping ranges neighbouring detections produce', () => {
+    // Frames 3 and 5 fire; at length 3 they cover [3,6) and [5,8), which
+    // overlap and must come out as one span rather than two.
+    const d = overlapped(3);
+    d.values[0][5] = 2;
+    const tl = subsetTimelineFor(d, criteria({ binWidth: hop }), 10);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([[3, 8]]);
+  });
+});
+
 describe('subsetTimelineFor', () => {
   it('merges contiguous firing frames into one span', () => {
     const tl = subsetTimelineFor(data, criteria({}), 10);
@@ -184,7 +236,8 @@ describe('subsetBuzzdetectData', () => {
     expect(sub.values[0]).toEqual([2, 2, 2, 2]);
     expect(sub.values[1]).toEqual([-1, -1, -1, -1]);
     expect(sub.neurons).toEqual(['bee', 'fly']);
-    expect(sub.binWidth).toBe(1);
+    expect(sub.frameLength).toBe(1);
+    expect(sub.frameHop).toBe(1);
   });
 
   it('returns the same object on the identity timeline', () => {
@@ -202,34 +255,105 @@ describe('subsetBuzzdetectData', () => {
 describe('subsetCriteriaFrom', () => {
   const inputs = {
     enabled: true,
-    neurons: ['bee'],
+    subsetThresholds: { bee: 1.5 },
+    thresholds: { bee: 0.25, fly: 0.75 },
     mode: 'activation' as const,
-    thresholds: { bee: 1.5 },
     minDetectionRate: 0.4,
     binWidthOverride: 2,
-    frameLength: 0.5,
+    frameHop: 0.5,
+    buffer: 0,
+    availableNeurons: ['bee', 'fly'],
   };
 
-  it('is null when disabled or nothing is ticked', () => {
+  it('is null when disabled or nothing is picked', () => {
     expect(subsetCriteriaFrom({ ...inputs, enabled: false })).toBeNull();
-    expect(subsetCriteriaFrom({ ...inputs, neurons: [] })).toBeNull();
+    expect(subsetCriteriaFrom({ ...inputs, subsetThresholds: {} })).toBeNull();
   });
 
-  it('carries the picks, mode and rate straight through', () => {
-    const c = subsetCriteriaFrom(inputs)!;
+  // Picks are saved per project and keyed by neuron label, so a track scored by
+  // a different model carries picks naming columns it hasn't got. Cutting by
+  // those would match nothing and blank the track.
+  it('ignores picks this file has no column for', () => {
+    const c = subsetCriteriaFrom({
+      ...inputs,
+      subsetThresholds: { bee: 1.5, wasp: 1.5 },
+    })!;
     expect(c.neurons).toEqual(['bee']);
+  });
+
+  it('is null when no pick survives, rather than cutting to nothing', () => {
+    expect(subsetCriteriaFrom({ ...inputs, subsetThresholds: { wasp: 1.5 } })).toBeNull();
+    // No results loaded at all — same story.
+    expect(subsetCriteriaFrom({ ...inputs, availableNeurons: null })).toBeNull();
+  });
+
+  // The picks ARE the threshold map's keys — there's no second list that could
+  // name a neuron the thresholds don't, or vice versa.
+  it('takes the picks from the subset thresholds', () => {
+    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: 1.5, fly: -1 } })!;
+    expect(c.neurons).toEqual(['bee', 'fly']);
     expect(c.mode).toBe('activation');
     expect(c.minDetectionRate).toBeCloseTo(0.4);
   });
 
-  it('falls back to the default threshold for neurons with no override', () => {
-    const c = subsetCriteriaFrom(inputs)!;
-    expect(c.thresholdOf('bee')).toBe(1.5);
-    expect(c.thresholdOf('fly')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+  // The point of the separate subset threshold: cut liberally, mark strictly.
+  it('cuts at the subset threshold in activation mode', () => {
+    const c = subsetCriteriaFrom({ ...inputs, subsetThresholds: { bee: -1.5 } })!;
+    expect(c.thresholdOf('bee')).toBe(-1.5);
   });
 
-  it('uses the pinned bin width, falling back to the frame length', () => {
+  // A detection RATE already counts frames that ARE detections, so the only
+  // threshold that means anything there is the one defining a detection; the
+  // pick's stored value is just a marker.
+  it('cuts at the detection threshold in detection-rate mode', () => {
+    const c = subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', subsetThresholds: { bee: -1.5 } })!;
+    expect(c.thresholdOf('bee')).toBe(0.25);
+    expect(c.thresholdOf('wasp')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+  });
+
+  // The hop, never the frame length: how much audio a frame covers is not a
+  // statement about how frames should be grouped for judging, and routing the
+  // frame length in here is what made a longer frame SHRINK the subset.
+  it('uses the pinned bin width, falling back to the frame hop', () => {
     expect(subsetCriteriaFrom(inputs)!.binWidth).toBe(2);
     expect(subsetCriteriaFrom({ ...inputs, binWidthOverride: null })!.binWidth).toBe(0.5);
+  });
+
+  it('never lets a negative buffer shrink the cut', () => {
+    expect(subsetCriteriaFrom({ ...inputs, buffer: 3 })!.buffer).toBe(3);
+    expect(subsetCriteriaFrom({ ...inputs, buffer: -3 })!.buffer).toBe(0);
+  });
+
+  // Padding a kept region reads as "the moments either side of this frame", and
+  // that only holds where the kept thing IS a frame. A detection rate is a
+  // summary over a bin the user sized themselves.
+  it('drops the buffer outside activation mode', () => {
+    expect(subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', buffer: 3 })!.buffer).toBe(0);
+  });
+});
+
+// A buffer widens every kept region by the same amount on each side, without
+// changing which bins were kept.
+describe('detectionRanges — buffer', () => {
+  it('pads each kept bin on both sides', () => {
+    const r = detectionRanges(data, criteria({ neurons: ['fly'], buffer: 3 }));
+    // `fly` fires only in the 1s bin starting at 5.
+    expect(r).toEqual([{ start: 2, end: 9 }]);
+  });
+
+  it('leaves the padding to be clamped and merged by the timeline', () => {
+    // Adjacent detections at 1,2,3 pad into overlapping ranges; the timeline
+    // merges them, and clamps the first one's negative start to the file.
+    const tl = subsetTimelineFor(data, criteria({ buffer: 3 }), 10);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([[0, 10]]);
+  });
+
+  it('keeps separate detections separate when the buffer does not reach', () => {
+    const tl = subsetTimelineFor(data, criteria({ neurons: ['bee', 'fly'], buffer: 0.25 }), 20);
+    expect(tl.spans.map(s => [s.srcStart, s.srcEnd])).toEqual([
+      [0.75, 4.25],
+      [4.75, 6.25],
+      [6.75, 8.25],
+    ]);
   });
 });

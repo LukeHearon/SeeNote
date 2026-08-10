@@ -1,11 +1,17 @@
 // Index lookups over buzzdetect frame starts.
 //
-// Frames are NOT necessarily contiguous: `binWidth` is the extent of a frame
-// and may be overridden (project setting) to something shorter than the native
-// spacing between `starts`. A 0.4s override on a model with 0.96s hops leaves
-// 0.56s of uncovered time between frames. So frame position must always be read
-// from `starts` — never reconstructed as `starts[0] + i * binWidth`, which is
-// only correct in the fully-contiguous case.
+// Two widths, never interchangeable (see BuzzdetectData in types.ts):
+// `frameLength` is a frame's own extent, `frameHop` the spacing between
+// consecutive `starts`. The project's frame-length setting moves only the
+// former, so frames may be contiguous (length == hop), leave gaps (a 0.4s
+// length on a model with 0.96s hops leaves 0.56s uncovered), or OVERLAP (a 3s
+// length on those same hops means each frame's audio runs 2.04s past where the
+// next begins). Extent questions — what does this frame cover, which frames
+// touch this span — take frameLength; grid questions — how many frames does a
+// unit of this width hold — take frameHop.
+//
+// Either way frame position is read from `starts` and never reconstructed as
+// `starts[0] + i * width`, which only holds in the contiguous case.
 //
 // `starts` is ascending, so every lookup here is a binary search.
 
@@ -32,12 +38,15 @@ export function firstStartAtOrAfter(starts: number[], t: number): number {
 
 /**
  * The frame covering time `t`, or null when `t` falls in a gap between frames
- * (or outside the data). Half-open: [start, start + binWidth).
+ * (or outside the data). Half-open: [start, start + frameLength).
+ *
+ * With overlapping frames several cover `t`; this returns the last one to
+ * begin, which is the one whose label a click at `t` should read.
  */
-export function binAtTime(starts: number[], binWidth: number, t: number): number | null {
+export function binAtTime(starts: number[], frameLength: number, t: number): number | null {
   const i = lastStartAtOrBefore(starts, t);
   if (i < 0) return null;
-  return t < starts[i] + binWidth ? i : null;
+  return t < starts[i] + frameLength ? i : null;
 }
 
 /**
@@ -46,10 +55,15 @@ export function binAtTime(starts: number[], binWidth: number, t: number): number
  * `starts.length` when `t` is past the end of the data; callers decide whether
  * that means "clamp to the last frame" or "nothing here".
  */
-export function firstFrameOverlapping(starts: number[], binWidth: number, t: number): number {
+export function firstFrameOverlapping(starts: number[], frameLength: number, t: number): number {
   const i = lastStartAtOrBefore(starts, t);
   if (i < 0) return 0;
-  return starts[i] + binWidth <= t ? i + 1 : i;
+  // Walk back over frames that begin before `t` but, being longer than the
+  // hop, still reach past it — with overlap the first such frame is not
+  // necessarily the last one to begin.
+  let j = starts[i] + frameLength <= t ? i + 1 : i;
+  while (j > 0 && starts[j - 1] + frameLength > t) j--;
+  return j;
 }
 
 /**
@@ -59,7 +73,7 @@ export function firstFrameOverlapping(starts: number[], binWidth: number, t: num
  */
 export function visibleBinRange(
   starts: number[],
-  binWidth: number,
+  frameLength: number,
   t0: number,
   t1: number,
 ): { iLeft: number; iRight: number } | null {
@@ -71,7 +85,7 @@ export function visibleBinRange(
   // the window — then one extra to connect. A window entirely past the data
   // clamps to the last frame here, which is what the draw loop wants: it still
   // has to connect back to that off-screen neighbour.
-  const iLeft = Math.max(0, Math.min(firstFrameOverlapping(starts, binWidth, t0), starts.length - 1) - 1);
+  const iLeft = Math.max(0, Math.min(firstFrameOverlapping(starts, frameLength, t0), starts.length - 1) - 1);
   if (iLeft > iRight) return null;
   return { iLeft, iRight };
 }
@@ -83,19 +97,19 @@ export function visibleBinRange(
  */
 export function frameRangeForTimeSpan(
   starts: number[],
-  binWidth: number,
+  frameLength: number,
   t0: number,
   t1: number,
 ): { start: number; end: number } | null {
   if (starts.length === 0) return null;
-  const start = firstFrameOverlapping(starts, binWidth, t0);
+  const start = firstFrameOverlapping(starts, frameLength, t0);
   if (start >= starts.length) return null;
   // Half-open on the right: a frame starting exactly at t1 is outside the span.
-  // The tolerance covers f32 round-off — `starts[k] + binWidth` can land a hair
-  // past `starts[k+1]`, so a span ending at one frame's end would otherwise
-  // pick up its neighbour. Same 1e-3 relative tolerance the Rust-side bin-width
-  // inference uses for CSV round-off.
-  const end = t1 <= t0 ? start : firstStartAtOrAfter(starts, t1 - binWidth * 1e-3) - 1;
+  // The tolerance covers f32 round-off — `starts[k] + frameLength` can land a
+  // hair past `starts[k+1]`, so a span ending at one frame's end would
+  // otherwise pick up its neighbour. Same 1e-3 relative tolerance the
+  // Rust-side frame-hop inference uses for CSV round-off.
+  const end = t1 <= t0 ? start : firstStartAtOrAfter(starts, t1 - frameLength * 1e-3) - 1;
   if (end < start) return null;
   return { start, end };
 }
@@ -143,12 +157,26 @@ export interface FrameUnit {
 }
 
 /**
- * Whether `unitWidth` groups several frames into one unit rather than
- * resolving them individually. The tolerance keeps a unit width pinned at the
- * file's own frame length reading as ungrouped despite float round-off.
+ * The frame grid the unit functions read: where the frames are, how far each
+ * one reaches, and how far apart they sit. `BuzzdetectData` satisfies this
+ * structurally, so the panel passes its data straight through.
  */
-export function isGroupedUnitWidth(binWidth: number, unitWidth: number): boolean {
-  return unitWidth > binWidth * 1.0001;
+export interface FrameGrid {
+  starts: number[];
+  frameLength: number;
+  frameHop: number;
+}
+
+/**
+ * Whether `unitWidth` groups several frames into one unit rather than
+ * resolving them individually. Judged against the HOP, not the frame length:
+ * how many frames a unit holds depends on how densely they're spaced, and with
+ * overlapping frames a unit narrower than one frame can still hold several.
+ * The tolerance keeps a unit width pinned at the file's own hop reading as
+ * ungrouped despite float round-off.
+ */
+export function isGroupedUnitWidth(frameHop: number, unitWidth: number): boolean {
+  return unitWidth > frameHop * 1.0001;
 }
 
 /**
@@ -170,7 +198,6 @@ export function isGroupedUnitWidth(binWidth: number, unitWidth: number): boolean
 export function sourceBucketPieces(
   timeline: Timeline,
   starts: number[],
-  binWidth: number,
   bucketWidth: number,
   b: number,
 ): FrameUnit[] {
@@ -192,8 +219,8 @@ export function sourceBucketPieces(
 
 /**
  * The unit containing time `t`, or null where it holds no frame — a gap
- * between frames (frame length overridden shorter than the frame spacing), a
- * bucket with no frames in it, or a time outside the data.
+ * between frames (frame length set shorter than the hop), a bucket with no
+ * frames in it, or a time outside the data.
  *
  * Under a subset, `t` is a display time but the bucket it belongs to is
  * decided in source time (see `sourceBucketPieces`) — and the segment cut may
@@ -202,18 +229,18 @@ export function sourceBucketPieces(
  */
 export function unitAtTime(
   timeline: Timeline,
-  starts: number[],
-  binWidth: number,
+  grid: FrameGrid,
   unitWidth: number,
   t: number,
 ): FrameUnit | null {
-  if (!isGroupedUnitWidth(binWidth, unitWidth)) {
-    const i = binAtTime(starts, binWidth, t);
-    return i === null ? null : { start: i, end: i, tStart: starts[i], tEnd: starts[i] + binWidth };
+  const { starts, frameLength, frameHop } = grid;
+  if (!isGroupedUnitWidth(frameHop, unitWidth)) {
+    const i = binAtTime(starts, frameLength, t);
+    return i === null ? null : { start: i, end: i, tStart: starts[i], tEnd: starts[i] + frameLength };
   }
   if (!(unitWidth > 0)) return null;
   const b = Math.floor(timeline.toSource(t) / unitWidth);
-  const pieces = sourceBucketPieces(timeline, starts, binWidth, unitWidth, b);
+  const pieces = sourceBucketPieces(timeline, starts, unitWidth, b);
   return pieces.find(p => t >= p.tStart && t < p.tEnd) ?? null;
 }
 
@@ -232,19 +259,19 @@ export function unitAtTime(
  */
 export function forEachUnitInSpan(
   timeline: Timeline,
-  starts: number[],
-  binWidth: number,
+  grid: FrameGrid,
   unitWidth: number,
   t0: number,
   t1: number,
   fn: (u: FrameUnit) => void,
 ): void {
+  const { starts, frameLength, frameHop } = grid;
   if (starts.length === 0) return;
-  if (!isGroupedUnitWidth(binWidth, unitWidth)) {
-    const r = visibleBinRange(starts, binWidth, t0, t1);
+  if (!isGroupedUnitWidth(frameHop, unitWidth)) {
+    const r = visibleBinRange(starts, frameLength, t0, t1);
     if (!r) return;
     for (let i = r.iLeft; i <= r.iRight; i++) {
-      fn({ start: i, end: i, tStart: starts[i], tEnd: starts[i] + binWidth });
+      fn({ start: i, end: i, tStart: starts[i], tEnd: starts[i] + frameLength });
     }
     return;
   }
@@ -257,7 +284,7 @@ export function forEachUnitInSpan(
   const firstBucket = Math.floor(spans[0].srcStart / unitWidth) - 1;
   const lastBucket = Math.floor(spans[spans.length - 1].srcEnd / unitWidth) + 1;
   for (let b = firstBucket; b <= lastBucket; b++) {
-    for (const piece of sourceBucketPieces(timeline, starts, binWidth, unitWidth, b)) {
+    for (const piece of sourceBucketPieces(timeline, starts, unitWidth, b)) {
       fn(piece);
     }
   }

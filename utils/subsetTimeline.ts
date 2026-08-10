@@ -215,6 +215,33 @@ export function segmentJoins(timeline: Timeline): number[] {
 }
 
 /**
+ * Narrower than this on screen (px), the seams between segments stop being
+ * readable as individual splices: the dashes of neighbouring joins run together
+ * into a solid gold wall that says only "this is subset", which the axis
+ * already says. Below it the joins aren't drawn at all — the same reasoning
+ * that drops per-frame boundary marks once frames are too tight to tell apart.
+ */
+export const MIN_SEGMENT_JOIN_PX = 2;
+
+/**
+ * Display-time duration of the SHORTEST span — how far apart the tightest pair
+ * of seams sits. Infinity when there are no seams to space out (identity, or a
+ * single span), so a caller comparing against a pixel threshold always draws.
+ *
+ * Memoise this per timeline: it's a scan over the spans, and the draw loops
+ * that gate on it run every frame.
+ */
+export function minSegmentDuration(timeline: Timeline): number {
+  if (timeline.identity || timeline.spans.length < 2) return Infinity;
+  let min = Infinity;
+  for (const s of timeline.spans) {
+    const d = s.srcEnd - s.srcStart;
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+/**
  * Build a subset timeline from kept source ranges. Ranges are sorted, clamped to
  * the file, and merged where they touch or overlap (`mergeTolerance` absorbs the
  * float round-off between one frame's end and the next one's start, so a run of

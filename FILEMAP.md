@@ -16,6 +16,8 @@ Quick reference for agents. One phrase per file.
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
+- `components/NeuronPalette.tsx` — sidebar list of the PLOTTED neurons, the add-neuron picker, and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
+- `components/NeuronSettingsPopover.tsx` — one neuron's color (pip opens a hex picker), its subset + detection thresholds, pin and remove; same surface whether the neuron was just added or edited
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 
@@ -75,6 +77,8 @@ Quick reference for agents. One phrase per file.
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops
 - `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
 - `utils/buzzdetectSubset.ts` — derives the subset timeline from buzzdetect activations, and re-expresses the activations on it
+- `utils/buzzdetectStats.ts` — what a subset came to (kept seconds, regions, frames), for the palette's readout
+- `utils/binIndex.ts` — index lookups over buzzdetect frame starts; frame extent (`frameLength`) and frame spacing (`frameHop`) are separate and never interchangeable
 - `utils/annotationProjection.ts` — projects annotations onto the display axis and reconciles edits back to source time
 - `MultiTierSpectrogramCache.ts` — in-memory multi-tier cache of decoded spectrogram chunks, with LRU eviction and a bounded fetch queue
 

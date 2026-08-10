@@ -6,7 +6,14 @@ import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
-import { Timeline, identityTimeline, segmentJoins, sourceIntervalOf } from '../utils/subsetTimeline';
+import {
+  MIN_SEGMENT_JOIN_PX,
+  Timeline,
+  identityTimeline,
+  minSegmentDuration,
+  segmentJoins,
+  sourceIntervalOf,
+} from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -237,6 +244,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // them — subset audio reads as continuous, but the cut is still a real jump
   // in the source file, worth flagging visually.
   const subsetJoins = useMemo(() => segmentJoins(activeTimeline), [activeTimeline]);
+  // Shortest segment on the axis. Zoomed far enough out that segments are only
+  // a pixel or two wide, the seams between them stop reading as splices and
+  // merge into a solid gold wall — so below MIN_SEGMENT_JOIN_PX they aren't
+  // drawn, the same way frame boundaries drop out once frames are too tight to
+  // tell apart. Memoised: the draw below runs every frame.
+  const minSegmentSec = useMemo(() => minSegmentDuration(activeTimeline), [activeTimeline]);
   // Lets the lifetime rAF loop (empty-dep effect) read live isPlaying for the
   // frame-timing diagnostic without resubscribing.
   const isPlayingRef = useRef(isPlaying);
@@ -477,7 +490,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // 1b. Draw subset segment joins — the seams where the display axis skips
     // from the end of one kept span to the start of the next. Dashed and
     // distinct from the playhead/ruler so a cut reads as a splice, not a marker.
-    if (subsetJoins.length > 0) {
+    if (subsetJoins.length > 0 && minSegmentSec * pixelsPerSecond_live >= MIN_SEGMENT_JOIN_PX) {
       ctx.save();
       ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
       ctx.lineWidth = 1;
@@ -581,7 +594,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation

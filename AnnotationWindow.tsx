@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
@@ -27,6 +27,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { subsetTimelineFor, subsetBuzzdetectData, subsetCriteriaFrom, type SubsetCriteria } from './utils/buzzdetectSubset';
+import { subsetStats } from './utils/buzzdetectStats';
 import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay, sourceRangesForDisplayRange } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
@@ -46,6 +47,8 @@ import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
+import NeuronPalette from './components/NeuronPalette';
+import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
 import MassRenameModal from './components/MassRenameModal';
@@ -181,18 +184,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // width) plus the H-held hide-labels toggle. See hooks/usePanelLayout.ts.
   const {
     splitRatio, setSplitRatio,
-    leftPanelRatio, setLeftPanelRatio,
+    sidebarSections,
     leftPanelWidth, setLeftPanelWidth,
     filePanelCollapsed, setFilePanelCollapsed,
     videoCollapsed, setVideoCollapsed,
     hideLabels,
     VIDEO_COLLAPSED_BAR_PX,
     handleSplitDrag,
-    handleLeftPanelDrag,
     handleLeftPanelWidthDrag,
   } = usePanelLayout({
     splitRatio: project.preferences.uiSettings?.splitRatio ?? DEFAULT_SPLIT_RATIO,
-    leftPanelRatio: project.preferences.uiSettings?.leftPanelRatio ?? DEFAULT_LEFT_PANEL_RATIO,
+    sidebarSections: sidebarSectionsFromUiSettings(
+      project.preferences.uiSettings?.sidebarSections,
+      project.preferences.uiSettings?.leftPanelRatio,
+    ),
     leftPanelWidth: project.preferences.uiSettings?.leftPanelWidthRatio != null
       ? project.preferences.uiSettings.leftPanelWidthRatio * window.innerWidth
       : DEFAULT_LEFT_PANEL_WIDTH,
@@ -300,19 +305,28 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const {
     buzzdetectEnabled, setBuzzdetectEnabled,
     buzzdetectThresholds, setBuzzdetectThresholds,
+    buzzdetectSubsetThresholds, setBuzzdetectSubsetThresholds,
     buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons,
     buzzdetectNeuronColors, setBuzzdetectNeuronColors,
     buzzdetectSeriesMode, setBuzzdetectSeriesMode,
     buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
     buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled,
-    buzzdetectSubsetNeurons, setBuzzdetectSubsetNeurons,
+    buzzdetectSubsetNeurons,
     buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate,
+    buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer,
+    buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons,
     buzzdetectPanelHeight, setBuzzdetectPanelHeight,
     buzzdetectData, setBuzzdetectData,
+    buzzdetectSettingsOpen, setBuzzdetectSettingsOpen,
+    buzzdetectYAxisOverride, setBuzzdetectYAxisOverride,
+    buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
+    buzzdetectAutoYRange, setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
+    handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
-    handleBuzzdetectToggleSubsetNeuron,
+    handleBuzzdetectTogglePinNeuron,
+    handleBuzzdetectSoloNeuron,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
   } = useBuzzdetect({ project, ident, addLog });
@@ -322,14 +336,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // what makes every path below run the whole-file case unchanged.
   const subsetCriteria = useMemo<SubsetCriteria | null>(() => subsetCriteriaFrom({
     enabled: buzzdetectSubsetEnabled,
-    neurons: buzzdetectSubsetNeurons,
-    mode: buzzdetectSeriesMode,
+    subsetThresholds: buzzdetectSubsetThresholds,
     thresholds: buzzdetectThresholds,
+    mode: buzzdetectSeriesMode,
     minDetectionRate: buzzdetectMinDetectionRate,
     binWidthOverride: buzzdetectBinWidthOverride,
-    frameLength: buzzdetectData?.binWidth ?? 0,
-  }), [buzzdetectSubsetEnabled, buzzdetectSubsetNeurons, buzzdetectSeriesMode, buzzdetectThresholds,
-      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData]);
+    frameHop: buzzdetectData?.frameHop ?? 0,
+    buffer: buzzdetectSubsetBuffer,
+    availableNeurons: buzzdetectData?.neurons ?? null,
+  }), [buzzdetectSubsetEnabled, buzzdetectSeriesMode, buzzdetectSubsetThresholds, buzzdetectThresholds,
+      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData, buzzdetectSubsetBuffer]);
 
   // The display axis. Identity (i.e. the whole file, unchanged) whenever the
   // subset is off. `duration` here is the file's own length; `displayDuration`
@@ -361,6 +377,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const subsetSourceRanges = useMemo(
     () => (timeline.identity ? null : timeline.spans.map(s => ({ start: s.srcStart, end: s.srcEnd }))),
     [timeline],
+  );
+  // How much audio the cut came to, for the palette's readout. Walks the frames
+  // once per timeline — i.e. per threshold nudge, on the same clock the
+  // timeline itself is rebuilt on, so it costs nothing the subset didn't.
+  const buzzdetectSubsetStats = useMemo(
+    () => subsetStats(buzzdetectData, timeline, duration),
+    [buzzdetectData, timeline, duration],
   );
   // Read by installChunkCache, which runs from callbacks that must not re-bind
   // every time a threshold moves.
@@ -1044,13 +1067,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     buzzdetectEnabled,
     buzzdetectThresholds,
+    buzzdetectSubsetThresholds,
     buzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
     buzzdetectSeriesMode,
     buzzdetectBinWidthOverride,
     buzzdetectSubsetEnabled,
-    buzzdetectSubsetNeurons,
     buzzdetectMinDetectionRate,
+    buzzdetectSubsetBuffer,
+    buzzdetectPinnedNeurons,
     videoMode,
     videoBrightness,
     videoContrast,
@@ -1060,7 +1085,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     filePanelCollapsed,
     videoCollapsed,
     splitRatio,
-    leftPanelRatio,
+    sidebarSections: sidebarSections.states,
     leftPanelWidth,
   });
 
@@ -1159,13 +1184,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setVideoContrast(ui.videoContrast);
     setBuzzdetectEnabled(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
     setBuzzdetectThresholds(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
+    setBuzzdetectSubsetThresholds(project.preferences.uiSettings?.buzzdetectSubsetThresholds ?? {});
     setBuzzdetectHiddenNeurons(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
     setBuzzdetectNeuronColors(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
     setBuzzdetectSeriesMode(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
     setBuzzdetectBinWidthOverride(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
     setBuzzdetectSubsetEnabled(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
-    setBuzzdetectSubsetNeurons(project.preferences.uiSettings?.buzzdetectSubsetNeurons ?? []);
     setBuzzdetectMinDetectionRate(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+    setBuzzdetectSubsetBuffer(project.preferences.uiSettings?.buzzdetectSubsetBuffer ?? DEFAULT_BUZZDETECT_SUBSET_BUFFER);
+    setBuzzdetectPinnedNeurons(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
     setBuzzdetectPanelHeight(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
     setBuzzdetectData(null);
     setFilterToolActive(false);
@@ -1177,7 +1204,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setFilePanelCollapsed(savedUi?.filePanelCollapsed ?? false);
     setVideoCollapsed(savedUi?.videoCollapsed ?? false);
     setSplitRatio(savedUi?.splitRatio ?? DEFAULT_SPLIT_RATIO);
-    setLeftPanelRatio(savedUi?.leftPanelRatio ?? DEFAULT_LEFT_PANEL_RATIO);
+    sidebarSections.setStates(sidebarSectionsFromUiSettings(savedUi?.sidebarSections, savedUi?.leftPanelRatio));
     setLeftPanelWidth(savedUi?.leftPanelWidthRatio != null
       ? savedUi.leftPanelWidthRatio * window.innerWidth
       : DEFAULT_LEFT_PANEL_WIDTH);
@@ -1998,7 +2025,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           if (filePanelCollapsed) {
             return (
               <div className="flex-none w-10 bg-slate-900 border-r border-slate-700 flex flex-col h-full relative">
-                <FileTree {...fileTreeProps} collapsed={true} />
+                <FileTree {...fileTreeProps} collapsed={true} sectionCollapsed={false} onToggleSectionCollapsed={() => {}} />
                 <CollapsedToolsRail
                   annotationTools={annotationTools}
                   activeToolKey={activeToolKey}
@@ -2014,39 +2041,99 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             );
           }
 
+          // The sidebar's stack, top to bottom. The neuron palette is only in
+          // it when the project names a buzzdetect directory — that's what
+          // decides whether this project has neurons at all — and the two
+          // remaining sections reflow into the space by themselves when it's
+          // absent (see SidebarStack). Deliberately NOT gated on the graph
+          // being open: the palette's thresholds drive the subset, which is a
+          // thing you can want without the graph taking up the window.
+          const stackItems = [
+            {
+              id: SIDEBAR_SECTION_FILES,
+              node: (
+                <FileTree
+                  {...fileTreeProps}
+                  collapsed={false}
+                  sectionCollapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_FILES)}
+                  onToggleSectionCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_FILES)}
+                />
+              ),
+            },
+            {
+              id: SIDEBAR_SECTION_LABELS,
+              node: (
+                <AnnotationToolsPanel
+                  annotationTools={annotationTools}
+                  activeToolKey={activeToolKey}
+                  onToolActivate={handleToolActivate}
+                  onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
+                  onOpenSettings={() => setShowToolSettings(true)}
+                  onOpenMassRename={() => setShowMassRename(true)}
+                  onOpenFindLabel={() => setShowFindLabel(true)}
+                  onEditTool={setPanelEditingToolIndex}
+                  onRequestDeleteTool={setPanelDeletingToolIndex}
+                  playingExampleToolId={examplePlayer.playingToolId}
+                  onPlayExample={examplePlayer.toggle}
+                  onShowExamples={handleShowExamples}
+                  collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_LABELS)}
+                  onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_LABELS)}
+                />
+              ),
+            },
+          ];
+          if (project.buzzdetectDirectoryAbs !== null) {
+            stackItems.push({
+              id: SIDEBAR_SECTION_NEURONS,
+              node: (
+                <NeuronPalette
+                  data={buzzdetectData}
+                  thresholds={buzzdetectThresholds}
+                  subsetThresholds={buzzdetectSubsetThresholds}
+                  hiddenNeurons={buzzdetectHiddenNeurons}
+                  neuronColors={buzzdetectNeuronColors}
+                  subsetNeurons={buzzdetectSubsetNeurons}
+                  pinnedNeurons={buzzdetectPinnedNeurons}
+                  collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
+                  onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
+                  onToggleNeuron={handleBuzzdetectToggleNeuron}
+                  onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
+                  onSoloNeuron={(n) => handleBuzzdetectSoloNeuron(buzzdetectData?.neurons ?? [], n)}
+                  onNeuronColorChange={handleBuzzdetectNeuronColorChange}
+                  onThresholdChange={handleBuzzdetectThresholdChange}
+                  onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
+                  onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
+                  seriesMode={buzzdetectSeriesMode}
+                  binWidthOverride={buzzdetectBinWidthOverride}
+                  autoBinWidth={buzzdetectAutoBinWidth}
+                  autoYRange={buzzdetectAutoYRange}
+                  yAxisOverride={buzzdetectYAxisOverride}
+                  minDetectionRate={buzzdetectMinDetectionRate}
+                  subsetEnabled={subsetActive}
+                  onToggleSubset={toggleBuzzdetectSubset}
+                  panelOpen={buzzdetectEnabled}
+                  onTogglePanel={() => setBuzzdetectEnabled(v => !v)}
+                  subsetBuffer={buzzdetectSubsetBuffer}
+                  subsetStats={buzzdetectSubsetStats}
+                  settingsOpen={buzzdetectSettingsOpen}
+                  onSettingsOpenChange={setBuzzdetectSettingsOpen}
+                  onSeriesModeChange={setBuzzdetectSeriesMode}
+                  onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
+                  onYAxisOverrideChange={setBuzzdetectYAxisOverride}
+                  onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
+                  onSubsetBufferChange={setBuzzdetectSubsetBuffer}
+                />
+              ),
+            });
+          }
+
           return (
             <div
               className="flex-none bg-slate-900 border-r border-slate-700 flex flex-col h-full relative"
               style={{ width: leftPanelWidth }}
               data-help-target="file-panel"
             >
-              {/* File Tree portion */}
-              <div style={{ height: `${leftPanelRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
-                <FileTree {...fileTreeProps} collapsed={false} />
-              </div>
-
-              {/* Horizontal divider — matches video/spectrogram divider */}
-              <div
-                className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors flex-none z-10 flex justify-center items-center"
-                onMouseDown={handleLeftPanelDrag}
-              >
-                <div className="w-12 h-1 bg-slate-600 rounded-full" />
-              </div>
-
-              <AnnotationToolsPanel
-                annotationTools={annotationTools}
-                activeToolKey={activeToolKey}
-                onToolActivate={handleToolActivate}
-                onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
-                onOpenSettings={() => setShowToolSettings(true)}
-                onOpenMassRename={() => setShowMassRename(true)}
-                onOpenFindLabel={() => setShowFindLabel(true)}
-                onEditTool={setPanelEditingToolIndex}
-                onRequestDeleteTool={setPanelDeletingToolIndex}
-                playingExampleToolId={examplePlayer.playingToolId}
-                onPlayExample={examplePlayer.toggle}
-                onShowExamples={handleShowExamples}
-              />
+              <SidebarStack items={stackItems} sections={sidebarSections} />
 
               {/* Right-edge width resize handle — sits on the outer face of the border */}
               <div
@@ -2160,12 +2247,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                setFilterStrength={setFilterStrength}
                videoMode={effectiveVideoMode}
                isAudioTrack={isAudioTrack}
-               buzzdetectAvailable={project.buzzdetectDirectoryAbs !== null}
-               buzzdetectEnabled={buzzdetectEnabled}
-               onToggleBuzzdetect={() => setBuzzdetectEnabled(v => !v)}
-               subsetAvailable={buzzdetectSubsetNeurons.length > 0}
-               subsetActive={subsetActive}
-               onToggleSubset={toggleBuzzdetectSubset}
                onRestartAudio={() => { engineRef.current?.restart(); }}
                playheadLocked={playheadLocked}
                onTogglePlayheadLock={() => {
@@ -2234,7 +2315,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              )}
              </div>
 
-             {buzzdetectEnabled && (
+             {/* Same gate as the Neurons palette (and its toggle button): the
+                 project has to name a buzzdetect directory for there to be
+                 results at all, whatever the persisted open/closed flag says. */}
+             {project.buzzdetectDirectoryAbs !== null && buzzdetectEnabled && (
                <BuzzdetectPanel
                  data={displayBuzzdetectData}
                  viewportStore={viewportStoreRef.current}
@@ -2251,17 +2335,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  binWidthOverride={buzzdetectBinWidthOverride}
                  subsetActive={subsetActive}
                  timeline={timeline}
-                 subsetNeurons={buzzdetectSubsetNeurons}
-                 minDetectionRate={buzzdetectMinDetectionRate}
+                 yAxisOverride={buzzdetectYAxisOverride}
+                 reportAutoValues={buzzdetectSettingsOpen}
                  height={buzzdetectPanelHeight}
-                 onThresholdChange={handleBuzzdetectThresholdChange}
-                 onToggleNeuron={handleBuzzdetectToggleNeuron}
-                 onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
-                 onNeuronColorChange={handleBuzzdetectNeuronColorChange}
-                 onSeriesModeChange={setBuzzdetectSeriesMode}
-                 onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
-                 onToggleSubsetNeuron={handleBuzzdetectToggleSubsetNeuron}
-                 onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
+                 onAutoBinWidthChange={setBuzzdetectAutoBinWidth}
+                 onAutoYRangeChange={setBuzzdetectAutoYRange}
                  onHeightChange={setBuzzdetectPanelHeight}
                  onSelectionChange={handleSelectionChange}
                  onBoundAnnotationChange={setBoundAnnotationId}
