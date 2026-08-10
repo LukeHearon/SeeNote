@@ -3,30 +3,68 @@ name: Update Homebrew Cask
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish to the tap (e.g. v0.16.2)'
+        required: true
 
 jobs:
   update-cask:
     runs-on: macos-latest
     permissions:
       contents: read
+      # Needed by the failure handler below, which files an issue so a broken
+      # tap update can't sit unnoticed as a red tick in the Actions tab.
+      issues: write
     steps:
       - name: Download macOS DMG and update Homebrew cask
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          TAG="${GITHUB_REF_NAME}"
+          set -euo pipefail
+          VERSION="${TAG#v}"
           DMG_NAME="SeeNote-macOS.dmg"
+          TAP="LukeHearon/homebrew-seenote"
+
+          # Preflight the token before doing any work. The clone below is of a
+          # PUBLIC repo, so it succeeds even with an expired or unscoped token
+          # and the failure only surfaces at `git push` — which is how the
+          # v0.16.0 and v0.16.1 cask updates failed while looking fine until
+          # the last second.
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::error::TAP_TOKEN secret is not set. Create a fine-grained PAT with Contents: Read and write on ${TAP} and add it as the TAP_TOKEN repository secret."
+            exit 1
+          fi
+          PERMS=$(GH_TOKEN="$TAP_TOKEN" gh api "repos/${TAP}" --jq '.permissions.push' 2>&1) || {
+            echo "::error::TAP_TOKEN was rejected by the GitHub API (${PERMS}). It is probably expired. Mint a new fine-grained PAT with Contents: Read and write on ${TAP} and update the TAP_TOKEN secret."
+            exit 1
+          }
+          if [ "$PERMS" != "true" ]; then
+            echo "::error::TAP_TOKEN authenticates but has no push access to ${TAP}. Give it Contents: Read and write on that repository."
+            exit 1
+          fi
 
           gh release download "$TAG" \
             --repo LukeHearon/SeeNote \
             --pattern "$DMG_NAME" \
             --dir /tmp/dmgs
 
+          # The cask pins a sha256, so publishing the hash of a broken download
+          # would send every `brew install` at a corrupt file. Release assets
+          # have shipped as 9-byte "Not Found" bodies before (see the
+          # rename-assets job in release.yml).
+          SIZE=$(stat -f%z "/tmp/dmgs/${DMG_NAME}")
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::${DMG_NAME} for ${TAG} is only ${SIZE} bytes — refusing to publish a cask pointing at it."
+            exit 1
+          fi
+
           SHA=$(shasum -a 256 "/tmp/dmgs/${DMG_NAME}" | awk '{print $1}')
 
-          git clone https://x-access-token:${TAP_TOKEN}@github.com/LukeHearon/homebrew-seenote.git /tmp/tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP}.git" /tmp/tap
           printf 'cask "seenote" do\n  version "%s"\n  sha256 "%s"\n\n  url "https://github.com/LukeHearon/SeeNote/releases/download/v#{version}/SeeNote-macOS.dmg"\n  name "SeeNote"\n  desc "Audio/video annotation tool for building ML training datasets"\n  homepage "https://github.com/LukeHearon/SeeNote"\n\n  app "SeeNote.app"\nend\n' \
             "${VERSION}" "${SHA}" > /tmp/tap/Casks/seenote.rb
 
@@ -34,5 +72,39 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/seenote.rb
+          if git diff --cached --quiet; then
+            echo "Cask already at ${VERSION} with this sha256 — nothing to push."
+            exit 0
+          fi
           git commit -m "Update seenote cask to ${VERSION}"
           git push
+
+          # Confirm the tap actually serves the new version, rather than
+          # trusting that a clean push means a correct cask.
+          PUBLISHED=$(GH_TOKEN="$TAP_TOKEN" gh api \
+            "repos/${TAP}/contents/Casks/seenote.rb" --jq '.content' \
+            | base64 --decode | sed -n 's/^  version "\(.*\)"$/\1/p')
+          if [ "$PUBLISHED" != "$VERSION" ]; then
+            echo "::error::Pushed, but ${TAP} still serves version '${PUBLISHED}' instead of '${VERSION}'."
+            exit 1
+          fi
+          echo "Tap now serves seenote ${VERSION} (sha256 ${SHA})."
+
+      # A failed workflow run is only visible to someone looking at the Actions
+      # tab. The cask silently serving an old version is exactly the kind of
+      # failure nobody notices for two releases, so make it arrive as an issue.
+      - name: File an issue if the cask update failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Homebrew cask update failed for ${TAG}" \
+            --body "The \`Update Homebrew Cask\` workflow failed for **${TAG}**, so \`brew install --cask LukeHearon/seenote/seenote\` is still serving the previous version.
+
+          Run log: ${RUN_URL}
+
+          The usual cause is an expired \`TAP_TOKEN\`. Mint a fine-grained PAT with **Contents: Read and write** on \`LukeHearon/homebrew-seenote\`, then \`gh secret set TAP_TOKEN --repo ${GITHUB_REPOSITORY}\`. Re-run with \`gh workflow run update-cask.yml -f tag=${TAG}\`."
