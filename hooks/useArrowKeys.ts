@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef } from 'react';
 import { Selection } from '../types';
 import { clamp } from '../utils/helpers';
 import { rampVelocityPx, scrubTarget } from '../utils/arrowScrub';
-import { extendSelection } from '../utils/selectionExtend';
+import { ExtendGesture, extendGestureFor, spanBetween } from '../utils/selectionExtend';
 import { useHotkeys } from './useHotkeys';
 
 /** Idle time after the last arrow movement before the gesture counts as finished. */
 const SETTLE_MS = 400;
+/** Longest plausible gap between OS key repeats; past it, a held key isn't held. */
+const KEY_REPEAT_GAP_MS = 1200;
 
 interface UseArrowKeysArgs {
   selectionRef: React.MutableRefObject<Selection | null>;
@@ -24,7 +26,11 @@ interface UseArrowKeysArgs {
    * history, so a burst of keypresses is one undoable operation.
    */
   onExtendSettled?: () => void;
-  /** Ramping is paused-only: every step seeks, and a seek mid-playback restarts the engine. */
+  /**
+   * Playback pins the playhead to the media clock, so nothing here moves it or
+   * builds a selection around it while the engine runs — Shift during playback
+   * belongs to the sweep gesture instead (useShiftSweep).
+   */
   isPlaying: boolean;
   enabled?: boolean;
 }
@@ -37,16 +43,13 @@ interface UseArrowKeysArgs {
  *  - Selection active: fine move — one pixel per tap, accelerating while held.
  *    Placing a playhead against a selection edge is pixel work, and the coarse
  *    jump overshoots it every time.
- *  - Shift: the same fine move, dragging a selection out behind it from a fixed
- *    anchor (see utils/selectionExtend) — the keyboard twin of Shift+click.
+ *  - Shift: the same fine move, walking a selection's edge (see
+ *    utils/selectionExtend) — the keyboard twin of Shift+click.
  *  - {mod}+Shift: extend straight to the start/end of the track.
  *
- * While playback is running every press is a coarse step instead — the ramp
- * seeks each frame, and a seek mid-play restarts the engine.
- *
- * Registered by both windows next to their own selection setter, so an extend
- * goes through the same wrapper (activation stack, frame pinning) as any other
- * selection change.
+ * While playback runs every press is a plain coarse scrub: the ramp seeks each
+ * frame (and a seek mid-play restarts the engine), while a selection built
+ * around a moving playhead fights the playback it's being drawn over.
  */
 export function useArrowKeys({
   selectionRef,
@@ -68,7 +71,9 @@ export function useArrowKeys({
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
 
-  const rampRef = useRef<{ dir: -1 | 1; extend: boolean; raf: number } | null>(null);
+  type Ramp = { dir: -1 | 1; extend: boolean; raf: number; repeats: number; lastKeyAt: number };
+  const rampRef = useRef<Ramp | null>(null);
+  const gestureRef = useRef<ExtendGesture | null>(null);
   const settleTimerRef = useRef<number | null>(null);
   // Whether anything has been extended since the last settle — nothing to
   // commit otherwise.
@@ -87,22 +92,34 @@ export function useArrowKeys({
     settleTimerRef.current = window.setTimeout(settleNow, SETTLE_MS);
   }, [settleNow]);
 
-  const moveTo = useCallback((target: number, extend: boolean, scrollView = false) => {
-    const t = clamp(target, 0, durationRef.current);
-    if (extend) {
-      // Selection first: it updates `selectionRef` synchronously, so a seek made
-      // while playing restarts bounded by the new selection, not the old one.
-      cbRef.current.onSelectionChange(extendSelection(selectionRef.current, currentTimeRef.current, t));
-      dirtyRef.current = true;
-    }
-    cbRef.current.seek(t, scrollView);
-    scheduleSettle();
-  }, [durationRef, selectionRef, currentTimeRef, scheduleSettle]);
+  /** Move the playhead alone, leaving any selection where it is. */
+  const scrubTo = useCallback((target: number) => {
+    cbRef.current.seek(clamp(target, 0, durationRef.current));
+  }, [durationRef]);
 
+  /** Walk the current extend gesture's edge to `target`. */
+  const extendTo = useCallback((target: number, scrollView = false) => {
+    const gesture = extendGestureFor(gestureRef.current, selectionRef.current, currentTimeRef.current);
+    const edge = clamp(target, 0, durationRef.current);
+    const next = spanBetween(gesture.anchor, edge);
+    // Selection first: it updates `selectionRef` synchronously, so a seek made
+    // straight after sees the new selection, not the stale one.
+    cbRef.current.onSelectionChange(next);
+    gestureRef.current = { ...gesture, edge, selection: next };
+    dirtyRef.current = true;
+    // Only a selection drawn out of the playhead drags it along — and never
+    // while the media clock owns it.
+    if (gesture.follow && !isPlayingRef.current) cbRef.current.seek(edge, scrollView);
+    scheduleSettle();
+  }, [selectionRef, currentTimeRef, durationRef, scheduleSettle]);
+
+  /** One step of `px` screen pixels, in whichever mode is running. */
   const movePixels = useCallback((dir: -1 | 1, extend: boolean, px: number) => {
     const pps = Math.max(cbRef.current.getPixelsPerSecond(), 1);
-    moveTo(currentTimeRef.current + dir * (px / pps), extend);
-  }, [moveTo, currentTimeRef]);
+    const delta = dir * (px / pps);
+    if (extend) extendTo((gestureRef.current?.edge ?? currentTimeRef.current) + delta);
+    else scrubTo(currentTimeRef.current + delta);
+  }, [extendTo, scrubTo, currentTimeRef]);
 
   const stopRamp = useCallback(() => {
     if (!rampRef.current) return;
@@ -117,41 +134,57 @@ export function useArrowKeys({
     movePixels(dir, extend, 1);
     const heldStart = performance.now();
     let last = heldStart;
+    // Each ramp owns its object, and a tick that finds itself displaced stops
+    // rescheduling. Without that identity check a tick from a superseded ramp
+    // overwrites the live ramp's frame handle, leaving a loop nothing holds a
+    // handle to — a playhead that keeps panning after every key is up.
+    const ramp: Ramp = { dir, extend, raf: 0, repeats: 0, lastKeyAt: performance.now() };
     const tick = () => {
+      if (rampRef.current !== ramp) return;
       const now = performance.now();
+      // Watchdog: once the OS has sent a repeat for this key we know repeats
+      // are on, so their drying up means the key is up and the keyup went
+      // missing (a swallowed event, a lost focus). Never armed when repeats
+      // are off — there'd be nothing to miss.
+      if (ramp.repeats > 0 && now - ramp.lastKeyAt > KEY_REPEAT_GAP_MS) { stopRamp(); return; }
       const dt = (now - last) / 1000;
       last = now;
       const velocity = rampVelocityPx((now - heldStart) / 1000);
       if (velocity > 0) movePixels(dir, extend, velocity * dt);
-      if (rampRef.current) rampRef.current.raf = requestAnimationFrame(tick);
+      if (rampRef.current === ramp) ramp.raf = requestAnimationFrame(tick);
     };
-    rampRef.current = { dir, extend, raf: requestAnimationFrame(tick) };
+    rampRef.current = ramp;
+    ramp.raf = requestAnimationFrame(tick);
   }, [stopRamp, movePixels]);
 
   const onArrow = useCallback((e: KeyboardEvent, dir: -1 | 1, extend: boolean) => {
     // Coarse: one 10%-of-window jump per press (including the OS's own key
-    // repeats). Used when there's no selection to work against, and whenever
-    // the engine is running — a ramp seeks every frame, and each seek mid-play
-    // restarts playback.
-    if ((!extend && !selectionRef.current) || isPlayingRef.current) {
+    // repeats). Used when there's no selection to work against, and for every
+    // press while the engine is running.
+    if (isPlayingRef.current || (!extend && !selectionRef.current)) {
       stopRamp();
-      moveTo(scrubTarget(currentTimeRef.current, durationRef.current, zoomSecRef.current, dir), extend);
+      scrubTo(scrubTarget(currentTimeRef.current, durationRef.current, zoomSecRef.current, dir));
       return;
     }
     const ramp = rampRef.current;
-    if (ramp && ramp.dir === dir && ramp.extend === extend) return; // already running
+    if (ramp && ramp.dir === dir && ramp.extend === extend) {
+      // Already running — the repeat is only evidence the key is still down.
+      ramp.repeats += 1;
+      ramp.lastKeyAt = performance.now();
+      return;
+    }
     // OS key repeats are ignored: the ramp, not the repeat rate, sets the pace.
     if (e.repeat && ramp) return;
     startRamp(dir, extend);
-  }, [selectionRef, currentTimeRef, durationRef, zoomSecRef, stopRamp, startRamp, moveTo]);
+  }, [selectionRef, currentTimeRef, durationRef, zoomSecRef, stopRamp, startRamp, scrubTo]);
 
   useHotkeys([
     { key: 'ArrowLeft', handler: e => onArrow(e, -1, false) },
     { key: 'ArrowRight', handler: e => onArrow(e, 1, false) },
     { key: 'ArrowLeft', mods: ['shift'], handler: e => onArrow(e, -1, true) },
     { key: 'ArrowRight', mods: ['shift'], handler: e => onArrow(e, 1, true) },
-    { key: 'ArrowLeft', mods: ['shift', 'mod'], handler: () => { stopRamp(); moveTo(0, true, true); } },
-    { key: 'ArrowRight', mods: ['shift', 'mod'], handler: () => { stopRamp(); moveTo(durationRef.current, true, true); } },
+    { key: 'ArrowLeft', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(0, true); } },
+    { key: 'ArrowRight', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(durationRef.current, true); } },
   ], enabled);
 
   useEffect(() => {
@@ -169,9 +202,11 @@ export function useArrowKeys({
     const onBlur = () => { stopRamp(); settleNow(); };
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('mousedown', stopRamp);
     return () => {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('mousedown', stopRamp);
       stopRamp();
       settleNow();
     };

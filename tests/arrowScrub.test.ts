@@ -27,7 +27,7 @@ describe('rampVelocityPx', () => {
   });
 
   it('caps out rather than running away', () => {
-    expect(rampVelocityPx(10)).toBe(1500);
-    expect(rampVelocityPx(1000)).toBe(1500);
+    expect(rampVelocityPx(10)).toBe(700);
+    expect(rampVelocityPx(1000)).toBe(700);
   });
 });

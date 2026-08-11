@@ -5,6 +5,7 @@ import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
+import { spanBetween } from '../utils/selectionExtend';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
 import {
   MIN_SEGMENT_JOIN_PX,
@@ -54,6 +55,12 @@ interface SpectrogramProps {
   activeAnnotationTool: AnnotationTool | null;
   annotationTools: AnnotationTool[];
   selection: Selection | null;
+  /**
+   * Start of an in-progress keyboard sweep (Shift held during playback — see
+   * hooks/useShiftSweep), or null. Drawn as a live span from here to the
+   * playhead; it isn't a real selection until the key comes up.
+   */
+  sweepStart?: number | null;
   boundAnnotationId: string | null;
   filterToolActive: boolean;
   bandPassFilter: BandPassFilter | null;
@@ -128,6 +135,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   activeAnnotationTool,
   annotationTools,
   selection,
+  sweepStart = null,
   boundAnnotationId,
   filterToolActive,
   bandPassFilter,
@@ -468,9 +476,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // 1. Selection region darkening — draw FIRST so other elements render on top
     // Only show creating-selection darkening once the mouse has moved (not on initial mousedown)
     const isDraggingSelection = creatingSelection && Math.abs(creatingSelection.current - creatingSelection.start) > 0.001;
-    const activeSelection = isDraggingSelection
+    // A span still being drawn — by drag, or by the Shift-held sweep whose end
+    // is wherever the playhead has got to this frame.
+    const creatingSpan = isDraggingSelection
       ? { start: Math.min(creatingSelection.start, creatingSelection.current), end: Math.max(creatingSelection.start, creatingSelection.current) }
-      : selection;
+      : sweepStart !== null ? spanBetween(sweepStart, currentTime) : null;
+    const activeSelection = creatingSpan ?? selection;
 
     if (activeSelection) {
       const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
@@ -484,6 +495,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // Right dark region
       if (selEndX < width) {
         ctx.fillRect(selEndX, 0, width - selEndX, height);
+      }
+    }
+
+    // 1a. Centre mark of a span still being drawn: a thin dotted line at its
+    // midpoint, so a selection in progress reads as in progress — the sweep in
+    // particular has no handles and no cursor to show for itself.
+    if (creatingSpan) {
+      const midX = timeToX((creatingSpan.start + creatingSpan.end) / 2, scrollLeft_live, pixelsPerSecond_live);
+      if (midX >= 0 && midX <= width) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath();
+        ctx.moveTo(midX, 0);
+        ctx.lineTo(midX, height);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
@@ -594,7 +623,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation

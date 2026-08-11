@@ -1,44 +1,55 @@
 import { describe, it, expect } from 'vitest';
-import { extendSelection, selectionAnchor } from '../utils/selectionExtend';
+import { extendGestureFor, selectionsEqual, spanBetween } from '../utils/selectionExtend';
 
-describe('selectionAnchor', () => {
-  it('is the playhead when nothing is selected', () => {
-    expect(selectionAnchor(null, 5)).toBe(5);
+describe('spanBetween', () => {
+  it('orders the two ends', () => {
+    expect(spanBetween(5, 7)).toEqual({ start: 5, end: 7 });
+    expect(spanBetween(7, 5)).toEqual({ start: 5, end: 7 });
   });
 
-  it('is the far edge of an existing selection', () => {
-    // Playhead at the end (grown rightwards) -> anchored at the start.
-    expect(selectionAnchor({ start: 3, end: 7 }, 7)).toBe(3);
-    // Playhead at the start (grown leftwards) -> anchored at the end.
-    expect(selectionAnchor({ start: 3, end: 7 }, 3)).toBe(7);
-    // Playhead pulled back inside -> still the further edge.
-    expect(selectionAnchor({ start: 3, end: 7 }, 6.5)).toBe(3);
+  it('is nothing once the edge is back on the anchor', () => {
+    expect(spanBetween(5, 5)).toBeNull();
   });
 });
 
-describe('extendSelection', () => {
-  it('creates a selection from the playhead on the first step', () => {
-    expect(extendSelection(null, 5, 6)).toEqual({ start: 5, end: 6 });
-    expect(extendSelection(null, 5, 4)).toEqual({ start: 4, end: 5 });
+describe('selectionsEqual', () => {
+  it('treats null as its own value', () => {
+    expect(selectionsEqual(null, null)).toBe(true);
+    expect(selectionsEqual(null, { start: 1, end: 2 })).toBe(false);
   });
 
-  it('grows away from the anchor and shrinks back towards it', () => {
-    const grown = extendSelection({ start: 5, end: 6 }, 6, 7);
-    expect(grown).toEqual({ start: 5, end: 7 });
-    expect(extendSelection(grown, 7, 6)).toEqual({ start: 5, end: 6 });
+  it('compares within a sub-millisecond tolerance', () => {
+    expect(selectionsEqual({ start: 1, end: 2 }, { start: 1, end: 2 })).toBe(true);
+    expect(selectionsEqual({ start: 1, end: 2 }, { start: 1, end: 2.5 })).toBe(false);
+  });
+});
+
+describe('extendGestureFor', () => {
+  it('starts at the playhead when nothing is selected, and drags it along', () => {
+    expect(extendGestureFor(null, null, 5)).toEqual({ anchor: 5, edge: 5, follow: true, selection: null });
   });
 
-  it('collapses to nothing when the playhead returns to the anchor', () => {
-    expect(extendSelection({ start: 5, end: 6 }, 6, 5)).toBeNull();
+  it('trims an existing selection from its end, leaving the playhead alone', () => {
+    // Playhead at 3 (where a drag left it) must not become an end of the span.
+    expect(extendGestureFor(null, { start: 4, end: 9 }, 3)).toEqual({
+      anchor: 4, edge: 9, follow: false, selection: { start: 4, end: 9 },
+    });
   });
 
-  it('flips to the far side once past the anchor', () => {
-    // Collapsed at the anchor (5), the next leftward step selects behind it.
-    expect(extendSelection(null, 5, 4)).toEqual({ start: 4, end: 5 });
+  it('continues a gesture that still describes the live selection', () => {
+    const gesture = { anchor: 5, edge: 6, follow: true, selection: { start: 5, end: 6 } };
+    expect(extendGestureFor(gesture, { start: 5, end: 6 }, 6)).toBe(gesture);
+    // Collapsed to nothing mid-run: still the same gesture, so the next step
+    // opens the span on the other side of the anchor.
+    const collapsed = { anchor: 5, edge: 5, follow: true, selection: null };
+    expect(extendGestureFor(collapsed, null, 5)).toBe(collapsed);
   });
 
-  it('handles a run to the track edges', () => {
-    expect(extendSelection({ start: 5, end: 6 }, 6, 0)).toEqual({ start: 0, end: 5 });
-    expect(extendSelection({ start: 5, end: 6 }, 6, 100)).toEqual({ start: 5, end: 100 });
+  it('restarts when something else has changed the selection', () => {
+    const gesture = { anchor: 5, edge: 6, follow: true, selection: { start: 5, end: 6 } };
+    const dragged = { start: 20, end: 30 };
+    expect(extendGestureFor(gesture, dragged, 20)).toEqual({
+      anchor: 20, edge: 30, follow: false, selection: dragged,
+    });
   });
 });

@@ -39,6 +39,7 @@ import { useFileNavigation } from './hooks/useFileNavigation';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
 import { useArrowKeys } from './hooks/useArrowKeys';
+import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -1615,6 +1616,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // settles — otherwise every keypress in a held run would be its own undo step.
   // The draft ref carries the run: `annotations` is a render-old snapshot, and a
   // ramp takes many steps per render.
+  const [sweepStart, setSweepStart] = useState<number | null>(null);
+
   const boundResizeDraftRef = useRef<Annotation[] | null>(null);
   const resizeBoundAnnotationTo = useCallback((sel: Selection | null) => {
     if (!boundAnnotationId || !sel) return;
@@ -1644,6 +1647,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     isPlaying,
     onSelectionChange: s => { handleSelectionChange(s); resizeBoundAnnotationTo(s); },
     onExtendSettled: commitBoundAnnotationResize,
+    enabled: libraryToolIndex === null,
+  });
+
+  // Hold Shift while listening to mark out what you're hearing. Only the
+  // in-progress span lives here; the selection itself arrives on release.
+  useShiftSweep({
+    isPlaying,
+    selectionRef,
+    currentTimeRef,
+    onSelectionChange: handleSelectionChange,
+    onSweepStartChange: setSweepStart,
     enabled: libraryToolIndex === null,
   });
 
@@ -2347,6 +2361,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
                 annotationTools={annotationTools}
                 selection={selection}
+                sweepStart={sweepStart}
                 boundAnnotationId={boundAnnotationId}
                 onSeek={seek}
                 onAnnotationsChange={handleDisplayAnnotationsChange}

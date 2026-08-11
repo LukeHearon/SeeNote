@@ -23,6 +23,7 @@ import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
 import { useArrowKeys } from './hooks/useArrowKeys';
+import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useHotkeys } from './hooks/useHotkeys';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -68,6 +69,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const selectionRef = useRef<Selection | null>(null);
   useEffect(() => { selectionRef.current = selection; }, [selection]);
   const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
+  const [sweepStart, setSweepStart] = useState<number | null>(null);
 
   const [zoomSec, setZoomSec] = useState(DEFAULT_ZOOM_SEC);
   const zoomSecRef = useRef(DEFAULT_ZOOM_SEC);
@@ -240,6 +242,16 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     seek,
     isPlaying,
     onSelectionChange: handleSelectionChange,
+  });
+
+  // Hold Shift while listening to mark out what you're hearing. Only the
+  // in-progress span lives here; the selection itself arrives on release.
+  useShiftSweep({
+    isPlaying,
+    selectionRef,
+    currentTimeRef,
+    onSelectionChange: handleSelectionChange,
+    onSweepStartChange: setSweepStart,
   });
 
   // Everything else (playback transport, spectrogram zoom, band-pass filter,
@@ -516,6 +528,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               activeAnnotationTool={null}
               annotationTools={[]}
               selection={selection}
+              sweepStart={sweepStart}
               boundAnnotationId={boundAnnotationId}
               onSeek={seek}
               onAnnotationsChange={() => {}}

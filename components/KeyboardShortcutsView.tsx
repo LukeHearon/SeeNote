@@ -44,6 +44,7 @@ const GROUPS: Group[] = [
       { codes: ['ArrowRight'], display: '{mod}+→', label: 'Jump to end of track' },
       { codes: ['ArrowLeft'], display: 'Shift+←', label: 'Extend selection backward' },
       { codes: ['ArrowRight'], display: 'Shift+→', label: 'Extend selection forward' },
+      { codes: ['ShiftLeft','ShiftRight'], display: 'Shift (hold)', label: 'Sweep a selection while playing' },
       { codes: ['ArrowLeft'], display: '{mod}+Shift+←', label: 'Select back to start of track' },
       { codes: ['ArrowRight'], display: '{mod}+Shift+→', label: 'Select on to end of track' },
       { codes: ['ArrowLeft'], display: 'Alt+←', label: 'Jump to previous annotation' },

@@ -25,8 +25,8 @@ export function scrubTarget(current: number, duration: number, zoomSec: number, 
 const RAMP_DELAY_SEC = 0.25;
 /** Opening speed once the ramp engages: 1px per frame at 60fps. */
 const RAMP_BASE_PX_PER_SEC = 60;
-const RAMP_ACCEL = 8;
-const RAMP_MAX_PX_PER_SEC = 1500;
+const RAMP_ACCEL = 3;
+const RAMP_MAX_PX_PER_SEC = 700;
 
 /** Pixels per second a key held for `heldSec` should move. Zero during the grace period. */
 export function rampVelocityPx(heldSec: number): number {
