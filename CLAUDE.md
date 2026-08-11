@@ -2,6 +2,8 @@
 
 SeeNote is a Tauri v2 + React/TypeScript desktop app for annotating audio/video files to build ML training datasets.
 
+There is no `src/` directory — frontend TS/TSX lives at the repo root and in `components/`, `utils/`, `hooks/`, `copy/`. Don't prefix searches with `src/`.
+
 For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.md`](TERMS.md). For a quick codebase map, see [`FILEMAP.md`](FILEMAP.md).
 
 
