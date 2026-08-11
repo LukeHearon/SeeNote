@@ -1640,6 +1640,29 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (draft) handleAnnotationsCommit(draft);
   }, [handleAnnotationsCommit]);
 
+  // A Shift+Arrow extend that builds a selection from scratch (nothing bound
+  // yet) has no annotation to resize, so resizeBoundAnnotationTo is a no-op
+  // through the whole gesture — mirroring a mouse drag, which stays a bare
+  // selection until release. On settle, if a tool is readied, promote the
+  // finished span into a new annotation from that tool, exactly as releasing
+  // the mouse with a tool readied would (useSpectrogramInteraction's
+  // commitNewAnnotation). An already-bound annotation just gets its resize
+  // committed, as before.
+  const handleExtendSettled = useCallback(() => {
+    if (boundAnnotationId === null && activeToolKey !== null && selectionRef.current) {
+      const tool = annotationTools.find(t => t.key === activeToolKey);
+      if (tool) {
+        const src = selectionToSource(selectionRef.current);
+        const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
+        handleAnnotationsCommit([...annotations, newAnnotation]);
+        setSelectedAnnotationId(newAnnotation.id);
+        setBoundAnnotationId(newAnnotation.id);
+        return;
+      }
+    }
+    commitBoundAnnotationResize();
+  }, [boundAnnotationId, activeToolKey, annotationTools, selectionRef, selectionToSource, annotations, handleAnnotationsCommit, commitBoundAnnotationResize]);
+
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
   // selection wrapper above, which is defined after that hook runs.
@@ -1653,7 +1676,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     revealTime: t => spectrogramRef.current?.revealTime(t),
     isPlaying,
     onSelectionChange: s => { handleSelectionChange(s); resizeBoundAnnotationTo(s); },
-    onExtendSettled: commitBoundAnnotationResize,
+    onExtendSettled: handleExtendSettled,
     enabled: libraryToolIndex === null,
   });
 
