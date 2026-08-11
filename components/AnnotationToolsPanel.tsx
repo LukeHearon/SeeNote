@@ -88,6 +88,7 @@ function AnnotationToolsPanel({
       helpTarget="tool-palette"
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
+      keepActionsWhenCollapsed
       title={<span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>}
       actions={(
         <div className="flex items-center gap-0.5 flex-none">

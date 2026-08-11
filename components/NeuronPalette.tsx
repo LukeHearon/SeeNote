@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings2, Sliders, X } from 'lucide-react';
+import { EyeOff, Plus, Pin, PinOff, RotateCcw, Scissors, Search, Settings, Settings2, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
@@ -477,10 +477,14 @@ function NeuronPalette({
       title={<span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
+      keepActionsWhenCollapsed
       helpTarget="neuron-palette"
       actions={(
         <div className="flex items-center gap-1 flex-none">
-          {neurons.length > 0 && (
+          {/* All / None is the one header control that acts on the rows
+              themselves, so it goes with them — and the collapsed header has
+              no width to spare for it. */}
+          {neurons.length > 0 && !collapsed && (
             <button
               onClick={() => onSetAllNeuronsHidden(allShown)}
               className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors underline decoration-dotted mr-0.5"
@@ -502,7 +506,7 @@ function NeuronPalette({
             className={`p-0.5 rounded transition-colors ${settingsOpen ? 'bg-slate-700 text-[#e65161]' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700'}`}
             data-tooltip={copy.settingsTitle}
           >
-            <Sliders size={12} />
+            <Settings size={12} />
           </button>
         </div>
       )}
