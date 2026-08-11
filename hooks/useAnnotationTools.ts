@@ -104,6 +104,14 @@ export function useAnnotationTools({
       );
       prevPersistedToolsRef.current = toPersistedTools(tools);
       skipToolPersistRef.current = true;
+      // Publish to the ref BEFORE the state update, not via the sync effect
+      // below: the annotation-load effect reads annotationToolsRef synchronously
+      // when its own read resolves, and that can happen in a microtask after
+      // this call but before React commits (and runs the sync effect). Leaving
+      // the ref stale there parses every label against the synthetic Custom tool
+      // alone and stamps the whole file white — the intermittent "labels lost
+      // their tool colour on project open" bug.
+      annotationToolsRef.current = tools;
       setAnnotationTools(tools);
       // The annotation-load effect can resolve before this (both race on
       // mount), parsing labels against only the synthetic Custom tool and
