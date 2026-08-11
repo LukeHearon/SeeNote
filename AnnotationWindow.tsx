@@ -1674,6 +1674,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
     revealTime: t => spectrogramRef.current?.revealTime(t),
+    centerOnPlayhead: t => spectrogramRef.current?.scrollToTime(t),
+    playheadLocked,
     isPlaying,
     onSelectionChange: s => { handleSelectionChange(s); resizeBoundAnnotationTo(s); },
     onExtendSettled: handleExtendSettled,

@@ -241,6 +241,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
     revealTime: t => spectrogramRef.current?.revealTime(t),
+    centerOnPlayhead: t => spectrogramRef.current?.scrollToTime(t),
+    playheadLocked,
     isPlaying,
     onSelectionChange: handleSelectionChange,
   });

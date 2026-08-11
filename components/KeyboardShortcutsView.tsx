@@ -35,8 +35,8 @@ const GROUPS: Group[] = [
     name: 'Navigation',
     bg: 'bg-sky-600', ring: 'ring-sky-400', dot: 'bg-sky-500', text: 'text-sky-300',
     shortcuts: [
-      { codes: ['ArrowLeft'], display: '←', label: 'Scrub backward (fine nudge with a selection)' },
-      { codes: ['ArrowRight'], display: '→', label: 'Scrub forward (fine nudge with a selection)' },
+      { codes: ['ArrowLeft'], display: '←', label: 'Move playhead backward (accelerating pixel nudge)' },
+      { codes: ['ArrowRight'], display: '→', label: 'Move playhead forward (accelerating pixel nudge)' },
       { codes: ['Comma'], display: ',', label: 'Nudge video forward one frame' },
       { codes: ['Period'], display: '.', label: 'Nudge video backward one frame' },
       { codes: ['KeyC'], display: 'C', label: 'Toggle lock playhead to center' },

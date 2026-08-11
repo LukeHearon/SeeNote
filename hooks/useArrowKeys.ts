@@ -14,13 +14,21 @@ interface UseArrowKeysArgs {
   selectionRef: React.MutableRefObject<Selection | null>;
   currentTimeRef: React.MutableRefObject<number>;
   durationRef: React.MutableRefObject<number>;
-  /** Visible-window width in seconds — the coarse scrub is 10% of it. */
+  /** Visible-window width in seconds — the playback coarse scrub is 10% of it. */
   zoomSecRef: React.MutableRefObject<number>;
   /** The spectrogram's live time→pixel scale, for the fine per-pixel ramp. */
   getPixelsPerSecond: () => number;
   seek: (time: number, scrollView?: boolean) => void;
   /** Pan the view just enough to keep a moving edge in sight, as auto-pan does for a drag. */
   revealTime?: (time: number) => void;
+  /**
+   * Recenter the view on a time that's the playhead itself (not just a
+   * selection edge). Used instead of `revealTime` while the playhead is
+   * locked, so an arrow-key move pans exactly like the playback auto-center
+   * does — a fixed function of time, not an edge nudged into view.
+   */
+  centerOnPlayhead?: (time: number) => void;
+  playheadLocked?: boolean;
   onSelectionChange: (s: Selection | null) => void;
   /**
    * Called once a run of Shift+arrow presses has gone quiet — the moment to
@@ -41,17 +49,17 @@ interface UseArrowKeysArgs {
  * Every arrow-key playhead movement, in one owner (they share a keydown, so
  * they cannot be split across hooks — useHotkeys fires every match).
  *
- *  - No selection, no Shift: coarse scrub, 10% of the visible window per press.
- *  - Selection active: fine move — one pixel per tap, accelerating while held.
- *    Placing a playhead against a selection edge is pixel work, and the coarse
- *    jump overshoots it every time.
- *  - Shift: the same fine move, walking a selection's edge (see
- *    utils/selectionExtend) — the keyboard twin of Shift+click.
+ *  - No selection, no Shift: fine move — one pixel per tap, accelerating
+ *    while held, same ramp as the Shift case below. Placing a playhead
+ *    precisely is pixel work; nothing here jumps by a fraction of the window.
+ *  - Selection active or Shift held: the same fine move, walking a
+ *    selection's edge (see utils/selectionExtend) — the keyboard twin of
+ *    Shift+click.
  *  - {mod}+Shift: extend straight to the start/end of the track.
  *
- * While playback runs every press is a plain coarse scrub: the ramp seeks each
- * frame (and a seek mid-play restarts the engine), while a selection built
- * around a moving playhead fights the playback it's being drawn over.
+ * While playback runs every press is a coarse scrub instead: the ramp seeks
+ * each frame (and a seek mid-play restarts the engine), while a selection
+ * built around a moving playhead fights the playback it's being drawn over.
  */
 export function useArrowKeys({
   selectionRef,
@@ -61,6 +69,8 @@ export function useArrowKeys({
   getPixelsPerSecond,
   seek,
   revealTime,
+  centerOnPlayhead,
+  playheadLocked,
   onSelectionChange,
   onExtendSettled,
   isPlaying,
@@ -68,8 +78,11 @@ export function useArrowKeys({
 }: UseArrowKeysArgs): void {
   // Callbacks are re-read per frame rather than captured: a ramp outlives many
   // renders, and each step must land on the latest state.
-  const cbRef = useRef({ seek, revealTime, onSelectionChange, onExtendSettled, getPixelsPerSecond });
-  cbRef.current = { seek, revealTime, onSelectionChange, onExtendSettled, getPixelsPerSecond };
+  const cbRef = useRef({ seek, revealTime, centerOnPlayhead, onSelectionChange, onExtendSettled, getPixelsPerSecond });
+  cbRef.current = { seek, revealTime, centerOnPlayhead, onSelectionChange, onExtendSettled, getPixelsPerSecond };
+
+  const playheadLockedRef = useRef(playheadLocked);
+  playheadLockedRef.current = playheadLocked;
 
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
@@ -100,6 +113,18 @@ export function useArrowKeys({
     settleTimerRef.current = window.setTimeout(settleNow, SETTLE_MS);
   }, [settleNow]);
 
+  /**
+   * Pan the view for a move to `time`. `movesPlayhead` is whether `time` is
+   * the playhead itself rather than a selection edge being trimmed — only
+   * then does a playhead lock apply, recentering exactly as the playback
+   * auto-center does. An edge that isn't the playhead always just gets
+   * revealed, lock or no.
+   */
+  const pan = useCallback((time: number, movesPlayhead: boolean) => {
+    if (movesPlayhead && playheadLockedRef.current) cbRef.current.centerOnPlayhead?.(time);
+    else cbRef.current.revealTime?.(time);
+  }, []);
+
   /** Move the playhead alone, leaving any selection where it is. */
   const scrubTo = useCallback((target: number) => {
     const t = clamp(target, 0, durationRef.current);
@@ -107,8 +132,8 @@ export function useArrowKeys({
     // measured from where the user has just put it.
     gestureRef.current = null;
     cbRef.current.seek(t);
-    cbRef.current.revealTime?.(t);
-  }, [durationRef]);
+    pan(t, true);
+  }, [durationRef, pan]);
 
   /** Walk the current extend gesture's edge to `target`. */
   const extendTo = useCallback((target: number) => {
@@ -122,10 +147,11 @@ export function useArrowKeys({
     dirtyRef.current = true;
     // Only a selection drawn out of the playhead drags it along — and never
     // while the media clock owns it.
-    if (gesture.follow && !isPlayingRef.current) cbRef.current.seek(edge);
-    cbRef.current.revealTime?.(edge);
+    const movesPlayhead = gesture.follow && !isPlayingRef.current;
+    if (movesPlayhead) cbRef.current.seek(edge);
+    pan(edge, movesPlayhead);
     scheduleSettle();
-  }, [selectionRef, currentTimeRef, durationRef, scheduleSettle]);
+  }, [selectionRef, currentTimeRef, durationRef, scheduleSettle, pan]);
 
   /** One step of `px` screen pixels, in whichever mode is running. */
   const movePixels = useCallback((dir: -1 | 1, extend: boolean, px: number) => {
@@ -178,9 +204,9 @@ export function useArrowKeys({
 
   const onArrow = useCallback((e: KeyboardEvent, dir: -1 | 1, extend: boolean) => {
     // Coarse: one 10%-of-window jump per press (including the OS's own key
-    // repeats). Used when there's no selection to work against, and for every
-    // press while the engine is running.
-    if (isPlayingRef.current || (!extend && !selectionRef.current)) {
+    // repeats). Only while the engine is running — the fine ramp below seeks
+    // every frame, and a seek mid-play restarts playback.
+    if (isPlayingRef.current) {
       stopRamp();
       scrubTo(scrubTarget(currentTimeRef.current, durationRef.current, zoomSecRef.current, dir));
       return;

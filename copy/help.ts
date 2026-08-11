@@ -188,7 +188,7 @@ export const help = {
     get li_fit() { return getOverride('help.zoom.li_fit') ?? "**`{mod}+0`** fits the entire track on screen. Press it again to drop back to exactly where you were — it remembers the window you left."; },
     get h_pan() { return getOverride('help.zoom.h_pan') ?? "Panning"; },
     get li_drag() { return getOverride('help.zoom.li_drag') ?? "**Right-click & drag** the spectrogram, or **scroll** without a modifier, to slide the view along."; },
-    get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** scrub the playhead by a tenth of the visible window, so the step scales with how far in you are. While a selection is active the same keys switch to fine work: a tap moves one pixel, and holding accelerates."; },
+    get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** move the playhead a pixel at a tap, accelerating while held — fine enough to place it exactly. While a selection is active the same keys walk its edge instead. During playback they scrub by a tenth of the visible window."; },
     get li_jump() { return getOverride('help.zoom.li_jump') ?? "**`{mod}+←` / `{mod}+→`** jump to the start / end of the track; **`Alt+←` / `Alt+→`** step between annotations."; },
     get note_lock() { return getOverride('help.zoom.note_lock') ?? "With [playhead lock](recenter-playhead@transport#lock) on (`C`), the view follows the playhead during playback and manual scrolling is disabled. Zoom level itself is saved per project."; },
   },
