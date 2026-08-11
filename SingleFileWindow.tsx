@@ -21,6 +21,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
+import { useSelectionKeyboard } from './hooks/useSelectionKeyboard';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useHotkeys } from './hooks/useHotkeys';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -221,6 +222,18 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       clearSelectionEnd();
     }
   }, [activationStack, frameSourceRef, clearSelectionEnd]);
+
+  // Shift+arrow selection extending — the keyboard twin of Shift+click. Lives
+  // here rather than in usePlaybackTransport because it needs the wrapper
+  // above, which is defined after that hook runs.
+  useSelectionKeyboard({
+    selectionRef,
+    currentTimeRef,
+    durationRef,
+    zoomSecRef,
+    seek,
+    onSelectionChange: handleSelectionChange,
+  });
 
   // Everything else (playback transport, spectrogram zoom, band-pass filter,
   // undo/redo) registers its own hotkeys inside the hook that owns its

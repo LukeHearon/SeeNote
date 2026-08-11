@@ -37,6 +37,7 @@ import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
+import { useSelectionKeyboard } from './hooks/useSelectionKeyboard';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -1603,6 +1604,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       clearSelectionEnd();
     }
   }, [activationStack, clearSelectionEnd]);
+
+  // Shift+arrow selection extending — the keyboard twin of Shift+click. Lives
+  // here rather than in usePlaybackTransport because it needs the wrapper
+  // above, which is defined after that hook runs.
+  useSelectionKeyboard({
+    selectionRef,
+    currentTimeRef,
+    durationRef: displayDurationRef,
+    zoomSecRef,
+    seek,
+    onSelectionChange: handleSelectionChange,
+    enabled: libraryToolIndex === null,
+  });
 
   // Hand the engine the axis it should play, and bring the rest of the view
   // onto it. Fires on every timeline change (subset toggled, threshold edited,

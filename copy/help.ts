@@ -282,6 +282,7 @@ export const help = {
 
   modes: {
     get li1() { return getOverride('help.modes.li1') ?? "**Selection Mode** (press `S` to enter — [see palette](tool-palette)): left-click & drag creates a _selection region_. Playback is bounded to that region. While a selection is active, pressing a tool key (`0`–`9`) drops an annotation onto it."; },
+    get li_shift() { return getOverride('help.modes.li_shift') ?? "**From the playhead:** hold `Shift` and click to select from the playhead to the click, or hold `Shift` and press `←`/`→` to grow the selection a step at a time (`{mod}+Shift+←`/`→` runs it to the start or end of the track). The end you started from stays put while the playhead moves; walk the playhead back past it and the selection flips to the other side."; },
     get li2() { return getOverride('help.modes.li2') ?? "**Annotation Tool Mode** (a tool is active): left-click & drag directly creates an annotation. Press a number key to switch tools, or `S` to return to Selection Mode."; },
     get note1() { return getOverride('help.modes.note1') ?? "A selection that overlaps an annotation pops that annotation's name to the selection's start, so the label stays next to where you're looking. If there's no room before the annotation's right edge, the name right-justifies against it instead."; },
     get note2() { return getOverride('help.modes.note2') ?? "`Esc` is the universal undo-layer key: it pops the most recently activated layer (band, filter-tool, selection, annotation tool) in the reverse order you turned them on."; },

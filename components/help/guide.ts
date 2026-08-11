@@ -371,7 +371,7 @@ export const GUIDE: Part[] = [
         title: () => help.pages.modes,
         target: 'tool-palette',
         blocks: () => [
-          { kind: 'ul', items: [help.modes.li1, help.modes.li2] },
+          { kind: 'ul', items: [help.modes.li1, help.modes.li_shift, help.modes.li2] },
           { kind: 'live', control: 'tool-palette' },
           { kind: 'note', text: help.modes.note1 },
           { kind: 'note', text: help.modes.note2 },
