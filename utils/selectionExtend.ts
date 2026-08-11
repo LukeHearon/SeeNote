@@ -1,21 +1,7 @@
 import { Selection } from '../types';
-import { clamp } from './helpers';
 
 /** Times closer than this are the same instant, as far as a selection cares. */
 const EPS = 1e-4;
-
-/**
- * How far one arrow-key scrub moves the playhead: 10% of the visible window.
- * Shared by the plain arrow scrub (usePlaybackTransport) and the Shift+arrow
- * selection extend (useSelectionKeyboard) so the two stay in step.
- */
-export function scrubStep(zoomSec: number): number {
-  return zoomSec * 0.1;
-}
-
-export function scrubTarget(current: number, duration: number, zoomSec: number, direction: -1 | 1): number {
-  return clamp(current + direction * scrubStep(zoomSec), 0, duration);
-}
 
 /**
  * The fixed end of a keyboard-extended selection — the point the playhead is

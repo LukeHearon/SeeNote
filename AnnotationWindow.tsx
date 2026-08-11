@@ -37,7 +37,7 @@ import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
-import { useSelectionKeyboard } from './hooks/useSelectionKeyboard';
+import { useArrowKeys } from './hooks/useArrowKeys';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -578,7 +578,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     spectrogramRef,
     examplePlayer,
     addLog,
-    zoomSecRef,
     // The example-library modal owns the keyboard while open — see its own
     // key handler's comment ("the host disables its own hotkeys"). Without
     // this, its Space binding would double-fire against this hook's Space.
@@ -1491,7 +1490,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       // Mod+key bindings. Undo/redo (useAnnotationHistory), band-pass filter
       // toggle (useBandPassFilter), spectrogram zoom (useSpectrogramZoomHotkeys),
-      // and playback transport (space/arrows/,/./r/m/c, usePlaybackTransport)
+      // and playback transport (space/,/./r/m/c, usePlaybackTransport; the
+      // arrow keys are useArrowKeys, registered further down)
       // now register their own hotkeys where their state/handlers live — see
       // those hooks' instantiations above. What's left here is annotation- and
       // file-navigation-specific glue that only this window has.
@@ -1605,16 +1605,41 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [activationStack, clearSelectionEnd]);
 
-  // Shift+arrow selection extending — the keyboard twin of Shift+click. Lives
-  // here rather than in usePlaybackTransport because it needs the wrapper
-  // above, which is defined after that hook runs.
-  useSelectionKeyboard({
+  // A bound selection carries its annotation with it, exactly as dragging the
+  // selection's edges does (useSpectrogramInteraction). Keyboard extends stream
+  // through `setAnnotations` and land in undo history once, when the burst
+  // settles — otherwise every keypress in a held run would be its own undo step.
+  // The draft ref carries the run: `annotations` is a render-old snapshot, and a
+  // ramp takes many steps per render.
+  const boundResizeDraftRef = useRef<Annotation[] | null>(null);
+  const resizeBoundAnnotationTo = useCallback((sel: Selection | null) => {
+    if (!boundAnnotationId || !sel) return;
+    const src = selectionToSource(sel);
+    const next = (boundResizeDraftRef.current ?? annotations).map(a =>
+      a.id === boundAnnotationId ? { ...a, start: src.start, end: src.end } : a
+    );
+    boundResizeDraftRef.current = next;
+    setAnnotations(next);
+  }, [boundAnnotationId, annotations, selectionToSource, setAnnotations]);
+  const commitBoundAnnotationResize = useCallback(() => {
+    const draft = boundResizeDraftRef.current;
+    boundResizeDraftRef.current = null;
+    if (draft) handleAnnotationsCommit(draft);
+  }, [handleAnnotationsCommit]);
+
+  // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
+  // Lives here rather than in usePlaybackTransport because it needs the
+  // selection wrapper above, which is defined after that hook runs.
+  useArrowKeys({
     selectionRef,
     currentTimeRef,
     durationRef: displayDurationRef,
     zoomSecRef,
+    getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
-    onSelectionChange: handleSelectionChange,
+    isPlaying,
+    onSelectionChange: s => { handleSelectionChange(s); resizeBoundAnnotationTo(s); },
+    onExtendSettled: commitBoundAnnotationResize,
     enabled: libraryToolIndex === null,
   });
 
@@ -1658,11 +1683,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (old && Math.abs(currentTimeRef.current - timeline.toDisplay(old.start)) <= 0.5) {
       seek(start, false);
     }
-    const src = selectionToSource({ start, end });
-    handleAnnotationsCommit(annotations.map(a =>
-      a.id === boundAnnotationId ? { ...a, start: src.start, end: src.end } : a
-    ));
-  }, [boundAnnotationId, annotations, handleAnnotationsCommit, seek, timeline, selectionToSource]);
+    // Same resize the keyboard extend makes, committed immediately — a typed
+    // edit is a single deliberate change, not a run of them.
+    resizeBoundAnnotationTo({ start, end });
+    commitBoundAnnotationResize();
+  }, [boundAnnotationId, annotations, seek, timeline, resizeBoundAnnotationTo, commitBoundAnnotationResize]);
 
   const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
 

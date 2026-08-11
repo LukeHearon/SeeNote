@@ -75,7 +75,8 @@ Quick reference for agents. One phrase per file.
 - `utils/BandPassFilterGraph.ts` — persistent Butterworth band-pass filter graph plus async group-delay measurement
 - `utils/PhaseVocoder.ts` — phase vocoder for time-stretching (slow-down playback)
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops
-- `utils/selectionExtend.ts` — arrow-scrub step and the anchor/extend math behind Shift+arrow selections
+- `utils/selectionExtend.ts` — the anchor/extend math behind Shift+arrow selections
+- `utils/arrowScrub.ts` — arrow-key movement math: the coarse 10%-of-window step and the held-key acceleration ramp
 - `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
 - `utils/buzzdetectSubset.ts` — derives the subset timeline from buzzdetect activations, and re-expresses the activations on it
 - `utils/buzzdetectStats.ts` — what a subset came to (kept seconds, regions, frames), for the palette's readout
@@ -120,7 +121,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useImportAnnotations.ts` — imports Audacity/annotation files into the current track
 - `hooks/useSpectrogramInteraction.ts` — spectrogram pointer logic: selection, annotation drag/create, filter draw
 - `hooks/usePlaybackTransport.ts` — selects/owns the active playback transport (audio vs video engine)
-- `hooks/useSelectionKeyboard.ts` — Shift+arrow selection extending (keyboard twin of Shift+click); registered by both windows
+- `hooks/useArrowKeys.ts` — all arrow-key playhead movement: coarse scrub, held-key fine ramp, Shift extend; registered by both windows
 - `hooks/useFileNavigation.ts` — next/prev/shuffle track navigation
 - `hooks/useVideoFrameSource.ts` — opens and tears down the VideoFrameSource for the active track/mode
 - `hooks/useAnnotationLoad.ts` — loads annotations for a track and resets history

@@ -10,7 +10,6 @@ import { DEFAULT_UI_SETTINGS } from '../constants';
 import type { TimeDisplayUnit, ElapsedTimeDisplayUnit } from '../utils/helpers';
 import type { useExamplePlayer } from './useExamplePlayer';
 import { useHotkeys } from './useHotkeys';
-import { scrubTarget } from '../utils/selectionExtend';
 
 interface UsePlaybackTransportArgs {
   project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: TimeDisplayUnit; fallbackTimeDisplayUnit?: ElapsedTimeDisplayUnit } } };
@@ -33,8 +32,6 @@ interface UsePlaybackTransportArgs {
   spectrogramRef: React.RefObject<SpectrogramHandle>;
   examplePlayer: ReturnType<typeof useExamplePlayer>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
-  // Visible-window width in seconds, for the arrow-key ±10%-of-window scrub.
-  zoomSecRef: React.MutableRefObject<number>;
   // Mirrors useHotkeys's own `enabled`: false while a modal (e.g. the example
   // library) owns the keyboard, so these bindings must not fire.
   enabled?: boolean;
@@ -64,7 +61,6 @@ export function usePlaybackTransport({
   spectrogramRef,
   examplePlayer,
   addLog,
-  zoomSecRef,
   enabled = true,
 }: UsePlaybackTransportArgs) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -415,8 +411,6 @@ export function usePlaybackTransport({
   }, [videoMode, isAudioTrack, videoSrc, selection, usesVideoTransport]);
 
   useHotkeys([
-    { key: 'ArrowLeft', handler: () => seek(scrubTarget(currentTimeRef.current, durationRef.current, zoomSecRef.current, -1)) },
-    { key: 'ArrowRight', handler: () => seek(scrubTarget(currentTimeRef.current, durationRef.current, zoomSecRef.current, 1)) },
     { key: ',', handler: () => {
       if (isAudioTrackRef.current) return;
       const frameDuration = frameSourceRef.current?.getFrameDuration() ?? (1 / 30);

@@ -1,18 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extendSelection, selectionAnchor, scrubStep, scrubTarget } from '../utils/selectionExtend';
-
-describe('scrubTarget', () => {
-  it('moves by 10% of the visible window', () => {
-    expect(scrubStep(20)).toBe(2);
-    expect(scrubTarget(10, 100, 20, 1)).toBe(12);
-    expect(scrubTarget(10, 100, 20, -1)).toBe(8);
-  });
-
-  it('clamps to the track', () => {
-    expect(scrubTarget(1, 100, 20, -1)).toBe(0);
-    expect(scrubTarget(99, 100, 20, 1)).toBe(100);
-  });
-});
+import { extendSelection, selectionAnchor } from '../utils/selectionExtend';
 
 describe('selectionAnchor', () => {
   it('is the playhead when nothing is selected', () => {

@@ -188,7 +188,7 @@ export const help = {
     get li_fit() { return getOverride('help.zoom.li_fit') ?? "**`{mod}+0`** fits the entire track on screen. Press it again to drop back to exactly where you were — it remembers the window you left."; },
     get h_pan() { return getOverride('help.zoom.h_pan') ?? "Panning"; },
     get li_drag() { return getOverride('help.zoom.li_drag') ?? "**Right-click & drag** the spectrogram, or **scroll** without a modifier, to slide the view along."; },
-    get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** scrub the playhead by a tenth of the visible window, so the step scales with how far in you are."; },
+    get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** scrub the playhead by a tenth of the visible window, so the step scales with how far in you are. While a selection is active the same keys switch to fine work: a tap moves one pixel, and holding accelerates."; },
     get li_jump() { return getOverride('help.zoom.li_jump') ?? "**`{mod}+←` / `{mod}+→`** jump to the start / end of the track; **`Alt+←` / `Alt+→`** step between annotations."; },
     get note_lock() { return getOverride('help.zoom.note_lock') ?? "With [playhead lock](recenter-playhead@transport#lock) on (`C`), the view follows the playhead during playback and manual scrolling is disabled. Zoom level itself is saved per project."; },
   },
@@ -282,7 +282,7 @@ export const help = {
 
   modes: {
     get li1() { return getOverride('help.modes.li1') ?? "**Selection Mode** (press `S` to enter — [see palette](tool-palette)): left-click & drag creates a _selection region_. Playback is bounded to that region. While a selection is active, pressing a tool key (`0`–`9`) drops an annotation onto it."; },
-    get li_shift() { return getOverride('help.modes.li_shift') ?? "**From the playhead:** hold `Shift` and click to select from the playhead to the click, or hold `Shift` and press `←`/`→` to grow the selection a step at a time (`{mod}+Shift+←`/`→` runs it to the start or end of the track). The end you started from stays put while the playhead moves; walk the playhead back past it and the selection flips to the other side."; },
+    get li_shift() { return getOverride('help.modes.li_shift') ?? "**From the playhead:** hold `Shift` and click to select from the playhead to the click, or hold `Shift` and press `←`/`→` to grow the selection — a pixel per tap, accelerating while the key is held (`{mod}+Shift+←`/`→` runs it to the start or end of the track). The end you started from stays put while the playhead moves; walk the playhead back past it and the selection flips to the other side. If the selection is [bound to an annotation](@editing), the annotation is resized with it, and the whole run counts as one undo step."; },
     get li2() { return getOverride('help.modes.li2') ?? "**Annotation Tool Mode** (a tool is active): left-click & drag directly creates an annotation. Press a number key to switch tools, or `S` to return to Selection Mode."; },
     get note1() { return getOverride('help.modes.note1') ?? "A selection that overlaps an annotation pops that annotation's name to the selection's start, so the label stays next to where you're looking. If there's no room before the annotation's right edge, the name right-justifies against it instead."; },
     get note2() { return getOverride('help.modes.note2') ?? "`Esc` is the universal undo-layer key: it pops the most recently activated layer (band, filter-tool, selection, annotation tool) in the reverse order you turned them on."; },

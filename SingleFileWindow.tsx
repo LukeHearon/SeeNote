@@ -16,12 +16,13 @@ import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
+import { createViewportStore } from './utils/viewportStore';
 import { useActivationStack } from './hooks/useActivationStack';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
 import { usePlaybackTransport } from './hooks/usePlaybackTransport';
-import { useSelectionKeyboard } from './hooks/useSelectionKeyboard';
+import { useArrowKeys } from './hooks/useArrowKeys';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useHotkeys } from './hooks/useHotkeys';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
@@ -93,6 +94,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
 
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
+  // The spectrogram's live time→pixel transform — read by the arrow keys for
+  // their per-pixel fine moves. See AnnotationWindow for why it's a ref store.
+  const viewportStoreRef = useRef(createViewportStore());
+
   const {
     frameSourceRef, frameSourceVersion, setFrameSourceVersion, frameSourceDecodeError,
     videoPrefetchEndRef, videoPrefetchBusyRef, preZoomExtentRef, prerollVideo,
@@ -115,7 +120,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     isAudioTrack, isAudioTrackRef, videoMode, videoModeRef,
     videoSrc, videoSrcRef: useRef(videoSrc), duration, durationRef,
     selection, selectionRef, frameSourceRef, videoPrefetchEndRef, videoPrefetchBusyRef,
-    prerollVideo, spectrogramRef, examplePlayer, addLog, zoomSecRef,
+    prerollVideo, spectrogramRef, examplePlayer, addLog,
   });
 
   // Spectrogram zoom-in/out/fit-to-track hotkeys — identical registration to
@@ -223,15 +228,17 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     }
   }, [activationStack, frameSourceRef, clearSelectionEnd]);
 
-  // Shift+arrow selection extending — the keyboard twin of Shift+click. Lives
-  // here rather than in usePlaybackTransport because it needs the wrapper
-  // above, which is defined after that hook runs.
-  useSelectionKeyboard({
+  // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
+  // Lives here rather than in usePlaybackTransport because it needs the
+  // selection wrapper above, which is defined after that hook runs.
+  useArrowKeys({
     selectionRef,
     currentTimeRef,
     durationRef,
     zoomSecRef,
+    getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
+    isPlaying,
     onSelectionChange: handleSelectionChange,
   });
 
@@ -517,6 +524,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               onSelectionChange={handleSelectionChange}
               onBoundAnnotationChange={setBoundAnnotationId}
               onZoomChange={setZoomSec}
+              onViewportChange={v => viewportStoreRef.current.set(v)}
               filterToolActive={filterToolActive}
               bandPassFilter={bandPassFilter}
               onBandPassFilterChange={setBandPassFilter}
