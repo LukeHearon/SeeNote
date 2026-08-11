@@ -236,10 +236,18 @@ const startOfLine = (line: string): number => {
     return Number.isFinite(n) ? n : Infinity;
 };
 
+// A label's color is always derived from the tool whose text matches it,
+// falling back to white for a Custom (unmatched) label — never cached or set
+// independently. Single source of truth for that lookup: used when parsing
+// annotation files, re-matching after tools load, unlinking a tool, and
+// renaming a label (including mass rename).
+export const colorForLabel = (text: string, tools: AnnotationTool[]): string =>
+    tools.find(t => t.text === text)?.color ?? '#ffffff';
+
 // Parse Audacity TXT (tab-delimited: start \t end \t text) into annotations.
 // Pure: matches each row's text against `tools` to recover the owning tool's
-// color, falling back to white for a Custom (unmatched) label. Used by both the
-// auto-load effect and annotation import so the two never diverge.
+// color via colorForLabel. Used by both the auto-load effect and annotation
+// import so the two never diverge.
 export const parseAudacityContent = (
     content: string,
     tools: AnnotationTool[],
@@ -253,13 +261,12 @@ export const parseAudacityContent = (
             const end = parseFloat(parts[1]);
             const text = parts.slice(2).join('\t');
             if (!isNaN(start) && !isNaN(end)) {
-                const matchedTool = tools.find(t => t.text === text);
                 loaded.push({
                     id: generateId(),
                     start,
                     end,
                     text,
-                    color: matchedTool?.color ?? '#ffffff',
+                    color: colorForLabel(text, tools),
                     raw: line,
                 });
             }

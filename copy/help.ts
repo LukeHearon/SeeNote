@@ -317,7 +317,7 @@ export const help = {
   },
 
   bulk: {
-    get p_rename() { return getOverride('help.bulk.p_rename') ?? "The **Mass Rename** icon next to the [gear](tool-palette) renames annotations by their text directly, across every file in the project, without needing a matching tool. Type the existing label to see a live per-file breakdown of how many annotations match, type the replacement, and confirm."; },
+    get p_rename() { return getOverride('help.bulk.p_rename') ?? "The **Mass Rename** icon next to the [gear](tool-palette) renames annotations by their text directly, without needing a matching tool. Type the existing label to see a live per-file breakdown of how many annotations match, type the replacement, choose whether to apply it to the current track or the whole project, and confirm."; },
     get h_find() { return getOverride('help.bulk.h_find') ?? "Find Label"; },
     get p_find() { return getOverride('help.bulk.p_find') ?? "The **Find Label** ([magnifying glass](tool-palette)) icon searches every file in the project for a label. Results stream in alphabetically by file as the search runs; expand a file to see each match's start/end time, select one, and click **Go** to open that file, scroll the spectrogram to it, and select the annotation. Check **Partial** to match the search text anywhere in a label (e.g. `mech_` matches `quiet_mech_auto`), or **Regex** to search with a regular expression (already unanchored, so `buzz\\d` matches `foo_buzz3_bar`); with either on, results show each match's own label since it may differ from what you typed. Both toggles are remembered per project."; },
   },

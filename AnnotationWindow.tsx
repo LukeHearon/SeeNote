@@ -8,7 +8,7 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
+import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
@@ -54,7 +54,7 @@ import NeuronPalette from './components/NeuronPalette';
 import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
-import MassRenameModal from './components/MassRenameModal';
+import MassRenameModal, { MassRenameScope } from './components/MassRenameModal';
 import FindLabelModal from './components/FindLabelModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
@@ -494,19 +494,25 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   });
 
   // Mass Rename: renames every annotation whose text matches `oldText` to
-  // `newText`, across the whole project — independent of any tool identity.
-  // Current track updates in memory (autosave picks it up); every other
-  // track's annotation file is rewritten on disk via the shared util also
-  // used by handleRenameTool.
-  const handleMassRename = useCallback(async (oldText: string, newText: string): Promise<number> => {
+  // `newText`, independent of any tool identity. Current track updates in
+  // memory (autosave picks it up); when scope is 'project', every other
+  // track's annotation file is also rewritten on disk via the shared util
+  // also used by handleRenameTool.
+  const handleMassRename = useCallback(async (oldText: string, newText: string, scope: MassRenameScope): Promise<number> => {
     const currentCount = annotations.filter(a => a.text === oldText).length;
     if (currentCount > 0) {
-      setAnnotations(prev => prev.map(a => a.text === oldText ? { ...a, text: newText } : a));
+      // newText may not belong to any tool (a one-off rename), so re-resolve
+      // its color rather than keeping the old cached one — otherwise a label
+      // renamed away from its tool would keep that tool's color instead of
+      // reverting to white.
+      const newColor = colorForLabel(newText, annotationTools);
+      setAnnotations(prev => prev.map(a => a.text === oldText ? { ...a, text: newText, color: newColor } : a));
     }
+    if (scope === 'track') return currentCount;
     const otherTracks = allTracks.filter(t => t !== trackPath);
     const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, oldText, newText);
     return currentCount + diskCount;
-  }, [annotations, allTracks, trackPath, getAnnotationPath]);
+  }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath]);
 
   // An example clip is sounding via either path (chip preview or the modal).
   // While true the main track's audio is parked so the two never overlap, and

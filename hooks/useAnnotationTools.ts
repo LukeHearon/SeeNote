@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Annotation, AnnotationTool, Project, ProjectPreferences } from '../types';
 import { HOTKEY_COLORS } from '../constants';
-import { generateId } from '../utils/helpers';
+import { generateId, colorForLabel } from '../utils/helpers';
 import {
   listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool,
   renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool,
@@ -117,10 +117,7 @@ export function useAnnotationTools({
       // mount), parsing labels against only the synthetic Custom tool and
       // stamping them white. Re-match now that the real tools are in so any
       // annotation loaded early still picks up its tool's color.
-      setAnnotations(prev => prev.map(a => {
-        const match = tools.find(t => t.text === a.text);
-        return match ? { ...a, color: match.color } : a;
-      }));
+      setAnnotations(prev => prev.map(a => ({ ...a, color: colorForLabel(a.text, tools) })));
     } catch (err) {
       addLog(`Error loading annotation tools: ${err}`, 'error');
     }
@@ -252,14 +249,15 @@ export function useAnnotationTools({
   const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
     const tool = annotationTools[toolIndex];
     if (!tool) return;
+    const remainingTools = annotationTools.filter((_, i) => i !== toolIndex);
     setAnnotations(prev => mode === 'delete'
       // Remove annotations carrying this tool's label entirely.
       ? prev.filter(a => a.text !== tool.text)
-      // Leave the labels but drop the tool: with no tool to match, they revert
-      // to Custom, so reset their cached color to white.
-      : prev.map(a => a.text === tool.text ? { ...a, color: '#ffffff' } : a)
+      // Leave the labels but drop the tool: with no tool left to match, they
+      // revert to Custom, so re-resolve their cached color.
+      : prev.map(a => a.text === tool.text ? { ...a, color: colorForLabel(a.text, remainingTools) } : a)
     );
-    setAnnotationTools(prev => prev.filter((_, i) => i !== toolIndex));
+    setAnnotationTools(remainingTools);
     if (activeToolKey === tool.key) setActiveToolKey(null);
   }, [annotationTools, activeToolKey]);
 
