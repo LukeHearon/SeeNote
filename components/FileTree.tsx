@@ -444,7 +444,10 @@ function FileTree({
     const el = scrollContainerRef.current;
     const sameRoot = prevRootRef.current === effectiveRoot;
     prevRootRef.current = effectiveRoot;
-    if (el && sameRoot) el.scrollTop = lastScrollTopRef.current;
+    if (!el) return;
+    // A genuine folder change (enter / step up / root change) starts at the top;
+    // `goUpOne` then scrolls from there to the folder it stepped out of.
+    el.scrollTop = sameRoot ? lastScrollTopRef.current : 0;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree]);
 
@@ -465,6 +468,7 @@ function FileTree({
   }, [currentTrack, effectiveRoot]);
 
   const toggleDir = (path: string) => {
+    cancelPendingActiveScroll();
     setExpandedDirs(prev => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
@@ -474,12 +478,14 @@ function FileTree({
   };
 
   const expandAll = () => {
+    cancelPendingActiveScroll();
     setExpandedDirs(new Set(getAllDirPaths(tree)));
   };
 
   const collapseAll = () => {
     // Collapse everything — ancestor dirs of the active file are highlighted
     // rather than auto-expanded, so the user still knows where it lives.
+    cancelPendingActiveScroll();
     setExpandedDirs(new Set());
   };
 
@@ -516,11 +522,29 @@ function FileTree({
   // When the active track changes, nudge the scroll so the item is visible:
   // - if it's above the viewport, make it the first visible row
   // - if it's below the viewport, make it the last visible row
+  //
+  // The row may not be in the DOM on the render where `currentTrack` changes —
+  // the ancestor-expanding effect above is a plain effect, so it reveals the row
+  // a render later. The request is therefore held in a ref and consumed on
+  // whichever render first paints the row. `expandedDirs` is in the deps purely
+  // to get that retry; expanding or collapsing a folder on its own must never
+  // move the view, so user-driven toggles drop the pending request first.
+  const pendingActiveScrollRef = useRef(true);
+  const scrolledForTrackRef = useRef<string | null>(null);
+  const cancelPendingActiveScroll = useCallback(() => {
+    pendingActiveScrollRef.current = false;
+  }, []);
   useLayoutEffect(() => {
+    if (scrolledForTrackRef.current !== currentTrack) {
+      scrolledForTrackRef.current = currentTrack;
+      pendingActiveScrollRef.current = true;
+    }
+    if (!pendingActiveScrollRef.current) return;
     const el = scrollContainerRef.current;
     if (!el) return;
     const activeEl = el.querySelector('[data-active-file]') as HTMLElement | null;
-    if (!activeEl) return;
+    if (!activeEl) return; // stays pending until the row exists
+    pendingActiveScrollRef.current = false;
     const containerRect = el.getBoundingClientRect();
     const elRect = activeEl.getBoundingClientRect();
     const topRelative = elRect.top - containerRect.top;
