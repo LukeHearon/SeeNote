@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { bandExtentY, freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
@@ -504,21 +504,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
-    // 1a. A span still being drawn gets a thin dotted line down its middle,
-    // spanning what's been covered so far — a selection in progress reading as
-    // in progress. The sweep in particular has no handles and no cursor to show
-    // for itself.
-    if (creatingSpan) {
-      const x0 = Math.max(0, timeToX(creatingSpan.start, scrollLeft_live, pixelsPerSecond_live));
-      const x1 = Math.min(width, timeToX(creatingSpan.end, scrollLeft_live, pixelsPerSecond_live));
+    // 1a. Every selection gets a thin dotted line down its middle — a spine
+    // marking what it covers, and the only thing a span still being swept out
+    // has to show for itself (no handles, no cursor). With a band-pass band up
+    // it runs down the middle of the band instead of the canvas, so the two
+    // read as the one region the audio is being taken from.
+    if (activeSelection) {
+      const x0 = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
+      const x1 = Math.min(width, timeToX(activeSelection.end, scrollLeft_live, pixelsPerSecond_live));
+      const band = bandPassFilter
+        ? bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale)
+        : null;
+      const midY = band ? (band.yTop + band.yBottom) / 2 : height / 2;
       if (x1 > x0) {
         ctx.save();
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 4]);
         ctx.beginPath();
-        ctx.moveTo(x0, height / 2);
-        ctx.lineTo(x1, height / 2);
+        ctx.moveTo(x0, midY);
+        ctx.lineTo(x1, midY);
         ctx.stroke();
         ctx.restore();
       }
@@ -631,7 +636,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -662,8 +667,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
       : bandPassFilter
       ? {
-          yTop: freqToY(bandPassFilter.high, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
-          yBottom: freqToY(bandPassFilter.low, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
+          ...bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale),
           strength: bandPassFilter.strength,
         }
       : null;

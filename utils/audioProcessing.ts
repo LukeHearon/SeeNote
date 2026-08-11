@@ -84,6 +84,22 @@ export const freqToY = (
 };
 
 /**
+ * The band-pass band's top and bottom edges in canvas pixels. Shared by the
+ * filter overlay (which draws the band) and the selection overlay (whose centre
+ * mark sits inside the band when there is one).
+ */
+export const bandExtentY = (
+  band: { low: number; high: number },
+  canvasHeight: number,
+  minFreq: number,
+  maxFreq: number,
+  scale: FrequencyScale
+): { yTop: number; yBottom: number } => ({
+  yTop: freqToY(band.high, canvasHeight, minFreq, maxFreq, scale),
+  yBottom: freqToY(band.low, canvasHeight, minFreq, maxFreq, scale),
+});
+
+/**
  * Frequency values (Hz) at which to draw Y-axis ticks for the given display
  * range and scale. Shared by the main Spectrogram and ExampleSpectrogram so
  * both axes pick the same ticks. Drawing/label-spacing is left to the caller.
