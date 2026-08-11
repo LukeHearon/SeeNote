@@ -361,7 +361,7 @@ export const help = {
   },
 
   sync: {
-    get p1() { return getOverride('help.sync.p1') ?? "Add a **repository URL**, **access token**, and **your name** under **Project Settings → Sync** to share annotations with collaborators through a private GitHub repo. A **refresh icon** then appears in the toolbar; click it to sync. The **chevron** beside it opens a box for a custom **commit message** (otherwise the commit is labeled \"Update annotations\")."; },
+    get p1() { return getOverride('help.sync.p1') ?? "Add a **repository URL**, **access token**, and **your name** under **Project Settings → Sync** to share annotations with collaborators through a private GitHub repo. A **refresh icon** then appears in the toolbar; click it to sync, or right-click it for **View GitHub repo** to open the repository in your browser. The **chevron** beside it opens a box for a custom **commit message** (otherwise the commit is labeled \"Update annotations\")."; },
     get h_merging() { return getOverride('help.sync.h_merging') ?? "How merging works"; },
     get p_merging() { return getOverride('help.sync.p_merging') ?? "Each sync uploads your annotation edits and pulls in everyone else's. Annotations merge automatically — two people labeling the same recording keep **both** sets; only a deliberate deletion removes a label. A summary shows what changed. Your name is recorded as the author of your edits. The file tree refreshes automatically after a sync pulls changes, so newly-annotated recordings light up."; },
     get h_shared() { return getOverride('help.sync.h_shared') ?? "What gets shared"; },

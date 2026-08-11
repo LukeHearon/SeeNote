@@ -377,6 +377,7 @@ export const annotationWindow = {
   get commitPlaceholder() { return getOverride('ui.annotationWindow.commitPlaceholder') ?? "Update annotations"; },
   get syncMenuCancel() { return getOverride('ui.annotationWindow.syncMenuCancel') ?? "Cancel"; },
   get syncMenuConfirm() { return getOverride('ui.annotationWindow.syncMenuConfirm') ?? "Sync"; },
+  get viewGithubRepo() { return getOverride('ui.annotationWindow.viewGithubRepo') ?? "View GitHub repo"; },
   // Sync result toast
   get syncFailedAuth() { return getOverride('ui.annotationWindow.syncFailedAuth') ?? "Access token rejected"; },
   get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },

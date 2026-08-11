@@ -56,10 +56,10 @@ pub fn is_update_supported() -> bool {
 }
 
 // Restricted to https://github.com/... since this is exposed to the frontend;
-// the only caller passes a hardcoded releases URL, but the check keeps this
-// command from becoming an arbitrary local-open primitive later.
+// callers pass either the releases page or a project's repo URL, but the
+// check keeps this command from becoming an arbitrary local-open primitive.
 #[tauri::command]
-pub fn open_releases_page(url: String) -> Result<(), String> {
+pub fn open_github_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://github.com/") {
         return Err("Refusing to open a non-GitHub URL".into());
     }

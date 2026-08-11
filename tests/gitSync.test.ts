@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
-import { normalizeGitRemoteUrl, readSyncToken } from '../utils/gitSync';
+import { githubRepoPageUrl, normalizeGitRemoteUrl, readSyncToken } from '../utils/gitSync';
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -19,6 +19,24 @@ describe('normalizeGitRemoteUrl', () => {
 
   it('keeps blank values blank', () => {
     expect(normalizeGitRemoteUrl('   ')).toBe('');
+  });
+});
+
+describe('githubRepoPageUrl', () => {
+  it('strips the .git suffix from a github.com remote', () => {
+    expect(githubRepoPageUrl('https://github.com/lab/annotations.git')).toBe(
+      'https://github.com/lab/annotations',
+    );
+  });
+
+  it('trims trailing slashes and whitespace', () => {
+    expect(githubRepoPageUrl(' https://github.com/lab/annotations/ ')).toBe(
+      'https://github.com/lab/annotations',
+    );
+  });
+
+  it('returns null for a non-github remote', () => {
+    expect(githubRepoPageUrl('https://gitlab.com/lab/annotations.git')).toBeNull();
   });
 });
 

@@ -10,6 +10,15 @@ export function normalizeGitRemoteUrl(remoteUrl: string): string {
 }
 
 /**
+ * The browsable GitHub URL for a repo's `.git` remote, or null if the remote
+ * isn't a github.com HTTPS URL (open_github_url rejects anything else).
+ */
+export function githubRepoPageUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim().replace(/\/+$/, '').replace(/\.git$/, '');
+  return trimmed.startsWith('https://github.com/') ? trimmed : null;
+}
+
+/**
  * Read the PAT for a sync config, honoring its storage mode. For 'plaintext' the
  * token is read straight from preferences (no IPC, no Keychain password prompt);
  * for 'keychain' (the default) it comes from the OS credential store.

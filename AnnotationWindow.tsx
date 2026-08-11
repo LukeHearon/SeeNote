@@ -11,7 +11,8 @@ import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_U
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
-import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
+import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
+import { githubRepoPageUrl } from './utils/gitSync';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -1124,6 +1125,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
 
+  // Right-click menu on the sync button ("View GitHub repo").
+  const [syncCtxMenu, setSyncCtxMenu] = useState<{ x: number; y: number } | null>(null);
+
   // Auto-dismiss the sync result toast (manual sync or background auto-pull):
   // fade it out, then clear it, a few seconds after it appears.
   const [syncToastFading, setSyncToastFading] = useState(false);
@@ -1832,6 +1836,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                <div className="relative flex items-center">
                  <button
                     onClick={() => handleSync()}
+                    onContextMenu={e => { e.preventDefault(); setSyncCtxMenu({ x: e.clientX, y: e.clientY }); }}
                     disabled={syncing}
                     className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
                     data-tooltip={
@@ -1894,6 +1899,27 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                       </button>
                     </div>
                   </div>
+                )}
+                {syncCtxMenu && (
+                  <>
+                    <div className="fixed inset-0 z-[300]" onClick={() => setSyncCtxMenu(null)} />
+                    <div
+                      className="fixed z-[300] bg-slate-800 border border-slate-600 rounded shadow-lg py-1 min-w-[160px]"
+                      style={{ left: syncCtxMenu.x, top: syncCtxMenu.y }}
+                    >
+                      <button
+                        className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-default"
+                        disabled={!githubRepoPageUrl(project.settings.gitSync.remoteUrl)}
+                        onClick={() => {
+                          setSyncCtxMenu(null);
+                          const url = githubRepoPageUrl(project.settings.gitSync.remoteUrl);
+                          if (url) openGithubUrl(url).catch(err => console.error('Failed to open GitHub repo:', err));
+                        }}
+                      >
+                        {annotationWindow.viewGithubRepo}
+                      </button>
+                    </div>
+                  </>
                 )}
                </div>
              )}

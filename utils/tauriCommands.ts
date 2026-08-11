@@ -233,9 +233,9 @@ export const installUpdate = (): Promise<void> =>
 export const isUpdateSupported = (): Promise<boolean> =>
   invoke('is_update_supported');
 
-/** Opens the GitHub releases page in the user's default browser. */
-export const openReleasesPage = (url: string): Promise<void> =>
-  invoke('open_releases_page', { url });
+/** Opens a github.com URL (releases page, repo page, …) in the user's default browser. */
+export const openGithubUrl = (url: string): Promise<void> =>
+  invoke('open_github_url', { url });
 
 // ── Diagnostics ──────────────────────────────────────────────────────────────
 

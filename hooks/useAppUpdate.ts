@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { checkForUpdate, installUpdate, isUpdateSupported, openReleasesPage, UpdateInfo } from '../utils/tauriCommands';
+import { checkForUpdate, installUpdate, isUpdateSupported, openGithubUrl, UpdateInfo } from '../utils/tauriCommands';
 
 const RELEASES_URL = 'https://github.com/LukeHearon/SeeNote/releases/latest';
 
@@ -37,7 +37,7 @@ export function useAppUpdate() {
   };
 
   const viewRelease = () => {
-    openReleasesPage(RELEASES_URL).catch(err => console.error('Failed to open releases page:', err));
+    openGithubUrl(RELEASES_URL).catch(err => console.error('Failed to open releases page:', err));
   };
 
   return { update, supported, state, error, applyUpdate, viewRelease };
