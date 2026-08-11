@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { Selection } from '../types';
+import type { Selection } from '../types';
 
 /**
  * How long Shift must be held for the sweep to count. Below this it was a
@@ -16,7 +16,12 @@ interface UseShiftSweepArgs {
   pause: () => void;
   selectionRef: React.MutableRefObject<Selection | null>;
   currentTimeRef: React.MutableRefObject<number>;
-  onSelectionChange: (s: Selection | null) => void;
+  /**
+   * Commit the swept span — Spectrogram's commitSpan, so a sweep means exactly
+   * what the same span drawn with the mouse would: an annotation when a tool is
+   * readied, a selection otherwise. `quiet` is Alt's "don't disturb the listen".
+   */
+  onCommitSpan: (anchor: number, edge: number, quiet?: boolean) => void;
   /**
    * Where the in-progress sweep started, or null. The spectrogram draws the
    * span from here to the live playhead — the selection itself isn't made until
@@ -28,7 +33,9 @@ interface UseShiftSweepArgs {
 
 /**
  * Hold Shift while listening to mark out what you're hearing: the press drops
- * the start, the playhead carries the end, and the release makes the selection.
+ * the start, the playhead carries the end, and the release commits the span —
+ * an annotation if a tool is readied, a selection otherwise, exactly as the
+ * same span drawn with the mouse would.
  *
  * Only when nothing is selected already — with a selection up, Shift belongs to
  * the arrow-key extend (useArrowKeys).
@@ -38,12 +45,12 @@ export function useShiftSweep({
   pause,
   selectionRef,
   currentTimeRef,
-  onSelectionChange,
+  onCommitSpan,
   onSweepStartChange,
   enabled = true,
 }: UseShiftSweepArgs): void {
-  const cbRef = useRef({ onSelectionChange, onSweepStartChange, pause });
-  cbRef.current = { onSelectionChange, onSweepStartChange, pause };
+  const cbRef = useRef({ onCommitSpan, onSweepStartChange, pause });
+  cbRef.current = { onCommitSpan, onSweepStartChange, pause };
 
   const sweepRef = useRef<{ start: number; pressedAt: number } | null>(null);
   // The span only becomes visible once the press has outlived the grace period.
@@ -90,13 +97,9 @@ export function useShiftSweep({
       const held = performance.now() - sweep.pressedAt;
       if (held < SWEEP_GRACE_MS) return;
       if (Math.abs(end - sweep.start) < SWEEP_MIN_SEC) return;
-      cbRef.current.onSelectionChange({
-        start: Math.min(sweep.start, end),
-        end: Math.max(sweep.start, end),
-      });
-      // The sweep is finished with; stop so the selection can be listened to on
-      // its own terms. Alt/Option holds playback open, the same "keep listening"
-      // escape hatch Alt-drag annotation has.
+      // Alt is the "keep listening" escape hatch, the same one Alt-drag
+      // annotation has: playback rolls on and the commit stays quiet.
+      cbRef.current.onCommitSpan(sweep.start, end, e.altKey);
       if (!e.altKey) cbRef.current.pause();
     };
 

@@ -54,6 +54,8 @@ export interface SpectrogramInteractionParams {
 export interface SpectrogramInteractionApi {
   // Interaction state (consumed by overlays / draw).
   creatingAnnotation: { start: number; current: number } | null;
+  /** Commit a drawn span (pinned end, dragged end) as an annotation or a selection. */
+  commitSpan: (anchor: number, edge: number, quiet?: boolean) => void;
   creatingSelection: { start: number; current: number } | null;
   creatingFilter: { y0: number; y1: number } | null;
   dragStart: { x: number; scroll: number } | null;
@@ -208,6 +210,36 @@ export function useSpectrogramInteraction({
     onSelectionChange({ start, end });
     snapPlayheadIfOutside(start, end);
   }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange, snapPlayheadIfOutside]);
+
+  /**
+   * Turn a span the user has just drawn out into whatever the current mode
+   * makes of it: an annotation when a tool is readied, a selection otherwise.
+   * Takes the span as the end it was pinned at and the end it was dragged to,
+   * in that order — a span drawn right-to-left passes them the other way round.
+   * The one place that decision is made — mouse drags, Shift+click and the
+   * keyboard sweep (via SpectrogramHandle.commitSpan) all come through here, so
+   * a gesture means the same thing whichever way it was performed.
+   *
+   * `quiet` is Alt's "don't disturb the listen": the annotation is committed
+   * without being selected, bound, or pulling the playhead to it.
+   */
+  const commitSpan = useCallback((anchor: number, edge: number, quiet = false) => {
+    const start = Math.min(anchor, edge);
+    const end = Math.max(anchor, edge);
+    if (end - start <= 0) {
+      if (!quiet) onSelectionChange(null);
+      return;
+    }
+    if (activeAnnotationTool !== null) {
+      commitNewAnnotation(start, end, quiet);
+      return;
+    }
+    // `anchor` is kept so a later Shift+arrow carries on from the end the user
+    // placed last, even when that's the earlier of the two.
+    onSelectionChange({ start, end, anchor });
+    onBoundAnnotationChange(null);
+    if (!quiet) snapPlayheadIfOutside(start, end);
+  }, [activeAnnotationTool, commitNewAnnotation, onSelectionChange, onBoundAnnotationChange, snapPlayheadIfOutside]);
 
   const getPointerTime = (e: React.MouseEvent) => {
     if (!containerRef.current) return 0;
@@ -509,16 +541,8 @@ export function useSpectrogramInteraction({
 
       // Shift+click while paused: extend/create from playhead to click point
       if (e.shiftKey && !isPlaying) {
-        const playT = currentTimeStore.get();
-        const selStart = Math.min(playT, t);
-        const selEnd = Math.max(playT, t);
-        if (selEnd - selStart > 0.001) {
-          if (activeAnnotationTool === null) {
-            onSelectionChange({ start: selStart, end: selEnd });
-          } else {
-            commitNewAnnotation(selStart, selEnd);
-          }
-        }
+        // The playhead is the pinned end; the click is the end just placed.
+        commitSpan(currentTimeStore.get(), t);
         return;
       }
 
@@ -706,7 +730,11 @@ export function useSpectrogramInteraction({
       } else {
         newEnd = Math.max(holdInSpan(selection.start, t), selection.start + 0.05);
       }
-      onSelectionChange({ start: newStart, end: newEnd });
+      onSelectionChange({
+        start: newStart,
+        end: newEnd,
+        anchor: resizingSelectionHandle === 'start' ? newEnd : newStart,
+      });
       // If there's a bound annotation, update its extent to match
       if (boundAnnotationId) {
         const updated = updateAnnotation(annotations, boundAnnotationId, a => ({ ...a, start: newStart, end: newEnd }));
@@ -756,27 +784,15 @@ export function useSpectrogramInteraction({
     pendingSelectionRef.current = null;
 
     if (creatingAnnotation) {
-      const start = Math.min(creatingAnnotation.start, creatingAnnotation.current);
-      const end = Math.max(creatingAnnotation.start, creatingAnnotation.current);
-      if (end > start && activeAnnotationTool !== null) {
-        // Read Alt live (not the quiet flag captured at mousedown/drag-start) so
-        // toggling Alt after the drag began still lands correctly: Alt down by
-        // release suppresses the highlight, Alt released by then re-enables it.
-        commitNewAnnotation(start, end, isAltHeldRef.current);
-      }
+      // Read Alt live (not the quiet flag captured at mousedown/drag-start) so
+      // toggling Alt after the drag began still lands correctly: Alt down by
+      // release suppresses the highlight, Alt released by then re-enables it.
+      commitSpan(creatingAnnotation.start, creatingAnnotation.current, isAltHeldRef.current);
       setCreatingAnnotation(null);
     }
 
     if (creatingSelection) {
-      const start = Math.min(creatingSelection.start, creatingSelection.current);
-      const end = Math.max(creatingSelection.start, creatingSelection.current);
-      if (end > start) {
-        onSelectionChange({ start, end });
-        onBoundAnnotationChange(null);
-        snapPlayheadIfOutside(start, end);
-      } else {
-        onSelectionChange(null);
-      }
+      commitSpan(creatingSelection.start, creatingSelection.current);
       setCreatingSelection(null);
     }
 
@@ -815,6 +831,7 @@ export function useSpectrogramInteraction({
 
   return {
     creatingAnnotation,
+    commitSpan,
     creatingSelection,
     creatingFilter,
     dragStart,

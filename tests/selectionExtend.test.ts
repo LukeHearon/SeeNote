@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { extendGestureFor, selectionsEqual, spanBetween } from '../utils/selectionExtend';
 
 describe('spanBetween', () => {
-  it('orders the two ends', () => {
-    expect(spanBetween(5, 7)).toEqual({ start: 5, end: 7 });
-    expect(spanBetween(7, 5)).toEqual({ start: 5, end: 7 });
+  it('orders the two ends, remembering which was pinned', () => {
+    expect(spanBetween(5, 7)).toEqual({ start: 5, end: 7, anchor: 5 });
+    expect(spanBetween(7, 5)).toEqual({ start: 5, end: 7, anchor: 7 });
   });
 
   it('is nothing once the edge is back on the anchor', () => {
@@ -29,10 +29,22 @@ describe('extendGestureFor', () => {
     expect(extendGestureFor(null, null, 5)).toEqual({ anchor: 5, edge: 5, follow: true, selection: null });
   });
 
-  it('trims an existing selection from its end, leaving the playhead alone', () => {
+  it('adjusts an existing selection from its end, leaving the playhead alone', () => {
     // Playhead at 3 (where a drag left it) must not become an end of the span.
     expect(extendGestureFor(null, { start: 4, end: 9 }, 3)).toEqual({
       anchor: 4, edge: 9, follow: false, selection: { start: 4, end: 9 },
+    });
+  });
+
+  it('adjusts the end placed last when the span was drawn backwards', () => {
+    // Dragged from 10s back to 3s: 10 is pinned, so the arrows move the start.
+    const backwards = { start: 3, end: 10, anchor: 10 };
+    expect(extendGestureFor(null, backwards, 10)).toEqual({
+      anchor: 10, edge: 3, follow: false, selection: backwards,
+    });
+    const forwards = { start: 3, end: 10, anchor: 3 };
+    expect(extendGestureFor(null, forwards, 3)).toEqual({
+      anchor: 3, edge: 10, follow: false, selection: forwards,
     });
   });
 

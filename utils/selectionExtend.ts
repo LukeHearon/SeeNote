@@ -29,14 +29,14 @@ export function selectionsEqual(a: Selection | null, b: Selection | null): boole
 }
 
 /**
- * The selection between a gesture's two ends. Null when the edge has come back
- * to the anchor — the next press then opens a fresh span on the other side,
- * which is what makes running left past the start turn into a backwards-looking
- * selection.
+ * The selection between a gesture's two ends, remembering which end was pinned.
+ * Null when the edge has come back to the anchor — the next press then opens a
+ * fresh span on the other side, which is what makes running left past the start
+ * turn into a backwards-looking selection.
  */
 export function spanBetween(anchor: number, edge: number): Selection | null {
   if (Math.abs(edge - anchor) < EPS) return null;
-  return { start: Math.min(anchor, edge), end: Math.max(anchor, edge) };
+  return { start: Math.min(anchor, edge), end: Math.max(anchor, edge), anchor };
 }
 
 /**
@@ -44,8 +44,10 @@ export function spanBetween(anchor: number, edge: number): Selection | null {
  *
  * `previous` continues only while it still describes the live selection —
  * anything else (a drag, a click, Esc) has taken over since, so a new gesture
- * starts. A selection that already exists is trimmed from its end, with the
- * start pinned; with nothing selected, both ends start at the playhead.
+ * starts. A selection that already exists is adjusted from the end that was
+ * placed last (its `anchor` names the other one), falling back to its end when
+ * it was made with no direction; with nothing selected, both ends start at the
+ * playhead.
  */
 export function extendGestureFor(
   previous: ExtendGesture | null,
@@ -53,6 +55,14 @@ export function extendGestureFor(
   playhead: number,
 ): ExtendGesture {
   if (previous && selectionsEqual(previous.selection, selection)) return previous;
-  if (selection) return { anchor: selection.start, edge: selection.end, follow: false, selection };
+  if (selection) {
+    // Pick up where the selection was left: whichever end was placed last is
+    // the one that goes on moving, whether it was drawn backwards with the
+    // mouse, walked there with the arrows, or thrown to the track's start.
+    const heldAtEnd = selection.anchor !== undefined && Math.abs(selection.anchor - selection.end) < EPS;
+    return heldAtEnd
+      ? { anchor: selection.end, edge: selection.start, follow: false, selection }
+      : { anchor: selection.start, edge: selection.end, follow: false, selection };
+  }
   return { anchor: playhead, edge: playhead, follow: true, selection: null };
 }

@@ -5,6 +5,14 @@ export type FrequencyScale = 'linear' | 'log' | 'mel';
 export interface Selection {
   start: number; // seconds
   end: number;   // seconds
+  /**
+   * The end that was pinned when this selection was drawn, in seconds — so the
+   * *other* end is the one the user placed last, and the one Shift+arrow goes
+   * on adjusting (see utils/selectionExtend). Optional: a selection made
+   * without a direction (typed into the toolbar, bound to an annotation) is
+   * adjusted from its end.
+   */
+  anchor?: number;
 }
 
 export interface Annotation {

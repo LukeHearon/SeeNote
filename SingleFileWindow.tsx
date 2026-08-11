@@ -252,7 +252,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     pause: () => { if (isPlaying) togglePlay(); },
     selectionRef,
     currentTimeRef,
-    onSelectionChange: handleSelectionChange,
+    onCommitSpan: (anchor, edge, quiet) => spectrogramRef.current?.commitSpan(anchor, edge, quiet),
     onSweepStartChange: setSweepStart,
   });
 

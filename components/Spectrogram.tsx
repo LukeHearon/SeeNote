@@ -107,6 +107,12 @@ export interface SpectrogramHandle {
   scrollToTime: (time: number) => void;
   /** Pan just enough to bring `time` inside the visible window, or not at all. */
   revealTime: (time: number) => void;
+  /**
+   * Commit a span drawn out by something other than the mouse (the keyboard
+   * sweep). Goes through the same rule as a drag: an annotation when a tool is
+   * readied, a selection otherwise.
+   */
+  commitSpan: (start: number, end: number, quiet?: boolean) => void;
   recenterPlayhead: () => void;
   zoomToRange: (startTime: number, endTime: number) => void;
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
@@ -327,6 +333,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // in those loops/handlers; the shared geometry refs and setScroll are passed in
   // because the scroll/zoom/render path here also writes through them.
   const {
+    commitSpan,
     creatingAnnotation,
     creatingSelection,
     creatingFilter,
@@ -484,9 +491,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const isDraggingSelection = creatingSelection && Math.abs(creatingSelection.current - creatingSelection.start) > 0.001;
     // A span still being drawn — by drag, or by the Shift-held sweep whose end
     // is wherever the playhead has got to this frame.
+    const sweepSpan = sweepStart !== null ? spanBetween(sweepStart, currentTime) : null;
+    // A sweep with a tool readied is drawing an annotation, not a selection —
+    // the same fork commitSpan takes when the key comes up. It previews as the
+    // annotation box below rather than as the selection veil.
+    const sweptAnnotation = activeAnnotationTool !== null ? sweepSpan : null;
     const creatingSpan = isDraggingSelection
       ? { start: Math.min(creatingSelection.start, creatingSelection.current), end: Math.max(creatingSelection.start, creatingSelection.current) }
-      : sweepStart !== null ? spanBetween(sweepStart, currentTime) : null;
+      : sweptAnnotation ? null : sweepSpan;
     const activeSelection = creatingSpan ?? selection;
 
     if (activeSelection) {
@@ -525,6 +537,32 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         ctx.moveTo(x0, midY);
         ctx.lineTo(x1, midY);
         ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 1a-ii. The annotation a sweep is drawing out. Mirrors the mouse-drag
+    // preview (renderCreatingOverlay) — same pale box and edges — with the
+    // tool's name and colour, since a keyboard gesture has no cursor to say
+    // which tool is about to be dropped.
+    if (sweptAnnotation) {
+      const x0 = Math.max(0, timeToX(sweptAnnotation.start, scrollLeft_live, pixelsPerSecond_live));
+      const x1 = Math.min(width, timeToX(sweptAnnotation.end, scrollLeft_live, pixelsPerSecond_live));
+      if (x1 > x0) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.fillRect(x0, 0, x1 - x0, height);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x0, 0); ctx.lineTo(x0, height);
+        ctx.moveTo(x1, 0); ctx.lineTo(x1, height);
+        ctx.stroke();
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillStyle = activeAnnotationTool.color;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(activeAnnotationTool.text, x0 + 4, 6);
         ctx.restore();
       }
     }
@@ -636,7 +674,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -1089,6 +1127,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     goToTrackEnd,
     scrollToTime,
     revealTime,
+    commitSpan,
     recenterPlayhead,
     zoomToRange,
     applyWheel,
@@ -1097,7 +1136,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     focusAnnotationInput: (id: string) => {
       inputRefs.current[id]?.focus();
     },
-  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
+  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 

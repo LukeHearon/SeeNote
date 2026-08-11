@@ -1658,7 +1658,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     pause: () => { if (isPlaying) togglePlay(); },
     selectionRef,
     currentTimeRef,
-    onSelectionChange: handleSelectionChange,
+    onCommitSpan: (anchor, edge, quiet) => spectrogramRef.current?.commitSpan(anchor, edge, quiet),
     onSweepStartChange: setSweepStart,
     enabled: libraryToolIndex === null,
   });
