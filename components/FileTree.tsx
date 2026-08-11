@@ -134,6 +134,19 @@ function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = [
   return root.children;
 }
 
+// ── Sticky folder headers ───────────────────────────────────────────────────
+// Ancestor folders pin to the top of the scroll view as their contents scroll
+// past, one row per depth. Only worth doing if enough of the folder's files
+// remain visible below the stack, so pinning is capped by the panel's height.
+const DEFAULT_ROW_H = 24;
+const MIN_VISIBLE_TRACKS = 3;
+
+/** Deepest folder depth allowed to pin, or -1 when the panel is too short. */
+function stickyMaxDepth(clientHeight: number, rowH: number): number {
+  if (rowH <= 0) return -1;
+  return Math.floor(clientHeight / rowH) - (MIN_VISIBLE_TRACKS + 1);
+}
+
 function getAllDirPaths(nodes: TreeNode[]): string[] {
   const paths: string[] = [];
   for (const node of nodes) {
@@ -171,6 +184,10 @@ interface TreeItemProps {
   onEnterFolder: (path: string) => void;
   expandedNonMedia: Set<string>;
   toggleNonMedia: (path: string) => void;
+  /** Deepest depth allowed to pin to the top of the view; -1 disables pinning. */
+  maxStickyDepth: number;
+  /** Measured height of one row, the pin offset per depth. */
+  rowHeight: number;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
@@ -186,20 +203,29 @@ const TreeItem: React.FC<TreeItemProps> = ({
   onEnterFolder,
   expandedNonMedia,
   toggleNonMedia,
+  maxStickyDepth,
+  rowHeight,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
     const isClosedAncestor = !isExpanded && ancestorPaths.has(node.path);
+    // Sticky only while expanded: a collapsed folder's wrapper is one row tall,
+    // so it would never pin anyway, and the tint below needs a transparent bg.
+    const isSticky = isExpanded && depth <= maxStickyDepth;
     return (
       <div>
         <div
           className={`relative group flex items-center w-full transition-colors ${
             isClosedAncestor
               ? 'bg-[#e65161]/10 hover:bg-[#e65161]/20 text-[#e65161]'
-              : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
+              : `${isSticky ? 'bg-slate-900 ' : ''}hover:bg-slate-800 text-slate-400 hover:text-slate-200`
           }`}
+          style={isSticky
+            ? { position: 'sticky', top: `${depth * rowHeight}px`, zIndex: 20 - depth }
+            : undefined}
           onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, true); }}
           data-folder-path={node.path}
+          data-folder-depth={isSticky ? depth : undefined}
         >
           <button
             onClick={() => toggleDir(node.path)}
@@ -240,6 +266,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
             onEnterFolder={onEnterFolder}
             expandedNonMedia={expandedNonMedia}
             toggleNonMedia={toggleNonMedia}
+            maxStickyDepth={maxStickyDepth}
+            rowHeight={rowHeight}
           />
         ))}
         {isExpanded && node.nonMediaFiles && node.nonMediaFiles.length > 0 && (
@@ -495,6 +523,8 @@ function FileTree({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollState, setScrollState] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
   const [activeItemFraction, setActiveItemFraction] = useState<number | null>(null);
+  const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_H);
+  const [pinnedCount, setPinnedCount] = useState(0);
   const activeItemFractionRef = useRef<number | null>(null);
   const isDraggingThumb = useRef(false);
   const thumbDragStartY = useRef(0);
@@ -517,6 +547,27 @@ function FileTree({
     } else {
       setActiveItemFraction(null);
     }
+
+    // How many folder headers are currently pinned, for the divider below them.
+    // Probing row by row from the top costs one hit-test per pinned depth
+    // (a handful) rather than a rect read per folder in the tree.
+    const firstFolder = el.querySelector('[data-folder-path]') as HTMLElement | null;
+    const rowH = firstFolder?.offsetHeight || DEFAULT_ROW_H;
+    setRowHeight(prev => (prev === rowH ? prev : rowH));
+
+    let pinned = 0;
+    if (el.scrollTop > 0) {
+      const rect = el.getBoundingClientRect();
+      const maxDepth = stickyMaxDepth(rect.height, rowH);
+      const x = rect.left + 12;
+      for (let depth = 0; depth <= maxDepth; depth++) {
+        const y = rect.top + depth * rowH + rowH / 2;
+        const hit = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest('[data-folder-depth]') as HTMLElement | null;
+        if (!hit || Number(hit.dataset.folderDepth) !== depth) break;
+        pinned = depth + 1;
+      }
+    }
+    setPinnedCount(prev => (prev === pinned ? prev : pinned));
   }, []);
 
   // When the active track changes, nudge the scroll so the item is visible:
@@ -580,6 +631,7 @@ function FileTree({
   }, [syncScrollbar]);
 
   const { scrollTop, scrollHeight, clientHeight } = scrollState;
+  const maxStickyDepth = stickyMaxDepth(clientHeight, rowHeight);
   const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
   const showScrollbar = scrollHeight > clientHeight + 2;
   const thumbHeight = Math.max(20, (clientHeight / scrollHeight) * clientHeight);
@@ -746,7 +798,14 @@ function FileTree({
       )}
     >
       {/* File list — inner flex row keeps the scrollbar track a true sibling, not an overlay */}
-      <div className="flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
+      <div className="relative flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
+        {/* Divider under the pinned folder stack — marks that files are hidden above */}
+        {pinnedCount > 0 && (
+          <div
+            className="absolute left-0 right-2 z-30 h-px bg-slate-700 pointer-events-none"
+            style={{ top: `${pinnedCount * rowHeight}px`, boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' }}
+          />
+        )}
         <div
           ref={scrollContainerRef}
           className="flex-1 min-w-0 overflow-y-scroll no-scrollbar"
@@ -881,6 +940,8 @@ function FileTree({
                   onEnterFolder={enterFolder}
                   expandedNonMedia={expandedNonMedia}
                   toggleNonMedia={toggleNonMedia}
+                  maxStickyDepth={maxStickyDepth}
+                  rowHeight={rowHeight}
                 />
               ))}
               {rootNonMedia.length > 0 && (

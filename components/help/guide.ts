@@ -147,6 +147,7 @@ export const GUIDE: Part[] = [
           { kind: 'live', control: 'file-panel-header' },
           { kind: 'h', id: 'folders', text: help.filePanel.h_folders },
           { kind: 'p', text: help.filePanel.p_folders },
+          { kind: 'p', text: help.filePanel.p_pinned },
           { kind: 'h', id: 'context', text: help.filePanel.h_context },
           { kind: 'p', text: help.filePanel.p_context },
           { kind: 'h', id: 'collapse', text: help.filePanel.h_collapse },
