@@ -468,23 +468,24 @@ export function useSpectrogramInteraction({
           if (da2) {
             // Pin the appropriate boundary to the visible edge so the annotation
             // stays fully visible: start→left edge when panning left, end→right edge when panning right.
-            // Only meaningful when the view actually moved.
-            if (scrollChanged) {
-              const viewLeft = newScroll / pps;
-              const viewRight = (newScroll + containerWidth) / pps;
-              const updated = updateAnnotation(annotationsRef.current, da2.id, a => {
-                const annotDur = a.end - a.start;
-                const newStart = overflow < 0
-                  ? Math.max(0, viewLeft)
-                  : Math.max(0, Math.min(viewRight - annotDur, dur - annotDur));
-                return { ...a, start: newStart, end: newStart + annotDur };
-              });
-              pendingAnnotationsRef.current = updated;
-              onAnnotationsChangeRef.current(updated);
-              if (da2.id === boundAnnotationIdRef.current) {
-                const moved = updated.find(a => a.id === da2.id);
-                if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
-              }
+            // Runs every tick the pointer is past the edge — not just when the view actually
+            // scrolled — because once the view is already pinned at 0/end (no room left to
+            // scroll), scrollChanged is false forever, but the annotation must still keep
+            // hugging the edge as the mouse continues moving, or it freezes with a gap.
+            const viewLeft = newScroll / pps;
+            const viewRight = (newScroll + containerWidth) / pps;
+            const updated = updateAnnotation(annotationsRef.current, da2.id, a => {
+              const annotDur = a.end - a.start;
+              const newStart = overflow < 0
+                ? Math.max(0, viewLeft)
+                : Math.max(0, Math.min(viewRight - annotDur, dur - annotDur));
+              return { ...a, start: newStart, end: newStart + annotDur };
+            });
+            pendingAnnotationsRef.current = updated;
+            onAnnotationsChangeRef.current(updated);
+            if (da2.id === boundAnnotationIdRef.current) {
+              const moved = updated.find(a => a.id === da2.id);
+              if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
             }
           } else {
             // Always drive the drag endpoint from the (clamped) pointer position while it's
