@@ -70,6 +70,8 @@ export interface LiveSnapshot {
   spectrogramSettings: SpectrogramSettings;
   /** Whether the settings popover is open in the main window. */
   spectrogramSettingsOpen: boolean;
+  /** Sample rate of the current track — its nyquist limit is the reset target for the frequency max field. */
+  sampleRate: number;
   /**
    * File panel state, or null in single-file mode — there is no file panel to
    * drive there, so the guide's copy of those buttons falls back to its demo.

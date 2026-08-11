@@ -22,6 +22,8 @@ export const tooltips = {
   get filterStrength() { return getOverride('tooltips.filterStrength') ?? "Adjust filter strength (F to toggle)"; },
   get buzzdetectPanel() { return getOverride('tooltips.buzzdetectPanel') ?? "buzzdetect activations panel"; },
   get spectrogramSettings() { return getOverride('tooltips.spectrogramSettings') ?? "Spectrogram Settings"; },
+  get resetFreqMin() { return getOverride('tooltips.resetFreqMin') ?? "Reset to 0 Hz"; },
+  get resetFreqMax() { return getOverride('tooltips.resetFreqMax') ?? "Reset to nyquist limit"; },
   get restartAudio() { return getOverride('tooltips.restartAudio') ?? "Restart Audio"; },
   get setupSync() { return getOverride('tooltips.setupSync') ?? "Instructions for setting up GitHub-synced annotations"; },
   get relinkProject() { return getOverride('tooltips.relinkProject') ?? "Find this project's folder on disk and re-link it"; },

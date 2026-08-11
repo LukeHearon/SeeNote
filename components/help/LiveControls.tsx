@@ -3,7 +3,7 @@ import { Selection } from '../../types';
 import { CurrentTimeStore, createCurrentTimeStore } from '../../utils/currentTimeStore';
 import { LiveClient, LiveSnapshot } from '../../utils/liveBridge';
 import { SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../../utils/helpers';
-import { DEMO_DURATION, DEMO_TRACK_START, demoAnnotationTools, demoSpectrogramSettings } from '../../utils/demoProject';
+import { DEMO_DURATION, DEMO_SAMPLE_RATE, DEMO_TRACK_START, demoAnnotationTools, demoSpectrogramSettings } from '../../utils/demoProject';
 import { help } from '../../copy/help';
 import { TransportButtons } from '../controls/TransportButtons';
 import { TimeReadout } from '../controls/TimeReadout';
@@ -89,6 +89,7 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     subsetActive: false,
     spectrogramSettings: demoSpectrogramSettings,
     spectrogramSettingsOpen: true,
+    sampleRate: DEMO_SAMPLE_RATE,
     filePanel: DEMO_FILE_PANEL,
     toolPalette: DEMO_PALETTE,
   });
@@ -291,6 +292,7 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <div className="w-72">
             <SpectrogramSettingsPanel
               settings={s.spectrogramSettings}
+              sampleRate={s.sampleRate}
               onChange={patch => act(
                 () => client.call('setSpectrogramSettings', patch),
                 () => demo.set({ spectrogramSettings: { ...demo.snapshot.spectrogramSettings, ...patch } }),

@@ -304,6 +304,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       subsetActive: false,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
+      sampleRate,
       // No file panel and no annotation tools in single-file mode — the guide's
       // copies of those fall back to their demos rather than to dead buttons.
       filePanel: null,
@@ -441,7 +442,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
           {showSettings && (
             <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-              <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
+              <SpectrogramSettingsPanel settings={settings} sampleRate={sampleRate} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
             </div>
           )}
 

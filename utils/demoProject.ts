@@ -31,6 +31,10 @@ export const demoSpectrogramSettings: SpectrogramSettings = {
   displayCeil: 0,
 };
 
+/** Nyquist limit of the demo track — twice maxFreq, so the reset button in
+ *  the frequency bounds control has something to demonstrate. */
+export const DEMO_SAMPLE_RATE = 24000;
+
 /** Index 0 is the Custom tool (key "0"), as in a real project. */
 export const demoAnnotationTools: AnnotationTool[] = [
   { id: 'demo-custom', key: '0', text: 'Custom', color: '#64748b' },

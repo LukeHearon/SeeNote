@@ -1703,6 +1703,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       subsetActive,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
+      sampleRate,
       filePanel: {
         fileFilter: (project?.preferences.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
         shuffleMode,
@@ -2222,7 +2223,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              {/* Settings Panel (Absolute, relative to spectrogram pane) */}
              {showSettings && (
                 <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                    <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
+                    <SpectrogramSettingsPanel settings={settings} sampleRate={sampleRate} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
                 </div>
              )}
 
