@@ -195,12 +195,45 @@ const roundToDecimals = (v: number, decimals: number): number => {
     return Math.round(v * factor) / factor;
 };
 
+// One annotation serialized at the project's output precision.
+const formatAnnotationLine = (a: Annotation, decimals: number): string =>
+    `${roundToDecimals(a.start, decimals).toFixed(decimals)}\t${roundToDecimals(a.end, decimals).toFixed(decimals)}\t${a.text}`;
+
+// True when `a.raw` — the line this annotation was loaded from — still describes
+// it exactly. Times are compared as parsed numbers against the values that same
+// parse produced, so this is only false once the user actually moves or relabels
+// the annotation.
+const rawLineStillMatches = (a: Annotation): boolean => {
+    if (a.raw === undefined) return false;
+    const parts = a.raw.split('\t');
+    if (parts.length < 3) return false;
+    return parseFloat(parts[0]) === a.start
+        && parseFloat(parts[1]) === a.end
+        && parts.slice(2).join('\t') === a.text;
+};
+
+// Serialize annotations to Audacity TXT. Untouched records are written back
+// byte-for-byte as they were read (see `Annotation.raw`) so a save only rewrites
+// what changed — without this every save reformats every line at `decimals` and
+// shows up in git sync as the whole file being re-added.
 export const generateAudacityContent = (annotations: Annotation[], decimals: number = 7): string => {
-    let content = "";
-    annotations.forEach(a => {
-        content += `${roundToDecimals(a.start, decimals).toFixed(decimals)}\t${roundToDecimals(a.end, decimals).toFixed(decimals)}\t${a.text}\n`;
+    const lines = annotations.map(a => (rawLineStillMatches(a) ? a.raw! : formatAnnotationLine(a, decimals)));
+    // Sort by start time, ties broken by line text: the same order the set-merge
+    // emits (`utils/annotationMerge.ts` / `git_sync/annotate.rs`), so a merged
+    // file and a locally-saved one agree and neither reorders the other.
+    lines.sort((x, y) => {
+        const sx = startOfLine(x);
+        const sy = startOfLine(y);
+        if (sx !== sy) return sx < sy ? -1 : 1;
+        return x < y ? -1 : x > y ? 1 : 0;
     });
-    return content;
+    return lines.length > 0 ? `${lines.join('\n')}\n` : '';
+};
+
+// Leading tab field as a start time; unparseable lines sort last.
+const startOfLine = (line: string): number => {
+    const n = parseFloat(line.split('\t')[0]);
+    return Number.isFinite(n) ? n : Infinity;
 };
 
 // Parse Audacity TXT (tab-delimited: start \t end \t text) into annotations.
@@ -227,6 +260,7 @@ export const parseAudacityContent = (
                     end,
                     text,
                     color: matchedTool?.color ?? '#ffffff',
+                    raw: line,
                 });
             }
         }

@@ -16,6 +16,13 @@ export interface Annotation {
   // `text` (white when no tool matches — i.e. a Custom/one-off label). Never
   // written to the annotation file; the tool link is the label itself.
   color?: string;
+  // The verbatim on-disk line this annotation was parsed from, when it came
+  // from a file. `generateAudacityContent` writes it back unchanged while
+  // `start`/`end`/`text` still match it, so saving a file never re-rounds
+  // records the user didn't touch (an imported `0.528075` stays `0.528075`
+  // instead of becoming `0.5281` and churning the whole file in git). Any edit
+  // makes the values disagree with the line, which drops it automatically.
+  raw?: string;
 }
 
 // Annotation with UI-only vertical-dodge layer assigned by calculateAnnotationLayers.

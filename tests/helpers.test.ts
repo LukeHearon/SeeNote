@@ -276,6 +276,28 @@ describe('generateAudacityContent', () => {
     const out = generateAudacityContent([ann(1.23456789, 2, 'x')], 4);
     expect(out).toBe('1.2346\t2.0000\tx\n');
   });
+
+  it('sorts by start time, ties broken by line text', () => {
+    const out = generateAudacityContent([ann(2, 3, 'b'), ann(0, 1, 'z'), ann(0, 1, 'a')], 1);
+    expect(out).toBe('0.0\t1.0\ta\n0.0\t1.0\tz\n2.0\t3.0\tb\n');
+  });
+
+  // Regression: re-rounding untouched records made every save rewrite every
+  // line, which showed up in git sync as the whole file being re-added.
+  it('writes an unmodified parsed line back verbatim instead of re-rounding it', () => {
+    const parsed = parseAudacityContent('0.528075\t85.9574\tins_trill\n', []);
+    expect(generateAudacityContent(parsed, 4)).toBe('0.528075\t85.9574\tins_trill\n');
+  });
+
+  it('reformats a record once its time is edited', () => {
+    const [a] = parseAudacityContent('0.528075\t85.9574\tins_trill\n', []);
+    expect(generateAudacityContent([{ ...a, start: 0.6 }], 4)).toBe('0.6000\t85.9574\tins_trill\n');
+  });
+
+  it('reformats a record once its label is edited', () => {
+    const [a] = parseAudacityContent('0.528075\t85.9574\tins_trill\n', []);
+    expect(generateAudacityContent([{ ...a, text: 'bird_crow' }], 4)).toBe('0.5281\t85.9574\tbird_crow\n');
+  });
 });
 
 describe('getExt', () => {
