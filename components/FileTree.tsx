@@ -134,17 +134,16 @@ function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = [
   return root.children;
 }
 
-// ── Sticky folder headers ───────────────────────────────────────────────────
-// Ancestor folders pin to the top of the scroll view as their contents scroll
-// past, one row per depth. Only worth doing if enough of the folder's files
-// remain visible below the stack, so pinning is capped by the panel's height.
+// ── Pinned breadcrumb ───────────────────────────────────────────────────────
+// One row pinned to the top of the scroll view naming the folders the topmost
+// visible row lives in, so you always know where you are in a deep tree. Only
+// worth the row if enough tracks still fit below it.
 const DEFAULT_ROW_H = 24;
 const MIN_VISIBLE_TRACKS = 3;
 
-/** Deepest folder depth allowed to pin, or -1 when the panel is too short. */
-function stickyMaxDepth(clientHeight: number, rowH: number): number {
-  if (rowH <= 0) return -1;
-  return Math.floor(clientHeight / rowH) - (MIN_VISIBLE_TRACKS + 1);
+/** Is the panel tall enough to give up a row to the breadcrumb? */
+function fitsBreadcrumb(clientHeight: number, rowH: number): boolean {
+  return rowH > 0 && clientHeight >= (MIN_VISIBLE_TRACKS + 1) * rowH;
 }
 
 function getAllDirPaths(nodes: TreeNode[]): string[] {
@@ -184,10 +183,8 @@ interface TreeItemProps {
   onEnterFolder: (path: string) => void;
   expandedNonMedia: Set<string>;
   toggleNonMedia: (path: string) => void;
-  /** Deepest depth allowed to pin to the top of the view; -1 disables pinning. */
-  maxStickyDepth: number;
-  /** Measured height of one row, the pin offset per depth. */
-  rowHeight: number;
+  /** Folder this node sits in — every row reports it for the pinned breadcrumb. */
+  parentPath: string;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
@@ -203,29 +200,23 @@ const TreeItem: React.FC<TreeItemProps> = ({
   onEnterFolder,
   expandedNonMedia,
   toggleNonMedia,
-  maxStickyDepth,
-  rowHeight,
+  parentPath,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
     const isClosedAncestor = !isExpanded && ancestorPaths.has(node.path);
-    // Sticky only while expanded: a collapsed folder's wrapper is one row tall,
-    // so it would never pin anyway, and the tint below needs a transparent bg.
-    const isSticky = isExpanded && depth <= maxStickyDepth;
     return (
       <div>
         <div
           className={`relative group flex items-center w-full transition-colors ${
             isClosedAncestor
               ? 'bg-[#e65161]/10 hover:bg-[#e65161]/20 text-[#e65161]'
-              : `${isSticky ? 'bg-slate-900 ' : ''}hover:bg-slate-800 text-slate-400 hover:text-slate-200`
+              : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
           }`}
-          style={isSticky
-            ? { position: 'sticky', top: `${depth * rowHeight}px`, zIndex: 20 - depth }
-            : undefined}
           onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, true); }}
           data-folder-path={node.path}
-          data-folder-depth={isSticky ? depth : undefined}
+          data-row-parent={parentPath}
+          data-row-folder=""
         >
           <button
             onClick={() => toggleDir(node.path)}
@@ -266,8 +257,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
             onEnterFolder={onEnterFolder}
             expandedNonMedia={expandedNonMedia}
             toggleNonMedia={toggleNonMedia}
-            maxStickyDepth={maxStickyDepth}
-            rowHeight={rowHeight}
+            parentPath={node.path}
           />
         ))}
         {isExpanded && node.nonMediaFiles && node.nonMediaFiles.length > 0 && (
@@ -276,6 +266,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
               className="flex items-center gap-1 w-full text-left text-slate-600 hover:text-slate-500 py-0.5"
               style={{ paddingLeft: `${(depth + 1) * 12 + 8}px`, paddingRight: '8px' }}
               onClick={() => toggleNonMedia(node.path)}
+              data-row-parent={node.path}
             >
               <span className="text-[9px] uppercase tracking-wider opacity-50 select-none">
                 {expandedNonMedia.has(node.path) ? '▾' : '▸'} {node.nonMediaFiles.length} unsupported
@@ -289,6 +280,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
                   className="flex items-center w-full py-px text-slate-600 opacity-40 select-none"
                   style={{ paddingLeft: `${(depth + 1) * 12 + 22}px`, paddingRight: '8px' }}
                   data-tooltip={fname}
+                  data-row-parent={node.path}
                 >
                   <span className="text-[10px] truncate flex-1 italic">{fname}</span>
                 </div>
@@ -312,6 +304,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
         className="flex items-center gap-2 w-full py-1 text-left text-slate-600 cursor-not-allowed"
         style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
         data-tooltip={`${node.name} (unsupported file type)`}
+        data-row-parent={parentPath}
       >
         {isAudio
           ? <Music size={12} className="flex-none opacity-40" />
@@ -337,6 +330,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
       style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
       data-tooltip={node.name}
       data-active-file={isActive ? '' : undefined}
+      data-row-parent={parentPath}
     >
       {isAudio
         ? <Music size={12} className="flex-none opacity-70" />
@@ -524,7 +518,10 @@ function FileTree({
   const [scrollState, setScrollState] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
   const [activeItemFraction, setActiveItemFraction] = useState<number | null>(null);
   const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_H);
-  const [pinnedCount, setPinnedCount] = useState(0);
+  // Folder path the pinned breadcrumb names, and how far it's been pushed up by
+  // an incoming folder header (0 = at rest, -rowHeight = fully off).
+  const [crumbPath, setCrumbPath] = useState<string | null>(null);
+  const [crumbOffset, setCrumbOffset] = useState(0);
   const activeItemFractionRef = useRef<number | null>(null);
   const isDraggingThumb = useRef(false);
   const thumbDragStartY = useRef(0);
@@ -548,26 +545,31 @@ function FileTree({
       setActiveItemFraction(null);
     }
 
-    // How many folder headers are currently pinned, for the divider below them.
-    // Probing row by row from the top costs one hit-test per pinned depth
-    // (a handful) rather than a rect read per folder in the tree.
+    // The breadcrumb names the folder containing whichever row sits at the top
+    // edge — one hit-test, rather than a rect read per folder in the tree. The
+    // breadcrumb covers that row, so when the row is itself a folder header the
+    // crumb is pushed up by it (and swaps to the new folder the moment that
+    // header clears the top), the same hand-off a sticky header would do.
     const firstFolder = el.querySelector('[data-folder-path]') as HTMLElement | null;
     const rowH = firstFolder?.offsetHeight || DEFAULT_ROW_H;
     setRowHeight(prev => (prev === rowH ? prev : rowH));
 
-    let pinned = 0;
-    if (el.scrollTop > 0) {
-      const rect = el.getBoundingClientRect();
-      const maxDepth = stickyMaxDepth(rect.height, rowH);
-      const x = rect.left + 12;
-      for (let depth = 0; depth <= maxDepth; depth++) {
-        const y = rect.top + depth * rowH + rowH / 2;
-        const hit = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest('[data-folder-depth]') as HTMLElement | null;
-        if (!hit || Number(hit.dataset.folderDepth) !== depth) break;
-        pinned = depth + 1;
+    let path: string | null = null;
+    let offset = 0;
+    const rect = el.getBoundingClientRect();
+    if (el.scrollTop > 0 && fitsBreadcrumb(rect.height, rowH)) {
+      const hit = (document.elementFromPoint(rect.left + 12, rect.top + 1) as HTMLElement | null)
+        ?.closest('[data-row-parent]') as HTMLElement | null;
+      if (hit) {
+        path = hit.dataset.rowParent ?? null;
+        if (hit.dataset.rowFolder !== undefined) {
+          const top = hit.getBoundingClientRect().top - rect.top;
+          offset = Math.max(-rowH, Math.min(0, top - rowH));
+        }
       }
     }
-    setPinnedCount(prev => (prev === pinned ? prev : pinned));
+    setCrumbPath(prev => (prev === path ? prev : path));
+    setCrumbOffset(prev => (prev === offset ? prev : offset));
   }, []);
 
   // When the active track changes, nudge the scroll so the item is visible:
@@ -631,7 +633,6 @@ function FileTree({
   }, [syncScrollbar]);
 
   const { scrollTop, scrollHeight, clientHeight } = scrollState;
-  const maxStickyDepth = stickyMaxDepth(clientHeight, rowHeight);
   const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
   const showScrollbar = scrollHeight > clientHeight + 2;
   const thumbHeight = Math.max(20, (clientHeight / scrollHeight) * clientHeight);
@@ -710,6 +711,12 @@ function FileTree({
   }, [rootDirectory, enteredPath]);
 
   const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : 'No folder');
+
+  // Folder names between the panel root and the row under the breadcrumb.
+  const crumbs = useMemo(() => {
+    if (!crumbPath || !effectiveRoot || !crumbPath.startsWith(effectiveRoot)) return [];
+    return crumbPath.substring(effectiveRoot.length + 1).split(/[\\/]/).filter(Boolean);
+  }, [crumbPath, effectiveRoot]);
 
   const menuItems = (m: ContextMenuState): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
@@ -799,12 +806,26 @@ function FileTree({
     >
       {/* File list — inner flex row keeps the scrollbar track a true sibling, not an overlay */}
       <div className="relative flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
-        {/* Divider under the pinned folder stack — marks that files are hidden above */}
-        {pinnedCount > 0 && (
+        {/* Pinned breadcrumb — the folders the row beneath it lives in. Must stay
+            pointer-transparent: the hit-test that drives it probes through here. */}
+        {crumbs.length > 0 && (
           <div
-            className="absolute left-0 right-2 z-30 h-px bg-slate-700 pointer-events-none"
-            style={{ top: `${pinnedCount * rowHeight}px`, boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' }}
-          />
+            className="absolute left-0 right-2 top-0 z-30 flex items-center gap-1 px-2 bg-slate-900 border-b border-slate-700 pointer-events-none overflow-hidden"
+            style={{ height: `${rowHeight}px`, transform: `translateY(${crumbOffset}px)`, boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' }}
+          >
+            <FolderOpen size={13} className="flex-none text-slate-500" />
+            {crumbs.map((name, i) => (
+              <React.Fragment key={i}>
+                {i > 0 && <span className="text-[10px] text-slate-600 flex-none">/</span>}
+                <span
+                  // Parents shrink first so the folder you're actually in stays legible
+                  className={`text-xs truncate ${i === crumbs.length - 1 ? 'text-slate-300 flex-none max-w-full' : 'text-slate-500 min-w-0'}`}
+                >
+                  {name}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
         )}
         <div
           ref={scrollContainerRef}
@@ -940,8 +961,7 @@ function FileTree({
                   onEnterFolder={enterFolder}
                   expandedNonMedia={expandedNonMedia}
                   toggleNonMedia={toggleNonMedia}
-                  maxStickyDepth={maxStickyDepth}
-                  rowHeight={rowHeight}
+                  parentPath={effectiveRoot ?? ''}
                 />
               ))}
               {rootNonMedia.length > 0 && (
@@ -961,6 +981,7 @@ function FileTree({
                         key={filePath}
                         className="flex items-center w-full py-px pl-[22px] pr-2 text-slate-600 opacity-40 select-none"
                         data-tooltip={fname}
+                        data-row-parent={effectiveRoot ?? ''}
                       >
                         <span className="text-[10px] truncate flex-1 italic">{fname}</span>
                       </div>
