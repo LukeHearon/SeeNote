@@ -1644,6 +1644,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     zoomSecRef,
     getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
+    revealTime: t => spectrogramRef.current?.revealTime(t),
     isPlaying,
     onSelectionChange: s => { handleSelectionChange(s); resizeBoundAnnotationTo(s); },
     onExtendSettled: commitBoundAnnotationResize,
@@ -1654,6 +1655,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // in-progress span lives here; the selection itself arrives on release.
   useShiftSweep({
     isPlaying,
+    pause: () => { if (isPlaying) togglePlay(); },
     selectionRef,
     currentTimeRef,
     onSelectionChange: handleSelectionChange,

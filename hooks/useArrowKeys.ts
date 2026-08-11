@@ -19,6 +19,8 @@ interface UseArrowKeysArgs {
   /** The spectrogram's live time→pixel scale, for the fine per-pixel ramp. */
   getPixelsPerSecond: () => number;
   seek: (time: number, scrollView?: boolean) => void;
+  /** Pan the view just enough to keep a moving edge in sight, as auto-pan does for a drag. */
+  revealTime?: (time: number) => void;
   onSelectionChange: (s: Selection | null) => void;
   /**
    * Called once a run of Shift+arrow presses has gone quiet — the moment to
@@ -58,6 +60,7 @@ export function useArrowKeys({
   zoomSecRef,
   getPixelsPerSecond,
   seek,
+  revealTime,
   onSelectionChange,
   onExtendSettled,
   isPlaying,
@@ -65,8 +68,8 @@ export function useArrowKeys({
 }: UseArrowKeysArgs): void {
   // Callbacks are re-read per frame rather than captured: a ramp outlives many
   // renders, and each step must land on the latest state.
-  const cbRef = useRef({ seek, onSelectionChange, onExtendSettled, getPixelsPerSecond });
-  cbRef.current = { seek, onSelectionChange, onExtendSettled, getPixelsPerSecond };
+  const cbRef = useRef({ seek, revealTime, onSelectionChange, onExtendSettled, getPixelsPerSecond });
+  cbRef.current = { seek, revealTime, onSelectionChange, onExtendSettled, getPixelsPerSecond };
 
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
@@ -81,6 +84,11 @@ export function useArrowKeys({
 
   const settleNow = useCallback(() => {
     if (settleTimerRef.current !== null) { clearTimeout(settleTimerRef.current); settleTimerRef.current = null; }
+    // The run is over: the next Shift+arrow starts a fresh gesture read off
+    // whatever is selected then. Keeping a spent one around is how a collapsed
+    // gesture (selection null, anchor far away) would resurface much later as a
+    // huge selection reaching back to wherever the user last was.
+    gestureRef.current = null;
     if (!dirtyRef.current) return;
     dirtyRef.current = false;
     cbRef.current.onExtendSettled?.();
@@ -94,11 +102,16 @@ export function useArrowKeys({
 
   /** Move the playhead alone, leaving any selection where it is. */
   const scrubTo = useCallback((target: number) => {
-    cbRef.current.seek(clamp(target, 0, durationRef.current));
+    const t = clamp(target, 0, durationRef.current);
+    // Placing the playhead by hand ends any extend gesture — the next one is
+    // measured from where the user has just put it.
+    gestureRef.current = null;
+    cbRef.current.seek(t);
+    cbRef.current.revealTime?.(t);
   }, [durationRef]);
 
   /** Walk the current extend gesture's edge to `target`. */
-  const extendTo = useCallback((target: number, scrollView = false) => {
+  const extendTo = useCallback((target: number) => {
     const gesture = extendGestureFor(gestureRef.current, selectionRef.current, currentTimeRef.current);
     const edge = clamp(target, 0, durationRef.current);
     const next = spanBetween(gesture.anchor, edge);
@@ -109,7 +122,8 @@ export function useArrowKeys({
     dirtyRef.current = true;
     // Only a selection drawn out of the playhead drags it along — and never
     // while the media clock owns it.
-    if (gesture.follow && !isPlayingRef.current) cbRef.current.seek(edge, scrollView);
+    if (gesture.follow && !isPlayingRef.current) cbRef.current.seek(edge);
+    cbRef.current.revealTime?.(edge);
     scheduleSettle();
   }, [selectionRef, currentTimeRef, durationRef, scheduleSettle]);
 
@@ -117,9 +131,14 @@ export function useArrowKeys({
   const movePixels = useCallback((dir: -1 | 1, extend: boolean, px: number) => {
     const pps = Math.max(cbRef.current.getPixelsPerSecond(), 1);
     const delta = dir * (px / pps);
-    if (extend) extendTo((gestureRef.current?.edge ?? currentTimeRef.current) + delta);
-    else scrubTo(currentTimeRef.current + delta);
-  }, [extendTo, scrubTo, currentTimeRef]);
+    if (!extend) { scrubTo(currentTimeRef.current + delta); return; }
+    // Step from the gesture's edge, resolving it first — on the opening press
+    // there is no gesture yet, and measuring that step from the playhead would
+    // jump the edge across to wherever the playhead happens to be.
+    const gesture = extendGestureFor(gestureRef.current, selectionRef.current, currentTimeRef.current);
+    gestureRef.current = gesture;
+    extendTo(gesture.edge + delta);
+  }, [extendTo, scrubTo, currentTimeRef, selectionRef]);
 
   const stopRamp = useCallback(() => {
     if (!rampRef.current) return;
@@ -183,8 +202,8 @@ export function useArrowKeys({
     { key: 'ArrowRight', handler: e => onArrow(e, 1, false) },
     { key: 'ArrowLeft', mods: ['shift'], handler: e => onArrow(e, -1, true) },
     { key: 'ArrowRight', mods: ['shift'], handler: e => onArrow(e, 1, true) },
-    { key: 'ArrowLeft', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(0, true); } },
-    { key: 'ArrowRight', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(durationRef.current, true); } },
+    { key: 'ArrowLeft', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(0); } },
+    { key: 'ArrowRight', mods: ['shift', 'mod'], handler: () => { stopRamp(); extendTo(durationRef.current); } },
   ], enabled);
 
   useEffect(() => {

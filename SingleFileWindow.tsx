@@ -240,6 +240,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     zoomSecRef,
     getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
+    revealTime: t => spectrogramRef.current?.revealTime(t),
     isPlaying,
     onSelectionChange: handleSelectionChange,
   });
@@ -248,6 +249,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // in-progress span lives here; the selection itself arrives on release.
   useShiftSweep({
     isPlaying,
+    pause: () => { if (isPlaying) togglePlay(); },
     selectionRef,
     currentTimeRef,
     onSelectionChange: handleSelectionChange,

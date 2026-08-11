@@ -12,6 +12,8 @@ const SWEEP_MIN_SEC = 0.05;
 
 interface UseShiftSweepArgs {
   isPlaying: boolean;
+  /** Stop playback. A finished selection is something to look at, not listen past. */
+  pause: () => void;
   selectionRef: React.MutableRefObject<Selection | null>;
   currentTimeRef: React.MutableRefObject<number>;
   onSelectionChange: (s: Selection | null) => void;
@@ -33,18 +35,24 @@ interface UseShiftSweepArgs {
  */
 export function useShiftSweep({
   isPlaying,
+  pause,
   selectionRef,
   currentTimeRef,
   onSelectionChange,
   onSweepStartChange,
   enabled = true,
 }: UseShiftSweepArgs): void {
-  const cbRef = useRef({ onSelectionChange, onSweepStartChange });
-  cbRef.current = { onSelectionChange, onSweepStartChange };
+  const cbRef = useRef({ onSelectionChange, onSweepStartChange, pause });
+  cbRef.current = { onSelectionChange, onSweepStartChange, pause };
 
   const sweepRef = useRef<{ start: number; pressedAt: number } | null>(null);
+  // The span only becomes visible once the press has outlived the grace period.
+  // Showing it from the keydown made every Shift tap flash the selection veil
+  // over the spectrogram.
+  const showTimerRef = useRef<number | null>(null);
 
   const cancelSweep = useCallback(() => {
+    if (showTimerRef.current !== null) { clearTimeout(showTimerRef.current); showTimerRef.current = null; }
     if (!sweepRef.current) return;
     sweepRef.current = null;
     cbRef.current.onSweepStartChange(null);
@@ -54,6 +62,9 @@ export function useShiftSweep({
     if (!enabled) { cancelSweep(); return; }
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // Other modifiers are readings of the same gesture, not competitors:
+      // Alt in particular is how the user says "keep playing" on release.
+      if (e.key === 'Alt' || e.key === 'Meta' || e.key === 'Control') return;
       if (e.key !== 'Shift') {
         // Shift turned out to be a modifier for something else (Shift+S,
         // Shift+arrow, a tool key) — that press owns the gesture, not this.
@@ -62,8 +73,12 @@ export function useShiftSweep({
       }
       if (e.repeat) return;
       if (!isPlaying || selectionRef.current || sweepRef.current) return;
-      sweepRef.current = { start: currentTimeRef.current, pressedAt: performance.now() };
-      cbRef.current.onSweepStartChange(sweepRef.current.start);
+      const start = currentTimeRef.current;
+      sweepRef.current = { start, pressedAt: performance.now() };
+      showTimerRef.current = window.setTimeout(() => {
+        showTimerRef.current = null;
+        if (sweepRef.current) cbRef.current.onSweepStartChange(sweepRef.current.start);
+      }, SWEEP_GRACE_MS);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -79,6 +94,10 @@ export function useShiftSweep({
         start: Math.min(sweep.start, end),
         end: Math.max(sweep.start, end),
       });
+      // The sweep is finished with; stop so the selection can be listened to on
+      // its own terms. Alt/Option holds playback open, the same "keep listening"
+      // escape hatch Alt-drag annotation has.
+      if (!e.altKey) cbRef.current.pause();
     };
 
     window.addEventListener('keydown', onKeyDown);

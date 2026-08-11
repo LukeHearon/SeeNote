@@ -105,6 +105,8 @@ export interface SpectrogramHandle {
   goToTrackStart: () => void;
   goToTrackEnd: () => void;
   scrollToTime: (time: number) => void;
+  /** Pan just enough to bring `time` inside the visible window, or not at all. */
+  revealTime: (time: number) => void;
   recenterPlayhead: () => void;
   zoomToRange: (startTime: number, endTime: number) => void;
   applyWheel: (deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => void;
@@ -112,6 +114,10 @@ export interface SpectrogramHandle {
   zoomOut: () => void;
   focusAnnotationInput: (id: string) => void;
 }
+
+// How close a keyboard-walked edge may get to the frame before the view pans
+// to keep it in sight.
+const REVEAL_MARGIN_PX = 48;
 
 // The scroll clamp (40%-of-viewport overrun past the end) lives in
 // utils/viewportTransform as `maxScroll`, imported here as `computeMaxScroll`
@@ -498,19 +504,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
-    // 1a. Centre mark of a span still being drawn: a thin dotted line at its
-    // midpoint, so a selection in progress reads as in progress — the sweep in
-    // particular has no handles and no cursor to show for itself.
+    // 1a. A span still being drawn gets a thin dotted line down its middle,
+    // spanning what's been covered so far — a selection in progress reading as
+    // in progress. The sweep in particular has no handles and no cursor to show
+    // for itself.
     if (creatingSpan) {
-      const midX = timeToX((creatingSpan.start + creatingSpan.end) / 2, scrollLeft_live, pixelsPerSecond_live);
-      if (midX >= 0 && midX <= width) {
+      const x0 = Math.max(0, timeToX(creatingSpan.start, scrollLeft_live, pixelsPerSecond_live));
+      const x1 = Math.min(width, timeToX(creatingSpan.end, scrollLeft_live, pixelsPerSecond_live));
+      if (x1 > x0) {
         ctx.save();
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 4]);
         ctx.beginPath();
-        ctx.moveTo(midX, 0);
-        ctx.lineTo(midX, height);
+        ctx.moveTo(x0, height / 2);
+        ctx.lineTo(x1, height / 2);
         ctx.stroke();
         ctx.restore();
       }
@@ -965,6 +973,25 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setScroll(centerScrollLeft(time, pixelsPerSecond, containerWidth, duration), 'scrollToTime');
   }, [pixelsPerSecond, duration, setScroll]);
 
+  // Minimal pan: bring `time` inside the window, keeping a margin so the edge
+  // being walked never sits flush against the frame. Does nothing while it's
+  // already comfortably in view — this follows a keyboard-driven edge the way
+  // auto-pan follows a dragged one, and a centering scroll on every step would
+  // make the whole spectrogram slide under a still cursor.
+  const revealTime = useCallback((time: number) => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.clientWidth;
+    const pps = pixelsPerSecondRef.current || pixelsPerSecond;
+    const margin = Math.min(REVEAL_MARGIN_PX, containerWidth / 4);
+    const x = time * pps - scrollLeftRef.current;
+    let target = scrollLeftRef.current;
+    if (x < margin) target = time * pps - margin;
+    else if (x > containerWidth - margin) target = time * pps - (containerWidth - margin);
+    else return;
+    const clamped = clamp(target, 0, computeMaxScroll(duration, pps, containerWidth));
+    if (Math.abs(clamped - scrollLeftRef.current) > 0.01) setScroll(clamped, 'revealTime');
+  }, [pixelsPerSecond, duration, setScroll]);
+
   // Recenter the playhead in the visible window without changing zoom.
   const recenterPlayhead = useCallback(() => {
     scrollToTime(currentTimeStore.get());
@@ -1057,6 +1084,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     goToTrackStart,
     goToTrackEnd,
     scrollToTime,
+    revealTime,
     recenterPlayhead,
     zoomToRange,
     applyWheel,
@@ -1065,7 +1093,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     focusAnnotationInput: (id: string) => {
       inputRefs.current[id]?.focus();
     },
-  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
+  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
