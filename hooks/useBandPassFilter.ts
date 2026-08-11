@@ -165,10 +165,15 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
     engageBandPassFilter(undefined, strength);
   }, [engageBandPassFilter]);
 
-  // Called by Spectrogram when a band-drag completes (new band drawn).
+  // Called by Spectrogram when a band-drag completes (new band drawn). The
+  // draw itself was the "use" of the readied tool, so un-ready it here —
+  // otherwise it stays armed and the next bare click on the spectrogram
+  // starts drawing another band instead of behaving normally.
   const handleBandPassFilterDrawn = useCallback((f: BandPassFilter) => {
     engageBandPassFilter(f);
-  }, [engageBandPassFilter]);
+    setFilterToolActive(false);
+    activationStack.remove('filterTool');
+  }, [engageBandPassFilter, activationStack]);
 
   return {
     filterToolActive,
