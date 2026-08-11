@@ -105,13 +105,18 @@ export function FilterStrengthSlider({
         }}
         className={`appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full ${unavailable ? 'cursor-not-allowed opacity-30 [&::-webkit-slider-thumb]:bg-slate-600' : enabled ? 'cursor-pointer [&::-webkit-slider-thumb]:bg-[#e65161]' : 'cursor-pointer [&::-webkit-slider-thumb]:bg-slate-500'}`}
         style={{
-          writingMode: 'vertical-lr',
-          direction: 'rtl',
-          width: 4,
-          height: 60,
+          // Rotated rather than `writing-mode: vertical-*`: vertical range
+          // inputs only work on newer engines, and where they don't the input
+          // falls back to horizontal inside a 4px-wide box — thumb offset from
+          // the track, and every click snapping to 0 (which disables the
+          // filter). Rotation behaves the same everywhere.
+          transform: 'rotate(-90deg)',
+          width: 60,
+          height: 4,
+          flexShrink: 0,
           background: unavailable ? '#334155'
             : enabled
-            ? `linear-gradient(to top, #e65161 0%, #e65161 ${pct}%, #64748b ${pct}%, #64748b 100%)`
+            ? `linear-gradient(to right, #e65161 0%, #e65161 ${pct}%, #64748b ${pct}%, #64748b 100%)`
             : '#475569',
           borderRadius: 2,
         }}
