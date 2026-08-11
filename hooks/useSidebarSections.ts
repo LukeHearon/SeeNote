@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { startDragSession } from './useCollapsibleSidebar';
+import { sectionFlexStyle } from '../utils/sidebarLayout';
 
 /** Persisted per-section layout: relative share of the stack, and collapse state. */
 export interface SidebarSectionState {
@@ -19,11 +20,10 @@ export type SidebarSectionsState = Record<string, SidebarSectionState>;
 const MIN_SECTION_PX = 72;
 
 /**
- * How far a divider has to be dragged TOWARD a collapsed neighbour's side
- * before that neighbour re-opens. The gesture is the mirror of the one that
- * collapsed it (drag past the minimum), so a section can be closed and reopened
- * without going near its chevron — but it needs a deliberate pull rather than
- * the pixel of travel a click sometimes carries.
+ * How far a divider has to be dragged toward a collapsed neighbour before that
+ * neighbour re-opens. Re-opening is only a *fallback* for when the drag has
+ * nothing else to do (see the drag handler), so it needs a deliberate pull
+ * rather than the pixel of travel a click sometimes carries.
  */
 const EXPAND_SECTION_PX = 24;
 
@@ -33,7 +33,7 @@ export interface SidebarSectionsApi {
   isCollapsed: (id: string) => boolean;
   toggleCollapsed: (id: string) => void;
   /** Flex style for a section: its weighted share, or nothing when collapsed. */
-  styleFor: (id: string) => React.CSSProperties;
+  styleFor: (id: string, ids: string[]) => React.CSSProperties;
   /**
    * mousedown handler for the divider drawn between two sections. `ids` is the
    * stack's full order (only the ids actually rendered), so the drag can find
@@ -72,15 +72,10 @@ export function useSidebarSections(initial: SidebarSectionsState): SidebarSectio
     });
   }, []);
 
-  const styleFor = useCallback((id: string): React.CSSProperties => {
-    const s = stateOf(id);
-    // Collapsed: the section is its header and nothing else, so let it size to
-    // its content. Expanded: grow by weight from a zero basis, which makes the
-    // weights a pure ratio regardless of what each body contains.
-    return s.collapsed
-      ? { flex: 'none' }
-      : { flexGrow: s.weight, flexShrink: 1, flexBasis: 0, minHeight: 0 };
-  }, [stateOf]);
+  const styleFor = useCallback(
+    (id: string, ids: string[]): React.CSSProperties => sectionFlexStyle(states, ids, id),
+    [states],
+  );
 
   const handleDividerDrag = useCallback((ids: string[], dividerIndex: number, e: React.MouseEvent) => {
     e.preventDefault();
@@ -126,6 +121,10 @@ export function useSidebarSections(initial: SidebarSectionsState): SidebarSectio
     // Set when a collapse/expand has been dispatched but the DOM hasn't caught
     // up yet: the next mousemove re-measures before doing anything else.
     let needsRebase = true;
+    // Once a drag has closed something it stays a closing drag: without this,
+    // carrying on in the same direction after a collapse would satisfy the
+    // re-open rule below and pop a neighbour open at the end of the gesture.
+    let collapsedThisDrag = false;
 
     const rebase = (clientY: number) => {
       needsRebase = false;
@@ -140,6 +139,7 @@ export function useSidebarSections(initial: SidebarSectionsState): SidebarSectio
     };
 
     const setCollapsed = (id: string, collapsed: boolean) => {
+      if (collapsed) collapsedThisDrag = true;
       live[id] = { ...live[id], collapsed };
       setStates(prev => ({ ...prev, [id]: { ...(prev[id] ?? defaultState()), collapsed } }));
       needsRebase = true;
@@ -149,15 +149,18 @@ export function useSidebarSections(initial: SidebarSectionsState): SidebarSectio
       if (needsRebase) { rebase(moveEvent.clientY); return; }
       const delta = moveEvent.clientY - startY;
 
-      // Pulling toward a collapsed neighbour re-opens it — up for the section
-      // below the divider, down for the one above — so the same handle that
-      // closed a section brings it back. Checked before the resize arithmetic,
-      // which has nothing to trade with while that side is only a header.
-      if (delta <= -EXPAND_SECTION_PX && live[downNeighbour].collapsed) {
+      // Pulling toward a collapsed neighbour re-opens it, but only when the
+      // drag has no other way to move the divider that way: with an expanded
+      // section still available on the growing side, resizing (and, past the
+      // minimum, collapsing) wins. That's what makes "throw the divider down"
+      // reliably close things instead of re-opening whatever sits above it.
+      const canExpandDown = !collapsedThisDrag && !belowId && live[downNeighbour].collapsed;
+      const canExpandUp = !collapsedThisDrag && !aboveId && live[upNeighbour].collapsed;
+      if (delta <= -EXPAND_SECTION_PX && canExpandDown) {
         setCollapsed(downNeighbour, false);
         return;
       }
-      if (delta >= EXPAND_SECTION_PX && live[upNeighbour].collapsed) {
+      if (delta >= EXPAND_SECTION_PX && canExpandUp) {
         setCollapsed(upNeighbour, false);
         return;
       }

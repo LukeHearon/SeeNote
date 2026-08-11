@@ -20,8 +20,12 @@ export default function SidebarStack({
   items, sections,
 }: { items: SidebarStackItem[]; sections: SidebarSectionsApi }) {
   const ids = items.map(i => i.id);
+  // Collapsed sections are headers with no grow, so an expanded section always
+  // pushes them to the bottom by itself. With every section collapsed there's
+  // nothing left to do the pushing, so the stack does it.
+  const allCollapsed = ids.every(id => sections.isCollapsed(id));
   return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+    <div className={`flex-1 min-h-0 flex flex-col overflow-hidden${allCollapsed ? ' justify-end' : ''}`}>
       {items.map((item, i) => (
         <React.Fragment key={item.id}>
           {i > 0 && (
@@ -34,7 +38,7 @@ export default function SidebarStack({
           )}
           <div
             data-sidebar-section={item.id}
-            style={sections.styleFor(item.id)}
+            style={sections.styleFor(item.id, ids)}
             className="overflow-hidden flex flex-col"
           >
             {item.node}
