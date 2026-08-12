@@ -3,7 +3,7 @@ import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
 import { X, Pencil } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
-import { updateAnnotation } from '../../utils/helpers';
+import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 
@@ -86,20 +86,11 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 
         if (left + width < 0 || left > containerWidth) return null;
 
-        const top = 22 + (annotation.layerIndex * 35);
+        const top = annotationBoxTop(annotation.layerIndex);
 
         const baseColor = annotation.color || "#ffffff";
         const isCustomAnnotation = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
-
-        const styleVars = isCustomAnnotation ? {
-            borderColor: isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.8)',
-            bgColor: isSelected ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.15)',
-            textColor: '#ffffff'
-        } : {
-            borderColor: baseColor,
-            bgColor: isSelected ? `${baseColor}99` : `${baseColor}66`,
-            textColor: baseColor
-        };
+        const styleVars = annotationColorStyle(baseColor, isSelected);
 
         const isHovered = hoveredAnnotationId === annotation.id;
 
@@ -152,7 +143,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    left: `${left}px`,
                    width: `${Math.max(2, width)}px`,
                    top: `${top}px`,
-                   height: '30px',
+                   height: `${ANNOTATION_BOX_HEIGHT}px`,
                    border: `${isBound ? '2px' : '1px'} solid ${isBound ? 'white' : styleVars.borderColor}`,
                    backgroundColor: styleVars.bgColor,
                    boxShadow: isBound ? '0 0 0 2px rgba(255,255,255,0.4)' : '0 2px 4px rgba(0,0,0,0.5)',

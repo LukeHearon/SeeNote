@@ -93,6 +93,39 @@ export const generateId = (): string => {
   return Math.random().toString(36).substring(2, 9);
 };
 
+export interface AnnotationColorStyle {
+  borderColor: string;
+  bgColor: string;
+  textColor: string;
+}
+
+// Border/background/text colors for an annotation box, derived from its color
+// (white = Custom/unmatched label). Shared by the real annotation box
+// (AnnotationOverlay) and the cosmetic previews shown while a new one is being
+// drawn out but not yet committed (Spectrogram's creating-annotation and
+// creating-selection overlays).
+export const annotationColorStyle = (color: string | undefined, selected: boolean): AnnotationColorStyle => {
+  const baseColor = color || "#ffffff";
+  const isCustom = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
+  if (isCustom) {
+    return {
+      borderColor: selected ? '#ffffff' : 'rgba(255, 255, 255, 0.8)',
+      bgColor: selected ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.15)',
+      textColor: '#ffffff',
+    };
+  }
+  return {
+    borderColor: baseColor,
+    bgColor: selected ? `${baseColor}99` : `${baseColor}66`,
+    textColor: baseColor,
+  };
+};
+
+// Vertical geometry of an annotation box, shared by the real box
+// (AnnotationOverlay) and the not-yet-committed preview (Spectrogram).
+export const ANNOTATION_BOX_HEIGHT = 30;
+export const annotationBoxTop = (layerIndex: number): number => 22 + layerIndex * 35;
+
 export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end: number): Annotation => {
   return {
     id: generateId(),

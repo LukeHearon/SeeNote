@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { bandExtentY, freqToY, freqAxisTicks } from '../utils/audioProcessing';
-import { formatTime, calculateAnnotationLayers, clamp } from '../utils/helpers';
+import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
@@ -13,7 +13,6 @@ import {
   identityTimeline,
   minSegmentDuration,
   segmentJoins,
-  sourceIntervalOf,
 } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
@@ -486,20 +485,28 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const timePerPixel = 1 / pixelsPerSecond_live;
     const endTime = startTime + (width * timePerPixel);
 
-    // 1. Selection region darkening — draw FIRST so other elements render on top
-    // Only show creating-selection darkening once the mouse has moved (not on initial mousedown)
+    // 1. Selection region darkening / annotation-being-made preview — draw
+    // FIRST so other elements render on top. Only show creating-selection
+    // darkening once the mouse has moved (not on initial mousedown).
+    //
+    // Selection creation and annotation-label creation are the same span —
+    // by mouse drag, by the Shift-held sweep whose end is wherever the
+    // playhead has got to this frame, or a settled selection not yet
+    // committed — shaded and spined identically below. They differ only in
+    // whether a label draws, gated separately by `previewingAnnotationLabel`.
     const isDraggingSelection = creatingSelection && Math.abs(creatingSelection.current - creatingSelection.start) > 0.001;
-    // A span still being drawn — by drag, or by the Shift-held sweep whose end
-    // is wherever the playhead has got to this frame.
+    const draggingAnnotationSpan = creatingAnnotation
+      ? spanBetween(creatingAnnotation.start, creatingAnnotation.current)
+      : null;
     const sweepSpan = sweepStart !== null ? spanBetween(sweepStart, currentTime) : null;
-    // A sweep with a tool readied is drawing an annotation, not a selection —
-    // the same fork commitSpan takes when the key comes up. It previews as the
-    // annotation box below rather than as the selection veil.
-    const sweptAnnotation = activeAnnotationTool !== null ? sweepSpan : null;
     const creatingSpan = isDraggingSelection
       ? { start: Math.min(creatingSelection.start, creatingSelection.current), end: Math.max(creatingSelection.start, creatingSelection.current) }
-      : sweptAnnotation ? null : sweepSpan;
+      : draggingAnnotationSpan ?? sweepSpan;
     const activeSelection = creatingSpan ?? selection;
+    // A tool is armed and this span (drawn, swept, or a settled selection)
+    // hasn't already become the real annotation AnnotationOverlay is now
+    // rendering — draw its label on top of the shading below.
+    const previewingAnnotationLabel = activeSelection !== null && activeAnnotationTool !== null && boundAnnotationId === null;
 
     if (activeSelection) {
       const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
@@ -541,28 +548,58 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
     }
 
-    // 1a-ii. The annotation a sweep is drawing out. Mirrors the mouse-drag
-    // preview (renderCreatingOverlay) — same pale box and edges — with the
-    // tool's name and colour, since a keyboard gesture has no cursor to say
-    // which tool is about to be dropped.
-    if (sweptAnnotation) {
-      const x0 = Math.max(0, timeToX(sweptAnnotation.start, scrollLeft_live, pixelsPerSecond_live));
-      const x1 = Math.min(width, timeToX(sweptAnnotation.end, scrollLeft_live, pixelsPerSecond_live));
+    // 1a-ii. Preview of the annotation box this span will become — mouse-drag,
+    // keyboard sweep, and a settled Shift+Arrow selection all reach here the
+    // same way (see `previewingAnnotationLabel` above). Drawn on top of the
+    // shading/spine already drawn for it above, in the same pass so it never
+    // lags a frame behind during a live sweep. Same geometry/colors as the
+    // real committed box (AnnotationOverlay) — border, background, rounded
+    // corners, height, and vertical stacking layer — just not interactive.
+    if (previewingAnnotationLabel && activeAnnotationTool) {
+      const x0 = Math.max(0, timeToX(activeSelection!.start, scrollLeft_live, pixelsPerSecond_live));
+      const x1 = Math.min(width, timeToX(activeSelection!.end, scrollLeft_live, pixelsPerSecond_live));
       if (x1 > x0) {
+        const withPreview = calculateAnnotationLayers([
+          ...annotations,
+          { id: '__preview__', start: activeSelection!.start, end: activeSelection!.end, text: '' },
+        ]);
+        const layerIndex = withPreview.find(a => a.id === '__preview__')?.layerIndex ?? 0;
+        const boxTop = annotationBoxTop(layerIndex);
+        const style = annotationColorStyle(activeAnnotationTool.color, false);
+        const r = 4;
+
         ctx.save();
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-        ctx.fillRect(x0, 0, x1 - x0, height);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x0, 0); ctx.lineTo(x0, height);
-        ctx.moveTo(x1, 0); ctx.lineTo(x1, height);
+        ctx.moveTo(x0 + r, boxTop);
+        ctx.lineTo(x1 - r, boxTop);
+        ctx.arcTo(x1, boxTop, x1, boxTop + r, r);
+        ctx.lineTo(x1, boxTop + ANNOTATION_BOX_HEIGHT - r);
+        ctx.arcTo(x1, boxTop + ANNOTATION_BOX_HEIGHT, x1 - r, boxTop + ANNOTATION_BOX_HEIGHT, r);
+        ctx.lineTo(x0 + r, boxTop + ANNOTATION_BOX_HEIGHT);
+        ctx.arcTo(x0, boxTop + ANNOTATION_BOX_HEIGHT, x0, boxTop + ANNOTATION_BOX_HEIGHT - r, r);
+        ctx.lineTo(x0, boxTop + r);
+        ctx.arcTo(x0, boxTop, x0 + r, boxTop, r);
+        ctx.closePath();
+        ctx.fillStyle = style.bgColor;
+        ctx.fill();
+        ctx.strokeStyle = style.borderColor;
+        ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillStyle = activeAnnotationTool.color;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText(activeAnnotationTool.text, x0 + 4, 6);
+
+        if (x1 - x0 > 30) {
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'black';
+          ctx.shadowBlur = 2;
+          ctx.shadowOffsetY = 1;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(
+            activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text,
+            x0 + 8,
+            boxTop + ANNOTATION_BOX_HEIGHT / 2,
+          );
+        }
         ctx.restore();
       }
     }
@@ -674,7 +711,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -1140,27 +1177,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
-  // Overlay for annotation being created (annotation tool mode)
-  const renderCreatingOverlay = () => {
-    if (!creatingAnnotation || activeAnnotationTool === null) return null;
-    const s = Math.min(creatingAnnotation.start, creatingAnnotation.current);
-    const eTime = Math.max(creatingAnnotation.start, creatingAnnotation.current);
-    const left = timeToX(s, scrollLeft, pixelsPerSecond);
-    const width = ((eTime - s) * pixelsPerSecond);
-    // Labelled in source time, like every other time the user reads.
-    const src = sourceIntervalOf(activeTimeline, s, eTime);
-
-    return (
-        <div
-            className="absolute top-0 bottom-0 bg-white/20 border-l border-r border-white/50 pointer-events-none"
-            style={{ left: `${left}px`, width: `${width}px` }}
-        >
-            <span className="absolute -top-6 left-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.start)}</span>
-            <span className="absolute -top-6 right-0 text-xs bg-black/80 px-1 rounded text-white">{formatTime(src.end)}</span>
-        </div>
-    );
-  };
-
   return (
     <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
       {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
@@ -1262,9 +1278,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            setPencilClickedId={setPencilClickedId}
            setResizingAnnotation={setResizingAnnotation}
          />
-
-         {/* Creating annotation overlay (annotation tool mode) */}
-         {renderCreatingOverlay()}
 
          {/* Selection region handles */}
          <SelectionHandles
