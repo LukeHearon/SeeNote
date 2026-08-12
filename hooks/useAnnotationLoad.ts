@@ -3,6 +3,7 @@ import { Annotation, AnnotationTool, Project } from '../types';
 import { readTextFile } from '../utils/tauriCommands';
 import { parseAudacityContent, generateAudacityContent } from '../utils/helpers';
 import { persistAnnotations } from '../utils/annotationPersist';
+import { getLocalSyncStatus } from '../utils/tauriCommands';
 import { setMergeContent } from '../utils/annotationMerge';
 import type { PreSyncSnapshot } from './useSyncManagement';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
@@ -109,7 +110,20 @@ export function useAnnotationLoad({
       try {
         const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
         const result = await persistAnnotations(savedAnnotPath, annotations, decimals);
-        if (projectRef.current?.settings.gitSync) setHasLocalChanges(true);
+        const cfg = projectRef.current;
+        if (cfg?.settings.gitSync) {
+          // Numerical (canonical record-set) comparison against HEAD, not a
+          // dirty-on-any-write flag — an edit reverted back to the same
+          // records (including precision-only rewrites) must not light the
+          // sync indicator. Mirrors the check `stage_and_commit` itself uses,
+          // so the dot and the actual commit-or-skip decision never disagree.
+          try {
+            const status = await getLocalSyncStatus(cfg.projectDir, cfg.annotationDirectoryAbs);
+            if (savedTrackPath === trackPathRef.current) setHasLocalChanges(status.hasLocalChanges);
+          } catch {
+            if (savedTrackPath === trackPathRef.current) setHasLocalChanges(true);
+          }
+        }
         setAnnotatedFiles(prev => {
           const next = new Set(prev);
           if (result === 'removed') next.delete(savedTrackPath);
