@@ -109,6 +109,13 @@ async function migrateSettingsIfNeeded(
       for (const field of ['authorName', 'tokenStorage', 'tokenPlaintext']) {
         if (gs[field] !== undefined) gitSyncUser[field] = gs[field];
       }
+      // Pre-Keychain projects stored the PAT as a flat plaintext 'token' field.
+      // Carry it forward as plaintext rather than dropping it and falling
+      // through to an empty Keychain lookup.
+      if (gitSyncUser['tokenStorage'] === undefined && typeof gs['token'] === 'string' && gs['token']) {
+        gitSyncUser['tokenStorage'] = 'plaintext';
+        gitSyncUser['tokenPlaintext'] = gs['token'];
+      }
       if (Object.keys(gitSyncUser).length > 0) newPrefs['gitSyncUser'] = gitSyncUser;
     } else {
       newSettings[key] = value;
