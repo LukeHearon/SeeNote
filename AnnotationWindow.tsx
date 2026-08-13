@@ -1118,7 +1118,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   } = useSyncManagement({
     project,
     projectRef,
-    annotations,
+    annotationsRef: sortedAnnotationsRef,
     getAnnotationPath,
     autoSaveTimeoutRef,
     trackPathRef,

@@ -17,8 +17,15 @@ export interface PreSyncSnapshot {
 interface UseSyncManagementArgs {
   project: Project;
   projectRef: React.MutableRefObject<Project>;
-  // Live annotation list — flushed to disk before the sync runs.
-  annotations: Annotation[];
+  // Live annotation list — flushed to disk before the sync runs, and captured as
+  // the merge ancestor. This MUST be a ref, not a value: the project-open
+  // auto-pull below runs from an effect that captures its callbacks once, so a
+  // closed-over array would be the mount-time `[]` long after a track loaded —
+  // which stored an EMPTY merge ancestor and made the post-pull reload union
+  // stale local records back in (resurrecting records teammates had edited).
+  // It is the same ref `useAnnotationLoad` reads as "ours", so ancestor and
+  // ours always come from one source.
+  annotationsRef: React.MutableRefObject<Annotation[]>;
   // Resolves a track's on-disk annotation path; used to flush the pending save.
   getAnnotationPath: (trackFilePath: string) => string | null;
   // Pending autosave timer; cleared so the in-flight debounce can't fire after sync.
@@ -43,7 +50,7 @@ interface UseSyncManagementArgs {
 export function useSyncManagement({
   project,
   projectRef,
-  annotations,
+  annotationsRef,
   getAnnotationPath,
   autoSaveTimeoutRef,
   trackPathRef,
@@ -77,21 +84,21 @@ export function useSyncManagement({
     autoSaveTimeoutRef.current = null;
     const trackPath = trackPathRef.current;
     // Persist only state that reflects a completed load of the current track;
-    // otherwise `annotations` may be the empty placeholder from a track switch.
+    // otherwise the list may be the empty placeholder from a track switch.
     if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) return;
     const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
-    await persistAnnotations(annotPath, annotations, project.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
+    await persistAnnotations(annotPath, annotationsRef.current, projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotations, getAnnotationPath, project.settings.outputRoundingDecimals]);
+  }, [getAnnotationPath]);
 
   // Capture the just-flushed state as the merge ancestor: the exact content the
   // post-pull reload will diff current in-memory + disk against, so an edit made
   // while the sync ran is folded back in rather than clobbered by the checkout.
   const snapshotMergeAncestor = useCallback(() => {
     const trackPath = trackPathRef.current;
-    // Only capture a hydrated track: if the sync starts mid-load, `annotations`
-    // is the transient [] — an empty ancestor would make the reload-merge union
+    // Only capture a hydrated track: if the sync starts mid-load, the list is
+    // the transient [] — an empty ancestor would make the reload-merge union
     // everything and resurrect remote-deleted lines. With no snapshot the
     // reload blind-replaces from disk, which is correct (no user edits exist).
     if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) {
@@ -101,10 +108,10 @@ export function useSyncManagement({
     const decimals = projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
     preSyncSnapshotRef.current = {
       trackPath,
-      content: generateAudacityContent(annotations, decimals),
+      content: generateAudacityContent(annotationsRef.current, decimals),
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotations]);
+  }, []);
 
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
   // autosave first so local edits aren't lost, runs the embedded-git pipeline,
