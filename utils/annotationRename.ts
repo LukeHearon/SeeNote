@@ -1,58 +1,11 @@
 import { readTextFile, writeTextFile } from './tauriCommands';
-import { matchingLinesInContent, renameLabelInContent, exactLabelMatcher, LabelMatcher, LabelLineMatch } from './helpers';
-
-export interface IdentMatchCount {
-  ident: string;
-  count: number;
-}
+import { matchingLinesInContent, renameLabelInContent, LabelMatcher, LabelLineMatch } from './helpers';
 
 export type LabelMatch = LabelLineMatch;
 
 export interface IdentMatches {
   ident: string;
   matches: LabelMatch[];
-}
-
-// Read one track's on-disk annotation file and return its matches (or null if
-// the track has no annotation file / no matches). Shared by the one-shot scan
-// below and the streaming find-label search.
-export async function searchTrackForMatches(
-  trackFilePath: string,
-  getAnnotationPath: (trackFilePath: string) => string | null,
-  getIdent: (trackFilePath: string) => string | null,
-  matcher: LabelMatcher,
-): Promise<IdentMatches | null> {
-  const annotPath = getAnnotationPath(trackFilePath);
-  if (!annotPath) return null;
-  try {
-    const content = await readTextFile(annotPath);
-    if (!content) return null;
-    const matches = matchingLinesInContent(content, matcher);
-    if (matches.length === 0) return null;
-    const ident = getIdent(trackFilePath);
-    return ident ? { ident, matches } : null;
-  } catch {
-    // No annotation file for this track — nothing to find.
-    return null;
-  }
-}
-
-// Scan every track's on-disk annotation file for lines whose label satisfies
-// `matcher`, returning each match's start/end per ident (idents with no
-// matches are omitted), sorted alphabetically by ident. Used to preview a
-// mass rename before it's applied.
-export async function findLabelOccurrences(
-  tracks: string[],
-  getAnnotationPath: (trackFilePath: string) => string | null,
-  getIdent: (trackFilePath: string) => string | null,
-  matcher: LabelMatcher,
-): Promise<IdentMatches[]> {
-  const settled = await Promise.all(
-    tracks.map(t => searchTrackForMatches(t, getAnnotationPath, getIdent, matcher)),
-  );
-  const results = settled.filter((r): r is IdentMatches => r !== null);
-  results.sort((a, b) => a.ident.localeCompare(b.ident));
-  return results;
 }
 
 // Every annotation of one track, as read from its file — the unit the project
@@ -67,9 +20,22 @@ export interface TrackLabels {
 // project-wide find filters locally instead of re-reading the project off disk
 // on every keystroke or option toggle. Annotation files are tiny (a large
 // project is a few hundred KB in total), so the whole set is cheap to hold.
-// Keyed by the track list it was built from, and invalidated explicitly
-// (see invalidateProjectLabelIndex) whenever a file may have changed on disk.
-let labelIndex: { key: string; entries: TrackLabels[] } | null = null;
+//
+// Disk stays authoritative. This is a read cache and nothing else: it answers
+// "which idents are worth looking at", and every write path re-reads the file
+// it's about to change. A stale entry can therefore cost a wasted read or show
+// a search hit that no longer exists — it can never produce a wrong write.
+//
+// The currently-open track is never served from here (callers overlay its
+// in-memory annotations), so ordinary editing and auto-save don't touch the
+// index. That leaves exactly four ways another track's file changes under it,
+// and each one invalidates:
+//   1. a rename across tracks       — renameLabelAcrossTracks, below
+//   2. importing into another track — hooks/useImportAnnotations
+//   3. a git sync pull              — the reloadNonce effect in AnnotationWindow
+//   4. switching tracks             — handleOpenTrack (flushes the outgoing
+//      track, and is also the catch-all for edits made outside the app)
+let labelIndex: { key: string; universe: Set<string>; entries: TrackLabels[] } | null = null;
 
 export function invalidateProjectLabelIndex(): void {
   labelIndex = null;
@@ -122,7 +88,7 @@ export async function loadProjectLabels(
     isCancelled,
   );
   if (isCancelled()) return;
-  labelIndex = { key, entries: collected };
+  labelIndex = { key, universe: new Set(tracks), entries: collected };
 }
 
 // Number of tracks searched concurrently per batch in streamSearch. Bounds
@@ -153,17 +119,24 @@ export async function streamSearch<T>(
   }
 }
 
-// Scan every track's on-disk annotation file for lines whose label matches
-// `text` exactly, returning per-ident occurrence counts (idents with zero
-// matches are omitted). Used to preview a mass rename before it's applied.
-export async function scanLabelOccurrences(
-  tracks: string[],
-  getAnnotationPath: (trackFilePath: string) => string | null,
-  getIdent: (trackFilePath: string) => string | null,
-  text: string,
-): Promise<IdentMatchCount[]> {
-  const found = await findLabelOccurrences(tracks, getAnnotationPath, getIdent, exactLabelMatcher(text));
-  return found.map(f => ({ ident: f.ident, count: f.matches.length }));
+// Narrow `tracks` to the ones the in-memory index says contain a match, so a
+// rename opens only the files it might actually rewrite. Returns `tracks`
+// unchanged unless the index has seen every track asked about — a miss must
+// fall back to opening everything, never to renaming nothing. (The rename
+// callers pass a subset of the indexed project: every track but the open one.)
+//
+// The index only points at candidates; the rename below still re-reads each
+// one from disk and decides what to write from that content. Disk stays
+// authoritative, so a stale index can at worst cost a wasted read.
+export function candidateTracks(tracks: string[], matcher: LabelMatcher): string[] {
+  const index = labelIndex;
+  if (!index || !tracks.every(t => index.universe.has(t))) return tracks;
+  const hits = new Set(
+    index.entries
+      .filter(e => e.labels.some(l => matcher(l.label)))
+      .map(e => e.trackFilePath),
+  );
+  return tracks.filter(t => hits.has(t));
 }
 
 // Rewrite every track's on-disk annotation file, renaming lines whose label
@@ -178,7 +151,11 @@ export async function renameLabelAcrossTracks(
   newText: string,
 ): Promise<number> {
   let total = 0;
-  await Promise.all(tracks.map(async (t) => {
+  // This rewrites annotation files, so whatever the index holds for them is
+  // about to be wrong.
+  const candidates = candidateTracks(tracks, matcher);
+  invalidateProjectLabelIndex();
+  await Promise.all(candidates.map(async (t) => {
     const annotPath = getAnnotationPath(t);
     if (!annotPath) return;
     try {

@@ -1347,6 +1347,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // reloadNonce only bumps on a successful pull; skip the initial 0.
   useEffect(() => {
     if (reloadNonce === 0) return;
+    // A pull rewrites annotation files behind the app's back, so anything the
+    // Find & Rename index holds for other tracks is now stale.
+    invalidateProjectLabelIndex();
     handleRefreshFiles();
   }, [reloadNonce, handleRefreshFiles]);
 

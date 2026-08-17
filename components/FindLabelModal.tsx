@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { findLabelModal as copy } from '../copy/ui';
 import { Annotation } from '../types';
 import { formatTime, buildLabelMatcher, LabelMatcher } from '../utils/helpers';
-import { loadProjectLabels, invalidateProjectLabelIndex, IdentMatches, LabelMatch } from '../utils/annotationRename';
+import { loadProjectLabels, IdentMatches, LabelMatch } from '../utils/annotationRename';
 import SettingsModalShell from './SettingsModalShell';
 
 export type RenameScope = 'track' | 'project';
@@ -162,9 +162,9 @@ export default function FindLabelModal({
     setError('');
     try {
       const count = await onRename(matcher, newLabel.trim(), scope);
-      // The rename rewrote annotation files on disk, so the cached index no
-      // longer describes them.
-      invalidateProjectLabelIndex();
+      // renameLabelAcrossTracks has already dropped the label index (it just
+      // rewrote the files it described); re-read so the results below reflect
+      // the new labels.
       setReloadKey(k => k + 1);
       setRenameResult({ count, identCount });
       onQueryChange('');

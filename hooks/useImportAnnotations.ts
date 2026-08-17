@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Annotation } from '../types';
 import { openFileDialog, readTextFile, writeTextFile } from '../utils/tauriCommands';
 import { generateAudacityContent, mergeAnnotations, parseAudacityContent } from '../utils/helpers';
+import { invalidateProjectLabelIndex } from '../utils/annotationRename';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 
 interface UseImportAnnotationsArgs {
@@ -55,6 +56,9 @@ export function useImportAnnotations({
       handleAnnotationsCommit(next);
     } else {
       await writeTextFile(annotPath, generateAudacityContent(next, decimals));
+      // Another track's file just changed on disk — the Find & Rename label
+      // index no longer describes it.
+      invalidateProjectLabelIndex();
     }
     setAnnotatedFiles(prev => {
       const updated = new Set(prev);
