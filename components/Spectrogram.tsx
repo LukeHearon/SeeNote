@@ -124,6 +124,25 @@ export interface SpectrogramHandle {
 // to keep it in sight.
 const REVEAL_MARGIN_PX = 48;
 
+// Flip to true to trace everything that can move the view sideways: every
+// scroll write (tagged with its source), every ResizeObserver notification with
+// the exact widths involved, every wheel event, every zoom-prop change, and a
+// 250ms heartbeat of the live geometry. Kept because this file has now grown
+// two separate self-sustaining scroll loops (the "violent jitter" oscillation
+// and the compounding resize rescale), and the source tags are what identify
+// them; the heartbeat separates "something keeps writing scroll" from "scroll
+// is still but the render drifts". Same idea as DIAG_FRAME_TIMING.
+const DIAG_SCROLL = false;
+const diagT0 = typeof performance !== 'undefined' ? performance.now() : 0;
+// Cap so a long session can't fill the console with megabytes of trace.
+let diagCount = 0;
+const diag = (msg: string) => {
+  if (!DIAG_SCROLL || diagCount > 3000) return;
+  diagCount++;
+  // eslint-disable-next-line no-console
+  console.log(`[scrolldiag +${((performance.now() - diagT0) / 1000).toFixed(3)}s] ${msg}`);
+};
+
 // The scroll clamp (40%-of-viewport overrun past the end) lives in
 // utils/viewportTransform as `maxScroll`, imported here as `computeMaxScroll`
 // so auto-pan, right-drag pan, wheel zoom/pan, and the recenter action all
@@ -196,8 +215,22 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // the stale value, producing a self-sustaining two-position oscillation
   // (the "violent jitter" bug). Every scroll write must go through setScroll.
   const setScroll = useCallback((v: number, _source: string = '?') => {
+    if (DIAG_SCROLL && Math.abs(v - scrollLeftRef.current) > 0.0001) {
+      diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
+    }
     scrollLeftRef.current = v;
     setScrollLeft(v);
+    // Every layer's geometry is a function of scrollLeft, and all three read it
+    // live from scrollLeftRef rather than from a prop — so moving the view is
+    // exactly the event that dirties them. Marking them here (not leaning on a
+    // dep-driven effect) is what makes a paused pan repaint: `draw` takes the
+    // scroll through a ref, so its identity does NOT change on a scroll step and
+    // the draw/drawYAxis useLayoutEffect below never fires for one. While
+    // playing the media-clock tick happened to cover it, which is why panning
+    // only ever looked broken when stopped.
+    drawDirtyRef.current = true;
+    overlayDirtyRef.current = true;
+    filterOverlayDirtyRef.current = true;
   }, []);
   // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
   // for a brief window after manual panning so the two don't fight each other.
@@ -277,7 +310,19 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
 
+  // The container's CONTENT-BOX width, straight from the ResizeObserver — so it
+  // is fractional (a flex child lands on sub-pixel boundaries: 810.15625, not
+  // 810). Every pixels-per-second derivation must use this same width, never
+  // `clientWidth`, which rounds to an integer: two pps values that disagree by
+  // that rounding turn the resize handler's scroll rescale into a small
+  // constant multiplier instead of an identity.
   const [containerWidth, setContainerWidth] = useState(0);
+  // Diagnostic mirror only (see DIAG_SCROLL).
+  const containerWidthRef = useRef(0);
+  containerWidthRef.current = containerWidth;
+  // Last width the ResizeObserver reported, so a notification that carries no
+  // actual size change can skip the scroll rescale entirely.
+  const lastObservedWidthRef = useRef(0);
 
   // True while the visible viewport still has chunks resolving (first load or a
   // settings-driven rebuild). Drives the "building spectrogram" veil. Reconciled
@@ -311,6 +356,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const prevZoomInputsRef = useRef({ zoomSec: -1, containerWidth: -1 });
   if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
       prevZoomInputsRef.current.containerWidth !== containerWidth) {
+    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
     prevZoomInputsRef.current = { zoomSec, containerWidth };
     pixelsPerSecondRef.current = pixelsPerSecond;
     zoomSecRef.current = zoomSec;
@@ -890,8 +936,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // scrollLeftRef.current), so a scroll step during playback no longer recreates
   // `draw` and trips the useLayoutEffect dirty flag. Mark the background dirty on
   // each media-clock tick while playing so it redraws every frame and tracks the
-  // auto-scroll smoothly — matching the overlay's cadence. When stopped/seeking,
-  // React re-renders still mark dirty via the draw/drawYAxis useLayoutEffect.
+  // auto-scroll smoothly — matching the overlay's cadence. Scrolling while
+  // stopped is covered by setScroll, which dirties every layer directly.
   useEffect(() => {
     if (!isPlaying) return;
     return currentTimeStore.subscribe(() => { drawDirtyRef.current = true; });
@@ -934,21 +980,54 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     };
   }, []);
 
-  // Handle Resize — keep all canvases in sync with their container dimensions
+  // Diagnostic heartbeat (see DIAG_SCROLL). Reports only when the view actually
+  // moved since the last tick, so a still view stays silent and any movement
+  // with no matching `write` line above it means the drift is in the render
+  // path, not in scrollLeft.
+  useEffect(() => {
+    if (!DIAG_SCROLL) return;
+    let last = scrollLeftRef.current;
+    const id = window.setInterval(() => {
+      const now = scrollLeftRef.current;
+      if (Math.abs(now - last) < 0.0001) return;
+      diag(`beat   scroll=${now.toFixed(2)} (moved ${(now - last).toFixed(3)}) t0=${(now / (pixelsPerSecondRef.current || 1)).toFixed(4)}s pps=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current} clientWidth=${containerRef.current?.clientWidth} playing=${isPlayingRef.current} dragging=${isAnyDragActiveRef.current}`);
+      last = now;
+    }, 250);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Handle Resize — keep all canvases in sync with their container dimensions.
+  //
+  // Empty deps deliberately: the draw functions are reached through their refs
+  // (kept current by the useLayoutEffects above), so the observer is created
+  // exactly once. Subscribing per render was a self-sustaining loop — observe()
+  // always delivers an immediate first notification, that notification wrote
+  // scroll, the write re-rendered, and the re-render built another observer.
   useEffect(() => {
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
         const newWidth = Math.max(1, width);
+        diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
         // Preserve the left-edge time across resize: scrollLeft is in pixels and
         // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
         // the visible time range unless we rescale scrollLeft proportionally.
-        if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0) {
+        //
+        // Only on an ACTUAL width change. A notification that reports the width
+        // we already have has nothing to preserve, and re-running the rescale
+        // then is not a no-op: it divides by the live pps and multiplies by a
+        // freshly-derived one, so any disagreement between the two (they were
+        // derived from different width sources) multiplies scrollLeft by a
+        // constant just off 1.0 — every notification, compounding, in the same
+        // direction. Zoomed in, where scrollLeft is large, that reads as the
+        // view panning steadily right on its own.
+        if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0 && newWidth !== lastObservedWidthRef.current) {
           const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
           const newPps = newWidth / zoomSecRef.current;
           const newScrollLeft = leftEdgeTime * newPps;
           setScroll(newScrollLeft, 'resize');
         }
+        lastObservedWidthRef.current = newWidth;
         setContainerWidth(newWidth);
         const dpr = window.devicePixelRatio || 1;
         if (canvasRef.current) {
@@ -967,10 +1046,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           yAxisCanvasRef.current.width = Y_AXIS_WIDTH * dpr;
           yAxisCanvasRef.current.height = height * dpr;
         }
-        draw();
-        drawOverlay();
-        drawFilterOverlay();
-        drawYAxis();
+        // Resizing a canvas clears it, so repaint every layer immediately rather
+        // than waiting a frame for the rAF loop's dirty flags.
+        drawRef.current();
+        drawOverlayRef.current();
+        drawFilterOverlayRef.current();
+        drawYAxisRef.current();
       }
     });
 
@@ -978,7 +1059,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       resizeObserver.observe(containerRef.current);
     }
     return () => resizeObserver.disconnect();
-  }, [draw, drawOverlay, drawFilterOverlay, drawYAxis]);
+  }, []);
 
   // --- Annotation navigation ---
 
@@ -1085,11 +1166,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
 
   const applyWheel = useCallback((deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => {
+    diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollState=${scrollLeft.toFixed(2)} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
     if (ctrlKey || metaKey) {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const mouseX = clientX - rect.left;
-      const containerWidth = containerRef.current.clientWidth;
+      // `containerWidth` (the ResizeObserver's fractional content-box width),
+      // NOT clientWidth: this is where pixelsPerSecondRef gets written, and it
+      // has to agree exactly with the pps the resize handler derives, or the
+      // two disagree by the integer rounding for as long as the zoom lasts.
       const currentPps = containerWidth / zoomSec;
       const timeAtMouse = (scrollLeft + mouseX) / currentPps;
       const zoomFactor = 1.25;
@@ -1121,12 +1206,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // appears to move. Skip the pan outright so nothing transient publishes.
       if (playheadLocked && isPlaying) return;
       const panAmount = deltaY + deltaX;
-      const containerWidth = containerRef.current?.clientWidth || 0;
       const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
-  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, onZoomChange, playheadLocked, isPlaying]);
+  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, containerWidth, onZoomChange, playheadLocked, isPlaying]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
@@ -1135,7 +1219,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const zoomToRange = useCallback((startTime: number, endTime: number) => {
     if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
+    // Same width source as applyWheel and the resize handler — see containerWidth.
     const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
     const newPps = containerWidth / newZoomSec;
     const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
@@ -1144,20 +1228,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     zoomSecRef.current = newZoomSec;
     setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
     onZoomChange(newZoomSec);
-  }, [duration, onZoomChange, setScroll]);
+  }, [duration, containerWidth, onZoomChange, setScroll]);
 
   const zoomIn = useCallback(() => {
     if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
     const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, -100, true, false, rect.left + containerWidth / 2);
+    applyWheel(0, -100, true, false, rect.left + rect.width / 2);
   }, [applyWheel]);
 
   const zoomOut = useCallback(() => {
     if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
     const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, 100, true, false, rect.left + containerWidth / 2);
+    applyWheel(0, 100, true, false, rect.left + rect.width / 2);
   }, [applyWheel]);
 
   useImperativeHandle(ref, () => ({
