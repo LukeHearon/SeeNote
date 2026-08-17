@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { findLabelModal as copy } from '../copy/ui';
 import { Annotation } from '../types';
 import { formatTime, buildLabelMatcher, LabelMatcher } from '../utils/helpers';
-import { searchTrackForMatches, streamSearch, IdentMatches, LabelMatch } from '../utils/annotationRename';
+import { loadProjectLabels, invalidateProjectLabelIndex, IdentMatches, LabelMatch } from '../utils/annotationRename';
 import SettingsModalShell from './SettingsModalShell';
 
 export type RenameScope = 'track' | 'project';
@@ -48,7 +48,6 @@ export default function FindLabelModal({
   useRegex, onUseRegexChange, partial, onPartialChange,
   query, onQueryChange, scope, onScopeChange, onClose, onGo, onRename,
 }: Props) {
-  const [results, setResults] = useState<IdentMatches[]>([]);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -72,62 +71,66 @@ export default function FindLabelModal({
     return buildLabelMatcher(label, { useRegex, partial });
   }, [query, useRegex, partial]);
 
+  // Whole-project labels, held in memory and filtered locally (below) so
+  // editing the query or flipping partial/regex never touches disk. Kept in a
+  // ref with a version counter rather than in state: the index streams in one
+  // batch at a time and rebuilding a Map per entry would be quadratic.
+  const projectLabelsRef = useRef<Map<string, LabelMatch[]>>(new Map());
+  const [labelsVersion, setLabelsVersion] = useState(0);
+  // Bumped to force a rebuild after a rename has rewritten files on disk.
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
-    const label = query.trim();
-    if (!label) {
-      setResults([]);
-      setScanning(false);
-      setError('');
-      return;
-    }
-    if (!matcher) {
-      setResults([]);
-      setScanning(false);
-      setError(copy.invalidRegexError);
-      return;
-    }
-    setError('');
-    // Current-track annotations live in memory (may not be flushed to disk
-    // yet), so 'track' scope reads them directly — synchronous, no debounce
-    // or disk scan needed.
-    if (scope === 'track') {
-      setScanning(false);
-      const matches: LabelMatch[] = annotations
-        .filter(a => matcher(a.text))
-        .map(a => ({ start: a.start, end: a.end, label: a.text }));
-      setResults(matches.length > 0 && ident ? [{ ident, matches }] : []);
-      return;
-    }
-    setScanning(true);
-    setResults([]);
+    if (scope !== 'project') return;
     let cancelled = false;
-    const timer = setTimeout(async () => {
-      // The current track's annotations live in memory (may not be flushed to
-      // disk yet), so read them directly instead of re-parsing its file.
-      const searchOne = (t: string): Promise<IdentMatches | null> => {
-        if (t === trackPath) {
-          const matches: LabelMatch[] = annotations
-            .filter(a => matcher(a.text))
-            .map(a => ({ start: a.start, end: a.end, label: a.text }));
-          return Promise.resolve(matches.length > 0 && ident ? { ident, matches } : null);
-        }
-        return searchTrackForMatches(t, getAnnotationPath, getIdent, matcher);
-      };
-      try {
-        await streamSearch(
-          sortedTracks,
-          searchOne,
-          (found) => { if (!cancelled) setResults(prev => [...prev, found]); },
-          () => cancelled,
-        );
-      } catch (err) {
-        if (!cancelled) setError(`Search failed: ${String(err)}`);
-      } finally {
-        if (!cancelled) setScanning(false);
-      }
-    }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [query, matcher, scope, sortedTracks, trackPath, annotations, ident, getAnnotationPath, getIdent]);
+    projectLabelsRef.current = new Map();
+    setLabelsVersion(v => v + 1);
+    setScanning(true);
+    loadProjectLabels(
+      sortedTracks,
+      getAnnotationPath,
+      getIdent,
+      (entry) => {
+        if (cancelled) return;
+        projectLabelsRef.current.set(entry.trackFilePath, entry.labels);
+        setLabelsVersion(v => v + 1);
+      },
+      () => cancelled,
+    )
+      .catch(err => { if (!cancelled) setError(`Search failed: ${String(err)}`); })
+      .finally(() => { if (!cancelled) setScanning(false); });
+    return () => { cancelled = true; };
+  }, [scope, sortedTracks, getAnnotationPath, getIdent, reloadKey]);
+
+  // The current track's annotations live in memory (may not be flushed to disk
+  // yet), so they always win over whatever the index read from its file.
+  const currentTrackMatches = useCallback((m: LabelMatcher): LabelMatch[] => (
+    annotations.filter(a => m(a.text)).map(a => ({ start: a.start, end: a.end, label: a.text }))
+  ), [annotations]);
+
+  const results: IdentMatches[] = useMemo(() => {
+    if (!matcher) return [];
+    if (scope === 'track') {
+      const matches = currentTrackMatches(matcher);
+      return matches.length > 0 && ident ? [{ ident, matches }] : [];
+    }
+    const out: IdentMatches[] = [];
+    for (const t of sortedTracks) {
+      const matchIdent = getIdent(t);
+      if (!matchIdent) continue;
+      const matches = t === trackPath
+        ? currentTrackMatches(matcher)
+        : (projectLabelsRef.current.get(t) ?? []).filter(l => matcher(l.label));
+      if (matches.length > 0) out.push({ ident: matchIdent, matches });
+    }
+    return out;
+    // labelsVersion is the dep that tracks projectLabelsRef's contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matcher, scope, sortedTracks, trackPath, ident, getIdent, currentTrackMatches, labelsVersion]);
+
+  useEffect(() => {
+    setError(query.trim() && !matcher ? copy.invalidRegexError : '');
+  }, [query, matcher]);
 
   // Regex/partial searches can match labels that differ from the typed query,
   // so show each match's own label; an exact search is redundant to repeat.
@@ -159,6 +162,10 @@ export default function FindLabelModal({
     setError('');
     try {
       const count = await onRename(matcher, newLabel.trim(), scope);
+      // The rename rewrote annotation files on disk, so the cached index no
+      // longer describes them.
+      invalidateProjectLabelIndex();
+      setReloadKey(k => k + 1);
       setRenameResult({ count, identCount });
       onQueryChange('');
       setNewLabel('');
@@ -230,7 +237,7 @@ export default function FindLabelModal({
             className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
           />
           <div className="flex items-center gap-4 mt-2">
-            {(['track', 'project'] as RenameScope[]).map(s => (
+            {(['project', 'track'] as RenameScope[]).map(s => (
               <label key={s} className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
                   type="radio"
@@ -248,7 +255,7 @@ export default function FindLabelModal({
         </div>
 
         <div>
-          {scanning && <p className="text-gray-500 text-sm">{copy.scanningLabel}</p>}
+          {scanning && query.trim() && <p className="text-gray-500 text-sm">{copy.scanningLabel}</p>}
           {!scanning && query.trim() && results.length === 0 && (
             <p className="text-gray-500 text-sm">{copy.noMatchesLabel}</p>
           )}

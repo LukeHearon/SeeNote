@@ -10,7 +10,7 @@ import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettin
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
-import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
+import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
@@ -110,7 +110,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // the next time the dialog is reopened this session.
   const [showFindLabel, setShowFindLabel] = useState(false);
   const [findLabelQuery, setFindLabelQuery] = useState('');
-  const [findLabelScope, setFindLabelScope] = useState<RenameScope>('track');
+  const [findLabelScope, setFindLabelScope] = useState<RenameScope>('project');
 
   // Pending-save timer for the annotation autosave. Declared here (rather than
   // alongside useSyncManagement below) so handleOpenTrack and the other
@@ -730,6 +730,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // an edit made just before switching tracks (e.g. a tool rename cascade
     // updating annotation text/color) never reaches disk.
     await flushPendingAutosaveRef.current();
+    // The track being left may have just been rewritten by that flush, so the
+    // cached whole-project label index (Find & Rename) no longer matches disk.
+    invalidateProjectLabelIndex();
 
     setAnnotations([]);
     setIsPlaying(false);
@@ -1005,7 +1008,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Find Label "Go": target ident + the match (start/end/label) on a track
   // that isn't currently open. Set right before handleOpenTrack fires;
   // consumed by the effect below once that track's annotations finish loading.
-  const pendingGoToLabelRef = useRef<{ ident: string } & LabelMatch | null>(null);
+  const pendingGoToLabelRef = useRef<{ trackPath: string; ident: string } & LabelMatch | null>(null);
 
   // Wrap setSelection at the prop boundary so any path that sets/clears the
   // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
@@ -1067,18 +1070,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
     const targetPath = allTracks.find(t => getIdent(t) === matchIdent);
     if (!targetPath) return;
-    pendingGoToLabelRef.current = { ident: matchIdent, ...match };
+    pendingGoToLabelRef.current = { trackPath: targetPath, ident: matchIdent, ...match };
     handleOpenTrack(targetPath);
   }, [ident, goToAnnotationMatch, allTracks, getIdent, handleOpenTrack]);
-
-  // Finish a cross-track "Go": once the newly-opened track's annotations have
-  // loaded and match the pending target ident, select + scroll, then clear.
-  useEffect(() => {
-    const pending = pendingGoToLabelRef.current;
-    if (!pending || !ident || ident !== pending.ident || annotations.length === 0) return;
-    pendingGoToLabelRef.current = null;
-    goToAnnotationMatch(pending);
-  }, [annotations, ident, goToAnnotationMatch]);
 
   // Band-pass filter state machine (filter tool / band / strength + engine-push
   // and persistence effects, plus its own F / Shift+F hotkeys). Needs engineRef,
@@ -1746,6 +1740,28 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setZoomSec(Math.max(MIN_ZOOM_SEC, displayDuration));
     }
   }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef]);
+
+  // Finish a cross-track Find & Rename "Go": select + scroll once the target
+  // track has finished loading and its annotations are in memory.
+  //
+  // Declared *after* the timeline effect above on purpose. A track load ends
+  // with a fresh timeline, and that effect clears the selection unconditionally
+  // — so applying the Go any earlier (the moment annotations arrive, which is
+  // well before the engine reports the new file's duration) left the match
+  // bound and glowing with its selection wiped out a beat later. Waiting for
+  // `isProcessing` to fall also means the seek and zoom below run against the
+  // new file's duration rather than the outgoing track's.
+  useEffect(() => {
+    const pending = pendingGoToLabelRef.current;
+    if (!pending || isProcessing) return;
+    if (trackPath !== pending.trackPath || ident !== pending.ident) return;
+    // Hold the pending Go (rather than consuming it) until the annotation
+    // actually shows up — the load is async and may land after this effect.
+    const found = annotations.some(a => a.start === pending.start && a.end === pending.end && a.text === pending.label);
+    if (!found) return;
+    pendingGoToLabelRef.current = null;
+    goToAnnotationMatch(pending);
+  }, [annotations, ident, trackPath, isProcessing, goToAnnotationMatch]);
 
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
