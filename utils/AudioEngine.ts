@@ -257,6 +257,17 @@ export class AudioEngine implements PlaybackTransport {
 
   private callbacks: AudioEngineCallbacks;
 
+  /** Set by dispose(), never cleared: this engine is dead for good.
+   *
+   * Nulling filePath in dispose() is not a sufficient guard on its own, because
+   * loadFile() re-sets it from a continuation that can resume *after* dispose
+   * (it awaits getFileInfo over IPC). A caller doing the usual
+   * `loadFile(p).then(() => engine.play(0))` would then reach play(), find no
+   * context, and open a brand-new AudioContext — audio that nothing holds a
+   * reference to any more, so nothing can ever pause or close it. Every entry
+   * point that could start or resume audio checks this first. */
+  private disposed = false;
+
   // ── PCM replay cache ────────────────────────────────────────────────────────
   // Decoded PCM for preloaded regions. On a cache hit, play() bypasses all
   // Rust IPC and schedules directly from the stored Float32Arrays. Owned by
@@ -283,6 +294,7 @@ export class AudioEngine implements PlaybackTransport {
   async loadFile(
     path: string,
   ): Promise<{ sampleRate: number; channels: number; durationSec: number }> {
+    if (this.disposed) throw new Error('AudioEngine.loadFile after dispose()');
     this._cancelPlayback();
 
     // Close any existing context (switching files)
@@ -296,6 +308,8 @@ export class AudioEngine implements PlaybackTransport {
     this.pcmCache.clear();  // also cancels any ongoing preload from the previous file
 
     const info = await getFileInfo(path);
+    // Disposed while the metadata IPC was in flight — do not re-arm the engine.
+    if (this.disposed) throw new Error('AudioEngine disposed while loading');
     this.filePath = path;
     this.fileSampleRate = info.sample_rate;
     this.fileChannels = info.channels;
@@ -343,7 +357,7 @@ export class AudioEngine implements PlaybackTransport {
    * AudioContext is created — or resumed — in a valid user gesture context.
    */
   play(startSec: number, endSec?: number): void {
-    if (!this.filePath) return;
+    if (this.disposed || !this.filePath) return;
     // A subset that kept nothing has no spans and so no audio to play. Bail
     // before the prefetch loop tries to resolve a position on an empty axis.
     if (this.timeline.spans.length === 0) return;
@@ -536,6 +550,7 @@ export class AudioEngine implements PlaybackTransport {
 
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
+    if (this.disposed) return;
     const target = clamp(sec, 0, this.timeline.duration);
     this._cancelPlayback();
     // After _cancelPlayback (which snapshots the pre-seek position), point both
@@ -596,6 +611,7 @@ export class AudioEngine implements PlaybackTransport {
    * immediately after the context is recreated.
    */
   async restart(): Promise<void> {
+    if (this.disposed) return;
     this._cancelPlayback();
     if (this.ctx) {
       await this.ctx.close().catch(() => {});
@@ -605,8 +621,10 @@ export class AudioEngine implements PlaybackTransport {
     }
   }
 
-  /** Fully tear down the engine. Call on component unmount. */
+  /** Fully tear down the engine. Call on component unmount. Irreversible —
+   *  every start/resume path no-ops afterwards (see `disposed`). */
   dispose(): void {
+    this.disposed = true;
     this._cancelPlayback();
     this.pcmCache.cancelPreload();
     if (this.ctx) {

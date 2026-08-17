@@ -560,6 +560,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     playheadLocked, setPlayheadLocked,
     timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,
+    videoEngineRef,
     currentTimeRef,
     currentTimeStoreRef,
     togglePlay,
@@ -871,9 +872,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // stays in the orchestrator.
   useEffect(() => {
     if (!exampleAudioActive) return;
-    activeTransport()?.pause();
+    // Pause BOTH transports, not just the one activeTransport() names — same
+    // reason togglePlay does: usesVideoTransport() reads frameSourceRef, which
+    // is filled in asynchronously, so the engine actually sounding can differ
+    // from the one named here, and pausing only that one leaves the track
+    // playing underneath the example clip. pause() is idempotent on both.
+    engineRef.current?.pause();
+    videoEngineRef.current?.pause();
     setIsPlaying(false);
-  }, [exampleAudioActive, activeTransport]);
+  }, [exampleAudioActive, engineRef, videoEngineRef]);
 
   // Rebuild the cache when what a cached chunk *is* changes underneath it while
   // a track is open: the FFT size (the bins in a chunk) or the subset grain (the

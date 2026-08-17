@@ -34,6 +34,11 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
   playingToolIdRef.current = playingToolId;
 
   const engineRef = useRef<AudioEngine | null>(null);
+  /** Bumped by every toggle/stop and by unmount. A load in flight compares the
+   *  token it captured before touching the engine, so a clip whose metadata
+   *  arrives after the user moved on (or after the engine was disposed) never
+   *  starts playing. */
+  const loadTokenRef = useRef(0);
 
   const getEngine = useCallback(() => {
     if (!engineRef.current) {
@@ -51,6 +56,7 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
   }, []);
 
   const stop = useCallback(() => {
+    loadTokenRef.current++;
     engineRef.current?.pause();
     setPlayingToolId(null);
   }, []);
@@ -71,8 +77,10 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
     onLogRef.current?.(`[example] loading clip ${idx + 1}/${files.length} for "${tool.text}": ${path}`);
     const engine = getEngine();
     engine.pause();
+    const token = ++loadTokenRef.current;
     engine.loadFile(path)
       .then(async () => {
+        if (token !== loadTokenRef.current) return;
         // Normalize loudness (cached per file) so clips preview at a comparable
         // level. Same target as the example-library modal.
         let gain = gainCacheRef.current.get(path);
@@ -81,17 +89,23 @@ export function useExamplePlayer(onLog?: (msg: string, type?: 'info' | 'error') 
           catch { gain = 1; }
           gainCacheRef.current.set(path, gain);
         }
+        // The peak measurement is another await — re-check before playing.
+        if (token !== loadTokenRef.current) return;
         engine.setGain(gain);
         engine.play(0);
         setPlayingToolId(tool.id);
       })
       .catch(err => {
+        // A superseded load (including the one dispose() rejects on unmount)
+        // isn't a failure worth reporting.
+        if (token !== loadTokenRef.current) return;
         onLogRef.current?.(`[example] failed to load "${path}": ${err}`, 'error');
         setPlayingToolId(null);
       });
   }, [getEngine, stop]);
 
   useEffect(() => () => {
+    loadTokenRef.current++;
     engineRef.current?.dispose();
     engineRef.current = null;
   }, []);

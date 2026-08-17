@@ -73,6 +73,13 @@ export class VideoElementEngine implements PlaybackTransport {
     if (this.el === el) return;
     if (this.el) {
       this._stopRaf();
+      // Silence the outgoing element before letting go of it. A media element
+      // that is still playing when the last reference to it drops keeps its
+      // audio track sounding until it is torn down, and by then nothing points
+      // at it any more — unstoppable phantom audio. Don't rely on React's
+      // removal from the document to do this: the element often survives the
+      // detach (a src swap, a renderer swap), and removal-pause is async.
+      this.el.pause();
       this.el.removeEventListener('canplay', this._applyPendingSeek);
     }
     this.el = el;
@@ -181,7 +188,11 @@ export class VideoElementEngine implements PlaybackTransport {
 
   dispose(): void {
     this._stopRaf();
-    if (this.el) this.el.removeEventListener('canplay', this._applyPendingSeek);
+    if (this.el) {
+      // Same reason as attach(): never drop a playing element (see attach).
+      this.el.pause();
+      this.el.removeEventListener('canplay', this._applyPendingSeek);
+    }
     this.el = null;
     this.playingState = false;
     this.pendingSeek = null;
