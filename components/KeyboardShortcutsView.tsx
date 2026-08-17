@@ -76,6 +76,7 @@ const GROUPS: Group[] = [
     bg: 'bg-emerald-600', ring: 'ring-emerald-400', dot: 'bg-emerald-500', text: 'text-emerald-300',
     shortcuts: [
       { codes: ['KeyA'], display: '{mod}+A', label: 'Select whole track' },
+      { codes: ['KeyF'], display: '{mod}+F', label: 'Find & rename label' },
       { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
       { codes: ['KeyZ'], display: '{mod}+Z', label: 'Undo' },
       { codes: ['KeyZ'], display: '{mod}+Shift+Z', label: 'Redo' },

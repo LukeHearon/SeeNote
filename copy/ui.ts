@@ -277,26 +277,8 @@ export const neuronPalette = {
   get noneShown() { return getOverride('ui.neuronPalette.noneShown') ?? "No neurons plotted. Add one below."; },
 };
 
-export const massRenameModal = {
-  get title() { return getOverride('ui.massRenameModal.title') ?? "Mass Rename"; },
-  get oldLabelField() { return getOverride('ui.massRenameModal.oldLabelField') ?? "Label to rename"; },
-  get oldLabelPlaceholder() { return getOverride('ui.massRenameModal.oldLabelPlaceholder') ?? "Existing label…"; },
-  get newLabelField() { return getOverride('ui.massRenameModal.newLabelField') ?? "New label"; },
-  get newLabelPlaceholder() { return getOverride('ui.massRenameModal.newLabelPlaceholder') ?? "Replacement label…"; },
-  get scopeCurrentTrackLabel() { return getOverride('ui.massRenameModal.scopeCurrentTrackLabel') ?? "Current track"; },
-  get scopeWholeProjectLabel() { return getOverride('ui.massRenameModal.scopeWholeProjectLabel') ?? "Whole project"; },
-  get occurrencesHeading() { return getOverride('ui.massRenameModal.occurrencesHeading') ?? "Occurrences"; },
-  get breakdownHeading() { return getOverride('ui.massRenameModal.breakdownHeading') ?? "Occurrences by file"; },
-  get scanningLabel() { return getOverride('ui.massRenameModal.scanningLabel') ?? "Scanning…"; },
-  get noMatchesLabel() { return getOverride('ui.massRenameModal.noMatchesLabel') ?? "No matching annotations found."; },
-  totalCountLabel: (count: number, fileCount: number) => `${count} annotation(s) across ${fileCount} file(s)`,
-  get cancelButton() { return getOverride('ui.massRenameModal.cancelButton') ?? "Cancel"; },
-  get renameButton() { return getOverride('ui.massRenameModal.renameButton') ?? "Rename"; },
-  get renamingButton() { return getOverride('ui.massRenameModal.renamingButton') ?? "Renaming…"; },
-};
-
 export const findLabelModal = {
-  get title() { return getOverride('ui.findLabelModal.title') ?? "Find Label"; },
+  get title() { return getOverride('ui.findLabelModal.title') ?? "Find & Rename Label"; },
   get labelField() { return getOverride('ui.findLabelModal.labelField') ?? "Label"; },
   get labelPlaceholder() { return getOverride('ui.findLabelModal.labelPlaceholder') ?? "Search for a label…"; },
   get partialCheckboxLabel() { return getOverride('ui.findLabelModal.partialCheckboxLabel') ?? "Partial"; },
@@ -306,6 +288,17 @@ export const findLabelModal = {
   get noMatchesLabel() { return getOverride('ui.findLabelModal.noMatchesLabel') ?? "No matching annotations found."; },
   get cancelButton() { return getOverride('ui.findLabelModal.cancelButton') ?? "Cancel"; },
   get goButton() { return getOverride('ui.findLabelModal.goButton') ?? "Go"; },
+  get renameHeading() { return getOverride('ui.findLabelModal.renameHeading') ?? "Rename matches"; },
+  get newLabelField() { return getOverride('ui.findLabelModal.newLabelField') ?? "Replace with"; },
+  get newLabelPlaceholder() { return getOverride('ui.findLabelModal.newLabelPlaceholder') ?? "New label…"; },
+  get scopeCurrentTrackLabel() { return getOverride('ui.findLabelModal.scopeCurrentTrackLabel') ?? "Current track"; },
+  get scopeWholeProjectLabel() { return getOverride('ui.findLabelModal.scopeWholeProjectLabel') ?? "Whole project"; },
+  matchCountLabel: (count: number, identCount: number) =>
+    `${count} match${count === 1 ? '' : 'es'} across ${identCount} recording${identCount === 1 ? '' : 's'}`,
+  get renameButton() { return getOverride('ui.findLabelModal.renameButton') ?? "Rename All"; },
+  get renamingButton() { return getOverride('ui.findLabelModal.renamingButton') ?? "Renaming…"; },
+  renameConfirmation: (count: number, identCount: number) =>
+    `Renamed ${count} annotation${count === 1 ? '' : 's'} across ${identCount} recording${identCount === 1 ? '' : 's'}.`,
 };
 
 export const annotationToolLibrary = {

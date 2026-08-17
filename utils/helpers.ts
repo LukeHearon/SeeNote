@@ -377,18 +377,20 @@ export const matchingLinesInContent = (content: string, matcher: LabelMatcher): 
     return matches;
 };
 
-// Rewrite Audacity TXT lines whose label matches `oldText` exactly to
-// `newText`. Pure — shared by tool rename and mass rename so the on-disk
-// rewrite logic exists in one place.
+// Rewrite Audacity TXT lines whose label satisfies `matcher` to `newText`.
+// Pure — shared by tool rename and mass/find rename so the on-disk rewrite
+// logic exists in one place. Callers doing an exact rename pass
+// `exactLabelMatcher(oldText)`; the find/rename dialog can pass a
+// regex/partial matcher to rename every match to one new label.
 export const renameLabelInContent = (
     content: string,
-    oldText: string,
+    matcher: LabelMatcher,
     newText: string,
 ): { updated: string; changed: boolean; count: number } => {
     let count = 0;
     const lines = content.split('\n').map(line => {
         const parts = line.split('\t');
-        if (parts.length >= 3 && parts.slice(2).join('\t') === oldText) {
+        if (parts.length >= 3 && matcher(parts.slice(2).join('\t'))) {
             count++;
             return `${parts[0]}\t${parts[1]}\t${newText}`;
         }

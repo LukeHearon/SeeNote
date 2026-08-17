@@ -8,7 +8,7 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel } from './utils/helpers';
+import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
@@ -55,8 +55,7 @@ import NeuronPalette from './components/NeuronPalette';
 import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
-import MassRenameModal, { MassRenameScope } from './components/MassRenameModal';
-import FindLabelModal from './components/FindLabelModal';
+import FindLabelModal, { RenameScope } from './components/FindLabelModal';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
@@ -105,8 +104,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
-  const [showMassRename, setShowMassRename] = useState(false);
+  // Both the "Find Label" and "Mass Rename" toolbar entry points open the
+  // same merged find-and-rename dialog. Query/scope live here (not inside the
+  // dialog) so the last search is still there — and its results reappear —
+  // the next time the dialog is reopened this session.
   const [showFindLabel, setShowFindLabel] = useState(false);
+  const [findLabelQuery, setFindLabelQuery] = useState('');
+  const [findLabelScope, setFindLabelScope] = useState<RenameScope>('track');
 
   // Pending-save timer for the annotation autosave. Declared here (rather than
   // alongside useSyncManagement below) so handleOpenTrack and the other
@@ -494,24 +498,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     getAnnotationPath,
   });
 
-  // Mass Rename: renames every annotation whose text matches `oldText` to
-  // `newText`, independent of any tool identity. Current track updates in
-  // memory (autosave picks it up); when scope is 'project', every other
-  // track's annotation file is also rewritten on disk via the shared util
-  // also used by handleRenameTool.
-  const handleMassRename = useCallback(async (oldText: string, newText: string, scope: MassRenameScope): Promise<number> => {
-    const currentCount = annotations.filter(a => a.text === oldText).length;
+  // Find & Rename: renames every annotation whose text satisfies `matcher`
+  // (exact, partial, or regex) to `newText`, independent of any tool
+  // identity. Current track updates in memory (autosave picks it up); when
+  // scope is 'project', every other track's annotation file is also
+  // rewritten on disk via the shared util also used by handleRenameTool.
+  const handleFindLabelRename = useCallback(async (matcher: LabelMatcher, newText: string, scope: RenameScope): Promise<number> => {
+    const currentCount = annotations.filter(a => matcher(a.text)).length;
     if (currentCount > 0) {
       // newText may not belong to any tool (a one-off rename), so re-resolve
       // its color rather than keeping the old cached one — otherwise a label
       // renamed away from its tool would keep that tool's color instead of
       // reverting to white.
       const newColor = colorForLabel(newText, annotationTools);
-      setAnnotations(prev => prev.map(a => a.text === oldText ? { ...a, text: newText, color: newColor } : a));
+      setAnnotations(prev => prev.map(a => matcher(a.text) ? { ...a, text: newText, color: newColor } : a));
     }
     if (scope === 'track') return currentCount;
     const otherTracks = allTracks.filter(t => t !== trackPath);
-    const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, oldText, newText);
+    const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, matcher, newText);
     return currentCount + diskCount;
   }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath]);
 
@@ -996,21 +1000,55 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // consumed by the effect below once that track's annotations finish loading.
   const pendingGoToLabelRef = useRef<{ ident: string } & LabelMatch | null>(null);
 
+  // Wrap setSelection at the prop boundary so any path that sets/clears the
+  // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
+  // activation stack synchronised without each caller having to remember to
+  // push/remove.
+  const handleSelectionChange = useCallback((s: Selection | null) => {
+    setSelection(s);
+    // Sync synchronously, not just via the state-mirroring effect below: a caller
+    // that seeks in the same tick as committing a new selection (e.g. snapping the
+    // playhead into a just-created selection) needs seek()'s bounded-restart logic
+    // to see the new selection immediately, not the stale one from last render.
+    selectionRef.current = s;
+    if (s) {
+      activationStack.pushIfAbsent('selection');
+      // Pin here, not only on commit: every non-null selection (drag, edge
+      // resize/move, toolbar time edit, annotation click) flows through this
+      // wrapper, whereas the commit callback only fires on a fresh drag-release.
+      // Pinning here is what keeps the selection's frames resident across the
+      // rolling prefetch's eviction churn so replays hit the cache.
+      frameSourceRef.current?.pinSelectionRange(s.start, s.end);
+    } else {
+      activationStack.remove('selection');
+      frameSourceRef.current?.clearPinnedRange();
+      // The selection was driving playback's bounded stop — drop it so
+      // playback continues through to EOF instead of stopping at the now-stale
+      // selection end.
+      clearSelectionEnd();
+    }
+  }, [activationStack, clearSelectionEnd]);
+
   // Select + scroll to an annotation matching `match` on the current track.
   // Shared by the same-track and cross-track ("Go") paths so the two don't
   // diverge on how a match is highlighted. Matches on label too (not just
   // start/end) since a regex/partial search can return several different
-  // labels at the same or coincidentally-equal times.
+  // labels at the same or coincidentally-equal times. Binds the match the
+  // same way clicking an annotation box does — bound + selected, with an
+  // active selection around it — so it lands ready to edit or delete.
   const goToAnnotationMatch = useCallback((match: LabelMatch) => {
     const found = annotations.find(a => a.start === match.start && a.end === match.end && a.text === match.label);
     if (!found) return;
     setSelectedAnnotationId(found.id);
-    // The match carries source times; the view and the playhead are on the
-    // display axis.
+    setBoundAnnotationId(found.id);
+    // The match carries source times; the view, the playhead, and the
+    // selection are all on the display axis.
     const dStart = timeline.toDisplay(match.start);
+    const dEnd = timeline.toDisplay(match.end);
+    handleSelectionChange({ start: dStart, end: dEnd });
     seek(dStart);
-    spectrogramRef.current?.zoomToRange(dStart, timeline.toDisplay(match.end));
-  }, [annotations, seek, timeline]);
+    spectrogramRef.current?.zoomToRange(dStart, dEnd);
+  }, [annotations, seek, timeline, handleSelectionChange]);
 
   // Find Label "Go" handler: same-track matches select + scroll immediately;
   // matches on another track open it first, and the effect below finishes
@@ -1511,6 +1549,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // those hooks' instantiations above. What's left here is annotation- and
       // file-navigation-specific glue that only this window has.
       { key: 'a', mods: ['mod'], handler: selectAllOrAnnotateFullTrack },
+      { key: 'f', mods: ['mod'], handler: () => setShowFindLabel(true) },
       { key: 'ArrowLeft', mods: ['mod'], handler: () => spectrogramRef.current?.goToTrackStart() },
       { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToTrackEnd() },
       { key: 'ArrowLeft', mods: ['alt'], handler: () => spectrogramRef.current?.goToPrevAnnotation() },
@@ -1591,34 +1630,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       addLog('Exported annotations as TXT');
   };
 
-  // Wrap setSelection at the prop boundary so any path that sets/clears the
-  // selection (Spectrogram drag, Toolbar selection-time edits, etc.) keeps the
-  // activation stack synchronised without each caller having to remember to
-  // push/remove.
-  const handleSelectionChange = useCallback((s: Selection | null) => {
-    setSelection(s);
-    // Sync synchronously, not just via the state-mirroring effect below: a caller
-    // that seeks in the same tick as committing a new selection (e.g. snapping the
-    // playhead into a just-created selection) needs seek()'s bounded-restart logic
-    // to see the new selection immediately, not the stale one from last render.
-    selectionRef.current = s;
-    if (s) {
-      activationStack.pushIfAbsent('selection');
-      // Pin here, not only on commit: every non-null selection (drag, edge
-      // resize/move, toolbar time edit, annotation click) flows through this
-      // wrapper, whereas the commit callback only fires on a fresh drag-release.
-      // Pinning here is what keeps the selection's frames resident across the
-      // rolling prefetch's eviction churn so replays hit the cache.
-      frameSourceRef.current?.pinSelectionRange(s.start, s.end);
-    } else {
-      activationStack.remove('selection');
-      frameSourceRef.current?.clearPinnedRange();
-      // The selection was driving playback's bounded stop — drop it so
-      // playback continues through to EOF instead of stopping at the now-stale
-      // selection end.
-      clearSelectionEnd();
-    }
-  }, [activationStack, clearSelectionEnd]);
 
   // A bound selection carries its annotation with it, exactly as dragging the
   // selection's edges does (useSpectrogramInteraction). Keyboard extends stream
@@ -1839,7 +1850,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       activateTool: handleToolActivate,
       activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
       openToolSettings: () => setShowToolSettings(true),
-      openMassRename: () => setShowMassRename(true),
+      openMassRename: () => setShowFindLabel(true),
       openFindLabel: () => setShowFindLabel(true),
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
@@ -2186,7 +2197,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onToolActivate={handleToolActivate}
                   onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                   onOpenSettings={() => setShowToolSettings(true)}
-                  onOpenMassRename={() => setShowMassRename(true)}
+                  onOpenMassRename={() => setShowFindLabel(true)}
                   onOpenFindLabel={() => setShowFindLabel(true)}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
@@ -2505,18 +2516,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onShowExamples={handleShowExamples}
         />
       )}
-      {showMassRename && (
-        <MassRenameModal
-          annotations={annotations}
-          allTracks={allTracks}
-          trackPath={trackPath}
-          ident={ident}
-          getAnnotationPath={getAnnotationPath}
-          getIdent={getIdent}
-          onClose={() => setShowMassRename(false)}
-          onApply={handleMassRename}
-        />
-      )}
       {showFindLabel && (
         <FindLabelModal
           annotations={annotations}
@@ -2529,8 +2528,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onUseRegexChange={handleFindLabelUseRegexChange}
           partial={project.preferences.findLabelPartialMatch ?? false}
           onPartialChange={handleFindLabelPartialChange}
+          query={findLabelQuery}
+          onQueryChange={setFindLabelQuery}
+          scope={findLabelScope}
+          onScopeChange={setFindLabelScope}
           onClose={() => setShowFindLabel(false)}
           onGo={handleGoToLabelMatch}
+          onRename={handleFindLabelRename}
         />
       )}
       {panelEditingToolIndex !== null && (

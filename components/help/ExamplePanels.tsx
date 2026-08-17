@@ -21,7 +21,7 @@ import { subsetBuzzdetectData, subsetCriteriaFrom, subsetTimelineFor } from '../
 import { help } from '../../copy/help';
 import BuzzdetectPanel from '../BuzzdetectPanel';
 import FileTree from '../FileTree';
-import MassRenameModal from '../MassRenameModal';
+import FindLabelModal, { RenameScope } from '../FindLabelModal';
 
 // Panels the guide renders against the example project (utils/demoProject.ts)
 // rather than the open one. They are the real components — only their data is
@@ -115,29 +115,42 @@ function ReopenButton({ label, onClick }: { label: string; onClick: () => void }
 }
 
 /**
- * Mass Rename over the example project's annotations. The real modal merges
- * in-memory counts for the current track with a disk scan of every other track;
- * the example project has one track, so the scan finds nothing to read and the
- * counts shown are the in-memory ones.
+ * Find & Rename Label over the example project's annotations. The real modal
+ * searches every track on disk and merges in the current track's in-memory
+ * annotations; the example project has one track and no annotation files to
+ * read, so the search only ever finds the in-memory ones.
  */
-export function ExampleMassRename() {
+export function ExampleFindLabel() {
   const [annotations, setAnnotations] = useState(demoAnnotations);
   const [open, setOpen] = useState(true);
+  const [useRegex, setUseRegex] = useState(false);
+  const [partial, setPartial] = useState(false);
+  const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<RenameScope>('track');
 
   return (
     <ModalStage>
       {open ? (
-        <MassRenameModal
+        <FindLabelModal
           annotations={annotations}
           allTracks={[DEMO_TRACK]}
           trackPath={DEMO_TRACK}
           ident={DEMO_IDENT}
           getAnnotationPath={() => null}
           getIdent={() => DEMO_IDENT}
+          useRegex={useRegex}
+          onUseRegexChange={setUseRegex}
+          partial={partial}
+          onPartialChange={setPartial}
+          query={query}
+          onQueryChange={setQuery}
+          scope={scope}
+          onScopeChange={setScope}
           onClose={() => setOpen(false)}
-          onApply={async (oldText, newText) => {
-            const hits = annotations.filter(a => a.text === oldText);
-            setAnnotations(list => list.map(a => (a.text === oldText ? { ...a, text: newText } : a)));
+          onGo={() => {}}
+          onRename={async (matcher, newText) => {
+            const hits = annotations.filter(a => matcher(a.text));
+            setAnnotations(list => list.map(a => (matcher(a.text) ? { ...a, text: newText } : a)));
             return hits.length;
           }}
         />

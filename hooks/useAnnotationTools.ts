@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Annotation, AnnotationTool, Project, ProjectPreferences } from '../types';
 import { HOTKEY_COLORS } from '../constants';
-import { generateId, colorForLabel } from '../utils/helpers';
+import { generateId, colorForLabel, exactLabelMatcher } from '../utils/helpers';
 import {
   listAnnotationTools, listToolExamples, createAnnotationTool, updateAnnotationTool,
   renameAnnotationTool, deleteAnnotationTool, importToolExamples, importExamplesToTool,
@@ -243,7 +243,7 @@ export function useAnnotationTools({
 
     // Rename matching annotations in every other track's annotation file on disk.
     // The current track's file will be updated by the auto-save triggered above.
-    renameLabelAcrossTracks(allTracks.filter(t => t !== trackPath), getAnnotationPath, oldText, newText);
+    renameLabelAcrossTracks(allTracks.filter(t => t !== trackPath), getAnnotationPath, exactLabelMatcher(oldText), newText);
   }, [annotationTools, allTracks, trackPath, getAnnotationPath]);
 
   const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {

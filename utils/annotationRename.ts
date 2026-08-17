@@ -97,12 +97,14 @@ export async function scanLabelOccurrences(
 }
 
 // Rewrite every track's on-disk annotation file, renaming lines whose label
-// matches `oldText` exactly to `newText`. Returns the total number of lines
-// changed. Shared by tool rename (useAnnotationTools) and mass rename.
+// satisfies `matcher` to `newText`. Returns the total number of lines
+// changed. Shared by tool rename (useAnnotationTools) and the find/rename
+// dialog — pass `exactLabelMatcher(oldText)` for an exact rename, or a
+// regex/partial matcher to rename every match to one new label.
 export async function renameLabelAcrossTracks(
   tracks: string[],
   getAnnotationPath: (trackFilePath: string) => string | null,
-  oldText: string,
+  matcher: LabelMatcher,
   newText: string,
 ): Promise<number> {
   let total = 0;
@@ -112,7 +114,7 @@ export async function renameLabelAcrossTracks(
     try {
       const content = await readTextFile(annotPath);
       if (!content) return;
-      const { updated, changed, count } = renameLabelInContent(content, oldText, newText);
+      const { updated, changed, count } = renameLabelInContent(content, matcher, newText);
       if (changed) {
         await writeTextFile(annotPath, updated);
         total += count;

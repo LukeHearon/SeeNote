@@ -584,7 +584,7 @@ describe('buildLabelMatcher', () => {
 describe('renameLabelInContent', () => {
   it('renames all matching rows and reports the count', () => {
     const content = '0\t1\tbird\n1\t2\tnoise\n2\t3\tbird\n';
-    const result = renameLabelInContent(content, 'bird', 'sparrow');
+    const result = renameLabelInContent(content, exactLabelMatcher('bird'), 'sparrow');
     expect(result.changed).toBe(true);
     expect(result.count).toBe(2);
     expect(result.updated).toBe('0\t1\tsparrow\n1\t2\tnoise\n2\t3\tsparrow\n');
@@ -592,7 +592,7 @@ describe('renameLabelInContent', () => {
 
   it('leaves content untouched and reports changed: false when nothing matches', () => {
     const content = '0\t1\tbird\n';
-    const result = renameLabelInContent(content, 'frog', 'toad');
+    const result = renameLabelInContent(content, exactLabelMatcher('frog'), 'toad');
     expect(result.changed).toBe(false);
     expect(result.count).toBe(0);
     expect(result.updated).toBe(content);
@@ -600,7 +600,7 @@ describe('renameLabelInContent', () => {
 
   it('preserves tabs inside unrelated label text', () => {
     const content = '0\t1\ta\tb\n1\t2\tbird\n';
-    const result = renameLabelInContent(content, 'bird', 'sparrow');
+    const result = renameLabelInContent(content, exactLabelMatcher('bird'), 'sparrow');
     expect(result.updated).toBe('0\t1\ta\tb\n1\t2\tsparrow\n');
   });
 });
