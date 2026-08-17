@@ -104,8 +104,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
-  // Both the "Find Label" and "Mass Rename" toolbar entry points open the
-  // same merged find-and-rename dialog. Query/scope live here (not inside the
+  // The "Find Label" toolbar entry point opens the merged find-and-rename
+  // dialog. Query/scope live here (not inside the
   // dialog) so the last search is still there — and its results reappear —
   // the next time the dialog is reopened this session.
   const [showFindLabel, setShowFindLabel] = useState(false);
@@ -1850,7 +1850,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       activateTool: handleToolActivate,
       activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
       openToolSettings: () => setShowToolSettings(true),
-      openMassRename: () => setShowFindLabel(true),
       openFindLabel: () => setShowFindLabel(true),
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
@@ -2197,7 +2196,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onToolActivate={handleToolActivate}
                   onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                   onOpenSettings={() => setShowToolSettings(true)}
-                  onOpenMassRename={() => setShowFindLabel(true)}
                   onOpenFindLabel={() => setShowFindLabel(true)}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}

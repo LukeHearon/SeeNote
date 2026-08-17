@@ -338,7 +338,6 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
               onToolActivate={key => act(() => client.call('activateTool', key), () => setTp({ activeToolKey: key }))}
               onSelectModeActivate={() => act(() => client.call('activateSelectMode'), () => setTp({ activeToolKey: null }))}
               onOpenSettings={() => act(() => client.call('openToolSettings'), () => {})}
-              onOpenMassRename={() => act(() => client.call('openMassRename'), () => {})}
               onOpenFindLabel={() => act(() => client.call('openFindLabel'), () => {})}
               onEditTool={i => act(() => client.call('editTool', i), () => {})}
               onRequestDeleteTool={i => act(() => client.call('requestDeleteTool', i), () => {})}

@@ -369,7 +369,6 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       activateTool: () => {},
       activateSelectMode: () => {},
       openToolSettings: () => {},
-      openMassRename: () => {},
       openFindLabel: () => {},
       editTool: () => {},
       requestDeleteTool: () => {},

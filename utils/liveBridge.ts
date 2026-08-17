@@ -120,7 +120,6 @@ export interface LiveHandlers {
   activateTool(key: string): void;
   activateSelectMode(): void;
   openToolSettings(): void;
-  openMassRename(): void;
   openFindLabel(): void;
   editTool(index: number): void;
   requestDeleteTool(index: number): void;

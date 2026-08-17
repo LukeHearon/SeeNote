@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Settings, Trash2, Play, Square, TextCursorInput, Search, Images } from 'lucide-react';
+import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
@@ -20,7 +20,6 @@ interface AnnotationToolsPanelProps {
   onToolActivate: (key: string) => void;
   onSelectModeActivate: () => void;
   onOpenSettings: () => void;
-  onOpenMassRename: () => void;
   onOpenFindLabel: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
@@ -39,7 +38,6 @@ function AnnotationToolsPanel({
   onToolActivate,
   onSelectModeActivate,
   onOpenSettings,
-  onOpenMassRename,
   onOpenFindLabel,
   onEditTool,
   onRequestDeleteTool,
@@ -98,13 +96,6 @@ function AnnotationToolsPanel({
             data-tooltip={tooltips.findLabel}
           >
             <Search size={12} />
-          </button>
-          <button
-            onClick={onOpenMassRename}
-            className="p-0.5 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
-            data-tooltip={tooltips.massRename}
-          >
-            <TextCursorInput size={12} />
           </button>
           <button
             onClick={onOpenSettings}
