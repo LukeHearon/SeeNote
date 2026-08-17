@@ -11,6 +11,7 @@ import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_U
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { renameLabelAcrossTracks, LabelMatch } from './utils/annotationRename';
+import { resolveLabelColor } from './utils/annotationTools';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
 import { showHelpPage } from './utils/helpChannel';
@@ -1422,8 +1423,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               };
               const savedText = reassignBufferRef.current[tool.key ?? ''];
               const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
+              // A restored Custom text can coincidentally match a defined tool's
+              // label; resolveLabelColor adopts that tool's color instead of the
+              // generic Custom color (falls back to `tool.color` either way).
               const updated = annotations.map(a => a.id === boundAnnotationId
-                  ? { ...a, text: newText, color: tool.color }
+                  ? { ...a, text: newText, color: resolveLabelColor(newText, annotationTools, tool.color) }
                   : a
               );
               handleAnnotationsCommit(updated);
@@ -1431,7 +1435,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               activationStack.pushIfAbsent('annotationTool');
               setFilterToolActive(false);
               activationStack.remove('filterTool');
-              if (isCustom && newText === '') {
+              if (isCustom) {
                   setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
               }
           }

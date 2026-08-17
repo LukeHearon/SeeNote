@@ -226,10 +226,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     hoverTimeoutRef.current = setTimeout(() => setHoveredAnnotationId(null), 300);
   }, []);
 
-  // Focus input when pencil is clicked
+  // Focus (and select all text in) the input when the pencil is clicked or
+  // an annotation's label is retargeted via focusAnnotationInput.
   useEffect(() => {
     if (pencilClickedId) {
-      inputRefs.current[pencilClickedId]?.focus();
+      const el = inputRefs.current[pencilClickedId];
+      el?.focus();
+      el?.select();
       setPencilClickedId(null);
     }
   }, [pencilClickedId]);
@@ -1171,7 +1174,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     zoomIn,
     zoomOut,
     focusAnnotationInput: (id: string) => {
-      inputRefs.current[id]?.focus();
+      setEditingInputId(id);
+      setPencilClickedId(id);
     },
   }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
 

@@ -26,6 +26,22 @@ export const makeCustomTool = (color: string): AnnotationTool => ({
   description: '',
 });
 
+/**
+ * The color an annotation's label should carry: if `text` matches a defined
+ * tool's label (case-insensitively), that tool owns the color; otherwise it's
+ * a genuine Custom label and falls back to `customColor`. Centralizes the
+ * "does this text belong to a defined tool" check so typing a label and
+ * switching tools via hotkey/palette can't disagree on its color.
+ */
+export const resolveLabelColor = (
+  text: string,
+  tools: Pick<AnnotationTool, 'key' | 'text' | 'color'>[],
+  customColor: string,
+): string => {
+  const matchingTool = tools.find(t => t.key !== '0' && t.text.toLowerCase() === text.toLowerCase());
+  return matchingTool ? matchingTool.color : customColor;
+};
+
 const fromFolderTool = (ft: FolderTool, key: string | null, id: string): AnnotationTool => ({
   id,
   key,

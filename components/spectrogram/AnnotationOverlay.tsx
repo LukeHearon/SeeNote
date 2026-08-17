@@ -4,6 +4,7 @@ import { tooltips } from '../../copy/tooltips';
 import { X, Pencil } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
+import { resolveLabelColor } from '../../utils/annotationTools';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 
@@ -215,12 +216,14 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                const newText = e.target.value;
                                const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
                                    // Typing a label that matches a defined tool adopts that tool's
-                                   // canonical text + color; anything else is a Custom label (white).
-                                   const matchingTool = annotationTools.find(t => t.text.toLowerCase() === newText.toLowerCase() && t.key !== "0");
-                                   if (matchingTool) {
-                                        return { ...a, text: matchingTool.text, color: matchingTool.color };
-                                   }
-                                   return { ...a, text: newText, color: "#ffffff" };
+                                   // canonical text + color; anything else is a Custom label.
+                                   const matchingTool = annotationTools.find(t => t.key !== "0" && t.text.toLowerCase() === newText.toLowerCase());
+                                   const customColor = annotationTools.find(t => t.key === "0")?.color ?? "#ffffff";
+                                   return {
+                                       ...a,
+                                       text: matchingTool ? matchingTool.text : newText,
+                                       color: resolveLabelColor(newText, annotationTools, customColor),
+                                   };
                                });
                                pendingAnnotationsRef.current = newAnnotations;
                                onAnnotationsChange(newAnnotations);
