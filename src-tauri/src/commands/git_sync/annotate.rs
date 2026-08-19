@@ -315,6 +315,18 @@ mod tests {
     }
 
     #[test]
+    fn a_teammates_clear_keeps_my_concurrent_work() {
+        // They cleared the whole track while I was still annotating it. Their
+        // delete is honored for the records that already existed, but anything I
+        // added or edited in the meantime is new on my side and survives — I do
+        // not lose work in progress because someone else emptied the track.
+        let ancestor = "1.0\t2.0\told\n3.0\t4.0\talso_old\n";
+        let ours = "1.0\t2.0\told\n3.0\t4.0\talso_old\n9.0\t9.5\tmine\n";
+        let theirs = ""; // the confirmed clear
+        assert_eq!(norm(&set_merge(ancestor, ours, theirs)), vec!["9.0\t9.5\tmine"]);
+    }
+
+    #[test]
     fn sorted_by_start_time() {
         let merged = set_merge("", "5.0\t6.0\tc\n1.0\t2.0\ta\n", "3.0\t4.0\tb\n");
         assert_eq!(
