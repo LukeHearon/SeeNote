@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { Annotation, AnnotationTool, Project } from '../types';
+import { Annotation, AnnotationTool, LoadedAnnotations, Project } from '../types';
 import { readTextFile } from '../utils/tauriCommands';
 import { parseAudacityContent, generateAudacityContent } from '../utils/helpers';
 import { persistAnnotations } from '../utils/annotationPersist';
@@ -28,15 +28,13 @@ interface UseAnnotationLoadArgs {
   // Pending-save timer. Created in the orchestrator because useSyncManagement
   // also flushes it before a sync; shared by both, owned by neither.
   autoSaveTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
-  // Which track's annotations have finished loading from disk. Until this
-  // matches the current track, `annotations` is the transient [] from the
-  // track switch and MUST NOT be persisted — doing so truncated or deleted
-  // real annotation files. Shared with useSyncManagement's flush.
-  loadedAnnotationTrackRef: React.MutableRefObject<string | null>;
-  // Live in-memory annotation list, read inside the auto-load effect without
-  // adding it to the dep array (a reload must not re-fire just because an edit
-  // landed). Owned by the orchestrator; kept current there.
-  annotationsRef: React.MutableRefObject<Annotation[]>;
+  // Which track is hydrated AND that track's annotations, as one atomic value
+  // (see LoadedAnnotations in types.ts). Seeded here the moment a read
+  // completes — track and list assigned together — and kept current as the user
+  // edits by an effect in the orchestrator. Until it names the current track,
+  // nothing may be persisted: `annotations` is the transient [] from the track
+  // switch, and persisting that deleted real annotation files.
+  loadedAnnotationsRef: React.MutableRefObject<LoadedAnnotations | null>;
   // True while a git sync/merge/checkout is running. The autosave suspends disk
   // writes while set, so a debounced write can't race the forced checkout.
   syncingRef: React.MutableRefObject<boolean>;
@@ -70,8 +68,7 @@ export function useAnnotationLoad({
   setAnnotatedFiles,
   setHasLocalChanges,
   autoSaveTimeoutRef,
-  loadedAnnotationTrackRef,
-  annotationsRef,
+  loadedAnnotationsRef,
   syncingRef,
   preSyncSnapshotRef,
   reloadNonce,
@@ -85,7 +82,7 @@ export function useAnnotationLoad({
     // an early timer would fire against the empty placeholder state and delete
     // or truncate the real file (the load itself may take longer than the
     // debounce, or never complete if the read errors).
-    if (loadedAnnotationTrackRef.current !== trackPath) return;
+    if (loadedAnnotationsRef.current?.trackPath !== trackPath) return;
     const annotPath = getAnnotationPath(trackPath);
     if (!annotPath) return;
     // Snapshot the identity at effect time so the async callback can verify
@@ -137,7 +134,13 @@ export function useAnnotationLoad({
     autoSaveTimeoutRef.current = setTimeout(runSave, 300);
 
     return () => {
-      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+      // Null it, don't just clear it. flushPendingAutosave treats a non-null
+      // handle as "a save is pending"; leaving a cleared-but-truthy handle
+      // behind made every flush run even when there was nothing to flush.
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+        autoSaveTimeoutRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotations, trackPath, annotationDirectory, getAnnotationPath]);
@@ -155,10 +158,18 @@ export function useAnnotationLoad({
     if (preSyncSnapshotRef.current && preSyncSnapshotRef.current.trackPath !== expectedTrackPath) {
       preSyncSnapshotRef.current = null;
     }
+    // Capture the in-memory list for THIS track before disarming — the
+    // post-pull merge below needs it as "ours", and disarming is what makes it
+    // unreadable. Null when the snapshot doesn't name this track (mid-load, or
+    // a track switch), which is exactly when there is no trustworthy in-memory
+    // state and the merge must not run.
+    const ours = loadedAnnotationsRef.current?.trackPath === expectedTrackPath
+      ? loadedAnnotationsRef.current.annotations
+      : null;
     // Disarm all persistence for this track until the read completes; if the
     // read errors we stay disarmed rather than risk saving state that doesn't
     // reflect what's on disk.
-    loadedAnnotationTrackRef.current = null;
+    loadedAnnotationsRef.current = null;
 
     (async () => {
       try {
@@ -171,15 +182,15 @@ export function useAnnotationLoad({
         const snapshot = preSyncSnapshotRef.current;
 
         let list: Annotation[];
-        if (snapshot && snapshot.trackPath === expectedTrackPath) {
+        if (snapshot && snapshot.trackPath === expectedTrackPath && ours !== null) {
           // This reload follows a sync/pull for the same track. Three-way-merge
           // the pre-sync ancestor, our current in-memory state (which may hold
           // an edit made *during* the sync that the checkout just clobbered on
           // disk), and the freshly-read disk content — instead of blindly
           // replacing state with disk. If the merge changes disk, write it back
           // through the shared persist helper (empty => remove the file).
-          const ours = generateAudacityContent(annotationsRef.current, decimals);
-          const merged = setMergeContent(snapshot.content, ours, diskContent);
+          const oursContent = generateAudacityContent(ours, decimals);
+          const merged = setMergeContent(snapshot.content, oursContent, diskContent);
           list = merged ? parseAudacityContent(merged, annotationToolsRef.current) : [];
           if (merged !== diskContent) {
             await persistAnnotations(annotPath, list, decimals);
@@ -196,7 +207,13 @@ export function useAnnotationLoad({
         setAnnotations(list);
         annotationsHistoryRef.current = [list];
         historyIndexRef.current = 0;
-        loadedAnnotationTrackRef.current = expectedTrackPath;
+        // Arm persistence with the track and the list TOGETHER. Arming the
+        // track alone and letting a separately-mirrored list catch up on the
+        // next render left a window in which a flush wrote the placeholder []
+        // over a real file — persistAnnotations turns an empty list into a
+        // delete, so two annotated recordings were removed and the deletion
+        // pushed to the whole team.
+        loadedAnnotationsRef.current = { trackPath: expectedTrackPath, annotations: list };
         if (list.length > 0) addLog(`Loaded ${list.length} annotations`);
         setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
       } catch (err) {

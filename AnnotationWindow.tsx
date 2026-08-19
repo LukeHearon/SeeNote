@@ -6,7 +6,7 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import { Annotation, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
+import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
@@ -122,12 +122,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // after annotations/getAnnotationPath exist); kept in a ref so the
   // earlier-declared track-switch callbacks can call the current version.
   const flushPendingAutosaveRef = useRef<() => Promise<void>>(async () => {});
-  // Which track's annotations have finished loading from disk. Set by the
-  // auto-load effect in useAnnotationLoad; both persistence paths (debounced
-  // autosave and useSyncManagement's flush) refuse to touch disk until it
-  // matches the current track, so the transient empty state during a track
-  // switch can never truncate or delete a real annotation file.
-  const loadedAnnotationTrackRef = useRef<string | null>(null);
+  // The single source of truth for annotation persistence: which track is
+  // hydrated AND that track's annotations, as one atomic value (see
+  // LoadedAnnotations in types.ts). Null means "nothing may be written".
+  // Every disk writer — the debounced autosave, useSyncManagement's flush, and
+  // the merge ancestor — reads the track and the list from here together, so
+  // none of them can pair a real track with a stale or placeholder list.
+  const loadedAnnotationsRef = useRef<LoadedAnnotations | null>(null);
   // Merge ancestor for the post-pull reload: the exact annotation state flushed
   // at sync start. Written by useSyncManagement, consumed/cleared by
   // useAnnotationLoad's three-way merge. Owned here, shared by both.
@@ -734,6 +735,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // cached whole-project label index (Find & Rename) no longer matches disk.
     invalidateProjectLabelIndex();
 
+    // Disarm persistence before the state wipe below, synchronously and in the
+    // same tick: from here until useAnnotationLoad has actually read the new
+    // track's file, nothing is allowed to write to disk.
+    loadedAnnotationsRef.current = null;
     setAnnotations([]);
     setIsPlaying(false);
     setIsBuffering(false);
@@ -950,6 +955,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // current list without re-subscribing on every annotation change.
   const sortedAnnotationsRef = useRef(sortedAnnotations);
   useEffect(() => { sortedAnnotationsRef.current = sortedAnnotations; }, [sortedAnnotations]);
+  // Feed subsequent edits into the persistence snapshot, but ONLY while it
+  // already names this track. useAnnotationLoad seeds it (track + freshly read
+  // list, in one assignment) when the read completes; this effect just keeps
+  // the list current as the user edits. The trackPath check is what makes the
+  // lag harmless: before the load completes the snapshot is null and this
+  // writes nothing, so the placeholder [] from a track switch can never be
+  // paired with a real track and persisted as a deletion.
+  useEffect(() => {
+    const loaded = loadedAnnotationsRef.current;
+    if (loaded && loaded.trackPath === trackPath) {
+      loadedAnnotationsRef.current = { trackPath: loaded.trackPath, annotations: sortedAnnotations };
+    }
+  }, [sortedAnnotations, trackPath]);
   // The same list on the display axis, for the prev/next-annotation enablement
   // below: that's a question about what the user can navigate to on screen, and
   // the playhead it's compared against is a display position. (The source-time
@@ -1158,11 +1176,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   } = useSyncManagement({
     project,
     projectRef,
-    annotationsRef: sortedAnnotationsRef,
     getAnnotationPath,
     autoSaveTimeoutRef,
     trackPathRef,
-    loadedAnnotationTrackRef,
+    loadedAnnotationsRef,
     preSyncSnapshotRef,
     addLog,
   });
@@ -1208,8 +1225,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setAnnotatedFiles,
     setHasLocalChanges,
     autoSaveTimeoutRef,
-    loadedAnnotationTrackRef,
-    annotationsRef: sortedAnnotationsRef,
+    loadedAnnotationsRef,
     syncingRef,
     preSyncSnapshotRef,
     reloadNonce,
@@ -1264,6 +1280,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setShuffledFiles([]);
     setCurrentDirectory(project.mediaDirectoryAbs);
     setAnnotatedFiles(new Set());
+    loadedAnnotationsRef.current = null;
     setAnnotations([]);
     setTrackPath(null);
     setVideoSrc(null);
@@ -1368,6 +1385,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (mediaDirChanged) {
       await flushPendingAutosaveRef.current();
       setCurrentDirectory(updated.mediaDirectoryAbs);
+      loadedAnnotationsRef.current = null;
       setTrackPath(null);
       setVideoSrc(null);
       setAnnotations([]);

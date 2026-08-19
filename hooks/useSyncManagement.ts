@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Annotation, Project } from '../types';
+import { LoadedAnnotations, Project } from '../types';
 import { syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type SyncSummary } from '../utils/tauriCommands';
 import { readSyncToken } from '../utils/gitSync';
-import { persistAnnotations } from '../utils/annotationPersist';
+import { persistAnnotations, resolveFlushTarget } from '../utils/annotationPersist';
 import { generateAudacityContent } from '../utils/helpers';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 
@@ -17,25 +17,17 @@ export interface PreSyncSnapshot {
 interface UseSyncManagementArgs {
   project: Project;
   projectRef: React.MutableRefObject<Project>;
-  // Live annotation list — flushed to disk before the sync runs, and captured as
-  // the merge ancestor. This MUST be a ref, not a value: the project-open
-  // auto-pull below runs from an effect that captures its callbacks once, so a
-  // closed-over array would be the mount-time `[]` long after a track loaded —
-  // which stored an EMPTY merge ancestor and made the post-pull reload union
-  // stale local records back in (resurrecting records teammates had edited).
-  // It is the same ref `useAnnotationLoad` reads as "ours", so ancestor and
-  // ours always come from one source.
-  annotationsRef: React.MutableRefObject<Annotation[]>;
   // Resolves a track's on-disk annotation path; used to flush the pending save.
   getAnnotationPath: (trackFilePath: string) => string | null;
   // Pending autosave timer; cleared so the in-flight debounce can't fire after sync.
   autoSaveTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   trackPathRef: React.MutableRefObject<string | null>;
-  // Which track's annotations have finished loading from disk (owned by
-  // useAnnotationLoad). The flush must never persist before this matches the
-  // current track — `annotations` would be the transient empty state from a
-  // track switch, and persisting it truncated real annotation files.
-  loadedAnnotationTrackRef: React.MutableRefObject<string | null>;
+  // Track + that track's annotations, as one atomic value (see
+  // LoadedAnnotations in types.ts). Both the flush and the merge-ancestor
+  // snapshot read the path AND the list from here, so neither can pair a real
+  // track with the transient empty state from a track switch — persisting that
+  // pairing is what deleted real annotation files.
+  loadedAnnotationsRef: React.MutableRefObject<LoadedAnnotations | null>;
   // Ancestor snapshot for the post-pull three-way merge. Written here at sync
   // start (right after the flush); read and cleared by useAnnotationLoad.
   preSyncSnapshotRef: React.MutableRefObject<PreSyncSnapshot | null>;
@@ -50,11 +42,10 @@ interface UseSyncManagementArgs {
 export function useSyncManagement({
   project,
   projectRef,
-  annotationsRef,
   getAnnotationPath,
   autoSaveTimeoutRef,
   trackPathRef,
-  loadedAnnotationTrackRef,
+  loadedAnnotationsRef,
   preSyncSnapshotRef,
   addLog,
 }: UseSyncManagementArgs) {
@@ -82,13 +73,11 @@ export function useSyncManagement({
     if (!autoSaveTimeoutRef.current) return;
     clearTimeout(autoSaveTimeoutRef.current);
     autoSaveTimeoutRef.current = null;
-    const trackPath = trackPathRef.current;
-    // Persist only state that reflects a completed load of the current track;
-    // otherwise the list may be the empty placeholder from a track switch.
-    if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) return;
-    const annotPath = getAnnotationPath(trackPath);
-    if (!annotPath) return;
-    await persistAnnotations(annotPath, annotationsRef.current, projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
+    // The track AND the list come from one read of the snapshot — see
+    // resolveFlushTarget for why pairing them from separate refs deleted files.
+    const target = resolveFlushTarget(loadedAnnotationsRef.current, trackPathRef.current, getAnnotationPath);
+    if (!target) return;
+    await persistAnnotations(target.annotPath, target.annotations, projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getAnnotationPath]);
 
@@ -96,19 +85,20 @@ export function useSyncManagement({
   // post-pull reload will diff current in-memory + disk against, so an edit made
   // while the sync ran is folded back in rather than clobbered by the checkout.
   const snapshotMergeAncestor = useCallback(() => {
-    const trackPath = trackPathRef.current;
-    // Only capture a hydrated track: if the sync starts mid-load, the list is
-    // the transient [] — an empty ancestor would make the reload-merge union
-    // everything and resurrect remote-deleted lines. With no snapshot the
+    // Only capture a hydrated track, and take its path and list from the same
+    // atomic read: if the sync starts mid-load there is no snapshot at all.
+    // Capturing the transient [] as the ancestor would make the reload-merge
+    // union everything and resurrect remote-deleted lines. With no snapshot the
     // reload blind-replaces from disk, which is correct (no user edits exist).
-    if (!trackPath || loadedAnnotationTrackRef.current !== trackPath) {
+    const loaded = loadedAnnotationsRef.current;
+    if (!loaded || loaded.trackPath !== trackPathRef.current) {
       preSyncSnapshotRef.current = null;
       return;
     }
     const decimals = projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
     preSyncSnapshotRef.current = {
-      trackPath,
-      content: generateAudacityContent(annotationsRef.current, decimals),
+      trackPath: loaded.trackPath,
+      content: generateAudacityContent(loaded.annotations, decimals),
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -156,7 +146,7 @@ export function useSyncManagement({
         (summary.annotationsAdded > 0 || summary.annotationsRemoved > 0
           ? ` downloaded +${summary.annotationsAdded}/-${summary.annotationsRemoved} across ${summary.recordingsChanged.length} file(s)` : '') +
         (summary.identsUploaded > 0
-          ? ` uploaded +${summary.annotationsUploaded} across ${summary.identsUploaded} file(s)` : '')
+          ? ` uploaded +${summary.annotationsUploaded}/-${summary.annotationsRemovedOnPush} across ${summary.identsUploaded} file(s)` : '')
       );
       if (summary.pulled) setReloadNonce(n => n + 1);
       setHasLocalChanges(false);

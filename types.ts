@@ -15,6 +15,32 @@ export interface Selection {
   anchor?: number;
 }
 
+/**
+ * What annotation persistence is allowed to write: a track, and that track's
+ * annotations, as ONE value.
+ *
+ * These two facts MUST travel together. They used to be separate refs — a
+ * `loadedAnnotationTrackRef` armed synchronously the moment a track's file
+ * finished loading, and an annotation list mirrored into a ref by a
+ * `useEffect`. The mirror lags the arming by a render, so there was a window
+ * where the guard said "this track is hydrated" while the list was still the
+ * empty placeholder from the track switch. Every flush passes through that
+ * guard (`handleOpenTrack` and every sync/auto-pull begin with one), and an
+ * empty list *deletes* the annotation file — which is how two annotated
+ * recordings were silently removed and the deletion pushed to the whole team.
+ *
+ * Assigning both fields in a single statement makes that window unrepresentable:
+ * a reader either sees a track together with a list that genuinely came from it,
+ * or sees `null` and writes nothing.
+ */
+export interface LoadedAnnotations {
+  /** The track these annotations were loaded from and may be written back to. */
+  trackPath: string;
+  /** That track's annotations. An empty array here is a real, user-authored
+   *  empty state — never a placeholder — so deleting the file is correct. */
+  annotations: Annotation[];
+}
+
 export interface Annotation {
   id: string;
   start: number; // Seconds
