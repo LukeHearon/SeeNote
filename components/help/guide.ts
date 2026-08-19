@@ -253,6 +253,7 @@ export const GUIDE: Part[] = [
           { kind: 'live', control: 'buzzdetect-panel' },
           { kind: 'h', id: 'reading', text: help.buzzdetect.h_reading },
           { kind: 'p', text: help.buzzdetect.p_reading },
+          { kind: 'live', control: 'isolate' },
           { kind: 'h', id: 'frames', text: help.buzzdetect.h_frames },
           { kind: 'p', text: help.buzzdetect.p_frames },
           { kind: 'h', id: 'interact', text: help.buzzdetect.h_interact },

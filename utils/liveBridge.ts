@@ -67,6 +67,9 @@ export interface LiveSnapshot {
   /** Whether any neuron has a Subset at value — gates the scissors button. */
   subsetAvailable: boolean;
   subsetActive: boolean;
+  /** Whether any neuron is isolated — gates the isolate button, as above. */
+  isolateAvailable: boolean;
+  isolateActive: boolean;
   spectrogramSettings: SpectrogramSettings;
   /** Whether the settings popover is open in the main window. */
   spectrogramSettingsOpen: boolean;
@@ -108,6 +111,7 @@ export interface LiveHandlers {
   disableFilter(): void;
   toggleBuzzdetect(): void;
   toggleSubset(): void;
+  toggleIsolate(): void;
   toggleSpectrogramSettings(): void;
   setSpectrogramSettings(patch: Partial<SpectrogramSettings>): void;
   // File panel. No-ops in single-file mode, which publishes `filePanel: null`

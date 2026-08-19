@@ -10,7 +10,7 @@ import { TimeReadout } from '../controls/TimeReadout';
 import { SelectionTimeFields } from '../controls/SelectionTimeFields';
 import { PlaybackSpeedControl } from '../controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from '../controls/FilterControls';
-import { BuzzdetectToggle, SubsetToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
+import { BuzzdetectToggle, IsolateToggle, SubsetToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
@@ -27,6 +27,7 @@ export type LiveControlId =
   | 'filter'
   | 'buzzdetect'
   | 'subset'
+  | 'isolate'
   | 'spectrogram-settings-button'
   | 'spectrogram-settings'
   | 'file-panel-header'
@@ -87,6 +88,8 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     buzzdetectEnabled: false,
     subsetAvailable: false,
     subsetActive: false,
+    isolateAvailable: false,
+    isolateActive: false,
     spectrogramSettings: demoSpectrogramSettings,
     spectrogramSettingsOpen: true,
     sampleRate: DEMO_SAMPLE_RATE,
@@ -141,6 +144,8 @@ function isLive(id: LiveControlId, state: LiveSnapshot | null): boolean {
     // Nothing is ticked to subset by, so the real button isn't on screen to
     // drive — fall back to the demo rather than to a dead scissors.
     case 'subset': return state.subsetAvailable;
+    // Same again: with no neuron isolated the real button isn't on screen.
+    case 'isolate': return state.isolateAvailable;
     case 'file-panel-header': return state.filePanel !== null;
     case 'tool-palette': return state.toolPalette !== null;
     default: return true;
@@ -278,6 +283,13 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <SubsetToggle
             active={s.subsetActive}
             onToggle={() => act(() => client.call('toggleSubset'), () => demo.set({ subsetActive: !demo.snapshot.subsetActive }))}
+          />
+        );
+      case 'isolate':
+        return (
+          <IsolateToggle
+            active={s.isolateActive}
+            onToggle={() => act(() => client.call('toggleIsolate'), () => demo.set({ isolateActive: !demo.snapshot.isolateActive }))}
           />
         );
       case 'spectrogram-settings-button':

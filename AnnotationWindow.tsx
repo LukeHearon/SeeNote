@@ -73,6 +73,10 @@ export interface AnnotationWindowProps {
   touchLastOpened: (id: string) => void;
 }
 
+// Stable identity for "no isolation", so a switched-off isolation doesn't hand
+// the panel a fresh array every render and redraw the canvas for nothing.
+const EMPTY_STRING_LIST: string[] = [];
+
 export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences, touchLastOpened }: AnnotationWindowProps) {
   // Ref that stays in sync with project prop — avoids stale-closure bugs in
   // persist effects and the navigation/shuffle handlers below.
@@ -335,8 +339,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectTogglePinNeuron,
-    buzzdetectIsolatedNeuron,
+    buzzdetectIsolatedNeurons,
     handleBuzzdetectToggleIsolateNeuron,
+    buzzdetectIsolateEnabled,
+    toggleBuzzdetectIsolate,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
   } = useBuzzdetect({ project, ident, addLog });
@@ -369,6 +375,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // from the file": a subset that happens to keep everything still draws as a
   // subset, and one that keeps nothing is still engaged.
   const subsetActive = subsetCriteria !== null;
+
+  // The isolation the graph actually draws: the picked neurons while the master
+  // switch is on, nothing otherwise. Reduced here so the panel is handed one
+  // list rather than a set and a flag to combine for itself.
+  const activeIsolatedNeurons = useMemo(
+    () => (buzzdetectIsolateEnabled ? buzzdetectIsolatedNeurons : EMPTY_STRING_LIST),
+    [buzzdetectIsolateEnabled, buzzdetectIsolatedNeurons],
+  );
 
   // ── Subset ↔ spectrogram cache ─────────────────────────────────────────────
   // Two things the chunk cache needs from the subset, and they change on
@@ -1842,6 +1856,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       buzzdetectEnabled,
       subsetAvailable: buzzdetectSubsetNeurons.length > 0,
       subsetActive,
+      isolateAvailable: buzzdetectIsolatedNeurons.length > 0,
+      isolateActive: activeIsolatedNeurons.length > 0,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
       sampleRate,
@@ -1891,6 +1907,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
       toggleSubset: toggleBuzzdetectSubset,
+      toggleIsolate: toggleBuzzdetectIsolate,
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
@@ -2304,8 +2321,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
                   onToggleNeuron={handleBuzzdetectToggleNeuron}
                   onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
-                  isolatedNeuron={buzzdetectIsolatedNeuron}
+                  isolatedNeurons={buzzdetectIsolatedNeurons}
                   onToggleIsolateNeuron={handleBuzzdetectToggleIsolateNeuron}
+                  isolateEnabled={buzzdetectIsolateEnabled}
+                  onToggleIsolate={toggleBuzzdetectIsolate}
                   onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                   onThresholdChange={handleBuzzdetectThresholdChange}
                   onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
@@ -2538,7 +2557,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  dateTimeFormat={dateTimeFormat}
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}
-                 isolatedNeuron={buzzdetectIsolatedNeuron}
+                 isolatedNeurons={activeIsolatedNeurons}
                  neuronColors={buzzdetectNeuronColors}
                  seriesMode={buzzdetectSeriesMode}
                  binWidthOverride={buzzdetectBinWidthOverride}

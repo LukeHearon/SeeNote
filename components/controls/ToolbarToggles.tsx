@@ -1,4 +1,4 @@
-import { Settings, Activity, Scissors } from 'lucide-react';
+import { Settings, Activity, Focus, Scissors } from 'lucide-react';
 import { tooltips } from '../../copy/tooltips';
 
 // The icon toggles for the spectrogram and buzzdetect. Extracted so the help
@@ -66,6 +66,29 @@ export function SubsetToggle({ active, onToggle, compact = false }: ToggleProps 
       data-help-target="buzzdetect-subset-toggle"
     >
       <Scissors size={compact ? 12 : 16} />
+    </button>
+  );
+}
+
+/**
+ * Fades every line the palette's isolated set doesn't name (components/
+ * NeuronPalette.tsx) — "fade the rest" vs "fade nothing". Only rendered when at
+ * least one neuron is isolated, for the same reason as SubsetToggle: with none
+ * there is nothing the button could do.
+ *
+ * Beside the subset scissors in the Neurons section header, since both are one
+ * switch over a set the rows below them name — the scissors decides what stays
+ * in the TRACK, this one only what stands out on the graph.
+ */
+export function IsolateToggle({ active, onToggle, compact = false }: ToggleProps & { active: boolean }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={toggleClass(active, compact)}
+      data-tooltip={tooltips.buzzdetectIsolate}
+      data-help-target="buzzdetect-isolate-toggle"
+    >
+      <Focus size={compact ? 12 : 16} />
     </button>
   );
 }

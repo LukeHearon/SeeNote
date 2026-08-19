@@ -53,6 +53,10 @@ const MAX_LINE_POINTS = 1000;
 const MIN_UNIT_BOUNDARY_PX = 6;
 // Narrower than this, a per-frame dot is no longer legible as its own marker.
 const MIN_DOT_PX = 4;
+// Default for the isolation prop: a module-level constant rather than a fresh
+// [] per render, which would be a new identity on every render and rebuild the
+// draw callback each time.
+const EMPTY_ISOLATION: readonly string[] = [];
 // Alpha the other neurons drop to while one is isolated. Far enough back that
 // the isolated line reads alone at a glance, still visible as context.
 const ISOLATED_ALPHA = 0.15;
@@ -91,12 +95,15 @@ interface BuzzdetectPanelProps {
   thresholds: Record<string, number | null>;
   hiddenNeurons: string[];
   /**
-   * The one neuron to draw at full strength, fading every other plotted line
-   * back — or null for no isolation. Transient, and deliberately a fade rather
-   * than a filter: the other lines stay on screen as context for the one being
-   * read, and dropping the isolation puts them back untouched.
+   * The neurons to draw at full strength, fading every other plotted line back.
+   * Empty (or absent) means no isolation. Transient, and deliberately a fade
+   * rather than a filter: the other lines stay on screen as context for the
+   * ones being read, and dropping the isolation puts them back untouched.
+   *
+   * Already reduced by the caller: whether the master switch is on is not this
+   * component's question, so an isolation that's turned off arrives as [].
    */
-  isolatedNeuron?: string | null;
+  isolatedNeurons?: readonly string[];
   // Per-neuron color override, keyed by neuron label. Absent entries fall
   // back to the palette-by-index default (buzzdetectNeuronColor).
   neuronColors: Record<string, string>;
@@ -152,7 +159,7 @@ export default function BuzzdetectPanel({
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
   thresholds,
   hiddenNeurons,
-  isolatedNeuron = null,
+  isolatedNeurons = EMPTY_ISOLATION,
   neuronColors: neuronColorOverrides,
   seriesMode,
   binWidthOverride,
@@ -696,9 +703,9 @@ export default function BuzzdetectPanel({
 
     // Isolation, applied as an alpha on everything a neuron draws: its line,
     // its dots and its threshold. A fade, not a filter — the other neurons
-    // stay on screen as the context the isolated one is being read against.
+    // stay on screen as the context the isolated ones are being read against.
     const alphaOf = (n: number) => (
-      isolatedNeuron !== null && neurons[n] !== isolatedNeuron ? ISOLATED_ALPHA : 1
+      isolatedNeurons.length > 0 && !isolatedNeurons.includes(neurons[n]) ? ISOLATED_ALPHA : 1
     );
 
     // Per-neuron threshold lines (dashed, in the neuron's color) — only in
@@ -869,7 +876,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeuron, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeurons, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks

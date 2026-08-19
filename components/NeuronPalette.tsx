@@ -6,7 +6,7 @@ import { SubsetStats } from '../utils/buzzdetectStats';
 import { pickedNeuronsIn } from '../utils/buzzdetectSubset';
 import { clamp, formatTime } from '../utils/helpers';
 import ToolCell from './ToolCell';
-import { BuzzdetectToggle, SubsetToggle } from './controls/ToolbarToggles';
+import { BuzzdetectToggle, IsolateToggle, SubsetToggle } from './controls/ToolbarToggles';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import DraftNumberInput from './DraftNumberInput';
@@ -30,9 +30,12 @@ interface NeuronPaletteProps {
   onToggleCollapsed: () => void;
   onToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   onSetAllNeuronsHidden: (hidden: boolean) => void;
-  /** The neuron currently isolated (every other line faded), or null. */
-  isolatedNeuron: string | null;
+  /** The isolated neurons — every other line is faded while isolation is on. */
+  isolatedNeurons: string[];
   onToggleIsolateNeuron: (neuron: string) => void;
+  /** Master isolate switch — "fade the rest" vs "fade nothing". */
+  isolateEnabled: boolean;
+  onToggleIsolate: () => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
   /** null clears the threshold, so the neuron stops detecting anything. */
   onThresholdChange: (neuron: string, value: number | null) => void;
@@ -112,8 +115,10 @@ function NeuronPalette({
   onToggleCollapsed,
   onToggleNeuron,
   onSetAllNeuronsHidden,
-  isolatedNeuron,
+  isolatedNeurons,
   onToggleIsolateNeuron,
+  isolateEnabled,
+  onToggleIsolate,
   onNeuronColorChange,
   onThresholdChange,
   onSubsetThresholdChange,
@@ -192,6 +197,11 @@ function NeuronPalette({
     [subsetThresholds, data],
   );
 
+  // Isolation only means something once a neuron is named: with an empty set
+  // the master switch has nothing to fade against, so it reads as off (and its
+  // button isn't shown) however it was left.
+  const isolateActive = isolateEnabled && isolatedNeurons.length > 0;
+
   // One button whose action flips with the current state: while every neuron is
   // plotted the only useful next step is clearing them all, so the label always
   // names what a click is about to do.
@@ -206,7 +216,7 @@ function NeuronPalette({
         onSelect: () => onTogglePinNeuron(n),
       },
       {
-        label: isolatedNeuron === n ? copy.menuUnisolate : copy.menuIsolate,
+        label: isolatedNeurons.includes(n) ? copy.menuUnisolate : copy.menuIsolate,
         icon: <Focus size={12} />,
         onSelect: () => onToggleIsolateNeuron(n),
       },
@@ -259,9 +269,10 @@ function NeuronPalette({
     const isSubset = subsetNeurons.includes(n);
     const isPinned = pinnedNeurons.includes(n);
     const isPlotted = !hidden.has(n);
-    // While one neuron is isolated the palette says so the way the graph does:
-    // the others recede rather than disappear, and nothing about them changed.
-    const faded = isolatedNeuron !== null && isolatedNeuron !== n;
+    // While isolation is on the palette says so the way the graph does: the
+    // neurons it doesn't name recede rather than disappear, and nothing about
+    // them changed.
+    const faded = isolateActive && !isolatedNeurons.includes(n);
     return (
       <div
         key={n}
@@ -498,11 +509,16 @@ function NeuronPalette({
               {allShown ? copy.selectNone : copy.selectAll}
             </button>
           )}
-          {/* The two buzzdetect switches sit with the neurons rather than in
-              the toolbar: the scissors is keyed to the Subset at boxes right
-              below it, and the graph the other one opens is what these rows
-              describe. Both are reachable exactly when this section is — i.e.
-              when the project names a buzzdetect directory. */}
+          {/* The buzzdetect switches sit with the neurons rather than in the
+              toolbar: each is keyed to something the rows below name — the
+              scissors to the Subset at boxes, the isolate to the isolated set —
+              and the graph the last one opens is what these rows describe. All
+              are reachable exactly when this section is — i.e. when the project
+              names a buzzdetect directory. Both set-keyed switches appear only
+              once their set has something in it. */}
+          {isolatedNeurons.length > 0 && (
+            <IsolateToggle compact active={isolateActive} onToggle={onToggleIsolate} />
+          )}
           {cuttingNeurons.length > 0 && (
             <SubsetToggle compact active={subsetEnabled} onToggle={onToggleSubset} />
           )}

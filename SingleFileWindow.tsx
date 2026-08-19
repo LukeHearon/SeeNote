@@ -322,9 +322,11 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       bandPassFilter,
       buzzdetectAvailable: false,
       buzzdetectEnabled: false,
-      // No buzzdetect here, so nothing to subset by.
+      // No buzzdetect here, so nothing to subset by and nothing to isolate.
       subsetAvailable: false,
       subsetActive: false,
+      isolateAvailable: false,
+      isolateActive: false,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
       sampleRate,
@@ -360,6 +362,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
       toggleBuzzdetect: () => {},
       toggleSubset: () => {},
+      toggleIsolate: () => {},
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => {},
