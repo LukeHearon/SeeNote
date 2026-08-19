@@ -335,7 +335,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectTogglePinNeuron,
-    handleBuzzdetectSoloNeuron,
+    buzzdetectIsolatedNeuron,
+    handleBuzzdetectToggleIsolateNeuron,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
   } = useBuzzdetect({ project, ident, addLog });
@@ -2303,7 +2304,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
                   onToggleNeuron={handleBuzzdetectToggleNeuron}
                   onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
-                  onSoloNeuron={(n) => handleBuzzdetectSoloNeuron(buzzdetectData?.neurons ?? [], n)}
+                  isolatedNeuron={buzzdetectIsolatedNeuron}
+                  onToggleIsolateNeuron={handleBuzzdetectToggleIsolateNeuron}
                   onNeuronColorChange={handleBuzzdetectNeuronColorChange}
                   onThresholdChange={handleBuzzdetectThresholdChange}
                   onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
@@ -2536,6 +2538,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  dateTimeFormat={dateTimeFormat}
                  thresholds={buzzdetectThresholds}
                  hiddenNeurons={buzzdetectHiddenNeurons}
+                 isolatedNeuron={buzzdetectIsolatedNeuron}
                  neuronColors={buzzdetectNeuronColors}
                  seriesMode={buzzdetectSeriesMode}
                  binWidthOverride={buzzdetectBinWidthOverride}

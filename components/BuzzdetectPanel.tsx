@@ -53,6 +53,9 @@ const MAX_LINE_POINTS = 1000;
 const MIN_UNIT_BOUNDARY_PX = 6;
 // Narrower than this, a per-frame dot is no longer legible as its own marker.
 const MIN_DOT_PX = 4;
+// Alpha the other neurons drop to while one is isolated. Far enough back that
+// the isolated line reads alone at a glance, still visible as context.
+const ISOLATED_ALPHA = 0.15;
 // How close (px, vertically) the cursor has to be to a neuron's point for the
 // readout to narrow to that neuron. A little wider than the dot itself, so it
 // can be aimed at without precision, but well short of half a panel — past this
@@ -87,6 +90,13 @@ interface BuzzdetectPanelProps {
   /** Per-neuron detection thresholds; null = this neuron never detects. */
   thresholds: Record<string, number | null>;
   hiddenNeurons: string[];
+  /**
+   * The one neuron to draw at full strength, fading every other plotted line
+   * back — or null for no isolation. Transient, and deliberately a fade rather
+   * than a filter: the other lines stay on screen as context for the one being
+   * read, and dropping the isolation puts them back untouched.
+   */
+  isolatedNeuron?: string | null;
   // Per-neuron color override, keyed by neuron label. Absent entries fall
   // back to the palette-by-index default (buzzdetectNeuronColor).
   neuronColors: Record<string, string>;
@@ -142,6 +152,7 @@ export default function BuzzdetectPanel({
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
   thresholds,
   hiddenNeurons,
+  isolatedNeuron = null,
   neuronColors: neuronColorOverrides,
   seriesMode,
   binWidthOverride,
@@ -683,6 +694,13 @@ export default function BuzzdetectPanel({
       ctx.stroke();
     }
 
+    // Isolation, applied as an alpha on everything a neuron draws: its line,
+    // its dots and its threshold. A fade, not a filter — the other neurons
+    // stay on screen as the context the isolated one is being read against.
+    const alphaOf = (n: number) => (
+      isolatedNeuron !== null && neurons[n] !== isolatedNeuron ? ISOLATED_ALPHA : 1
+    );
+
     // Per-neuron threshold lines (dashed, in the neuron's color) — only in
     // activation mode; a detection rate isn't in the threshold's units.
     if (seriesMode === 'activation') {
@@ -691,6 +709,7 @@ export default function BuzzdetectPanel({
         const th = thresholdOf(neurons[n]);
         if (!isFinite(th)) continue;
         const y = yOf(th);
+        ctx.globalAlpha = alphaOf(n);
         ctx.strokeStyle = neuronColors[n] + '66';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -698,6 +717,7 @@ export default function BuzzdetectPanel({
         ctx.stroke();
       }
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
 
     // Polylines + dots, one neuron at a time. In activation mode each point
@@ -707,6 +727,7 @@ export default function BuzzdetectPanel({
     // per-frame value is).
     for (const n of enabled) {
       const color = neuronColors[n];
+      ctx.globalAlpha = alphaOf(n);
       const th = thresholdOf(neurons[n]);
       const perFrameValue = (i: number) => seriesMode === 'activation' ? values[n][i] : (values[n][i] >= th ? 1 : 0);
       // Bucket aggregate, hoisted: the grouped polyline and the grouped dots
@@ -810,6 +831,7 @@ export default function BuzzdetectPanel({
         }
       }
     }
+    ctx.globalAlpha = 1;
 
     ctx.restore();
 
@@ -847,7 +869,7 @@ export default function BuzzdetectPanel({
         yctx.restore();
       }
     }
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeuron, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks

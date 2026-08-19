@@ -240,6 +240,7 @@ export const neuronPalette = {
   get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin"; },
   get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
   get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
+  get menuUnisolate() { return getOverride('ui.neuronPalette.menuUnisolate') ?? "Stop isolating"; },
   get menuColor() { return getOverride('ui.neuronPalette.menuColor') ?? "Color…"; },
   get menuPlot() { return getOverride('ui.neuronPalette.menuPlot') ?? "Plot"; },
   get menuUnplot() { return getOverride('ui.neuronPalette.menuUnplot') ?? "Stop plotting"; },

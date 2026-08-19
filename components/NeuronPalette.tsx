@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, Palette, Pin, PinOff, RotateCcw, Scissors, Settings, X } from 'lucide-react';
+import { Eye, EyeOff, Focus, Palette, Pin, PinOff, RotateCcw, Scissors, Settings, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { BUZZDETECT_PALETTE, DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
@@ -30,7 +30,9 @@ interface NeuronPaletteProps {
   onToggleCollapsed: () => void;
   onToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   onSetAllNeuronsHidden: (hidden: boolean) => void;
-  onSoloNeuron: (neuron: string) => void;
+  /** The neuron currently isolated (every other line faded), or null. */
+  isolatedNeuron: string | null;
+  onToggleIsolateNeuron: (neuron: string) => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
   /** null clears the threshold, so the neuron stops detecting anything. */
   onThresholdChange: (neuron: string, value: number | null) => void;
@@ -110,7 +112,8 @@ function NeuronPalette({
   onToggleCollapsed,
   onToggleNeuron,
   onSetAllNeuronsHidden,
-  onSoloNeuron,
+  isolatedNeuron,
+  onToggleIsolateNeuron,
   onNeuronColorChange,
   onThresholdChange,
   onSubsetThresholdChange,
@@ -202,7 +205,11 @@ function NeuronPalette({
         icon: isPinned ? <PinOff size={12} /> : <Pin size={12} />,
         onSelect: () => onTogglePinNeuron(n),
       },
-      { label: copy.menuIsolate, icon: <Scissors size={12} />, onSelect: () => onSoloNeuron(n) },
+      {
+        label: isolatedNeuron === n ? copy.menuUnisolate : copy.menuIsolate,
+        icon: <Focus size={12} />,
+        onSelect: () => onToggleIsolateNeuron(n),
+      },
       {
         label: copy.menuColor,
         icon: <Palette size={12} />,
@@ -252,16 +259,20 @@ function NeuronPalette({
     const isSubset = subsetNeurons.includes(n);
     const isPinned = pinnedNeurons.includes(n);
     const isPlotted = !hidden.has(n);
+    // While one neuron is isolated the palette says so the way the graph does:
+    // the others recede rather than disappear, and nothing about them changed.
+    const faded = isolatedNeuron !== null && isolatedNeuron !== n;
     return (
       <div
         key={n}
-        className="relative"
+        className={`relative transition-opacity ${faded ? 'opacity-40' : ''}`}
         onContextMenu={(e) => { e.preventDefault(); setContextNeuron({ neuron: n, x: e.clientX, y: e.clientY }); }}
       >
-        {/* The whole row is the plot switch — dot included, since a click
-            anywhere on a neuron means the same thing. Active = plotted, and a
-            hollow dot is one that isn't. Whether it also cuts the subset is
-            said by its "Subset at" box holding a number, in the accent
+        {/* The color dot is the plot switch, and only the dot: the rest of the
+            row carries fields to type in and a right-click menu, so a click
+            that lands on it shouldn't change what's drawn. Active = plotted,
+            and a hollow dot is one that isn't. Whether it also cuts the subset
+            is said by its "Subset at" box holding a number, in the accent
             colour. */}
         <ToolCell
           isActive={isPlotted}
@@ -269,8 +280,7 @@ function NeuronPalette({
           dotColor={color}
           dotHollow={!isPlotted}
           label={n}
-          onClick={() => onToggleNeuron(n, isPlotted)}
-          tooltip={isPlotted ? tooltips.buzzdetectUnplotNeuron : tooltips.buzzdetectPlotNeuron}
+          tooltip={tooltips.buzzdetectNeuronRow}
           onDotClick={() => onToggleNeuron(n, isPlotted)}
           dotTooltip={isPlotted ? tooltips.buzzdetectUnplotNeuron : tooltips.buzzdetectPlotNeuron}
           trailing={(

@@ -5,7 +5,13 @@ interface ToolCellProps {
   color: string;
   dotColor: string;
   label: string;
-  onClick: () => void;
+  /**
+   * Activate action for the cell body. Omit where the cell has no whole-row
+   * action (the neuron palette, where only the dot and the trailing controls
+   * do anything) — the full-bleed button isn't rendered at all then, so a
+   * click on the row is inert rather than silently swallowed.
+   */
+  onClick?: () => void;
   /** Mono text shown at the trailing edge. Ignored when `trailing` is given. */
   hotkey?: string;
   /** Arbitrary trailing content (e.g. an editable value plus a toggle). */
@@ -51,7 +57,7 @@ function ToolCell({
       }}
       data-tooltip={tooltip ? `${label}\n${tooltip}` : label}
     >
-      <button onClick={onClick} aria-label={label} className="absolute inset-0 w-full h-full rounded" />
+      {onClick && <button onClick={onClick} aria-label={label} className="absolute inset-0 w-full h-full rounded" />}
       <div className="relative flex items-center gap-1.5 pointer-events-none">
         {onDotClick ? (
           <button

@@ -90,8 +90,15 @@ export interface BuzzdetectApi {
   handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
   /** Pin a neuron to the top of the palette, or unpin it. Newly pinned goes last among the pinned. */
   handleBuzzdetectTogglePinNeuron: (neuron: string) => void;
-  /** Plot only this neuron, hiding every other one in `neurons`. */
-  handleBuzzdetectSoloNeuron: (neurons: string[], neuron: string) => void;
+  /**
+   * The neuron being isolated, or null. Isolating fades the other lines on the
+   * graph rather than un-plotting them, so it changes nothing that has to be
+   * put back — and transient, never persisted: it's a way of looking at the
+   * graph for a moment, not a setting.
+   */
+  buzzdetectIsolatedNeuron: string | null;
+  /** Isolate this neuron, or clear the isolation if it's already the isolated one. */
+  handleBuzzdetectToggleIsolateNeuron: (neuron: string) => void;
   /** Toggle subset mode. No-op when no neuron is picked — there'd be nothing to subset by. */
   toggleBuzzdetectSubset: () => void;
   /**
@@ -134,6 +141,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const [buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate] = useState<number>(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
   const [buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer] = useState<number>(project.preferences.uiSettings?.buzzdetectSubsetBuffer ?? DEFAULT_BUZZDETECT_SUBSET_BUFFER);
   const [buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
+  // Transient (see BuzzdetectApi): a fade over the other lines, not a setting.
+  const [buzzdetectIsolatedNeuron, setBuzzdetectIsolatedNeuron] = useState<string | null>(null);
   const [buzzdetectPanelHeight, setBuzzdetectPanelHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
   const [buzzdetectSettingsOpen, setBuzzdetectSettingsOpen] = useState(false);
@@ -207,10 +216,14 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   const handleBuzzdetectTogglePinNeuron = useCallback((neuron: string) => {
     setBuzzdetectPinnedNeurons(prev => prev.includes(neuron) ? prev.filter(n => n !== neuron) : [...prev, neuron]);
   }, []);
-  // Hides exactly the file's own neurons, so a label from a previously loaded
-  // file never lingers in hiddenNeurons (same reason as setAllNeuronsHidden).
-  const handleBuzzdetectSoloNeuron = useCallback((neurons: string[], neuron: string) => {
-    setBuzzdetectHiddenNeurons(neurons.filter(n => n !== neuron));
+  // Isolating also plots the neuron, since isolating one that isn't drawn
+  // would fade every line and show nothing. Nothing else is touched: the other
+  // neurons stay plotted, just faded, so dropping the isolation brings back
+  // exactly what was there — and no more, since the ones the user had switched
+  // off were never switched on.
+  const handleBuzzdetectToggleIsolateNeuron = useCallback((neuron: string) => {
+    setBuzzdetectIsolatedNeuron(prev => (prev === neuron ? null : neuron));
+    setBuzzdetectHiddenNeurons(prev => prev.filter(n => n !== neuron));
   }, []);
   // The picks are the threshold map's keys — one place a pick can live, so a
   // typed "Subset at" value and the neuron being cut by can never disagree.
@@ -266,7 +279,8 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
     handleBuzzdetectTogglePinNeuron,
-    handleBuzzdetectSoloNeuron,
+    buzzdetectIsolatedNeuron,
+    handleBuzzdetectToggleIsolateNeuron,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
   };
