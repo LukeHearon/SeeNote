@@ -78,6 +78,7 @@ export function ExampleFilePanel() {
         onImportAnnotations={() => {}}
         onRefresh={() => {}}
         nonMediaFiles={demoNonMediaFiles}
+        filenameTimeInfo={{ pattern: '', dateTimeFormat: 'friendly' }}
       />
     </div>
   );

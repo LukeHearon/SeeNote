@@ -5,6 +5,26 @@ import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import { fileTree as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
+import { parseFilenameTime } from '../utils/filenameTime';
+import { previewDateTimeFormat, DateTimeFormat } from '../utils/datetimeDisplay';
+
+export interface FilenameTimeInfo {
+  pattern: string;
+  offsetSeparator?: string;
+  dateTimeFormat: DateTimeFormat;
+}
+
+/**
+ * Filename tooltip, with a "(August 13, 1:00a)" second line when the name
+ * matches the project's filename timestamp pattern. `displayText` is what the
+ * tooltip shows (a bare name or a full path); the pattern is always matched
+ * against just the basename, so a coincidental digit run in a parent
+ * directory can't produce a bogus date.
+ */
+function tooltipWithDate(displayText: string, name: string, info: FilenameTimeInfo): string {
+  const date = parseFilenameTime(name, info.pattern, info.offsetSeparator);
+  return date ? `${displayText}\n(${previewDateTimeFormat(info.dateTimeFormat, date)})` : displayText;
+}
 
 interface TreeNode {
   name: string;
@@ -44,6 +64,7 @@ interface FileTreeProps {
   initialEnteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
   nonMediaFiles?: string[];
+  filenameTimeInfo: FilenameTimeInfo;
   /**
    * Reports the header state the guide's live copy of these buttons needs, plus
    * the one action (expand/collapse) whose state lives inside this component.
@@ -185,6 +206,7 @@ interface TreeItemProps {
   toggleNonMedia: (path: string) => void;
   /** Folder this node sits in — rows report it to the pinned breadcrumb. */
   parentPath: string;
+  filenameTimeInfo: FilenameTimeInfo;
 }
 
 const TreeItem: React.FC<TreeItemProps> = ({
@@ -201,6 +223,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
   expandedNonMedia,
   toggleNonMedia,
   parentPath,
+  filenameTimeInfo,
 }) => {
   if (node.isDir) {
     const isExpanded = expandedDirs.has(node.path);
@@ -261,6 +284,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
             expandedNonMedia={expandedNonMedia}
             toggleNonMedia={toggleNonMedia}
             parentPath={node.path}
+            filenameTimeInfo={filenameTimeInfo}
           />
         ))}
         {isExpanded && node.nonMediaFiles && node.nonMediaFiles.length > 0 && (
@@ -331,7 +355,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
             : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
       }`}
       style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
-      data-tooltip={node.name}
+      data-tooltip={tooltipWithDate(node.name, node.name, filenameTimeInfo)}
       data-active-file={isActive ? '' : undefined}
       data-crumb={parentPath}
     >
@@ -371,6 +395,7 @@ function FileTree({
   initialEnteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
+  filenameTimeInfo,
   onHeaderState,
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
@@ -913,7 +938,7 @@ function FileTree({
                           : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
                     }`}
                     style={{ opacity }}
-                    data-tooltip={filePath}
+                    data-tooltip={tooltipWithDate(filePath, basename(filePath), filenameTimeInfo)}
                     data-active-file={isActive ? '' : undefined}
                   >
                     {isAudio
@@ -954,6 +979,7 @@ function FileTree({
                   expandedNonMedia={expandedNonMedia}
                   toggleNonMedia={toggleNonMedia}
                   parentPath={effectiveRoot ?? ''}
+                  filenameTimeInfo={filenameTimeInfo}
                 />
               ))}
               {rootNonMedia.length > 0 && (

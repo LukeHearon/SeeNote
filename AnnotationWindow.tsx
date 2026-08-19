@@ -2170,6 +2170,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onImportAnnotations: handleImportAnnotations,
             onRefresh: handleRefreshFiles,
             nonMediaFiles: allNonMediaFiles,
+            filenameTimeInfo: {
+              pattern: project.settings.filenameTimeFormat ?? '',
+              offsetSeparator: project.settings.filenameTimeOffsetSeparator,
+              dateTimeFormat,
+            },
             initialEnteredFolderPath: project?.preferences.enteredFolderPath ?? null,
             onEnteredFolderChange: handleEnteredFolderChange,
             onHeaderState: handleFileTreeHeaderState,
