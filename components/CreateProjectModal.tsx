@@ -28,6 +28,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [buzzdetectDir, setBuzzdetectDir] = useState('');
   // null = auto-detect from each CSV (the default for new projects).
   const [filenameTimeFormat, setFilenameTimeFormat] = useState('');
+  const [filenameTimeOffsetSeparator, setFilenameTimeOffsetSeparator] = useState('');
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(null);
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
@@ -123,6 +124,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
         buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
       filenameTimeFormat: filenameTimeFormat.trim() || undefined,
+        filenameTimeOffsetSeparator: filenameTimeOffsetSeparator.trim() || undefined,
         outputFormat: 'txt',
         outputRoundingDecimals,
         nameGradientColors: gradientColors,
@@ -228,6 +230,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               annotationDirNotExistMessage={createProjectModal.infoDirWillBeCreated}
               filenameTimeFormat={filenameTimeFormat}
               onFilenameTimeFormatChange={setFilenameTimeFormat}
+              filenameTimeOffsetSeparator={filenameTimeOffsetSeparator}
+              onFilenameTimeOffsetSeparatorChange={setFilenameTimeOffsetSeparator}
               outputRoundingDecimals={outputRoundingDecimals}
               onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
               buzzdetectDir={buzzdetectDir}

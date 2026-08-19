@@ -268,6 +268,14 @@ export interface ProjectSettings {
    * as wall-clock datetimes. See utils/filenameTime.ts for the token set.
    */
   filenameTimeFormat?: string;
+  /**
+   * Optional separator (e.g. "_s") marking an elapsed-seconds offset in media
+   * filenames, added on top of the time parsed via `filenameTimeFormat`
+   * (e.g. "..._s52860.mp3" adds 52860s). The digits between the separator and
+   * the extension must parse as an integer, or the offset is silently
+   * ignored. See utils/filenameTime.ts.
+   */
+  filenameTimeOffsetSeparator?: string;
   /** Optional directory of buzzdetect `{ident}_buzzdetect.csv` files. */
   buzzdetectDirectory?: ProjectPath;
   /** Frame length in seconds, used as a fallback bin width when it can't be

@@ -995,8 +995,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const trackStartDate = useMemo(() => {
     const pattern = project.settings.filenameTimeFormat;
     if (!pattern || !trackPath) return null;
-    return parseFilenameTime(basename(trackPath), pattern);
-  }, [project.settings.filenameTimeFormat, trackPath]);
+    return parseFilenameTime(basename(trackPath), pattern, project.settings.filenameTimeOffsetSeparator);
+  }, [project.settings.filenameTimeFormat, project.settings.filenameTimeOffsetSeparator, trackPath]);
 
   // 'datetime' only applies where a start time is known; elsewhere readouts
   // fall back to the last elapsed unit the user chose.

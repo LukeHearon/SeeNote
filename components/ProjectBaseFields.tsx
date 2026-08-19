@@ -9,7 +9,7 @@ import CollapsibleSection from './CollapsibleSection';
 import DraftNumberInput from './DraftNumberInput';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
 import { normalizeGitRemoteUrl } from '../utils/gitSync';
-import { formatFilenameTime, isUsableFilenameTimePattern, FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
+import { formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
 
 const PREVIEW_DATE = FILENAME_PREVIEW_DATE;
 const PREVIEW_DATE_LABEL = 'July 31, 2026 4:56 PM';
@@ -33,6 +33,8 @@ interface Props {
   // Filename timestamp
   filenameTimeFormat: string;
   onFilenameTimeFormatChange: (v: string) => void;
+  filenameTimeOffsetSeparator: string;
+  onFilenameTimeOffsetSeparatorChange: (v: string) => void;
   // Output
   outputRoundingDecimals: number;
   onOutputRoundingDecimalsChange: (n: number) => void;
@@ -66,6 +68,8 @@ export default function ProjectBaseFields({
   annotationDirNotExistMessage,
   filenameTimeFormat,
   onFilenameTimeFormatChange,
+  filenameTimeOffsetSeparator,
+  onFilenameTimeOffsetSeparatorChange,
   outputRoundingDecimals,
   onOutputRoundingDecimalsChange,
   buzzdetectDir,
@@ -160,6 +164,25 @@ export default function ProjectBaseFields({
           ) : (
             <p className="text-amber-500/80 text-xs mt-1">{projectBaseFields.filenameTimeIncomplete}</p>
           )
+        )}
+      </div>
+
+      <div>
+        <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.filenameTimeOffsetLabel}</label>
+        <input
+          type="text"
+          value={filenameTimeOffsetSeparator}
+          onChange={e => onFilenameTimeOffsetSeparatorChange(e.target.value)}
+          placeholder={projectBaseFields.filenameTimeOffsetPlaceholder}
+          spellCheck={false}
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
+        />
+        <p className="text-gray-600 text-xs mt-1">{projectBaseFields.filenameTimeOffsetHelp}</p>
+        {filenameTimeOffsetSeparator.trim() !== '' && isUsableFilenameTimePattern(filenameTimeFormat) && (
+          <p className="text-gray-500 text-xs mt-1 font-mono">
+            E.g. <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}{filenameTimeOffsetSeparator}52860.mp3</span>{' '}
+            → {new Date(PREVIEW_DATE.getTime() + (parseFilenameOffsetSeconds(`${filenameTimeOffsetSeparator}52860`, filenameTimeOffsetSeparator) ?? 0) * 1000).toLocaleString()}
+          </p>
         )}
       </div>
 

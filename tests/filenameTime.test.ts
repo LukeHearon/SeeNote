@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern } from '../utils/filenameTime';
+import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds } from '../utils/filenameTime';
 
 const PATTERN = 'YYMMDD_HHMM';
 
@@ -47,6 +47,51 @@ describe('parseFilenameTime', () => {
     expect(parseFilenameTime('0456.mp3', 'HHmm')).toBeNull();
     expect(isUsableFilenameTimePattern('HHmm')).toBe(false);
     expect(isUsableFilenameTimePattern(PATTERN)).toBe(true);
+  });
+});
+
+describe('parseFilenameOffsetSeconds', () => {
+  it('reads the digits between the separator and the extension', () => {
+    expect(parseFilenameOffsetSeconds('240903_1319_s52860.mp3', '_s')).toBe(52860);
+  });
+
+  it('returns null when the separator is empty', () => {
+    expect(parseFilenameOffsetSeconds('240903_1319_s52860.mp3', '')).toBeNull();
+  });
+
+  it('returns null when the separator is not in the filename', () => {
+    expect(parseFilenameOffsetSeconds('240903_1319.mp3', '_s')).toBeNull();
+  });
+
+  it('returns null when the text after the separator is not an integer', () => {
+    expect(parseFilenameOffsetSeconds('240903_1319_snope.mp3', '_s')).toBeNull();
+  });
+
+  it('handles a filename with no extension', () => {
+    expect(parseFilenameOffsetSeconds('240903_1319_s52860', '_s')).toBe(52860);
+  });
+});
+
+describe('parseFilenameTime with an offset separator', () => {
+  it('adds the parsed offset onto the parsed date, rolling over as needed', () => {
+    // 2024-09-03 13:19 + 52860s = 2024-09-04 04:00:00
+    expect(parseFilenameTime('240903_1319_s52860.mp3', 'YYMMDD_HHMM', '_s'))
+      .toEqual(new Date(2024, 8, 4, 4, 0, 0));
+  });
+
+  it('falls back to the plain date when the separator is absent from the filename', () => {
+    expect(parseFilenameTime('240903_1319.mp3', 'YYMMDD_HHMM', '_s'))
+      .toEqual(new Date(2024, 8, 3, 13, 19, 0));
+  });
+
+  it('falls back to the plain date when the offset does not parse as an integer', () => {
+    expect(parseFilenameTime('240903_1319_snope.mp3', 'YYMMDD_HHMM', '_s'))
+      .toEqual(new Date(2024, 8, 3, 13, 19, 0));
+  });
+
+  it('ignores offsets entirely when no separator is given', () => {
+    expect(parseFilenameTime('240903_1319_s52860.mp3', 'YYMMDD_HHMM'))
+      .toEqual(new Date(2024, 8, 3, 13, 19, 0));
   });
 });
 

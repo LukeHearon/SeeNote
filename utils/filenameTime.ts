@@ -17,6 +17,11 @@
 //   mm    minute (always; never ambiguous)
 //   ss    second   (SS is accepted as a synonym)
 // Everything else in the pattern is a literal character.
+//
+// Separately, a project can also declare an "offset separator" (e.g. "_s")
+// for recorders that encode an elapsed-seconds offset rather than, or in
+// addition to, a clock time (e.g. "240903_1319_s52860.mp3" = 2024-09-03
+// 13:19 plus 52860s). See parseFilenameOffsetSeconds.
 
 /**
  * A fixed, arbitrary moment shared by the settings previews that illustrate a
@@ -102,7 +107,29 @@ export function isUsableFilenameTimePattern(pattern: string): boolean {
  * (e.g. "260230"). Match is unanchored, so surrounding text — a site prefix, a
  * "_part2" suffix, the extension — is fine.
  */
-export function parseFilenameTime(filename: string, pattern: string): Date | null {
+/**
+ * Find `separator` in `filename` and parse the digits between it and the
+ * extension as a whole number of seconds (e.g. "..._s52860.mp3" → 52860).
+ * Returns null — silently, no error — when `separator` is empty, absent from
+ * the name, or not followed by an integer.
+ */
+export function parseFilenameOffsetSeconds(filename: string, separator: string): number | null {
+  if (!separator) return null;
+  const idx = filename.lastIndexOf(separator);
+  if (idx === -1) return null;
+  const afterSeparator = filename.slice(idx + separator.length);
+  const dotIndex = afterSeparator.lastIndexOf('.');
+  const digits = dotIndex === -1 ? afterSeparator : afterSeparator.slice(0, dotIndex);
+  if (!/^-?\d+$/.test(digits)) return null;
+  return parseInt(digits, 10);
+}
+
+/**
+ * Like `parseFilenameTime`, but also applies an offset found in the filename
+ * between `offsetSeparator` and the extension (see `parseFilenameOffsetSeconds`).
+ * Pass an empty/undefined separator to skip offset handling entirely.
+ */
+export function parseFilenameTime(filename: string, pattern: string, offsetSeparator?: string): Date | null {
   if (!isUsableFilenameTimePattern(pattern)) return null;
 
   const parts = parsePattern(pattern);
@@ -141,6 +168,11 @@ export function parseFilenameTime(filename: string, pattern: string): Date | nul
   const date = new Date(year, month - 1, day, hour, minute, second);
   // Reject dates JS silently rolled over (Feb 30 → Mar 2).
   if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+
+  if (offsetSeparator) {
+    const offsetSeconds = parseFilenameOffsetSeconds(filename, offsetSeparator);
+    if (offsetSeconds !== null) date.setSeconds(date.getSeconds() + offsetSeconds);
+  }
   return date;
 }
 
