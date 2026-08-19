@@ -1172,6 +1172,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     hasRemoteChanges,
     reloadNonce,
     handleSync,
+    confirmPendingClears,
     flushPendingAutosave,
   } = useSyncManagement({
     project,
@@ -1198,6 +1199,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => {
     if (!syncSummary && !syncError) return;
     setSyncToastFading(false);
+    // A toast asking whether to commit cleared tracks must not fade out from
+    // under the user — it is the only thing standing between an accidentally
+    // emptied track and everyone else losing those records.
+    if (syncSummary && syncSummary.pendingClears.length > 0) return;
     const fadeTimer = setTimeout(() => setSyncToastFading(true), 4500);
     const clearTimer = setTimeout(() => {
       setSyncSummary(null);
@@ -2075,6 +2080,31 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           ) : syncSummary && (
             <div className="text-xs text-slate-300 mt-2 space-y-1">
               <p>{syncSummary.message}</p>
+              {syncSummary.pendingClears.length > 0 && (
+                <div className="mt-2 p-2 rounded border border-amber-600/60 bg-amber-950/30 space-y-2">
+                  <p className="text-amber-200">{annotationWindow.pendingClearsPrompt}</p>
+                  <ul className="max-h-32 overflow-y-auto space-y-0.5">
+                    {syncSummary.pendingClears.map(id => (
+                      <li key={id} className="font-mono text-[10px] text-amber-100/80 truncate">{id}</li>
+                    ))}
+                  </ul>
+                  <p className="text-amber-200">{annotationWindow.pendingClearsQuestion}</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { const ids = syncSummary.pendingClears; setSyncSummary(null); confirmPendingClears(ids); }}
+                      className="px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white text-xs"
+                    >
+                      {annotationWindow.pendingClearsCommit}
+                    </button>
+                    <button
+                      onClick={() => setSyncSummary(null)}
+                      className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs"
+                    >
+                      {annotationWindow.pendingClearsKeep}
+                    </button>
+                  </div>
+                </div>
+              )}
               {syncSummary.identsUploaded > 0 && (
                 <p>
                   Uploaded <span className="text-green-400">+{syncSummary.annotationsUploaded}</span>,{' '}

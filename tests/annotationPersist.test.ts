@@ -32,11 +32,15 @@ describe('persistAnnotations', () => {
     expect(removeFile).not.toHaveBeenCalled();
   });
 
-  it('removes the file for an empty list — never writes a 0-byte file', async () => {
+  it('writes an EMPTY FILE for an empty list — never deletes', async () => {
+    // The three on-disk states each mean one thing: records, deliberately
+    // cleared (empty), unknown (absent). The app only ever produces the first
+    // two. Deleting the file would spell an accident exactly like an intent,
+    // which is how a bug wiped annotated recordings for the whole team.
     const result = await persistAnnotations('/x/a.txt', [], 4);
-    expect(result).toBe('removed');
-    expect(removeFile).toHaveBeenCalledWith('/x/a.txt');
-    expect(writeTextFile).not.toHaveBeenCalled();
+    expect(result).toBe('cleared');
+    expect(writeTextFile).toHaveBeenCalledWith('/x/a.txt', '');
+    expect(removeFile).not.toHaveBeenCalled();
   });
 });
 
@@ -91,16 +95,19 @@ describe('resolveFlushTarget', () => {
     expect(target?.annotations).toBe(loaded.annotations);
   });
 
-  it('passes through a genuinely emptied track so the file is deleted', async () => {
+  it('passes through a genuinely emptied track so the clear is recorded', async () => {
     // An empty list HERE is real: the track was loaded and the user removed
-    // every annotation. Deleting the file is the correct outcome — the guard
-    // must not block it, or clearing a track would silently do nothing.
+    // every annotation. The guard must not block it, or clearing a track would
+    // silently do nothing. It becomes an empty file, and committing that file
+    // is separately gated on confirmation (git_sync/repo.rs stage_and_commit).
     const emptied = { trackPath: '/audio/a.wav', annotations: [] };
     const target = resolveFlushTarget(emptied, '/audio/a.wav', pathFor);
     expect(target).toEqual({ annotPath: '/ann/a.wav.txt', annotations: [] });
 
+    vi.mocked(writeTextFile).mockClear();
     vi.mocked(removeFile).mockClear();
     await persistAnnotations(target!.annotPath, target!.annotations, 4);
-    expect(removeFile).toHaveBeenCalledWith('/ann/a.wav.txt');
+    expect(writeTextFile).toHaveBeenCalledWith('/ann/a.wav.txt', '');
+    expect(removeFile).not.toHaveBeenCalled();
   });
 });

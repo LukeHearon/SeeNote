@@ -507,6 +507,8 @@ export const GUIDE: Part[] = [
           { kind: 'p', text: help.sync.p1 },
           { kind: 'h', id: 'merging', text: help.sync.h_merging },
           { kind: 'p', text: help.sync.p_merging },
+          { kind: 'h', id: 'clearing', text: help.sync.h_clearing },
+          { kind: 'p', text: help.sync.p_clearing },
           { kind: 'h', id: 'shared', text: help.sync.h_shared },
           { kind: 'p', text: help.sync.p_shared },
           { kind: 'h', id: 'token', text: help.sync.h_token },

@@ -123,7 +123,7 @@ export function useAnnotationLoad({
         }
         setAnnotatedFiles(prev => {
           const next = new Set(prev);
-          if (result === 'removed') next.delete(savedTrackPath);
+          if (result === 'cleared') next.delete(savedTrackPath);
           else next.add(savedTrackPath);
           return next;
         });

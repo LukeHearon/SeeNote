@@ -1,21 +1,33 @@
 import { Annotation, LoadedAnnotations } from '../types';
-import { writeTextFile, removeFile } from './tauriCommands';
+import { writeTextFile } from './tauriCommands';
 import { generateAudacityContent } from './helpers';
 
-// The single write-or-delete decision for an annotation file: a non-empty list
-// is written, an empty list removes the file — a 0-byte annotation file is
-// never a valid on-disk state. Both the debounced autosave and the pre-sync
-// flush must go through here so the two paths cannot disagree (a flush that
-// wrote "" where the autosave would have deleted is how truncated annotation
-// files ended up committed and pushed).
+/**
+ * The single write decision for an annotation file. Both the debounced autosave
+ * and the pre-sync flush go through here so the two paths cannot disagree.
+ *
+ * A track with no annotations is written as an EMPTY FILE — it is never deleted.
+ * The three on-disk states each mean one thing, and the app only ever produces
+ * the first two:
+ *   - has records  -> the track's annotations
+ *   - exists, empty -> the user deliberately cleared the track
+ *   - absent        -> unknown; the sync layer treats it as no information
+ *
+ * This app used to delete the file instead. That made "cleared by the user" and
+ * "removed by a bug" the same thing on disk, so a bug that wrongly believed a
+ * track was empty deleted real annotations and the sync propagated it to the
+ * whole team. Never removing files means an accident can no longer be spelled
+ * as an intent. (Committing the empty file is still gated on confirmation —
+ * see stage_and_commit in git_sync/repo.rs.)
+ */
 export async function persistAnnotations(
   annotPath: string,
   annotations: Annotation[],
   decimals: number,
-): Promise<'written' | 'removed'> {
+): Promise<'written' | 'cleared'> {
   if (annotations.length === 0) {
-    await removeFile(annotPath);
-    return 'removed';
+    await writeTextFile(annotPath, '');
+    return 'cleared';
   }
   await writeTextFile(annotPath, generateAudacityContent(annotations, decimals));
   return 'written';

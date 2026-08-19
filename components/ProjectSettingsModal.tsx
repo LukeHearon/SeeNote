@@ -4,7 +4,7 @@ import { projectSettingsModal } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
-import { getOrphanedAnnotations, deleteFiles, copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
+import { copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { DateTimeFormat, previewDateTimeFormat } from '../utils/datetimeDisplay';
 import { FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
@@ -15,7 +15,7 @@ import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
 import ApplicationSettingsFields from './ApplicationSettingsFields';
 
-type Step = 'form' | 'orphanConfirm' | 'annotationCopyConfirm' | 'conflictConfirm';
+type Step = 'form' | 'annotationCopyConfirm' | 'conflictConfirm';
 type SettingsTab = 'application' | 'settings' | 'preferences';
 
 interface Props {
@@ -80,7 +80,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [activeTab, setActiveTab] = useState<SettingsTab>(project ? 'settings' : 'application');
   const [focusToken, setFocusToken] = useState(false);
   const [step, setStep] = useState<Step>('form');
-  const [orphanedPaths, setOrphanedPaths] = useState<string[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -170,25 +169,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     };
     pendingRef.current = { settings, preferences };
 
-    const mediaDirChanged = resolvedMediaDir !== project.mediaDirectoryAbs;
+    // Pointing the project at a different media directory used to offer to
+    // delete annotation files with no matching media. It no longer does, and
+    // nothing else may either: annotations are the irreplaceable half of this
+    // project, and "no media here" is not evidence the labels are unwanted —
+    // the recordings may simply have been offloaded to free disk space.
+    // Orphans are harmless; they sit in the annotation directory until the
+    // media comes back.
     const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
-
-    if (mediaDirChanged) {
-      setIsBusy(true);
-      try {
-        const orphans = await getOrphanedAnnotations(project.annotationDirectoryAbs, resolvedMediaDir);
-        setIsBusy(false);
-        if (orphans.length > 0) {
-          setOrphanedPaths(orphans);
-          setStep('orphanConfirm');
-          return;
-        }
-      } catch (err) {
-        setIsBusy(false);
-        setError(String(err));
-        return;
-      }
-    }
 
     if (annotationDirChanged) {
       setIsBusy(true);
@@ -204,38 +192,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     }
 
     commitSave(settings, preferences);
-  };
-
-  const handleOrphanResolution = async (resolution: 'delete' | 'retain') => {
-    if (resolution === 'delete') {
-      setIsBusy(true);
-      try {
-        await deleteFiles(orphanedPaths);
-      } catch (err) {
-        setError(String(err));
-        setIsBusy(false);
-        return;
-      }
-      setIsBusy(false);
-    }
-
-    const annotationDirChanged = resolvedAnnotationDir !== project.annotationDirectoryAbs;
-    if (annotationDirChanged) {
-      setIsBusy(true);
-      let sourceFiles: string[] = [];
-      try {
-        sourceFiles = await listAnnotationFilesRecursive(project.annotationDirectoryAbs, '.txt');
-      } catch { /* old dir doesn't exist */ }
-      setIsBusy(false);
-      if (sourceFiles.length > 0) {
-        setStep('annotationCopyConfirm');
-        return;
-      }
-    }
-
-    const pending = pendingRef.current;
-    if (!pending) return;
-    commitSave(pending.settings, pending.preferences);
   };
 
   const handleCopyDecision = async (shouldCopy: boolean) => {
@@ -445,38 +401,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             </>
           )}
         </SettingsModalShell>
-      )}
-
-      {step === 'orphanConfirm' && (
-        <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
-          <h2 className="text-white text-lg font-semibold mb-4">{projectSettingsModal.orphanedTitle}</h2>
-          <p className="text-gray-300 text-sm mb-2">
-            {orphanedPaths.length} annotation {orphanedPaths.length === 1 ? 'file has' : 'files have'} {projectSettingsModal.orphanedNoMedia}
-          </p>
-          <ul className="bg-gray-800 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-1">
-            {orphanedPaths.map(p => (
-              <li key={p} className="text-gray-400 text-xs font-mono truncate">{p}</li>
-            ))}
-          </ul>
-          <p className="text-gray-300 text-sm mb-4">{projectSettingsModal.orphanedWhatToDo}</p>
-          {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
-          <div className="flex gap-3 justify-end">
-            <button
-              onClick={() => handleOrphanResolution('retain')}
-              disabled={isBusy}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-            >
-              {projectSettingsModal.retainButton}
-            </button>
-            <button
-              onClick={() => handleOrphanResolution('delete')}
-              disabled={isBusy}
-              className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
-            >
-              {isBusy ? projectSettingsModal.deletingButton : projectSettingsModal.deleteOrphanedButton}
-            </button>
-          </div>
-        </div>
       )}
 
       {step === 'annotationCopyConfirm' && (

@@ -62,6 +62,10 @@ export function useSyncManagement({
   // annotation file (which may have changed on disk during the merge).
   const [reloadNonce, setReloadNonce] = useState(0);
 
+  // The commit message the last sync ran with, so confirming a pending clear
+  // re-runs the same sync rather than silently dropping a typed message.
+  const lastCommitMessageRef = useRef('');
+
   const setSyncingBoth = useCallback((v: boolean) => {
     syncingRef.current = v;
     setSyncing(v);
@@ -106,7 +110,7 @@ export function useSyncManagement({
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
   // autosave first so local edits aren't lost, runs the embedded-git pipeline,
   // then reloads the active track if the pull changed anything on disk.
-  const handleSync = useCallback(async (commitMessage = '') => {
+  const handleSync = useCallback(async (commitMessage = '', confirmedClears: string[] = []) => {
     const cfg = projectRef.current.settings.gitSync;
     if (!cfg?.remoteUrl) {
       setSyncError('Configure the repository URL under Project Settings → Sync first.');
@@ -123,6 +127,7 @@ export function useSyncManagement({
     setSyncError(null);
     setSyncSummary(null);
     setSyncIsAutoPull(false);
+    lastCommitMessageRef.current = commitMessage;
     try {
       await flushPendingAutosave();
       snapshotMergeAncestor();
@@ -139,6 +144,7 @@ export function useSyncManagement({
         token,
         projectRef.current.preferences.gitSyncUser?.authorName ?? '',
         commitMessage,
+        confirmedClears,
       );
       setSyncSummary(summary);
       addLog(
@@ -158,6 +164,13 @@ export function useSyncManagement({
       setSyncingBoth(false);
     }
   }, [flushPendingAutosave, snapshotMergeAncestor, addLog, setSyncingBoth]);
+
+  // The user answered "yes, commit these clears": re-run the same sync with the
+  // idents confirmed, so staging is allowed to commit those empty files.
+  const confirmPendingClears = useCallback(async (idents: string[]) => {
+    if (idents.length === 0) return;
+    await handleSync(lastCommitMessageRef.current, idents);
+  }, [handleSync]);
 
   // Pull remote annotation changes in (fetch + merge, never push) for the
   // background auto-pull — on project open and the heartbeat below. Silent on
@@ -257,6 +270,7 @@ export function useSyncManagement({
     hasRemoteChanges,
     reloadNonce,
     handleSync,
+    confirmPendingClears,
     flushPendingAutosave,
   };
 }

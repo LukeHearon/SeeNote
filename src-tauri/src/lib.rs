@@ -143,8 +143,6 @@ pub fn run() {
             commands::projects::write_app_settings,
             commands::projects::project_dir_exists,
             commands::projects::create_dir_all,
-            commands::projects::get_orphaned_annotations,
-            commands::projects::delete_files,
             commands::projects::copy_annotation_files,
             commands::projects::list_txt_files_recursive,
             commands::projects::reveal_in_file_manager,

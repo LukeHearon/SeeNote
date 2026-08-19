@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 use tauri::Manager;
 
-use super::shared::{atomic_write, walk_files, AUDIO_EXTS, VIDEO_EXTS};
+use super::shared::{atomic_write, walk_files};
 
 /// Slim registry entry stored in `{app_data}/.projects/projects.json`. Maps a
 /// stable id to a project directory on this machine plus a `last_opened`
@@ -185,71 +185,6 @@ pub async fn project_dir_exists(project_dir: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn create_dir_all(path: String) -> Result<(), String> {
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())
-}
-
-fn has_media_file_with_stem(dir: &Path, stem: &str) -> bool {
-    for ext in AUDIO_EXTS.iter().chain(VIDEO_EXTS.iter()) {
-        let candidate = dir.join(format!("{}.{}", stem, ext));
-        if candidate.exists() {
-            return true;
-        }
-    }
-    false
-}
-
-#[tauri::command]
-pub async fn get_orphaned_annotations(
-    annotation_dir: String,
-    new_audio_dir: String,
-) -> Result<Vec<String>, String> {
-    let ann_root = Path::new(&annotation_dir);
-    let audio_root = Path::new(&new_audio_dir);
-
-    if !ann_root.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut orphans = vec![];
-    collect_orphaned_annotations(ann_root, audio_root, &mut orphans);
-    Ok(orphans)
-}
-
-fn collect_orphaned_annotations(ann_root: &Path, audio_root: &Path, orphans: &mut Vec<String>) {
-    walk_files(ann_root, &mut |path| {
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            return;
-        }
-        // Derive relative path from annotation root
-        if let Ok(rel) = path.strip_prefix(ann_root) {
-            // Get the stem (remove .txt extension)
-            if let Some(stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) {
-                // Corresponding audio directory: audio_root / rel_parent
-                let rel_parent = rel.parent().unwrap_or(Path::new(""));
-                let audio_dir = audio_root.join(rel_parent);
-                if !has_media_file_with_stem(&audio_dir, stem) {
-                    orphans.push(path.to_string_lossy().to_string());
-                }
-            }
-        }
-    });
-}
-
-#[tauri::command]
-pub async fn delete_files(paths: Vec<String>) -> Result<(), String> {
-    let mut errors = vec![];
-    for path_str in &paths {
-        let path = Path::new(path_str);
-        if path.exists() {
-            if let Err(e) = std::fs::remove_file(path) {
-                errors.push(format!("{}: {}", path_str, e));
-            }
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("\n"))
-    }
 }
 
 #[tauri::command]

@@ -76,11 +76,6 @@ export const projectSettingsModal = {
   get cancelButton() { return getOverride('ui.projectSettingsModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.projectSettingsModal.saveButton') ?? "Save"; },
   get savingButton() { return getOverride('ui.projectSettingsModal.savingButton') ?? "Checking…"; },
-  get orphanedTitle() { return getOverride('ui.projectSettingsModal.orphanedTitle') ?? "Orphaned Annotations"; },
-  get orphanedWhatToDo() { return getOverride('ui.projectSettingsModal.orphanedWhatToDo') ?? "What would you like to do with these files?"; },
-  get retainButton() { return getOverride('ui.projectSettingsModal.retainButton') ?? "Retain"; },
-  get deleteOrphanedButton() { return getOverride('ui.projectSettingsModal.deleteOrphanedButton') ?? "Delete Orphaned"; },
-  get deletingButton() { return getOverride('ui.projectSettingsModal.deletingButton') ?? "Deleting…"; },
   get moveAnnotationsTitle() { return getOverride('ui.projectSettingsModal.moveAnnotationsTitle') ?? "Move Annotations"; },
   get moveAnnotationsMessage() { return getOverride('ui.projectSettingsModal.moveAnnotationsMessage') ?? "The annotations directory has changed. Would you like to copy your existing annotation files to the new directory?"; },
   get handleConflictsTitle() { return getOverride('ui.projectSettingsModal.handleConflictsTitle') ?? "Handle Conflicts"; },
@@ -92,7 +87,6 @@ export const projectSettingsModal = {
   get copyingButton() { return getOverride('ui.projectSettingsModal.copyingButton') ?? "Copying…"; },
   get projectDirLabel() { return getOverride('ui.projectSettingsModal.projectDirLabel') ?? "Project Directory"; },
   get showInFinderTitle() { return getOverride('ui.projectSettingsModal.showInFinderTitle') ?? "Show in Finder"; },
-  get orphanedNoMedia() { return getOverride('ui.projectSettingsModal.orphanedNoMedia') ?? "no corresponding media in the new media directory:"; },
   // Auto-pull preference
   get autoPullLabel() { return getOverride('ui.projectSettingsModal.autoPullLabel') ?? "Automatically pull remote changes"; },
   get autoPullHint() { return getOverride('ui.projectSettingsModal.autoPullHint') ?? "Merge in teammates' annotation changes on project open and every couple of minutes, without pushing your own edits."; },
@@ -382,6 +376,13 @@ export const annotationWindow = {
   get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },
   get syncComplete() { return getOverride('ui.annotationWindow.syncComplete') ?? "Sync complete"; },
   get autoPullComplete() { return getOverride('ui.annotationWindow.autoPullComplete') ?? "Annotations updated"; },
+  // Shown when a sync finds annotation files that are now empty while history
+  // still holds records for them. Emptying a track deletes those records for
+  // every collaborator, so it is never committed without this confirmation.
+  get pendingClearsPrompt() { return getOverride('ui.annotationWindow.pendingClearsPrompt') ?? "The following tracks now have no annotations:"; },
+  get pendingClearsQuestion() { return getOverride('ui.annotationWindow.pendingClearsQuestion') ?? "Commit these changes?"; },
+  get pendingClearsCommit() { return getOverride('ui.annotationWindow.pendingClearsCommit') ?? "Commit"; },
+  get pendingClearsKeep() { return getOverride('ui.annotationWindow.pendingClearsKeep') ?? "Not now"; },
   // Import-conflict dialog
   get importConflictTitle() { return getOverride('ui.annotationWindow.importConflictTitle') ?? "Annotations already exist"; },
   get importErrorTitle() { return getOverride('ui.annotationWindow.importErrorTitle') ?? "Could not import annotations"; },

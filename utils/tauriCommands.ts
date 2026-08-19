@@ -428,6 +428,13 @@ export interface SyncSummary {
   annotationsUploaded: number;
   annotationsRemovedOnPush: number;
   identsUploaded: number;
+  /**
+   * Idents whose annotation file is now empty while history still holds records
+   * for them — i.e. tracks the user appears to have cleared. These are NOT
+   * committed: emptying a track destroys records for everyone, so the UI lists
+   * them and asks. Confirming re-runs the sync with them as `confirmedClears`.
+   */
+  pendingClears: string[];
   message: string;
 }
 
@@ -454,8 +461,11 @@ export const syncProject = (
   authorName: string,
   // Optional custom commit message; empty string uses the default ("Update annotations").
   commitMessage = '',
+  // Idents from a previous run's `pendingClears` that the user has confirmed
+  // clearing. Empty on a first attempt.
+  confirmedClears: string[] = [],
 ): Promise<SyncSummary> =>
-  invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName, commitMessage });
+  invoke('sync_project', { projectDir, annotationDir, remoteUrl, token, authorName, commitMessage, confirmedClears });
 
 /**
  * Pull remote annotation changes in without pushing local commits: stages and

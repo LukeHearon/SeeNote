@@ -178,15 +178,6 @@ export const writeAppSettings = async (settings: AppSettings): Promise<void> => 
 
 // ── Misc project-related filesystem helpers (unchanged signatures) ────────────
 
-export const getOrphanedAnnotations = (
-  annotationDir: string,
-  newAudioDir: string,
-): Promise<string[]> =>
-  invoke('get_orphaned_annotations', { annotationDir, newAudioDir });
-
-export const deleteFiles = (paths: string[]): Promise<void> =>
-  invoke('delete_files', { paths });
-
 export const copyAnnotationFiles = (
   copies: { src: string; dst: string }[],
   conflictResolution: 'overwrite' | 'skip',

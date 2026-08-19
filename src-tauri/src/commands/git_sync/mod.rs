@@ -90,6 +90,11 @@ pub struct SyncSummary {
     pub annotations_removed_on_push: usize,
     /// Number of recording files with annotation changes uploaded.
     pub idents_uploaded: usize,
+    /// Idents whose annotation file is now empty while HEAD still holds records
+    /// for them. These clears were NOT committed: emptying a track destroys
+    /// records for everyone, so the UI lists these and asks first. Confirming
+    /// re-runs the sync with them in `confirmed_clears`.
+    pub pending_clears: Vec<String>,
     /// Human-readable note for the UI (e.g. "Already up to date").
     pub message: String,
 }
@@ -120,10 +125,13 @@ pub async fn sync_project(
     // Optional custom commit message for the local commit. Empty falls back to
     // the default ("Update annotations").
     commit_message: String,
+    // Idents the user has explicitly confirmed clearing (see
+    // SyncSummary::pending_clears). Empty on a first attempt.
+    confirmed_clears: Vec<String>,
 ) -> Result<SyncSummary, String> {
     // Heavy/blocking libgit2 work off the async runtime's cooperative threads.
     tauri::async_runtime::spawn_blocking(move || {
-        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, &commit_message, true)
+        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, &commit_message, true, &confirmed_clears)
     })
     .await
     .map_err(|e| format!("sync task panicked: {e}"))?
@@ -145,7 +153,9 @@ pub async fn pull_project(
     author_name: String,
 ) -> Result<SyncSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, "", false)
+        // Never any confirmed clears: the background auto-pull runs unattended,
+        // and emptying a track is only ever committed with the user watching.
+        sync_blocking(&project_dir, &annotation_dir, &remote_url, &token, &author_name, "", false, &[])
     })
     .await
     .map_err(|e| format!("pull task panicked: {e}"))?
@@ -188,6 +198,7 @@ fn sync_blocking(
     author_name: &str,
     commit_message: &str,
     do_push: bool,
+    confirmed_clears: &[String],
 ) -> Result<SyncSummary, String> {
     let project_path = Path::new(project_dir);
     let ann_path = Path::new(annotation_dir);
@@ -265,7 +276,8 @@ fn sync_blocking(
         "" => "Update annotations",
         m => m,
     };
-    let pushed_local = stage_and_commit(&repo, project_path, &ann_rel, &sig, message)?;
+    let staged = stage_and_commit(&repo, project_path, &ann_rel, &sig, message, confirmed_clears)?;
+    let pushed_local = staged.committed;
 
     // 2. Fetch remote.
     fetch(&repo, &branch, token)?;
@@ -284,6 +296,24 @@ fn sync_blocking(
 
     // 3. Merge remote tracking branch into local (set-merge for annotations).
     let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig)?;
+    summary.pending_clears = staged.pending_clears;
+
+    // A pending clear is a change the user made that we deliberately did NOT
+    // commit. The merge's checkout force-updates the working tree to HEAD, so it
+    // just wrote those records back over the empty files — silently undoing the
+    // clear before the user has even been asked about it, and leaving a
+    // confirmation that would then find nothing to clear. Re-empty them so the
+    // working tree keeps showing what the user actually did.
+    if summary.pulled {
+        for ident in &summary.pending_clears {
+            let path = project_path.join(&ann_rel).join(format!("{ident}.{ANNOTATION_EXT}"));
+            if path.exists() {
+                std::fs::write(&path, "").map_err(|e| {
+                    format!("failed to re-apply cleared track {}: {e}", path.display())
+                })?;
+            }
+        }
+    }
 
     // 4. Push (skipped entirely for a pull-only run).
     let pushed = if do_push { push(&repo, &branch, token)? } else { false };
@@ -302,7 +332,9 @@ fn sync_blocking(
     }
 
     if summary.message.is_empty() {
-        summary.message = if summary.pushed {
+        summary.message = if !summary.pending_clears.is_empty() && !summary.pushed && !summary.pulled {
+            "No changes synced.".into()
+        } else if summary.pushed {
             "Sync complete.".into()
         } else if summary.pulled {
             "Pulled remote changes.".into()
@@ -410,7 +442,7 @@ mod tests {
         write_gitignore(&root, &ann_rel).unwrap();
         std::fs::write(root.join("ann").join("a.txt"), "1.0\t2.0\ta\n").unwrap();
         let sig = Signature::now("T", "t@seenote.local").unwrap();
-        stage_and_commit(&repo, &root, &ann_rel, &sig, "init").unwrap();
+        stage_and_commit(&repo, &root, &ann_rel, &sig, "init", &[]).unwrap();
 
         // Simulate the annotation dir vanishing (unmounted volume / renamed).
         std::fs::remove_dir_all(root.join("ann")).unwrap();
@@ -425,6 +457,7 @@ mod tests {
             "T",
             "",
             false,
+            &[],
         )
         .unwrap_err();
         assert!(err.contains("refusing to sync"), "unexpected error: {err}");

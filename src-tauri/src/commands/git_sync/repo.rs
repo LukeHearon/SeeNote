@@ -113,16 +113,41 @@ pub(crate) fn write_gitignore(project_path: &Path, ann_rel: &Path) -> Result<(),
 // Stage + commit
 // ---------------------------------------------------------------------------
 
+/// What staging decided, beyond whether it produced a commit.
+#[derive(Default)]
+pub(crate) struct StageOutcome {
+    /// True if a commit was created.
+    pub committed: bool,
+    /// Idents whose annotation file is now empty while HEAD still holds
+    /// records for them — a clear that was NOT staged because it destroys
+    /// data. The UI lists these and asks before a later sync commits them.
+    pub pending_clears: Vec<String>,
+}
+
 /// Stage the curated set explicitly (never `git add .`) and commit if the index
-/// differs from HEAD. Returns true if a commit was created.
+/// differs from HEAD.
+///
+/// The on-disk states an annotation file can be in, and what each means:
+///   - has records  -> those are the track's annotations.
+///   - exists, empty -> the user deliberately cleared the track. Committing it
+///     propagates the clear (set_merge reads "no records" as delete-all).
+///   - absent        -> UNKNOWN, never a deletion. Nothing is staged for it, so
+///     a file that vanishes cannot destroy anyone else's copy.
+///
+/// The empty case is the only destructive one, so it is gated: an empty file
+/// whose HEAD blob still has records is reported in `pending_clears` rather than
+/// staged, unless its ident appears in `confirmed_clears`.
 pub(crate) fn stage_and_commit(
     repo: &Repository,
     project_path: &Path,
     ann_rel: &Path,
     sig: &Signature,
     message: &str,
-) -> Result<bool, String> {
+    confirmed_clears: &[String],
+) -> Result<StageOutcome, String> {
     let mut index = repo.index().map_err(gerr)?;
+    let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
+    let mut pending_clears: Vec<String> = Vec::new();
 
     // HEAD's annotation blobs (path → content), used to skip precision-only
     // rewrites below. Empty when there are no commits yet.
@@ -144,22 +169,33 @@ pub(crate) fn stage_and_commit(
         };
         let content = std::fs::read_to_string(abs).unwrap_or_default();
 
-        // Fix 2: never commit a 0-byte / whitespace-only annotation file. An
-        // empty file is never a legitimate state (the app deletes the file when
-        // a track has zero annotations), and the set-merge reads an empty file
-        // as "delete every line", truncating the record for every teammate.
-        // Skipping it here means such a file is neither staged nor staged for
-        // deletion: stage_deletions only removes files ABSENT from disk, and
-        // this file exists, so its previously committed content simply stays
-        // untouched in HEAD.
+        let rel_posix = rel.to_string_lossy().replace('\\', "/");
+
+        // An empty file means the user cleared the track. That is legitimate and
+        // must sync — but it is also the only edit that destroys records for
+        // everyone, so it never happens unattended. If HEAD still has records
+        // here, report the ident and leave HEAD untouched until the user
+        // confirms; the confirmed ident comes back in `confirmed_clears`.
         if content.trim().is_empty() {
-            continue;
+            let had_records = head_blobs
+                .get(&rel_posix)
+                .is_some_and(|c| !line_key_set(c).is_empty());
+            if !had_records {
+                // Nothing to clear. An empty file HEAD doesn't track carries no
+                // information, so keep it out of the repo entirely.
+                continue;
+            }
+            let ident = ident_of(&rel_posix, &ann_rel_posix);
+            if !confirmed_clears.iter().any(|c| c == &ident) {
+                pending_clears.push(ident);
+                continue;
+            }
+            // Confirmed: fall through and stage the empty file.
         }
 
         // Fix 3: skip a precision-only rewrite — the same records re-serialized
         // at a different decimal precision. Comparing canonical record sets (not
         // raw text) means `1.234` vs `1.23400` never creates a commit.
-        let rel_posix = rel.to_string_lossy().replace('\\', "/");
         if let Some(head_content) = head_blobs.get(&rel_posix) {
             if line_key_set(&content) == line_key_set(head_content) {
                 continue;
@@ -175,9 +211,11 @@ pub(crate) fn stage_and_commit(
     if let Ok(rel) = project_path.join(ann_rel).join(".gitignore").strip_prefix(project_path) {
         index.add_path(rel).map_err(gerr)?;
     }
-    // Stage deletions of previously-tracked annotation files that no longer
-    // exist on disk, so a deleted recording's labels propagate.
-    stage_deletions(repo, &mut index, project_path, ann_rel)?;
+    // Deliberately NO deletion staging. A tracked annotation file that is
+    // absent from disk is "unknown", not "deleted" (see the rules above): the
+    // app never removes annotation files, so a missing one is an accident —
+    // a half-finished move, an offline drive, an app bug — and propagating it
+    // destroyed real annotations for the whole team. HEAD keeps the records.
 
     // Untrack anything previously committed under .seenote/ — older versions of
     // SeeNote synced tool definitions there; tools are no longer shared. The
@@ -201,10 +239,10 @@ pub(crate) fn stage_and_commit(
     // Skip empty commits.
     if let Some(p) = &parent {
         if p.tree_id() == tree_oid {
-            return Ok(false);
+            return Ok(StageOutcome { committed: false, pending_clears });
         }
     } else if tree.is_empty() {
-        return Ok(false);
+        return Ok(StageOutcome { committed: false, pending_clears });
     }
 
     let parents: Vec<&git2::Commit> = parent.iter().collect();
@@ -217,45 +255,25 @@ pub(crate) fn stage_and_commit(
         &parents,
     )
     .map_err(gerr)?;
-    Ok(true)
+    Ok(StageOutcome { committed: true, pending_clears })
 }
 
-/// Mark for removal any currently-tracked annotation file that no longer exists
-/// in the working tree (an intentional deletion to propagate).
-fn stage_deletions(
-    repo: &Repository,
-    index: &mut git2::Index,
-    project_path: &Path,
-    ann_rel: &Path,
-) -> Result<(), String> {
-    let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
-        Some(t) => t,
-        None => return Ok(()), // no commits yet
+/// Repo-relative annotation path -> the ident the UI shows (the path relative to
+/// the annotation directory, without the extension). Mirrors `getIdent` on the
+/// TS side, and is the token round-tripped back as a confirmed clear.
+pub(crate) fn ident_of(rel_posix: &str, ann_rel_posix: &str) -> String {
+    let without_dir = if ann_rel_posix.is_empty() || ann_rel_posix == "." {
+        rel_posix
+    } else {
+        rel_posix
+            .strip_prefix(ann_rel_posix)
+            .map(|r| r.trim_start_matches('/'))
+            .unwrap_or(rel_posix)
     };
-    let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
-    let mut to_remove: Vec<PathBuf> = Vec::new();
-    head_tree
-        .walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                return git2::TreeWalkResult::Ok;
-            }
-            let name = match entry.name() {
-                Some(n) => n,
-                None => return git2::TreeWalkResult::Ok,
-            };
-            let rel = format!("{dir}{name}");
-            let is_annotation = rel.starts_with(&ann_rel_posix)
-                && rel.ends_with(&format!(".{ANNOTATION_EXT}"));
-            if is_annotation && !project_path.join(&rel).exists() {
-                to_remove.push(PathBuf::from(&rel));
-            }
-            git2::TreeWalkResult::Ok
-        })
-        .map_err(gerr)?;
-    for rel in to_remove {
-        let _ = index.remove_path(&rel);
-    }
-    Ok(())
+    without_dir
+        .strip_suffix(&format!(".{ANNOTATION_EXT}"))
+        .unwrap_or(without_dir)
+        .to_string()
 }
 
 fn collect_annotation_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -409,7 +427,7 @@ mod tests {
     fn first_commit_stages_annotation_file() {
         let (repo, root, ann_rel) = init_repo("first");
         write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
-        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap().committed;
         assert!(committed);
         assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
         std::fs::remove_dir_all(&root).ok();
@@ -419,12 +437,12 @@ mod tests {
     fn empty_file_neither_commits_nor_deletes_head_content() {
         let (repo, root, ann_rel) = init_repo("empty");
         write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
-        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
 
         // Overwrite with whitespace-only content. Must NOT create a commit, and
         // the previously committed content must survive in HEAD (Fix 2).
         write_ann(&root, "a.txt", "   \n\n");
-        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2").unwrap();
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &[]).unwrap().committed;
         assert!(!committed, "empty file should not create a commit");
         assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
         std::fs::remove_dir_all(&root).ok();
@@ -434,25 +452,112 @@ mod tests {
     fn precision_only_rewrite_does_not_commit() {
         let (repo, root, ann_rel) = init_repo("precision");
         write_ann(&root, "a.txt", "1.234\t2.5\ta\n");
-        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
 
         // Re-serialize the same record at more decimals (Fix 3).
         write_ann(&root, "a.txt", "1.23400\t2.50000\ta\n");
-        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2").unwrap();
+        let committed = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &[]).unwrap().committed;
         assert!(!committed, "precision-only rewrite should not create a commit");
         assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.234\t2.5\ta\n"));
 
         // And a genuine change still commits.
         write_ann(&root, "a.txt", "1.234\t2.5\ta\n3.0\t4.0\tb\n");
-        assert!(stage_and_commit(&repo, &root, &ann_rel, &sig(), "m3").unwrap());
+        assert!(stage_and_commit(&repo, &root, &ann_rel, &sig(), "m3", &[]).unwrap().committed);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+
+    // -----------------------------------------------------------------------
+    // The three on-disk states. An annotation file with records holds them; an
+    // empty file means the user cleared the track; an absent file means nothing
+    // at all. Only the middle one destroys data, so only it needs confirming.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clearing_a_track_is_reported_not_committed() {
+        let (repo, root, ann_rel) = init_repo("clear_pending");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        // User cleared the track: the file stays, with no records in it.
+        write_ann(&root, "a.txt", "");
+        let out = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &[]).unwrap();
+
+        assert!(!out.committed, "a clear must not be committed unasked");
+        assert_eq!(out.pending_clears, vec!["a".to_string()]);
+        // HEAD is untouched until the user confirms.
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn confirming_a_clear_commits_the_empty_file() {
+        let (repo, root, ann_rel) = init_repo("clear_confirmed");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+        write_ann(&root, "a.txt", "");
+
+        let confirmed = vec!["a".to_string()];
+        let out = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &confirmed).unwrap();
+
+        assert!(out.committed, "a confirmed clear must sync");
+        assert!(out.pending_clears.is_empty());
+        // Empty in HEAD: set_merge reads "no records" as delete-all, which is
+        // exactly what clearing the track should propagate.
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some(""));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_missing_file_is_never_a_deletion() {
+        // The incident: a bug removed an annotation file from disk, staging read
+        // that as an intentional deletion, and the commit propagated it to every
+        // collaborator. A vanished file must now change nothing.
+        let (repo, root, ann_rel) = init_repo("missing");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        write_ann(&root, "b.txt", "3.0\t4.0\tb\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        std::fs::remove_file(root.join("ann").join("a.txt")).unwrap();
+        let out = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &[]).unwrap();
+
+        assert!(!out.committed, "a vanished file must not produce a commit");
+        assert!(out.pending_clears.is_empty(), "absence is unknown, not a clear");
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some("1.0\t2.0\ta\n"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn empty_file_for_an_untracked_track_is_not_added() {
+        // Opening a never-annotated track and leaving it empty must not add a
+        // file to the repo — there is nothing to record.
+        let (repo, root, ann_rel) = init_repo("empty_new");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        write_ann(&root, "fresh.txt", "");
+        let out = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &[]).unwrap();
+
+        assert!(!out.committed);
+        assert!(out.pending_clears.is_empty());
+        assert!(head_blob(&repo, "ann/fresh.txt").is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ident_of_strips_the_annotation_dir_and_extension() {
+        assert_eq!(ident_of("ann/Site A/rec_01.txt", "ann"), "Site A/rec_01");
+        assert_eq!(ident_of("ann/a.txt", "ann"), "a");
+        // Annotation dir at the repo root: nothing to strip but the extension.
+        assert_eq!(ident_of("a.txt", ""), "a");
+        assert_eq!(ident_of("a.txt", "."), "a");
     }
 
     #[test]
     fn local_changes_ignores_precision_rewrite() {
         let (repo, root, ann_rel) = init_repo("localdot");
         write_ann(&root, "a.txt", "1.234\t2.5\ta\n");
-        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m").unwrap();
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
 
         write_ann(&root, "a.txt", "1.23400\t2.50000\ta\n");
         assert!(!has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
