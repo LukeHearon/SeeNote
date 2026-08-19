@@ -69,7 +69,7 @@ The control strip above the spectrogram. Contains transport controls, time field
 Display settings for the spectrogram: frequency range, intensity, FFT size, and frequency scale.
 
 ### buzzdetect panel
-An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below). Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the activity icon in the Neurons section header. Implemented by `BuzzdetectPanel`.
+An optional line graph docked below the spectrogram, plotting per-frame neuron **activations** (raw logits) from buzzdetect output CSVs. It shares the spectrogram's exact time→pixel transform, so it stays in lockstep with the playhead, selection, and annotations. Each **neuron** is one colored polyline; a per-neuron **threshold** controls whether each frame's dot is filled (≥ threshold) or open (below); leaving it blank means the neuron never detects, so its dots are always open. Clicking a frame (bin) selects that frame's audio interval on the spectrogram; dragging extends the selection across bins. Configured via the buzzdetect directory under **Advanced** in the project create/settings form, toggled from the activity icon in the Neurons section header. Implemented by `BuzzdetectPanel`.
 
 ---
 

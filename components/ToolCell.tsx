@@ -15,6 +15,8 @@ interface ToolCellProps {
   /** Makes the color dot its own click target (e.g. to open a color picker). */
   onDotClick?: () => void;
   dotTooltip?: string;
+  /** Draws the dot as an outline rather than a filled disc (e.g. "not plotted"). */
+  dotHollow?: boolean;
 }
 
 // Compact palette cell, shared by the annotation-tool palette and the neuron
@@ -28,9 +30,13 @@ interface ToolCellProps {
 // activate click still lands anywhere on the cell; anything needing its own
 // clicks opts back in with `pointer-events-auto`.
 function ToolCell({
-  isActive, color, dotColor, label, hotkey, onClick, dotted, tooltip, onDotClick, dotTooltip, trailing,
+  isActive, color, dotColor, label, hotkey, onClick, dotted, tooltip, onDotClick, dotTooltip, dotHollow, trailing,
 }: ToolCellProps) {
-  const dotStyle = { backgroundColor: dotColor };
+  // Hollow: the color moves from the fill to the ring, so an off dot still says
+  // which neuron it belongs to at a glance.
+  const dotStyle: React.CSSProperties = dotHollow
+    ? { backgroundColor: 'transparent', boxShadow: `inset 0 0 0 1.5px ${dotColor}` }
+    : { backgroundColor: dotColor };
   return (
     <div
       className={`relative w-full px-1.5 py-1 rounded text-xs transition-all border

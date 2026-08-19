@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HexColorPicker } from 'react-colorful';
-import { Pin, PinOff, Scissors, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Pin, PinOff, Scissors } from 'lucide-react';
 import { BuzzdetectSeriesMode } from '../types';
 import DraftNumberInput from './DraftNumberInput';
 import { tooltips } from '../copy/tooltips';
@@ -9,16 +9,18 @@ import { neuronPalette as copy } from '../copy/ui';
 interface NeuronSettingsPopoverProps {
   neuron: string;
   color: string;
-  threshold: number;
+  /** null = no threshold at all: this neuron never registers a detection. */
+  threshold: number | null;
   /** null = this neuron isn't part of the subset at all. */
   subsetThreshold: number | null;
   seriesMode: BuzzdetectSeriesMode;
   isPinned: boolean;
+  isPlotted: boolean;
   onColorChange: (color: string) => void;
-  onThresholdChange: (value: number) => void;
+  onThresholdChange: (value: number | null) => void;
   onSubsetThresholdChange: (value: number | null) => void;
   onTogglePin: () => void;
-  onRemove: () => void;
+  onTogglePlotted: () => void;
   onClose: () => void;
 }
 
@@ -28,16 +30,12 @@ const NUMBER_FIELD = 'w-14 bg-slate-900 border border-slate-700 rounded px-1 py-
 
 /**
  * Everything about ONE neuron, in one place: its color, the two thresholds,
- * whether it's pinned, and the way off the list.
+ * whether it's pinned, and whether it's plotted.
  *
  * The palette row it hangs off keeps only what's worth comparing across every
  * neuron at a glance — name, color, the two thresholds — so this is where the
  * settings that are chosen once per neuron live rather than competing for
  * width in a row that has to stay readable at sidebar size.
- *
- * Deliberately the SAME surface for adding and for editing: a neuron just
- * added from the picker opens straight into this, so there's one place to
- * learn instead of an add-modal and a separate edit path that drift apart.
  *
  * Color is the pip beside the name, and clicking it opens a full picker. There
  * is no swatch row: a neuron's color has no meaning of its own to pick from a
@@ -51,11 +49,12 @@ function NeuronSettingsPopover({
   subsetThreshold,
   seriesMode,
   isPinned,
+  isPlotted,
   onColorChange,
   onThresholdChange,
   onSubsetThresholdChange,
   onTogglePin,
-  onRemove,
+  onTogglePlotted,
   onClose,
 }: NeuronSettingsPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -140,7 +139,9 @@ function NeuronSettingsPopover({
           <span className={LABEL}>{copy.settingsThreshold}</span>
           <DraftNumberInput
             value={threshold}
-            onCommit={(v) => { if (v !== null) onThresholdChange(v); }}
+            onCommit={onThresholdChange}
+            allowEmpty
+            placeholder={copy.settingsThresholdOff}
             className={NUMBER_FIELD}
             tooltip={tooltips.buzzdetectThreshold}
           />
@@ -155,13 +156,16 @@ function NeuronSettingsPopover({
           {isPinned ? <PinOff size={11} /> : <Pin size={11} />}
           <span>{isPinned ? copy.menuUnpin : copy.menuPin}</span>
         </button>
+        {/* Stays open on a plot toggle, unlike the pin beside it: the row is
+            still here either way, and the graph behind the popover is the thing
+            being judged. */}
         <button
-          onClick={() => { onRemove(); onClose(); }}
-          className="flex-1 flex items-center justify-center gap-1 px-1 py-1 rounded text-[10px] text-slate-400 hover:bg-[#e65161]/15 hover:text-[#e65161] transition-colors"
-          data-tooltip={copy.removeTooltip}
+          onClick={onTogglePlotted}
+          className="flex-1 flex items-center justify-center gap-1 px-1 py-1 rounded text-[10px] text-slate-400 hover:bg-slate-700/60 hover:text-slate-200 transition-colors"
+          data-tooltip={isPlotted ? tooltips.buzzdetectUnplotNeuron : tooltips.buzzdetectPlotNeuron}
         >
-          <Trash2 size={11} />
-          <span>{copy.settingsRemove}</span>
+          {isPlotted ? <EyeOff size={11} /> : <Eye size={11} />}
+          <span>{isPlotted ? copy.menuUnplot : copy.menuPlot}</span>
         </button>
       </div>
     </div>

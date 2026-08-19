@@ -26,8 +26,8 @@ function migrateSubsetThresholds(ui: ProjectUiSettings | undefined): Record<stri
 export interface BuzzdetectApi {
   buzzdetectEnabled: boolean;
   setBuzzdetectEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  buzzdetectThresholds: Record<string, number>;
-  setBuzzdetectThresholds: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  buzzdetectThresholds: Record<string, number | null>;
+  setBuzzdetectThresholds: React.Dispatch<React.SetStateAction<Record<string, number | null>>>;
   /**
    * Per-neuron threshold the SUBSET is cut at — the palette's "Subset at" box.
    * An entry here is what makes a neuron part of the subset, so this map's keys
@@ -82,7 +82,8 @@ export interface BuzzdetectApi {
   setBuzzdetectAutoYRange: React.Dispatch<React.SetStateAction<{ min: number; max: number } | null>>;
   buzzdetectData: BuzzdetectData | null;
   setBuzzdetectData: React.Dispatch<React.SetStateAction<BuzzdetectData | null>>;
-  handleBuzzdetectThresholdChange: (neuron: string, value: number) => void;
+  /** null clears the threshold: the neuron stops registering detections at all. */
+  handleBuzzdetectThresholdChange: (neuron: string, value: number | null) => void;
   /** null clears the value, taking the neuron out of the subset entirely. */
   handleBuzzdetectSubsetThresholdChange: (neuron: string, value: number | null) => void;
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
@@ -118,7 +119,7 @@ export interface BuzzdetectParams {
 export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): BuzzdetectApi {
   // buzzdetect activations panel — UI fields persisted in uiSettings.
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
-  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
+  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number | null>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
   const [buzzdetectSubsetThresholds, setBuzzdetectSubsetThresholds] = useState<Record<string, number>>(
     () => migrateSubsetThresholds(project.preferences.uiSettings),
   );
@@ -170,7 +171,10 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
   }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
-  const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number) => {
+  // null is kept in the map rather than deleted: an absent entry means "never
+  // set", which takes the default, while null is the user saying this neuron
+  // detects nothing.
+  const handleBuzzdetectThresholdChange = useCallback((neuron: string, value: number | null) => {
     setBuzzdetectThresholds(prev => ({ ...prev, [neuron]: value }));
   }, []);
   // Typing a subset threshold IS picking the neuron, so the first one engages

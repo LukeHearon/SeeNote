@@ -241,6 +241,8 @@ export const neuronPalette = {
   get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
   get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
   get menuSettings() { return getOverride('ui.neuronPalette.menuSettings') ?? "Settings…"; },
+  get menuPlot() { return getOverride('ui.neuronPalette.menuPlot') ?? "Plot"; },
+  get menuUnplot() { return getOverride('ui.neuronPalette.menuUnplot') ?? "Stop plotting"; },
   // Graph-wide settings block.
   get settingsTitle() { return getOverride('ui.neuronPalette.settingsTitle') ?? "Graph settings"; },
   get seriesHeader() { return getOverride('ui.neuronPalette.seriesHeader') ?? "Series"; },
@@ -258,20 +260,15 @@ export const neuronPalette = {
   statsKept: (kept: string, source: string, percent: string) => `${kept} of ${source} (${percent})`,
   statsBreakdown: (regions: number, frames: number) =>
     `${regions.toLocaleString('en-US')} region${regions === 1 ? '' : 's'} · ${frames.toLocaleString('en-US')} frame${frames === 1 ? '' : 's'}`,
-  // Per-neuron settings popover, and the picker that adds a neuron.
+  // Per-neuron settings popover.
   get settingsThreshold() { return getOverride('ui.neuronPalette.settingsThreshold') ?? "Detection at"; },
   get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Subset at"; },
+  // Placeholder in an empty "Detection at" box: this neuron never detects.
+  get settingsThresholdOff() { return getOverride('ui.neuronPalette.settingsThresholdOff') ?? "none"; },
   // Placeholder in an empty "Subset at" box: this neuron isn't cutting at all.
   get settingsSubsetOff() { return getOverride('ui.neuronPalette.settingsSubsetOff') ?? "off"; },
   // Its counterpart where the pick is a switch rather than a number (detection-rate mode).
   get settingsSubsetOn() { return getOverride('ui.neuronPalette.settingsSubsetOn') ?? "on"; },
-  get settingsRemove() { return getOverride('ui.neuronPalette.settingsRemove') ?? "Remove"; },
-  get removeTooltip() { return getOverride('ui.neuronPalette.removeTooltip') ?? "Stop plotting this neuron (its settings are kept)"; },
-  get addNeuron() { return getOverride('ui.neuronPalette.addNeuron') ?? "Add neuron"; },
-  get addSearchPlaceholder() { return getOverride('ui.neuronPalette.addSearchPlaceholder') ?? "Search neurons…"; },
-  get addNoMatches() { return getOverride('ui.neuronPalette.addNoMatches') ?? "No matching neurons."; },
-  get addAllShown() { return getOverride('ui.neuronPalette.addAllShown') ?? "Every neuron is already plotted."; },
-  get noneShown() { return getOverride('ui.neuronPalette.noneShown') ?? "No neurons plotted. Add one below."; },
 };
 
 export const findLabelModal = {

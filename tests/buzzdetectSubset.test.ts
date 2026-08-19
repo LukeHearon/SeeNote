@@ -311,6 +311,19 @@ describe('subsetCriteriaFrom', () => {
     expect(c.thresholdOf('wasp')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
   });
 
+  // A cleared threshold is a neuron that never detects, so a detection-rate cut
+  // keyed to it keeps nothing rather than falling back to the default.
+  it('treats a null detection threshold as unreachable', () => {
+    const c = subsetCriteriaFrom({
+      ...inputs,
+      mode: 'detectionRate',
+      subsetThresholds: { bee: -1.5 },
+      thresholds: { bee: null },
+    })!;
+    expect(c.thresholdOf('bee')).toBe(Infinity);
+    expect(detectionRanges(data, { ...c, neurons: ['bee'], binWidth: 1, minDetectionRate: 0.5 })).toEqual([]);
+  });
+
   // The hop, never the frame length: how much audio a frame covers is not a
   // statement about how frames should be grouped for judging, and routing the
   // frame length in here is what made a longer frame SHRINK the subset.

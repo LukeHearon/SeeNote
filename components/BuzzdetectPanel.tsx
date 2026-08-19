@@ -13,7 +13,6 @@ import {
 } from '../utils/subsetTimeline';
 import {
   buzzdetectNeuronColor,
-  DEFAULT_BUZZDETECT_THRESHOLD,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
   Y_AXIS_WIDTH,
@@ -38,6 +37,7 @@ import {
   rangeSum,
   rangeMean,
 } from '../utils/prefixSums';
+import { detectionThreshold } from '../utils/buzzdetectThresholds';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 
 const PAD_TOP = 12;
@@ -79,7 +79,8 @@ interface BuzzdetectPanelProps {
   /** Style for wall-clock datetimes in the hover readout. */
   dateTimeFormat?: DateTimeFormat;
   // Persisted UI state.
-  thresholds: Record<string, number>;
+  /** Per-neuron detection thresholds; null = this neuron never detects. */
+  thresholds: Record<string, number | null>;
   hiddenNeurons: string[];
   // Per-neuron color override, keyed by neuron label. Absent entries fall
   // back to the palette-by-index default (buzzdetectNeuronColor).
@@ -216,8 +217,12 @@ export default function BuzzdetectPanel({
     [data, neuronColorOverrides],
   );
 
+  // Infinity where a neuron's threshold has been cleared — nothing reaches it,
+  // so every comparison below stays a plain `>=` with no branch. The two places
+  // that PLOT a threshold (the dashed line, the auto Y-range) do need to skip
+  // it, and check isFinite.
   const thresholdOf = useCallback(
-    (neuron: string) => thresholds[neuron] ?? DEFAULT_BUZZDETECT_THRESHOLD,
+    (neuron: string) => detectionThreshold(thresholds[neuron]),
     [thresholds],
   );
 
@@ -465,6 +470,7 @@ export default function BuzzdetectPanel({
       if (isFinite(yMin)) yMin = Math.min(yMin, 0);
       for (const n of enabled) {
         const th = thresholdOf(neurons[n]);
+        if (!isFinite(th)) continue;
         if (th < yMin) yMin = th;
         if (th > yMax) yMax = th;
       }
@@ -630,7 +636,9 @@ export default function BuzzdetectPanel({
     if (seriesMode === 'activation') {
       ctx.setLineDash([4, 4]);
       for (const n of enabled) {
-        const y = yOf(thresholdOf(neurons[n]));
+        const th = thresholdOf(neurons[n]);
+        if (!isFinite(th)) continue;
+        const y = yOf(th);
         ctx.strokeStyle = neuronColors[n] + '66';
         ctx.lineWidth = 1;
         ctx.beginPath();

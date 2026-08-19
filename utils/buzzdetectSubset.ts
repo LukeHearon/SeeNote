@@ -73,6 +73,7 @@ import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
 import { bucketFrameRange } from './binIndex';
 import { buildAnyOverThresholdPrefix, buildPrefixSum, rangeMean, rangeSum } from './prefixSums';
+import { detectionThreshold } from './buzzdetectThresholds';
 import { Timeline, buildSubsetTimeline, identityTimeline } from './subsetTimeline';
 
 export interface SubsetCriteria {
@@ -117,8 +118,12 @@ export interface SubsetInputs {
    * disagree with the thresholds. Empty means "no subset". Picks are OR'd.
    */
   subsetThresholds: Record<string, number>;
-  /** Per-neuron detection thresholds — what the cut is judged at in detectionRate mode. */
-  thresholds: Record<string, number>;
+  /**
+   * Per-neuron detection thresholds — what the cut is judged at in
+   * detectionRate mode. A null entry is a neuron with no threshold at all: it
+   * never detects, so it never keeps a bin (see utils/buzzdetectThresholds.ts).
+   */
+  thresholds: Record<string, number | null>;
   /**
    * The neuron labels THIS file's results actually contain, or null when no
    * results are loaded. Picks are saved per project and keyed by label, so a
@@ -176,7 +181,7 @@ export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null 
     thresholdOf: (n: string) => (
       inputs.mode === 'activation'
         ? inputs.subsetThresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD
-        : inputs.thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD
+        : detectionThreshold(inputs.thresholds[n])
     ),
     minDetectionRate: inputs.minDetectionRate,
     // Padding a kept region is a statement about a frame's surroundings, and

@@ -156,7 +156,11 @@ export interface ProjectUiSettings {
 
   // buzzdetect activations panel (see components/BuzzdetectPanel.tsx).
   buzzdetectEnabled?: boolean;             // panel shown/hidden
-  buzzdetectThresholds?: Record<string, number>; // per-neuron logit threshold, keyed by neuron label
+  // Per-neuron logit threshold, keyed by neuron label. An explicit null is a
+  // threshold deliberately cleared — that neuron never registers a detection —
+  // as distinct from an absent entry, which takes the default (see
+  // utils/buzzdetectThresholds.ts).
+  buzzdetectThresholds?: Record<string, number | null>;
   // Per-neuron threshold the SUBSET is cut at, where it differs from the
   // detection threshold above (activation mode only). Absent = the same value.
   // Per-neuron threshold the SUBSET is cut at. An entry here is what makes a
