@@ -240,7 +240,7 @@ export const neuronPalette = {
   get menuPin() { return getOverride('ui.neuronPalette.menuPin') ?? "Pin"; },
   get menuUnpin() { return getOverride('ui.neuronPalette.menuUnpin') ?? "Unpin"; },
   get menuIsolate() { return getOverride('ui.neuronPalette.menuIsolate') ?? "Isolate"; },
-  get menuSettings() { return getOverride('ui.neuronPalette.menuSettings') ?? "Settings…"; },
+  get menuColor() { return getOverride('ui.neuronPalette.menuColor') ?? "Color…"; },
   get menuPlot() { return getOverride('ui.neuronPalette.menuPlot') ?? "Plot"; },
   get menuUnplot() { return getOverride('ui.neuronPalette.menuUnplot') ?? "Stop plotting"; },
   // Graph-wide settings block.
@@ -260,7 +260,7 @@ export const neuronPalette = {
   statsKept: (kept: string, source: string, percent: string) => `${kept} of ${source} (${percent})`,
   statsBreakdown: (regions: number, frames: number) =>
     `${regions.toLocaleString('en-US')} region${regions === 1 ? '' : 's'} · ${frames.toLocaleString('en-US')} frame${frames === 1 ? '' : 's'}`,
-  // Per-neuron settings popover.
+  // Per-neuron threshold fields on a row.
   get settingsThreshold() { return getOverride('ui.neuronPalette.settingsThreshold') ?? "Detection at"; },
   get settingsSubsetThreshold() { return getOverride('ui.neuronPalette.settingsSubsetThreshold') ?? "Subset at"; },
   // Placeholder in an empty "Detection at" box: this neuron never detects.

@@ -53,6 +53,11 @@ const MAX_LINE_POINTS = 1000;
 const MIN_UNIT_BOUNDARY_PX = 6;
 // Narrower than this, a per-frame dot is no longer legible as its own marker.
 const MIN_DOT_PX = 4;
+// How close (px, vertically) the cursor has to be to a neuron's point for the
+// readout to narrow to that neuron. A little wider than the dot itself, so it
+// can be aimed at without precision, but well short of half a panel — past this
+// the cursor isn't pointing at any one line and the readout lists them all.
+const NEURON_HOVER_PX = 10;
 // Most decimal places the hover/selection readout ever shows a time to. Times
 // carrying less precision than this are shown to less (see decimalsForTimes).
 const READOUT_MAX_DECIMALS = 2;
@@ -165,6 +170,15 @@ export default function BuzzdetectPanel({
   // readout — updated through `setHover` below, which drops no-op moves.
   const hoverRangeRef = useRef<FrameUnit | null>(null);
   const [hoverRange, setHoverRange] = useState<FrameUnit | null>(null);
+  // The one neuron the cursor is pointing AT, when it's near enough to a
+  // neuron's point to have meant it — the readout narrows to that neuron.
+  // Plain state: it only drives the readout, which is DOM.
+  const [hoverNeuron, setHoverNeuron] = useState<string | null>(null);
+  // The current value→y mapping, published by the draw so the cursor can be
+  // tested against what's actually on screen. The Y-range it's built from is
+  // decided during the draw (auto range, threshold widening, headroom), so
+  // there's nowhere else it could come from without computing it twice.
+  const yOfRef = useRef<((v: number) => number) | null>(null);
 
   // Drag-to-select across hit units. `dragging` gates the window listeners; the
   // anchor unit lives in a ref so the listener effect attaches once per drag
@@ -354,6 +368,43 @@ export default function BuzzdetectPanel({
     return unitAtTime(activeTimeline, data, effectiveBinWidthRef.current, t);
   }, [data, timeAtClientX, activeTimeline]);
 
+  // The value the graph PLOTS for one neuron over one unit: the raw activation
+  // of a single frame or the mean across a range; in detection-rate mode a
+  // frame's own 1/0 or the fraction of the range's frames detecting. Shared by
+  // the readout and by the cursor's hit-testing below, so what the readout
+  // names is the line the cursor is actually nearest.
+  const unitValueOf = useCallback((i: number, unit: FrameUnit): number => {
+    if (!data) return 0;
+    const { start, end } = unit;
+    const single = start === end;
+    if (seriesMode === 'activation') {
+      return single
+        ? data.values[i][start]
+        : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
+    }
+    return single
+      ? (data.values[i][start] >= detectionThreshold(thresholds[data.neurons[i]]) ? 1 : 0)
+      : (detectionPrefix ? rangeMean(detectionPrefix[i], start, end) : 0);
+  }, [data, seriesMode, activationPrefix, detectionPrefix, thresholds]);
+
+  // The plotted neuron the cursor is pointing at, or null when it isn't near
+  // enough to any one of them. Nearest wins where lines cross or run together,
+  // which is exactly where narrowing the readout to one neuron is worth most.
+  const neuronAtClientY = useCallback((unit: FrameUnit | null, clientY: number): string | null => {
+    const rect = areaRef.current?.getBoundingClientRect();
+    const yOf = yOfRef.current;
+    if (!unit || !rect || !yOf || !data) return null;
+    if (unit.start < 0 || unit.end >= data.starts.length) return null;
+    const y = clientY - rect.top;
+    let best: string | null = null;
+    let bestDist = NEURON_HOVER_PX;
+    for (const i of enabled) {
+      const d = Math.abs(yOf(unitValueOf(i, unit)) - y);
+      if (d < bestDist) { bestDist = d; best = data.neurons[i]; }
+    }
+    return best;
+  }, [data, enabled, unitValueOf]);
+
   // A unit's own time extent, end clamped to EOF — the same span the panel
   // washes and highlights, so a selection lands exactly on what the cursor
   // pointed at.
@@ -496,6 +547,7 @@ export default function BuzzdetectPanel({
 
     const usableH = h - PAD_TOP - PAD_BOTTOM;
     const yOf = (v: number) => PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * usableH;
+    yOfRef.current = yOf;
 
     // The units this viewport draws — one per frame, or one per bucket when
     // frames are grouped (utils/binIndex decides which; hit-testing resolves a
@@ -1012,11 +1064,13 @@ export default function BuzzdetectPanel({
   const handleAreaMouseMove = (e: React.MouseEvent) => {
     if (dragging) return; // drag handled at window level
     // The same unit a click would select — highlight and hit target can't disagree.
-    setHover(unitAtClientX(e.clientX));
+    const unit = unitAtClientX(e.clientX);
+    setHover(unit);
+    setHoverNeuron(neuronAtClientY(unit, e.clientY));
   };
 
   // Drop a stale hover range when the track's data changes (indices differ).
-  useEffect(() => { setHover(null); }, [data, setHover]);
+  useEffect(() => { setHover(null); setHoverNeuron(null); }, [data, setHover]);
 
   // ── Resize via top-edge handle ──────────────────────────────────────────────
   const handleResizeDown = (e: React.MouseEvent) => {
@@ -1086,31 +1140,20 @@ export default function BuzzdetectPanel({
         <div className="flex flex-wrap gap-x-2">
           {data.neurons.map((n, i) => {
             if (hidden.has(n)) return null;
-            if (seriesMode === 'detectionRate') {
-              const th = thresholdOf(n);
-              if (isSingle) {
-                const detected = data.values[i][start] >= th;
-                return (
-                  <span key={n} style={{ color: neuronColors[i] }}>
-                    {n} {detected ? buzzdetectCopy.detection : buzzdetectCopy.noDetection}
-                  </span>
-                );
-              }
-              // Prefix-sum lookup: the selection readout is persistent and
-              // re-renders freely, and a selection can span the whole file.
-              const rate = detectionPrefix ? rangeMean(detectionPrefix[i], start, end) : 0;
-              return (
-                <span key={n} style={{ color: neuronColors[i] }}>
-                  {n} {(rate * 100).toFixed(0)}%
-                </span>
-              );
-            }
-            const value = isSingle
-              ? data.values[i][start]
-              : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
+            // Pointing at one neuron's point is asking about that neuron, so
+            // the readout drops to it alone rather than making the user find
+            // its line in a list of a dozen. Everything else about the readout
+            // — the unit, the span, the headers — is unchanged.
+            if (hoverNeuron && n !== hoverNeuron) return null;
+            const value = unitValueOf(i, unit);
+            const text = seriesMode !== 'detectionRate'
+              ? value.toFixed(2)
+              : isSingle
+                ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
+                : `${(value * 100).toFixed(0)}%`;
             return (
               <span key={n} style={{ color: neuronColors[i] }}>
-                {n} {value.toFixed(2)}
+                {n} {text}
               </span>
             );
           })}
@@ -1141,7 +1184,7 @@ export default function BuzzdetectPanel({
           style={{ cursor: 'crosshair' }}
           onMouseDown={handleAreaMouseDown}
           onMouseMove={handleAreaMouseMove}
-          onMouseLeave={() => setHover(null)}
+          onMouseLeave={() => { setHover(null); setHoverNeuron(null); }}
           onWheel={(e) => {
             if (e.ctrlKey || e.metaKey) e.preventDefault();
             onScrollWheel?.(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);

@@ -77,7 +77,6 @@ export const tooltips = {
   get buzzdetectThreshold() { return getOverride('tooltips.buzzdetectThreshold') ?? "Activation at or above which this neuron counts as detecting.\nLeave it blank and the neuron never detects: its dots all draw open."; },
   get buzzdetectPlotNeuron() { return getOverride('tooltips.buzzdetectPlotNeuron') ?? "Plot this neuron on the graph"; },
   get buzzdetectUnplotNeuron() { return getOverride('tooltips.buzzdetectUnplotNeuron') ?? "Stop plotting this neuron (its color and thresholds are kept)"; },
-  get buzzdetectNeuronSettings() { return getOverride('tooltips.buzzdetectNeuronSettings') ?? "Color, thresholds, pin, plot"; },
   get buzzdetectSubsetThreshold() { return getOverride('tooltips.buzzdetectSubsetThreshold') ?? "Threshold the subset is cut at.\nLeave blank and this neuron doesn't cut at all; set it lower than the detection threshold to keep the audio around each detection while the graph still marks detections strictly."; },
   get buzzdetectSubsetPick() { return getOverride('tooltips.buzzdetectSubsetPick') ?? "Subset the track by this neuron.\nIn detection-rate mode the cut is judged at the detection threshold and loosened by the minimum rate, so there is no separate value to set."; },
   get buzzdetectSubsetUnpick() { return getOverride('tooltips.buzzdetectSubsetUnpick') ?? "Stop subsetting by this neuron"; },

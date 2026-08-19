@@ -1,7 +1,7 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Eye, EyeOff, Pin, PinOff, RotateCcw, Scissors, Settings, Settings2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Eye, EyeOff, Palette, Pin, PinOff, RotateCcw, Scissors, Settings, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
-import { DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
+import { BUZZDETECT_PALETTE, DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
 import { pickedNeuronsIn } from '../utils/buzzdetectSubset';
 import { clamp, formatTime } from '../utils/helpers';
@@ -10,7 +10,7 @@ import { BuzzdetectToggle, SubsetToggle } from './controls/ToolbarToggles';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import DraftNumberInput from './DraftNumberInput';
-import NeuronSettingsPopover from './NeuronSettingsPopover';
+import ColorSwatchPicker from './ColorSwatchPicker';
 import { tooltips } from '../copy/tooltips';
 import { neuronPalette as copy } from '../copy/ui';
 
@@ -78,9 +78,10 @@ interface NeuronPaletteProps {
  *
  * The row carries what's worth comparing ACROSS neurons at a glance: color,
  * name, and the two thresholds — what counts as a detection, and what the
- * track is subset at. Everything else per-neuron — its color, pin, and the same
- * two thresholds spelled out — is in its settings popover
- * (NeuronSettingsPopover), opened by clicking the row itself or its gear.
+ * track is subset at. Everything rarer — pin, isolate, color — is in the row's
+ * right-click menu. There is no per-neuron settings popover: every setting it
+ * held is either a control on the row already or a menu item, and a second
+ * surface repeating them was a place for the two to disagree.
  *
  * The graph-wide settings sit in a disclosure above the list rather than in a
  * popover over the graph: the series being plotted and the bin width decide
@@ -134,9 +135,25 @@ function NeuronPalette({
   onMinDetectionRateChange,
   onSubsetBufferChange,
 }: NeuronPaletteProps) {
-  // Which neuron's settings popover is open (null = none). The popover closes
-  // itself on an outside click or Escape.
-  const [openSettingsNeuron, setOpenSettingsNeuron] = useState<string | null>(null);
+  // Which neuron's color picker is open (null = none) — the one per-neuron
+  // setting that needs a surface of its own, since a color can't be typed into
+  // a row. Everything else about a neuron is either on the row or in its
+  // right-click menu.
+  const [colorNeuron, setColorNeuron] = useState<string | null>(null);
+  const colorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!colorNeuron) return;
+    const onDown = (e: MouseEvent) => {
+      if (colorRef.current && !colorRef.current.contains(e.target as Node)) setColorNeuron(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setColorNeuron(null); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [colorNeuron]);
   const [contextNeuron, setContextNeuron] = useState<{ neuron: string; x: number; y: number } | null>(null);
 
   const neurons = useMemo(() => data?.neurons ?? [], [data]);
@@ -187,9 +204,9 @@ function NeuronPalette({
       },
       { label: copy.menuIsolate, icon: <Scissors size={12} />, onSelect: () => onSoloNeuron(n) },
       {
-        label: copy.menuSettings,
-        icon: <Settings2 size={12} />,
-        onSelect: () => setOpenSettingsNeuron(n),
+        label: copy.menuColor,
+        icon: <Palette size={12} />,
+        onSelect: () => setColorNeuron(n),
         separatorBefore: true,
       },
       {
@@ -241,20 +258,19 @@ function NeuronPalette({
         className="relative"
         onContextMenu={(e) => { e.preventDefault(); setContextNeuron({ neuron: n, x: e.clientX, y: e.clientY }); }}
       >
-        {/* The cell's active state is whether the neuron is PLOTTED — the thing
-            that varies most across the list now that every neuron has a row,
-            and the thing the dot toggles. Whether it's also cutting the subset
-            is said by its "Subset at" box holding a number, in the accent
-            colour. The cell body opens the neuron's settings; the dot is the
-            plot switch, and a hollow dot is a neuron that isn't plotted. */}
+        {/* The whole row is the plot switch — dot included, since a click
+            anywhere on a neuron means the same thing. Active = plotted, and a
+            hollow dot is one that isn't. Whether it also cuts the subset is
+            said by its "Subset at" box holding a number, in the accent
+            colour. */}
         <ToolCell
           isActive={isPlotted}
           color={color}
           dotColor={color}
           dotHollow={!isPlotted}
           label={n}
-          onClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
-          tooltip={tooltips.buzzdetectNeuronSettings}
+          onClick={() => onToggleNeuron(n, isPlotted)}
+          tooltip={isPlotted ? tooltips.buzzdetectUnplotNeuron : tooltips.buzzdetectPlotNeuron}
           onDotClick={() => onToggleNeuron(n, isPlotted)}
           dotTooltip={isPlotted ? tooltips.buzzdetectUnplotNeuron : tooltips.buzzdetectPlotNeuron}
           trailing={(
@@ -276,32 +292,26 @@ function NeuronPalette({
                 style={{ color }}
                 tooltip={tooltips.buzzdetectThreshold}
               />
-              <button
-                onClick={() => setOpenSettingsNeuron(v => (v === n ? null : n))}
-                className={`p-0.5 rounded transition-colors ${openSettingsNeuron === n ? 'text-[#e65161] bg-[#e65161]/15' : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60'}`}
-                data-tooltip={tooltips.buzzdetectNeuronSettings}
-              >
-                <Settings2 size={11} />
-              </button>
             </span>
           )}
         />
-        {openSettingsNeuron === n && (
-          <NeuronSettingsPopover
-            neuron={n}
-            color={color}
-            threshold={n in thresholds ? thresholds[n] : DEFAULT_BUZZDETECT_THRESHOLD}
-            subsetThreshold={subsetThresholds[n] ?? null}
-            seriesMode={seriesMode}
-            isPinned={isPinned}
-            isPlotted={isPlotted}
-            onColorChange={(c) => onNeuronColorChange(n, c)}
-            onThresholdChange={(v) => onThresholdChange(n, v)}
-            onSubsetThresholdChange={(v) => onSubsetThresholdChange(n, v)}
-            onTogglePin={() => onTogglePinNeuron(n)}
-            onTogglePlotted={() => onToggleNeuron(n, isPlotted)}
-            onClose={() => setOpenSettingsNeuron(null)}
-          />
+        {/* Color, on demand from the right-click menu: it's the one thing
+            about a neuron that can't be a control on the row, and it's set
+            once and then left alone. */}
+        {colorNeuron === n && (
+          <div
+            ref={colorRef}
+            className="absolute left-0 right-0 top-full mt-1 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-1.5"
+          >
+            <ColorSwatchPicker
+              value={color}
+              swatchColors={BUZZDETECT_PALETTE}
+              onChange={(c) => onNeuronColorChange(n, c)}
+              customColorTitle={copy.customColorTitle}
+              size={16}
+              popoverPosition="bottom"
+            />
+          </div>
         )}
       </div>
     );

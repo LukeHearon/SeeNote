@@ -17,7 +17,6 @@ Quick reference for agents. One phrase per file.
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
-- `components/NeuronSettingsPopover.tsx` — one neuron's color (pip opens a hex picker), its subset + detection thresholds, pin and plot toggle
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 
