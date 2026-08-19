@@ -545,6 +545,29 @@ mod tests {
     }
 
     #[test]
+    fn a_clear_already_in_head_is_not_re_prompted() {
+        // Receiving a collaborator's confirmed clear: the merge leaves the file
+        // empty on disk AND empty in HEAD. That is a settled state, not a fresh
+        // clear of ours -- we must not ask the user to confirm someone else's
+        // deletion, and must not treat it as an outstanding local change.
+        let (repo, root, ann_rel) = init_repo("clear_settled");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        // Confirm the clear, as a pull would have done by committing theirs.
+        write_ann(&root, "a.txt", "");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m2", &["a".to_string()]).unwrap();
+        assert_eq!(head_blob(&repo, "ann/a.txt").as_deref(), Some(""));
+
+        // Now the same state comes round again on the next sync.
+        let out = stage_and_commit(&repo, &root, &ann_rel, &sig(), "m3", &[]).unwrap();
+        assert!(!out.committed, "settled clear must not churn a commit");
+        assert!(out.pending_clears.is_empty(), "must not re-ask about a clear already in HEAD");
+        assert!(!has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn ident_of_strips_the_annotation_dir_and_extension() {
         assert_eq!(ident_of("ann/Site A/rec_01.txt", "ann"), "Site A/rec_01");
         assert_eq!(ident_of("ann/a.txt", "ann"), "a");
