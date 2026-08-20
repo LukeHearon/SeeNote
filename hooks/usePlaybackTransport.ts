@@ -6,6 +6,7 @@ import { wantsCanvasRenderer } from '../utils/videoPlaybackMode';
 import { createCurrentTimeStore } from '../utils/currentTimeStore';
 import { SpectrogramHandle } from '../components/Spectrogram';
 import { Selection, VideoMode, PlaybackTransport } from '../types';
+import { Timeline, sourceIntervalOf } from '../utils/subsetTimeline';
 import { DEFAULT_UI_SETTINGS } from '../constants';
 import type { TimeDisplayUnit, ElapsedTimeDisplayUnit } from '../utils/helpers';
 import type { useExamplePlayer } from './useExamplePlayer';
@@ -29,12 +30,42 @@ interface UsePlaybackTransportArgs {
   videoPrefetchEndRef: React.MutableRefObject<number>;
   videoPrefetchBusyRef: React.MutableRefObject<boolean>;
   prerollVideo: (startSec: number, endSec?: number) => Promise<void>;
+  // The display↔source map. Omit it in windows that have no subset mode
+  // (SingleFileWindow): the two axes are then the same thing and every
+  // conversion below is skipped rather than run against a stale identity map.
+  timelineRef?: React.MutableRefObject<Timeline>;
   spectrogramRef: React.RefObject<SpectrogramHandle>;
   examplePlayer: ReturnType<typeof useExamplePlayer>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
   // Mirrors useHotkeys's own `enabled`: false while a modal (e.g. the example
   // library) owns the keyboard, so these bindings must not fire.
   enabled?: boolean;
+}
+
+type TimelineRef = React.MutableRefObject<Timeline> | undefined;
+
+// Everything this hook holds a clock for — currentTimeRef, the selection, the
+// duration it clamps against — is DISPLAY time. VideoFrameSource is the one
+// consumer that isn't: it decodes and caches frames by real position in the
+// file, so every time handed to it has to be converted first. These two helpers
+// are that conversion, and the only way times reach the frame source.
+//
+// Today the conversion is the identity map: a subset closes the frame source
+// outright (AnnotationWindow's effectiveVideoMode), so the frame source is only
+// ever live while display time and source time coincide. Converting anyway
+// makes that correct by construction rather than by an invariant held somewhere
+// else — the same reason the readouts and the playhead already convert.
+function toSourceTime(timelineRef: TimelineRef, t: number): number {
+  return timelineRef ? timelineRef.current.toSource(t) : t;
+}
+
+// The source-time interval a display interval names. `end` stays undefined when
+// there's no selection to bound the range. Resolving the end inside the start's
+// span is what sourceIntervalOf does; see utils/subsetTimeline.
+function toSourceInterval(timelineRef: TimelineRef, start: number, end?: number): { start: number; end?: number } {
+  if (!timelineRef) return { start, end };
+  if (end === undefined) return { start: timelineRef.current.toSource(start), end };
+  return sourceIntervalOf(timelineRef.current, start, end);
 }
 
 // Dual-transport abstraction over AudioEngine and VideoElementEngine. Owns the
@@ -58,6 +89,7 @@ export function usePlaybackTransport({
   videoPrefetchEndRef,
   videoPrefetchBusyRef,
   prerollVideo,
+  timelineRef,
   spectrogramRef,
   examplePlayer,
   addLog,
@@ -129,17 +161,21 @@ export function usePlaybackTransport({
     // Kick a video prefetch chunk starting at prevBufferedTo. Chains immediately
     // when the chunk finishes so decode pipelines ahead of the playhead even when
     // VideoToolbox takes longer than the chunk's playback duration (dense GOPs).
+    //
+    // videoPrefetchEndRef — the buffer edge — is a SOURCE time, like everything
+    // else the frame source is handed (prerollVideo sets it from the source
+    // range it warmed), so the playhead is converted before being compared
+    // against it.
     const kickVideoPrefetch = (prevBufferedTo: number) => {
       const src = frameSourceRef.current;
       if (!src || videoPrefetchBusyRef.current) return;
-      const t = currentTimeRef.current;
       // Always start from the buffer edge, not max(edge, t). Starting from t
       // when t > prevBufferedTo causes ensureRange to overlap the just-completed
       // chunk, forcing a re-decode of already-cached frames through VideoToolbox.
       // The allCached fast-path in ensureRange handles the case where frames
       // at prevBufferedTo are already in cache.
       const chunkStart = prevBufferedTo;
-      const dur = durationRef.current || chunkStart + 5;
+      const dur = (timelineRef ? timelineRef.current.sourceDuration : durationRef.current) || chunkStart + 5;
       const chunkEnd = Math.min(chunkStart + 5, dur);
       if (chunkStart >= chunkEnd) return;
       videoPrefetchBusyRef.current = true;
@@ -152,7 +188,7 @@ export function usePlaybackTransport({
           // If the decode took longer than playback, the playhead may already
           // be close to the new buffer edge — kick the next chunk now.
           const buf = videoPrefetchEndRef.current;
-          if (currentTimeRef.current + 6 >= buf) kickVideoPrefetch(buf);
+          if (toSourceTime(timelineRef, currentTimeRef.current) + 6 >= buf) kickVideoPrefetch(buf);
         });
     };
 
@@ -192,7 +228,7 @@ export function usePlaybackTransport({
         const canvasLive = wantsCanvasRenderer(mode, selectionRef.current !== null);
         if (canvasLive && !videoPrefetchBusyRef.current) {
           const bufferedTo = videoPrefetchEndRef.current;
-          if (t + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
+          if (toSourceTime(timelineRef, t) + 6 >= bufferedTo) kickVideoPrefetch(bufferedTo);
         }
       },
       onPlaying,
@@ -298,13 +334,15 @@ export function usePlaybackTransport({
       // before any frame renders). The <video>-element transport decodes itself,
       // and audio-only tracks have no frames, so both skip the wait.
       if (frameSourceRef.current && !usesVideoTransport()) {
-          await prerollVideo(startSec, sel?.end);
+          // prerollVideo warms the frame cache, so it takes source time.
+          const src = toSourceInterval(timelineRef, startSec, sel?.end);
+          await prerollVideo(src.start, src.end);
           if (token !== playTokenRef.current) return; // user interrupted
       }
       // isPlaying is set to true only when onPlaying fires. endSec enables the
       // bounded selection stop on whichever transport is active.
       transport?.play(startSec, sel ? sel.end : undefined);
-  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport, examplePlayer, selectionRef, frameSourceRef]);
+  }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport, examplePlayer, selectionRef, frameSourceRef, timelineRef]);
 
   const seek = useCallback(async (time: number, scrollView = false) => {
       const transport = activeTransport();
@@ -323,12 +361,17 @@ export function usePlaybackTransport({
       // the GOP decode animation from being visible before the React overlay
       // renders (which is async and can lag several rAF ticks behind).
       if (!isAudioTrack && frameSourceRef.current) {
-          frameSourceRef.current.notifyPlayhead(time);
+          // Source time: the frame source's window, its frozen frame and its
+          // scrub decode are all keyed on position in the file.
+          const srcTime = toSourceTime(timelineRef, time);
+          const srcDuration = timelineRef ? timelineRef.current.sourceDuration : durationRef.current;
+          const scrubEnd = Math.min(srcTime + 0.5, srcDuration || srcTime + 0.5);
+          frameSourceRef.current.notifyPlayhead(srcTime);
           if (!wasPlaying && !usesVideoTransport()) {
-              frameSourceRef.current.freezeDisplayAt(prevTime);
+              frameSourceRef.current.freezeDisplayAt(toSourceTime(timelineRef, prevTime));
               setIsBuffering(true);
               const token = ++playTokenRef.current;
-              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
+              frameSourceRef.current.ensureRange(srcTime, scrubEnd, 'seekScrub')
                 .then(() => {
                     if (token === playTokenRef.current) {
                         frameSourceRef.current?.clearDisplayFreeze();
@@ -342,7 +385,7 @@ export function usePlaybackTransport({
                     }
                 });
           } else if (!wasPlaying) {
-              frameSourceRef.current.ensureRange(time, Math.min(time + 0.5, durationRef.current || time + 0.5), 'seekScrub')
+              frameSourceRef.current.ensureRange(srcTime, scrubEnd, 'seekScrub')
                 .catch(() => {});
           }
       }
@@ -356,7 +399,8 @@ export function usePlaybackTransport({
               setIsBuffering(true);
               const token = ++playTokenRef.current;
               if (frameSourceRef.current) {
-                  await prerollVideo(time, sel?.end);
+                  const src = toSourceInterval(timelineRef, time, sel?.end);
+                  await prerollVideo(src.start, src.end);
                   if (token !== playTokenRef.current) return;
               }
               engineRef.current?.play(time, sel ? sel.end : undefined);
@@ -365,7 +409,7 @@ export function usePlaybackTransport({
               setIsPlaying(false);
           }
       }
-  }, [isAudioTrack, prerollVideo, activeTransport, usesVideoTransport, durationRef, selectionRef, frameSourceRef, spectrogramRef]);
+  }, [isAudioTrack, prerollVideo, activeTransport, usesVideoTransport, durationRef, selectionRef, frameSourceRef, spectrogramRef, timelineRef]);
 
   // Keep seekRef in sync with seek so the mount-time onEnded closure always calls the latest version
   useEffect(() => { seekRef.current = seek; }, [seek]);

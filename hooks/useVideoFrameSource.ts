@@ -75,10 +75,17 @@ export function useVideoFrameSource({
     }
   }, []);
 
-  // React to videoMode changes for the currently-loaded track. Toggling
-  // off/fast ↔ mixed/accurate without this would leave a stale frame source open
-  // (memory + decoder) or, conversely, leave the canvas dark with no decoder.
-  // The track itself doesn't need to be reloaded — only the frame source.
+  // The one place a VideoFrameSource is opened or closed. Keyed on both the
+  // track and the video mode, so it covers opening a new track and toggling
+  // off/fast ↔ mixed/accurate on the track already loaded; without the latter a
+  // stale frame source would stay open (memory + decoder) or, conversely, the
+  // canvas would go dark with no decoder. The track itself doesn't need to be
+  // reloaded — only the frame source.
+  //
+  // Callers pass the EFFECTIVE video mode (AnnotationWindow forces 'off' under a
+  // subset), so opening from anywhere else would bypass that override — as well
+  // as the expectedTrack guard and onDecoderUnsupported below — and race this
+  // effect for ownership of frameSourceRef.
   useEffect(() => {
     if (!trackPath || isAudioTrack) return;
     const wantsFrameSource =
@@ -102,12 +109,15 @@ export function useVideoFrameSource({
           frameSourceRef.current = source;
           setFrameSourceVersion(v => v + 1);
           if (videoMode === 'accurate') {
+            // Canvas drives playback from the start, so warm the cache around
+            // t=0 — the first frame is ready to draw whether this open came
+            // from a mode change or from a freshly-opened track.
             const dur = durationRef.current;
-            source.ensureRange(0, Math.min(5, dur || 5), 'modeChangeWarm').catch(() => {});
+            source.ensureRange(0, Math.min(5, dur || 5), 'openWarm').catch(() => {});
           } else if (videoMode === 'mixed' && selectionRef.current) {
             // Mode switched on with an existing selection — warm it now.
             const sel = selectionRef.current;
-            source.ensureRange(sel.start, sel.end, 'modeChangeWarmSel').catch(() => {});
+            source.ensureRange(sel.start, sel.end, 'openWarmSel').catch(() => {});
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

@@ -47,7 +47,6 @@ import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogra
 import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoElementEngine } from './utils/VideoElementEngine';
-import { VideoFrameSource, canUseFrameSource } from './utils/VideoFrameSource';
 import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
@@ -605,6 +604,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoPrefetchEndRef,
     videoPrefetchBusyRef,
     prerollVideo,
+    // The frame source, unlike the transport, works in SOURCE time — it decodes
+    // by position in the file — so the transport needs the map to convert every
+    // playhead it hands over.
+    timelineRef,
     spectrogramRef,
     examplePlayer,
     addLog,
@@ -833,37 +836,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         installChunkCache(absolutePath, sr, dur, effectiveZoom);
         addLog('Spectrogram loading...');
 
-        // Frame-perfect video path: MP4/MOV only. WebCodecs + mp4box.js
-        // demuxes the file and feeds a VideoDecoder; frames are cached by
-        // timestamp for instant replay at sample boundaries. Other containers
-        // fall back to the <video> element below.
-        //
-        // Gated by videoMode:
-        //   off, fast → don't open a frame source at all (the file load + demux
-        //               is itself non-trivial on old hardware).
-        //   mixed     → open it so the canvas can light up the moment the user
-        //               commits a selection, but skip the t=0 warm decode.
-        //   accurate  → open + warm (canvas drives playback from the start).
-        const mode = videoModeRef.current;
-        const wantFrameSource = !isAudio && canUseFrameSource(absolutePath)
-            && (mode === 'accurate' || mode === 'mixed');
-        if (wantFrameSource) {
-            try {
-                const source = new VideoFrameSource({ onDebugLog: addLog });
-                await source.open(assetUrl);
-                frameSourceRef.current = source;
-                setFrameSourceVersion(v => v + 1);
-                if (mode === 'accurate') {
-                    // Warm the cache around t=0 so the first frame is ready to draw.
-                    source.ensureRange(0, Math.min(5, dur), 'trackOpenWarm').catch(() => {});
-                }
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                addLog(`[video] frame source unavailable, falling back: ${msg}`, 'error');
-                frameSourceRef.current = null;
-                setFrameSourceVersion(v => v + 1);
-            }
-        }
+        // The frame-perfect video path (WebCodecs VideoFrameSource, MP4/MOV
+        // only) is NOT opened here. useVideoFrameSource's own effect is keyed on
+        // trackPath + the EFFECTIVE video mode, so `setTrackPath` above is what
+        // opens it — with the subset override applied (a subset closes the frame
+        // source outright), with the track-identity guard that discards a source
+        // whose file has already been switched away from, and with the
+        // onDecoderUnsupported callback. Opening a second one from here raced
+        // that effect and orphaned whichever source lost, leaking its VideoFrame
+        // handles; SingleFileWindow has always relied on the effect alone.
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         addLog(`Error opening file: ${errMsg}`, 'error');
