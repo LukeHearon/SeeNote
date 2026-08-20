@@ -420,6 +420,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
               className="bg-black relative flex flex-none overflow-hidden"
             >
+              {/* getFrameTime is the transport clock unconverted: this window
+                  has no subset, so display time is source time. */}
               <VideoPane
                 frameSource={frameSourceRef.current}
                 frameSourceVersion={frameSourceVersion}
@@ -428,7 +430,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 videoSrc={videoSrc}
                 isProcessing={isProcessing}
                 isBuffering={isBuffering}
-                getMediaTime={getMediaTime}
+                getFrameTime={getMediaTime}
                 onDebugLog={addLog}
                 onDurationChange={setDuration}
                 videoMode={videoMode}

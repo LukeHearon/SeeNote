@@ -5,9 +5,12 @@ interface CanvasVideoPlayerProps {
   /** Frame source to draw from. The component does not own this — the caller
    *  is responsible for opening and closing it. */
   frameSource: VideoFrameSource;
-  /** Called every rAF tick to get the current media time in seconds. The
-   *  canvas draws whichever cached frame is ≤ this value. */
-  getMediaTime: () => number;
+  /** Called every rAF tick for the playhead's position in the file, in
+   *  seconds. The canvas draws whichever cached frame is ≤ this value.
+   *  SOURCE time, not display time: frames are indexed by where they sit in
+   *  the file, so a caller running a subset timeline converts before passing
+   *  this in (see utils/subsetTimeline). */
+  getFrameTime: () => number;
   /** Optional debug logger. One-shot logs emit on mount + first successful draw. */
   onDebugLog?: (msg: string, type?: 'info' | 'error') => void;
 }
@@ -21,7 +24,7 @@ interface CanvasVideoPlayerProps {
  * plus a single drawImage. The decode pipeline runs independently in the
  * frame source.
  */
-export default function CanvasVideoPlayer({ frameSource, getMediaTime, onDebugLog }: CanvasVideoPlayerProps) {
+export default function CanvasVideoPlayer({ frameSource, getFrameTime, onDebugLog }: CanvasVideoPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +60,7 @@ export default function CanvasVideoPlayer({ frameSource, getMediaTime, onDebugLo
         lastH = targetH;
         onDebugLog?.(`[canvasvp] canvas sized ${targetW}x${targetH} (container=${rect.width}x${rect.height} dpr=${dpr})`);
       }
-      frameSource.drawAt(ctx, getMediaTime());
+      frameSource.drawAt(ctx, getFrameTime());
       ticks++;
       rAF = requestAnimationFrame(tick);
     };
@@ -67,7 +70,7 @@ export default function CanvasVideoPlayer({ frameSource, getMediaTime, onDebugLo
       if (rAF !== null) cancelAnimationFrame(rAF);
       onDebugLog?.(`[canvasvp] rAF loop stopped after ${ticks} ticks`);
     };
-  }, [frameSource, getMediaTime, onDebugLog]);
+  }, [frameSource, getFrameTime, onDebugLog]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative bg-black">

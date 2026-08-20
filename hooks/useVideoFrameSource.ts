@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { VideoFrameSource, canUseFrameSource } from '../utils/VideoFrameSource';
 import { toAssetUrl } from '../utils/tauriCommands';
 import { VideoMode, Selection } from '../types';
+import { Timeline, sourceIntervalOf } from '../utils/subsetTimeline';
 
 interface UseVideoFrameSourceArgs {
   // Track identity / mode mirrors, read inside async opens & the mode-change effect.
@@ -11,6 +12,10 @@ interface UseVideoFrameSourceArgs {
   videoMode: VideoMode;
   durationRef: React.MutableRefObject<number>;
   selectionRef: React.MutableRefObject<Selection | null>;
+  // The display↔source map. A selection is display time; the frame source
+  // decodes by position in the file. Omit it in windows with no subset mode
+  // (SingleFileWindow) — then the two axes are the same thing.
+  timelineRef?: React.MutableRefObject<Timeline>;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -30,6 +35,7 @@ export function useVideoFrameSource({
   videoMode,
   durationRef,
   selectionRef,
+  timelineRef,
   addLog,
 }: UseVideoFrameSourceArgs) {
   // VideoFrameSource for frame-perfect playback on MP4/MOV video tracks.
@@ -115,9 +121,14 @@ export function useVideoFrameSource({
             const dur = durationRef.current;
             source.ensureRange(0, Math.min(5, dur || 5), 'openWarm').catch(() => {});
           } else if (videoMode === 'mixed' && selectionRef.current) {
-            // Mode switched on with an existing selection — warm it now.
+            // Mode switched on with an existing selection — warm it now. The
+            // selection is display time; ensureRange decodes by position in
+            // the file, so it goes through the timeline first.
             const sel = selectionRef.current;
-            source.ensureRange(sel.start, sel.end, 'openWarmSel').catch(() => {});
+            const src = timelineRef
+              ? sourceIntervalOf(timelineRef.current, sel.start, sel.end)
+              : sel;
+            source.ensureRange(src.start, src.end, 'openWarmSel').catch(() => {});
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -132,7 +143,7 @@ export function useVideoFrameSource({
       videoPrefetchBusyRef.current = false;
       setFrameSourceDecodeError(false);
     }
-  }, [videoMode, trackPath, isAudioTrack, addLog, trackPathRef, durationRef, selectionRef]);
+  }, [videoMode, trackPath, isAudioTrack, addLog, trackPathRef, durationRef, selectionRef, timelineRef]);
 
   // Reset whenever the open track changes — a decode error belongs to the
   // file that produced it, not to whatever opens next.

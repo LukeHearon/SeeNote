@@ -559,6 +559,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoMode: effectiveVideoMode,
     durationRef,
     selectionRef,
+    // Warming the selection on open decodes by position in the file, so the
+    // hook needs the map from the display-time selection back to source time.
+    timelineRef,
     addLog,
   });
 
@@ -617,6 +620,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     enabled: libraryToolIndex === null,
   });
 
+  // The canvas video player's draw clock. getMediaTime is display time (the
+  // transport's axis); the frame cache is indexed by position in the file, so
+  // every rAF tick converts. Read off the ref rather than closing over
+  // `timeline` so the rAF loop isn't torn down and rebuilt on every threshold
+  // nudge. Identity while no subset is on, which is when a frame source can be
+  // open at all today — the conversion is what stops that from being load-bearing.
+  const getFrameTime = useCallback(
+    () => timelineRef.current.toSource(getMediaTime()),
+    [getMediaTime],
+  );
+
   // Spectrogram zoom-in/out/fit-to-track hotkeys (mod+=/mod+-/mod+shift+plus/
   // mod+0), shared verbatim with SingleFileWindow. mod+0's "remember where I
   // was" snapshot reads the live scroll position from the viewport store (the
@@ -651,16 +665,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // move and each ensureRange re-decodes its GOP from the keyframe; we warm
   // once the selection settles. ensureRange fast-paths if already cached, so a
   // play that beats the timer just decodes in preroll as before.
+  //
+  // The selection is display time and ensureRange is source time, so it goes
+  // through the timeline — same conversion the preroll and the pin make.
   useEffect(() => {
     if (isAudioTrack || !selection) return;
     const source = frameSourceRef.current;
     if (!source) return;
-    const sel = selection;
+    const sel = selectionToSource(selection);
     const timer = setTimeout(() => {
       source.ensureRange(sel.start, sel.end, 'selectionWarm').catch(() => {});
     }, 150);
     return () => clearTimeout(timer);
-  }, [selection, isAudioTrack]);
+  }, [selection, isAudioTrack, selectionToSource, frameSourceRef]);
 
   // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
   useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
@@ -1041,8 +1058,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // resize/move, toolbar time edit, annotation click) flows through this
       // wrapper, whereas the commit callback only fires on a fresh drag-release.
       // Pinning here is what keeps the selection's frames resident across the
-      // rolling prefetch's eviction churn so replays hit the cache.
-      frameSourceRef.current?.pinSelectionRange(s.start, s.end);
+      // rolling prefetch's eviction churn so replays hit the cache. The pin is
+      // matched against decoded frames, which are indexed by position in the
+      // file, so the display-time selection converts first.
+      const src = selectionToSource(s);
+      frameSourceRef.current?.pinSelectionRange(src.start, src.end);
     } else {
       activationStack.remove('selection');
       frameSourceRef.current?.clearPinnedRange();
@@ -1051,7 +1071,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // selection end.
       clearSelectionEnd();
     }
-  }, [activationStack, clearSelectionEnd]);
+  }, [activationStack, clearSelectionEnd, selectionToSource, frameSourceRef]);
 
   // Select + scroll to an annotation matching `match` on the current track.
   // Shared by the same-track and cross-track ("Go") paths so the two don't
@@ -2378,7 +2398,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 videoSrc={videoSrc}
                 isProcessing={isProcessing}
                 isBuffering={isBuffering}
-                getMediaTime={getMediaTime}
+                getFrameTime={getFrameTime}
                 onDebugLog={addLog}
                 onDurationChange={setDuration}
                 videoMode={videoMode}

@@ -42,7 +42,11 @@ interface VideoPaneProps {
   videoSrc: string | null;
   isProcessing: boolean;
   isBuffering: boolean;
-  getMediaTime: () => number;
+  /** The playhead's position in the FILE, in seconds — the clock the frame-
+   *  accurate canvas draws against. Source time, not display time: under a
+   *  subset the caller converts first (see utils/subsetTimeline). Only the
+   *  canvas path uses it; the <video> element owns its own clock. */
+  getFrameTime: () => number;
   onDebugLog: (msg: string, type?: 'info' | 'error') => void;
   onDurationChange?: (d: number) => void;
   /** Active video-rendering mode. Determines which player is mounted and
@@ -72,7 +76,7 @@ export default function VideoPane({
   videoSrc,
   isProcessing,
   isBuffering,
-  getMediaTime,
+  getFrameTime,
   onDebugLog,
   onDurationChange,
   videoMode,
@@ -304,7 +308,7 @@ export default function VideoPane({
             <CanvasVideoPlayer
               key={frameSourceVersion}
               frameSource={frameSource!}
-              getMediaTime={getMediaTime}
+              getFrameTime={getFrameTime}
               onDebugLog={onDebugLog}
             />
           ) : (
