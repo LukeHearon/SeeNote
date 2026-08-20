@@ -231,9 +231,13 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
   }, []);
   // Appended rather than prepended, so the pinned block reads in the order the
   // user built it up rather than reshuffling every time they pin one more.
+  // Pinning also un-hides the neuron: it only floats to the top of the plotted
+  // block, so pinning a hidden one would otherwise silently do nothing.
   const handleBuzzdetectTogglePinNeuron = useCallback((neuron: string) => {
-    setBuzzdetectPinnedNeurons(prev => prev.includes(neuron) ? prev.filter(n => n !== neuron) : [...prev, neuron]);
-  }, []);
+    const pinning = !buzzdetectPinnedNeurons.includes(neuron);
+    setBuzzdetectPinnedNeurons(prev => pinning ? [...prev, neuron] : prev.filter(n => n !== neuron));
+    if (pinning) setBuzzdetectHiddenNeurons(prev => prev.filter(n => n !== neuron));
+  }, [buzzdetectPinnedNeurons]);
   // Isolating also plots the neuron, since isolating one that isn't drawn
   // would fade every line and show nothing. Nothing else is touched: the other
   // neurons stay plotted, just faded, so dropping the isolation brings back
