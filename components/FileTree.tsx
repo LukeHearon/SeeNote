@@ -523,7 +523,11 @@ function FileTree({
     setExpandedDirs(prev => {
       const next = new Set(prev);
       if (next.has(node.path)) {
-        next.delete(node.path);
+        const collapseSubtree = (n: TreeNode) => {
+          next.delete(n.path);
+          for (const child of n.children) if (child.isDir) collapseSubtree(child);
+        };
+        collapseSubtree(node);
       } else {
         let current: TreeNode | undefined = node;
         while (current) {
