@@ -1805,13 +1805,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const sourceTime = prevTimeline.toSource(currentTimeRef.current);
     const newDisplayTime = displayOfNearestKept(timeline, sourceTime);
     if (newDisplayTime !== currentTimeRef.current) seek(newDisplayTime);
+    // Always recenter, even when the display time itself didn't change: the
+    // timeline swap can redraw entirely different content under the same
+    // playhead position, so the view still needs to follow it.
+    spectrogramRef.current?.scrollToTime(newDisplayTime);
     // A subset can be a few seconds of a multi-hour file. Fit the window to it
     // rather than leaving the user staring at one narrow band of content in a
     // screen of blank — the same courtesy handleOpenTrack does for short files.
     if (displayDuration > 0 && zoomSecRef.current > displayDuration) {
       setZoomSec(Math.max(MIN_ZOOM_SEC, displayDuration));
     }
-  }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef]);
+  }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef, spectrogramRef]);
 
   // Finish a cross-track Find & Rename "Go": select + scroll once the target
   // track has finished loading and its annotations are in memory.
