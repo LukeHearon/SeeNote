@@ -166,6 +166,11 @@ const LATENCY_PROBE_DELAY_SEC = 0.2;
  *  measurement noise; above it, the audio device or its buffer size changed
  *  under us, which moves the delay before sound. */
 const LATENCY_CHANGE_LOG_SEC = 0.005;
+/** How often the clock-drift monitor compares the context clock against the
+ *  wall clock during a play (see _startClockDriftMonitor). */
+const CLOCK_DRIFT_SAMPLE_MS = 2000;
+/** Additional drift (seconds) beyond the last logged figure worth another line. */
+const CLOCK_DRIFT_LOG_STEP_SEC = 0.1;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
@@ -250,6 +255,12 @@ export class AudioEngine implements PlaybackTransport {
   private lastLoggedLatencySec = -1;
   /** One-shot timer armed alongside the render check (see _armLatencyProbe). */
   private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Repeating timer comparing the context clock to the wall clock during a
+   *  play (see _startClockDriftMonitor), with the origins it measures from. */
+  private driftTimer: ReturnType<typeof setInterval> | null = null;
+  private driftCtxOrigin = 0;
+  private driftWallOriginMs = 0;
+  private driftLastLoggedSec = 0;
   /** Hardware sample rate of the default output device, as reported by a
    *  throwaway context created without a `sampleRate` option. Null until probed;
    *  0 if the probe failed. */
@@ -376,15 +387,30 @@ export class AudioEngine implements PlaybackTransport {
     // context (e.g. pausing and resuming), reuse it to avoid the latency of
     // re-creating it and to preserve ctx.currentTime continuity.
     if (!this.ctx || this.ctx.state === 'closed') {
+      // Open at the OUTPUT DEVICE's rate, not the file's. Asking for the file's
+      // rate is what keeps our own graph resample-free, but when it isn't the
+      // device's rate the audio subsystem resamples on the way out, and on
+      // WKWebView/macOS that path buffers deeply — deep enough to put a second
+      // or more between scheduling a sample and hearing it, none of which is
+      // reported in `outputLatency`. Nothing in the scheduling math cares:
+      // chunks are still built as AudioBuffers at the file's rate (Web Audio
+      // resamples each one), and a buffer's duration in seconds is
+      // frames / its own rate either way.
+      //
+      // Set localStorage['seenote.audioContextRate'] = 'file' to force the old
+      // behaviour for an A/B on the latency.
+      const deviceRate = this._probeDeviceSampleRate();
+      let forceFileRate = false;
+      try { forceFileRate = localStorage.getItem('seenote.audioContextRate') === 'file'; } catch { /* no storage */ }
+      const wantedRate = !forceFileRate && deviceRate > 0 ? deviceRate : this.fileSampleRate;
       try {
-        this.ctx = new AudioContext({ sampleRate: this.fileSampleRate });
+        this.ctx = new AudioContext({ sampleRate: wantedRate });
       } catch {
         this.ctx = new AudioContext();
         console.warn(
-          `AudioEngine: ${this.fileSampleRate} Hz not supported, using ${this.ctx.sampleRate} Hz`,
+          `AudioEngine: ${wantedRate} Hz not supported, using ${this.ctx.sampleRate} Hz`,
         );
       }
-      this._probeDeviceSampleRate();
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
       this.gainNode.connect(this.ctx.destination);
@@ -760,6 +786,52 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
+   * Compare the context clock against the wall clock for the length of a play.
+   *
+   * `ctx.currentTime` is supposed to be the audio device's clock. If it instead
+   * advances on a render thread that outruns the device — which is what a
+   * resampling output path with a growing FIFO looks like from inside the page —
+   * it gains on `performance.now()`, and every sample we schedule lands that
+   * much further behind the speakers. That gap is the delay before sound, and
+   * unlike `getOutputTimestamp()` (which WKWebView reports as zero lag) nothing
+   * in the engine can fake this measurement: it is two independent clocks.
+   *
+   * A healthy device holds this within a few ms over a minute.
+   */
+  private _startClockDriftMonitor(myPlayId: number): void {
+    this._stopClockDriftMonitor();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.driftCtxOrigin = ctx.currentTime;
+    this.driftWallOriginMs = performance.now();
+    this.driftLastLoggedSec = 0;
+    let firstSample = true;
+    this.driftTimer = setInterval(() => {
+      if (this.playId !== myPlayId || !this.ctx) { this._stopClockDriftMonitor(); return; }
+      const ctxElapsed = this.ctx.currentTime - this.driftCtxOrigin;
+      const wallElapsed = (performance.now() - this.driftWallOriginMs) / 1000;
+      if (wallElapsed <= 0) return;
+      const excess = ctxElapsed - wallElapsed;
+      const worthLogging = Math.abs(excess) >= this.driftLastLoggedSec + CLOCK_DRIFT_LOG_STEP_SEC;
+      if (!firstSample && !worthLogging) return;
+      firstSample = false;
+      if (worthLogging) this.driftLastLoggedSec = Math.abs(excess);
+      this._log(
+        `clock drift: ctx +${ctxElapsed.toFixed(3)}s vs wall +${wallElapsed.toFixed(3)}s `
+        + `— ctx clock ${excess >= 0 ? 'ahead' : 'behind'} by ${Math.abs(excess * 1000).toFixed(0)}ms `
+        + `(ratio ${(ctxElapsed / wallElapsed).toFixed(5)})`,
+      );
+    }, CLOCK_DRIFT_SAMPLE_MS);
+  }
+
+  private _stopClockDriftMonitor(): void {
+    if (this.driftTimer !== null) {
+      clearInterval(this.driftTimer);
+      this.driftTimer = null;
+    }
+  }
+
+  /**
    * Log the output latency when it is high enough to perceptibly desync the
    * playhead (>20ms) or when it has changed since the last line. The change
    * case matters more than the absolute value: the delay before sound moves
@@ -913,6 +985,7 @@ export class AudioEngine implements PlaybackTransport {
       clearTimeout(this.latencyProbeTimer);
       this.latencyProbeTimer = null;
     }
+    this._stopClockDriftMonitor();
 
     this._raf.stop();
 
@@ -1278,6 +1351,7 @@ export class AudioEngine implements PlaybackTransport {
         this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f (${elapsedMs}ms after play)`);
         this._armRenderCheck(ctxStart, myPlayId);
         this._armLatencyProbe(ctxStart, myPlayId);
+        this._startClockDriftMonitor(myPlayId);
         if (this.slowDecodeTimer !== null) {
           clearInterval(this.slowDecodeTimer);
           this.slowDecodeTimer = null;
@@ -1377,6 +1451,7 @@ export class AudioEngine implements PlaybackTransport {
     // entirely, so a delay before sound here can only be the device.
     this._armRenderCheck(this.playStartCtx, myPlayId);
     this._armLatencyProbe(this.playStartCtx, myPlayId);
+    this._startClockDriftMonitor(myPlayId);
     // The cached slice covers exactly [startSec, endSec] and nothing follows it,
     // so the end bound is committed the moment it's scheduled.
     this.endBoundCommitted = true;
