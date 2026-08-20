@@ -15,6 +15,10 @@ describe('formatRulerTime', () => {
   it('omits hours below an hour', () => {
     expect(formatRulerTime(125, 10, 300)).toBe('2m05s');
   });
+
+  it('in plain mode shows a bare second count instead of h/m/s, even past an hour', () => {
+    expect(formatRulerTime(8320, 600, 7200, true)).toBe('8,320s');
+  });
 });
 
 describe('rulerTicks', () => {

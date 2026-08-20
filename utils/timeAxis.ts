@@ -38,9 +38,15 @@ export function chooseTimeStep(pixelsPerSecond: number, minSpacingPx: number = M
 
 /**
  * Format a ruler label for time `s` (seconds). `viewSpan` decides whether to
- * show hours; `timeStep` decides sub-second vs minute formatting.
+ * show hours; `timeStep` decides sub-second vs minute formatting. `plain`
+ * (set when the project's time-display unit is "Seconds") skips the h/m/s
+ * cascade entirely and reads as a bare second count, matching the running
+ * time readout's Seconds mode instead of switching formats between the two.
  */
-export function formatRulerTime(s: number, timeStep: number, viewSpan: number): string {
+export function formatRulerTime(s: number, timeStep: number, viewSpan: number, plain: boolean = false): string {
+  if (plain) {
+    return `${Math.round(s).toLocaleString('en-US')}s`;
+  }
   if (timeStep < 1) {
     return `${s.toFixed(2)}s`;
   }

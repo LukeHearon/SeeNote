@@ -747,7 +747,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
         const timeStr = datetimeRuler
           ? formatDatetimeRulerLabel(trackStartDate, tick.src, prevLabelled, timeStep, dateTimeFormat)
-          : formatRulerTime(tick.src, timeStep, timeRange);
+          : formatRulerTime(tick.src, timeStep, timeRange, timeDisplayUnit === 'seconds');
         prevLabelled = tick.src;
         // The leading full-date label is wide enough to hang off the left edge;
         // nudge it back on-canvas rather than letting it clip.
