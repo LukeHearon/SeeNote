@@ -173,19 +173,22 @@ function NeuronPalette({
     [neuronColorOverrides, neurons],
   );
 
-  // Three blocks, in this order: pinned, then the rest of the plotted ones in
-  // the file's own order, then everything not plotted. Unplotted rows sink to
-  // the bottom so the list reads as what the graph is showing, with the rest
-  // still there to switch on. Pins are persisted per project and outlive the
-  // file, so a pin naming a neuron this file doesn't have simply drops out here
+  // Three blocks, in this order: pinned (regardless of plot state), then the
+  // rest of the plotted ones in the file's own order, then everything not
+  // plotted. A pin is a standing decision about where a neuron reads in the
+  // list, so switching its plotting off doesn't bump it back down — otherwise
+  // toggling the dot would silently undo the pin. Unplotted rows sink to the
+  // bottom so the list reads as what the graph is showing, with the rest still
+  // there to switch on. Pins are persisted per project and outlive the file,
+  // so a pin naming a neuron this file doesn't have simply drops out here
   // rather than showing an empty row.
   const { pinned, unpinned, unplotted } = useMemo(() => {
     const pinnedSet = new Set(pinnedNeurons);
     const plotted = neurons.filter(n => !hidden.has(n));
     return {
-      pinned: pinnedNeurons.filter(n => plotted.includes(n)),
+      pinned: pinnedNeurons.filter(n => neurons.includes(n)),
       unpinned: plotted.filter(n => !pinnedSet.has(n)),
-      unplotted: neurons.filter(n => hidden.has(n)),
+      unplotted: neurons.filter(n => hidden.has(n) && !pinnedSet.has(n)),
     };
   }, [neurons, hidden, pinnedNeurons]);
 
