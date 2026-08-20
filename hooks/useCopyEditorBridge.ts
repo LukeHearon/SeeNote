@@ -87,11 +87,11 @@ export function useCopyEditorBridge() {
 
   useHotkeys([
     {
-      key: 'e', mods: ['mod', 'shift', 'alt'],
+      key: 'c', mods: ['mod', 'shift', 'alt'],
       handler: () => DEV_MODE && copyChannel?.postMessage({ type: 'toggleShowAll' }),
     },
     {
-      key: 'e', mods: ['mod', 'shift'],
+      key: 'c', mods: ['mod', 'shift'],
       handler: () => {
         if (!DEV_MODE) return;
         try { localStorage.setItem('copy:accessedKeys', JSON.stringify([...getAccessedKeys()])); } catch { /* */ }

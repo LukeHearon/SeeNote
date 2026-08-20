@@ -1604,6 +1604,36 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setBoundAnnotationId(null);
       }
   };
+  // Export the current selection's audio to a file (spectrogram's right-click
+  // menu, and Mod+Shift+E below). The selection is in display time; the file
+  // itself is read at its source time (selectionToSource), matching how
+  // selections are already converted for annotation creation. The suggested
+  // filename reuses the project's filename-timestamp scheme when one is
+  // configured, so a track's exports stay in the same naming convention as
+  // the tracks themselves.
+  const handleExportSelection = useCallback(async () => {
+      if (!selection || !trackPath) return;
+      const src = selectionToSource(selection);
+      const filename = basename(trackPath);
+      const dir = trackPath.slice(0, trackPath.length - filename.length);
+      const suggested = suggestExportFilename(
+          filename,
+          src.start,
+          project.settings.filenameTimeFormat,
+          project.settings.filenameTimeOffsetSeparator,
+      );
+      const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
+          { name: 'Audio File', extensions: audioExportExtensions(filename) },
+      ]);
+      if (!chosenPath) return;
+      try {
+          await exportAudioRange(trackPath, src.start, src.end - src.start, chosenPath);
+          addLog(`Exported selection to ${basename(chosenPath)}`);
+      } catch (err) {
+          addLog(`Error exporting audio: ${err}`, 'error');
+      }
+  }, [selection, trackPath, selectionToSource, project.settings.filenameTimeFormat, project.settings.filenameTimeOffsetSeparator, addLog]);
+
   useHotkeys([
       // Help guide — also fires inside text inputs, since help is universal.
       { key: 'F1', allowInInput: true, handler: () => showHelpPage() },
@@ -1623,6 +1653,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'ArrowRight', mods: ['alt'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
+      { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
 
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
@@ -1696,35 +1727,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       await exportToAudacity(annotations, trackName, trackPath, decimals);
       addLog('Exported annotations as TXT');
   };
-
-  // Export the current selection's audio to a file (spectrogram's right-click
-  // menu). The selection is in display time; the file itself is read at its
-  // source time (selectionToSource), matching how selections are already
-  // converted for annotation creation. The suggested filename reuses the
-  // project's filename-timestamp scheme when one is configured, so a track's
-  // exports stay in the same naming convention as the tracks themselves.
-  const handleExportSelection = useCallback(async () => {
-      if (!selection || !trackPath) return;
-      const src = selectionToSource(selection);
-      const filename = basename(trackPath);
-      const dir = trackPath.slice(0, trackPath.length - filename.length);
-      const suggested = suggestExportFilename(
-          filename,
-          src.start,
-          project.settings.filenameTimeFormat,
-          project.settings.filenameTimeOffsetSeparator,
-      );
-      const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
-          { name: 'Audio File', extensions: audioExportExtensions(filename) },
-      ]);
-      if (!chosenPath) return;
-      try {
-          await exportAudioRange(trackPath, src.start, src.end - src.start, chosenPath);
-          addLog(`Exported selection to ${basename(chosenPath)}`);
-      } catch (err) {
-          addLog(`Error exporting audio: ${err}`, 'error');
-      }
-  }, [selection, trackPath, selectionToSource, project.settings.filenameTimeFormat, project.settings.filenameTimeOffsetSeparator, addLog]);
 
 
   // A bound selection carries its annotation with it, exactly as dragging the

@@ -288,6 +288,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     // Help guide — also fires inside text inputs, since help is universal.
     { key: 'F1', allowInInput: true, handler: () => showHelpPage('single-file') },
     { key: 'a', mods: ['mod'], handler: () => { if (duration > 0) handleSelectionChange({ start: 0, end: duration }); } },
+    { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
     { key: 'Escape', allowInInput: true, handler: () => {
         const top = activationStack.popTop();
         switch (top) {
