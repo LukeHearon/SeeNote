@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds } from '../utils/filenameTime';
+import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, suggestExportFilename } from '../utils/filenameTime';
 
 const PATTERN = 'YYMMDD_HHMM';
 
@@ -106,5 +106,36 @@ describe('formatFilenameTime', () => {
   it('keeps literals and pads every field', () => {
     expect(formatFilenameTime(new Date(2026, 0, 2, 3, 4, 5), 'YYYY-MM-DD_HH.mm.ss'))
       .toBe('2026-01-02_03.04.05');
+  });
+});
+
+describe('suggestExportFilename', () => {
+  it('appends an offset suffix when a separator is configured and the name has none yet', () => {
+    expect(suggestExportFilename('200101_1200.mp3', 300, undefined, '_s')).toBe('200101_1200_s300.mp3');
+  });
+
+  it('stacks onto an existing offset suffix', () => {
+    expect(suggestExportFilename('200101_1200_s400.mp3', 300, undefined, '_s')).toBe('200101_1200_s700.mp3');
+  });
+
+  it('re-renders the date pattern shifted forward when no separator is configured', () => {
+    expect(suggestExportFilename('200101_1200.mp3', 3600, 'YYMMDD_HHMM')).toBe('200101_1300.mp3');
+  });
+
+  it('preserves a prefix/suffix around the matched date pattern', () => {
+    expect(suggestExportFilename('hive3_200101_1200_part2.mp3', 3600, 'YYMMDD_HHMM'))
+      .toBe('hive3_200101_1300_part2.mp3');
+  });
+
+  it('falls back to an implicit "_s" suffix with neither a separator nor a usable date format', () => {
+    expect(suggestExportFilename('buzz.wav', 20)).toBe('buzz_s20.wav');
+  });
+
+  it('falls back to "_s" when a date format is configured but the name does not match it', () => {
+    expect(suggestExportFilename('buzz.wav', 20, 'YYMMDD_HHMM')).toBe('buzz_s20.wav');
+  });
+
+  it('rounds a fractional start second', () => {
+    expect(suggestExportFilename('buzz.wav', 20.6)).toBe('buzz_s21.wav');
   });
 });

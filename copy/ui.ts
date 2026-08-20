@@ -308,6 +308,7 @@ export const annotationOverlay = {
 
 export const spectrogramView = {
   get generating() { return getOverride('ui.spectrogramView.generating') ?? "Generating spectrogram…"; },
+  get exportSelectionLabel() { return getOverride('ui.spectrogramView.exportSelectionLabel') ?? "Export selected audio…"; },
 };
 
 export const videoPane = {

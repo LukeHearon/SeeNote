@@ -46,6 +46,11 @@ export interface SpectrogramInteractionParams {
   setSuppressCustomCursor: (v: boolean) => void;
   // Right-drag pan timestamp (shared with wheel handling).
   lastManualScrollRef: React.MutableRefObject<number>;
+  // Fires on a right-click that didn't turn into a pan drag (movement stayed
+  // under CONTEXT_MENU_MOVE_THRESHOLD_PX between mousedown and mouseup) — the
+  // signal to open a context menu. Right-click always starts a pan drag (see
+  // handleMouseDown), so this is how a plain right-click is told apart from one.
+  onContextMenu?: (clientX: number, clientY: number) => void;
   // Live Alt state, read at annotation-commit time so toggling Alt mid-drag (after
   // mousedown, before mouseup) can flip whether the new annotation gets highlighted.
   isAltHeldRef: React.MutableRefObject<boolean>;
@@ -121,8 +126,13 @@ export function useSpectrogramInteraction({
   setSuppressCustomCursor,
   lastManualScrollRef,
   isAltHeldRef,
+  onContextMenu,
 }: SpectrogramInteractionParams): SpectrogramInteractionApi {
   const [dragStart, setDragStart] = useState<{ x: number; scroll: number } | null>(null);
+  // Screen position at a right-button mousedown, so mouseup can tell a plain
+  // right-click (context menu) apart from a right-drag pan (see onContextMenu).
+  const rightClickStartRef = useRef<{ x: number; y: number } | null>(null);
+  const CONTEXT_MENU_MOVE_THRESHOLD_PX = 4;
 
   // Interaction State (annotations — only when activeAnnotationTool !== null)
   const [creatingAnnotation, setCreatingAnnotation] = useState<{ start: number; current: number } | null>(null);
@@ -513,6 +523,7 @@ export function useSpectrogramInteraction({
     if (e.button === 2) {
       e.preventDefault();
       setDragStart({ x: e.clientX, scroll: scrollLeft });
+      rightClickStartRef.current = { x: e.clientX, y: e.clientY };
       return;
     }
 
@@ -746,7 +757,15 @@ export function useSpectrogramInteraction({
   };
 
   const handleMouseUp = (e?: React.MouseEvent) => {
-    if (dragStart) setDragStart(null);
+    if (dragStart) {
+      setDragStart(null);
+      const start = rightClickStartRef.current;
+      rightClickStartRef.current = null;
+      if (start && e) {
+        const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+        if (moved < CONTEXT_MENU_MOVE_THRESHOLD_PX) onContextMenu?.(e.clientX, e.clientY);
+      }
+    }
 
     if (resizingFilterEdge !== null) {
       setResizingFilterEdge(null);

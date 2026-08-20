@@ -641,6 +641,198 @@ pub async fn close_pcm_stream(
     Ok(())
 }
 
+// ── Audio range export ────────────────────────────────────────────────────────
+
+/// Write a PCM buffer as a 16-bit-PCM WAV file. Standard 44-byte header — see
+/// range_tests::write_test_wav above for the same layout used by the test
+/// fixtures.
+fn write_wav_i16(path: &std::path::Path, sample_rate: u32, channels: u16, samples: &[i16]) -> std::io::Result<()> {
+    let data_bytes = (samples.len() * 2) as u32;
+    let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * channels as u32 * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&(channels * 2).to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_bytes.to_le_bytes());
+    for &s in samples {
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(path, wav)
+}
+
+/// Decode `[start_sec, start_sec + duration_sec)` of `source_path`, preserving
+/// its channel count (unlike `decode_audio_range`, which mixes to mono), and
+/// write it to `out_path`.
+///
+/// `out_path`'s extension picks the output format: `.wav` is written directly;
+/// anything else is produced by writing a temp WAV and shelling out to ffmpeg
+/// to transcode it, so this only works for other formats when ffmpeg is
+/// available (see `ffmpeg_stream::detected_ffmpeg_path`) — same fallback
+/// backend the `.wma` decode path uses.
+fn export_audio_range_blocking(source_path: &str, start_sec: f64, duration_sec: f64, out_path: &str) -> Result<(), String> {
+    let mut stream = decoder::PcmStream::open(source_path, start_sec).map_err(|e| e.to_string())?;
+    let sample_rate = stream.sample_rate();
+    let channels = stream.channels().max(1);
+    let total_frames = (duration_sec.max(0.0) * sample_rate as f64).round() as usize;
+
+    let mut pcm: Vec<i16> = Vec::with_capacity(total_frames * channels as usize);
+    let mut remaining = total_frames;
+    while remaining > 0 {
+        let (interleaved, frames_read) = stream.read(remaining.min(65536)).map_err(|e| e.to_string())?;
+        if frames_read == 0 {
+            break; // EOF — export whatever was decoded, shorter than requested
+        }
+        for &s in &interleaved[..frames_read * channels as usize] {
+            pcm.push((s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16);
+        }
+        remaining -= frames_read;
+    }
+
+    let out = std::path::Path::new(out_path);
+    let ext = out.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+
+    if ext.is_empty() || ext == "wav" {
+        return write_wav_i16(out, sample_rate, channels, &pcm).map_err(|e| e.to_string());
+    }
+
+    let ffmpeg = crate::audio::ffmpeg_stream::detected_ffmpeg_path().ok_or_else(|| {
+        format!(
+            "Can't export as .{ext}: this format needs ffmpeg to convert, and no ffmpeg install \
+             was found. Export as .wav instead, or set an ffmpeg path in Application Settings."
+        )
+    })?;
+
+    let tmp = std::env::temp_dir().join(format!(
+        "seenote_export_{}_{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    ));
+    write_wav_i16(&tmp, sample_rate, channels, &pcm).map_err(|e| e.to_string())?;
+
+    let status = std::process::Command::new(&ffmpeg)
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(&tmp)
+        .arg(out_path)
+        .status();
+    let _ = std::fs::remove_file(&tmp);
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("ffmpeg exited with status {s} converting to .{ext}")),
+        Err(e) => Err(format!("Failed to run ffmpeg: {e}")),
+    }
+}
+
+/// Export the audio in `[start_sec, start_sec + duration_sec)` of `source_path`
+/// to `out_path`. Runs on a blocking thread — decode + (occasionally) an
+/// ffmpeg subprocess, no await points of its own.
+#[tauri::command]
+pub async fn export_audio_range(
+    source_path: String,
+    start_sec: f64,
+    duration_sec: f64,
+    out_path: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || export_audio_range_blocking(&source_path, start_sec, duration_sec, &out_path))
+        .await
+        .map_err(|e| format!("export task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// Write a mono 16-bit WAV whose samples encode their own frame index (as
+    /// a ramp), so a wrong start offset or wrong length in the exported range
+    /// is directly visible in the sample values, not just their count.
+    fn write_ramp_wav(name: &str, sample_rate: u32, channels: u16, n_frames: usize) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        let data_bytes = (n_frames * channels as usize * 2) as u32;
+        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * channels as u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&(channels * 2).to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for frame in 0..n_frames {
+            for ch in 0..channels as usize {
+                // Every channel of every frame gets a distinct, recoverable value.
+                let v = ((frame * channels as usize + ch) % 30000) as i16;
+                wav.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        std::fs::write(&path, wav).expect("write ramp wav");
+        path
+    }
+
+    fn read_wav_i16(path: &std::path::Path) -> (u32, u16, Vec<i16>) {
+        let bytes = std::fs::read(path).expect("read exported wav");
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let channels = u16::from_le_bytes(bytes[22..24].try_into().unwrap());
+        let sample_rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+        let data_bytes = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
+        let samples = bytes[44..44 + data_bytes]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        (sample_rate, channels, samples)
+    }
+
+    #[test]
+    fn exports_the_requested_range_preserving_channels() {
+        let sr = 8000u32;
+        let channels = 2u16;
+        let src = write_ramp_wav("seenote_export_src.wav", sr, channels, sr as usize * 4); // 4s
+
+        let out = std::env::temp_dir().join("seenote_export_out.wav");
+        export_audio_range_blocking(src.to_str().unwrap(), 1.0, 2.0, out.to_str().unwrap())
+            .expect("export");
+
+        let (out_sr, out_channels, samples) = read_wav_i16(&out);
+        assert_eq!(out_sr, sr);
+        assert_eq!(out_channels, channels);
+        // 2s at 8kHz stereo = 16000 frames * 2 channels.
+        assert_eq!(samples.len(), 16000 * 2);
+        // First exported frame is source frame 8000 (start_sec=1.0 * sr):
+        // channel 0 value is (8000*2 + 0) % 30000.
+        assert_eq!(samples[0], ((8000 * 2) % 30000) as i16);
+        assert_eq!(samples[1], ((8000 * 2 + 1) % 30000) as i16);
+
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn errors_on_an_unsupported_extension_without_ffmpeg() {
+        // Only meaningful when ffmpeg isn't resolvable in this test environment;
+        // skip rather than false-fail on a machine that happens to have it.
+        if crate::audio::ffmpeg_stream::detected_ffmpeg_path().is_some() {
+            return;
+        }
+        let sr = 8000u32;
+        let src = write_ramp_wav("seenote_export_src2.wav", sr, 1, sr as usize);
+        let out = std::env::temp_dir().join("seenote_export_out.mp3");
+        let result = export_audio_range_blocking(src.to_str().unwrap(), 0.0, 1.0, out.to_str().unwrap());
+        assert!(result.is_err());
+        let _ = std::fs::remove_file(&src);
+    }
+}
+
 #[cfg(test)]
 mod coarse_bench {
     use super::*;

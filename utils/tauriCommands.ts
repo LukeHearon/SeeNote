@@ -158,6 +158,18 @@ export const readBuzzdetect = (
 export const createDirAll = (path: string): Promise<void> =>
   invoke('create_dir_all', { path });
 
+/** Export `[startSec, startSec + durationSec)` of `sourcePath`'s audio to
+ * `outPath`, preserving its channel count. `outPath`'s extension picks the
+ * output format: `.wav` is always supported; anything else needs ffmpeg
+ * installed (see `detectFfmpeg`) and rejects with an error otherwise. */
+export const exportAudioRange = (
+  sourcePath: string,
+  startSec: number,
+  durationSec: number,
+  outPath: string,
+): Promise<void> =>
+  invoke('export_audio_range', { sourcePath, startSec, durationSec, outPath });
+
 export const saveFileDialog = (
   defaultPath: string,
   filters: DialogFilter[],

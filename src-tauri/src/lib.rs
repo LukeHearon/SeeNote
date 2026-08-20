@@ -116,6 +116,7 @@ pub fn run() {
             commands::audio::start_pcm_stream,
             commands::audio::read_pcm_chunk,
             commands::audio::close_pcm_stream,
+            commands::audio::export_audio_range,
             commands::filesystem::list_directory,
             commands::filesystem::list_media_files_recursive,
             commands::filesystem::write_text_file,

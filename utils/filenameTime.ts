@@ -196,3 +196,65 @@ export function formatFilenameTime(date: Date, pattern: string): string {
     }
   }).join('');
 }
+
+/**
+ * Suggested filename for exporting the audio starting `startSec` into
+ * `sourceFilename`, in one of three schemes (checked in this order):
+ *
+ *  1. `offsetSeparator` is set: reuse it. If the source name already carries
+ *     an offset suffix (see `parseFilenameOffsetSeconds`), the exported
+ *     file's offset is the existing one plus `startSec` — so exporting from
+ *     an already-offset subset keeps stacking correctly, matching how
+ *     `parseFilenameTime` accumulates offsets. Otherwise the suffix is
+ *     appended fresh.
+ *  2. No separator, but `filenameTimeFormat` matches the source name: the
+ *     parsed start time, shifted forward by `startSec`, re-rendered in the
+ *     same pattern in place of the matched portion (any surrounding literal
+ *     text — a site prefix, a "_part2" suffix — is preserved).
+ *  3. Neither applies: fall back to scheme 1 with "_s" as an implicit
+ *     separator, so there's always a sensible suggestion.
+ *
+ * The suggested extension is always the source file's own; the caller (a
+ * save dialog) is what lets the user retype it to pick an export format.
+ */
+export function suggestExportFilename(
+  sourceFilename: string,
+  startSec: number,
+  filenameTimeFormat?: string,
+  filenameTimeOffsetSeparator?: string,
+): string {
+  const dotIndex = sourceFilename.lastIndexOf('.');
+  const stem = dotIndex === -1 ? sourceFilename : sourceFilename.slice(0, dotIndex);
+  const ext = dotIndex === -1 ? '' : sourceFilename.slice(dotIndex);
+  const offsetWhole = Math.round(startSec);
+
+  const withOffsetSuffix = (separator: string): string => {
+    const existing = parseFilenameOffsetSeconds(sourceFilename, separator);
+    if (existing !== null) {
+      const idx = sourceFilename.lastIndexOf(separator);
+      return `${sourceFilename.slice(0, idx)}${separator}${existing + offsetWhole}${ext}`;
+    }
+    return `${stem}${separator}${offsetWhole}${ext}`;
+  };
+
+  if (filenameTimeOffsetSeparator) return withOffsetSuffix(filenameTimeOffsetSeparator);
+
+  if (filenameTimeFormat && isUsableFilenameTimePattern(filenameTimeFormat)) {
+    const parts = parsePattern(filenameTimeFormat);
+    let source = '';
+    for (const part of parts) {
+      source += part.token ? `(\\d{${FIELD_WIDTH[part.token]}})` : escapeRegExp(part.literal);
+    }
+    const match = sourceFilename.match(new RegExp(source));
+    const startDate = match ? parseFilenameTime(sourceFilename, filenameTimeFormat) : null;
+    if (match && startDate) {
+      const shifted = new Date(startDate.getTime() + offsetWhole * 1000);
+      const rendered = formatFilenameTime(shifted, filenameTimeFormat);
+      const before = sourceFilename.slice(0, match.index!);
+      const after = sourceFilename.slice(match.index! + match[0].length).replace(/\.[^/.]+$/, '');
+      return `${before}${rendered}${after}${ext}`;
+    }
+  }
+
+  return withOffsetSuffix('_s');
+}

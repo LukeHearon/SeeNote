@@ -11,7 +11,8 @@ import TooltipLayer from './components/TooltipLayer';
 import { Selection, SpectrogramSettings, VideoMode } from './types';
 import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
-import { getFileInfo, toAssetUrl } from './utils/tauriCommands';
+import { suggestExportFilename } from './utils/filenameTime';
+import { getFileInfo, toAssetUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -229,6 +230,27 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       clearSelectionEnd();
     }
   }, [activationStack, frameSourceRef, clearSelectionEnd]);
+
+  // Export the current selection's audio to a file. No project here (this
+  // window has none), so there's no display->source timeline conversion and
+  // no filename-timestamp scheme to reuse — suggestExportFilename falls back
+  // to its "_s<offset>" default.
+  const handleExportSelection = useCallback(async () => {
+    if (!selection) return;
+    const filename = basename(filePath);
+    const dir = filePath.slice(0, filePath.length - filename.length);
+    const suggested = suggestExportFilename(filename, selection.start);
+    const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
+      { name: 'Audio File', extensions: ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'] },
+    ]);
+    if (!chosenPath) return;
+    try {
+      await exportAudioRange(filePath, selection.start, selection.end - selection.start, chosenPath);
+      addLog(`Exported selection to ${basename(chosenPath)}`);
+    } catch (err) {
+      addLog(`Error exporting audio: ${err}`, 'error');
+    }
+  }, [selection, filePath, addLog]);
 
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
@@ -554,6 +576,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               isAudioTrack={isAudioTrack}
               playheadLocked={playheadLocked}
               hideLabels={hideLabels}
+              onExportSelection={handleExportSelection}
             />
           </div>
 

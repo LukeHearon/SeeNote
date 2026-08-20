@@ -165,6 +165,7 @@ export const GUIDE: Part[] = [
             help.spectrogram.li3,
             help.spectrogram.li4,
             help.spectrogram.li5,
+            help.spectrogram.li6,
           ] },
           { kind: 'h', id: 'axes', text: help.spectrogram.h_axes },
           { kind: 'p', text: help.spectrogram.p_axes },

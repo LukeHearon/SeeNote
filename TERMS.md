@@ -132,3 +132,6 @@ The file format for annotation files. Options: Audacity `.txt`, `.csv`, or `.jso
 
 ## Annotation File
 The file in the annotation output directory corresponding to a track, pathed by ident.
+
+## Audio Export
+Saving the currently selected audio (a [Selection](#selections)) to its own file, via the spectrogram's right-click menu. The suggested filename reuses the project's filename-timestamp settings (`filenameTimeFormat` / `filenameTimeOffsetSeparator`) when configured. `.wav` is always supported; other output formats are transcoded via a system-installed ffmpeg.

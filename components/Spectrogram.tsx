@@ -24,6 +24,7 @@ import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
+import ContextMenu from './ContextMenu';
 
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
@@ -96,6 +97,13 @@ interface SpectrogramProps {
   timeDisplayUnit?: TimeDisplayUnit;
   /** Style for wall-clock datetimes on the ruler. */
   dateTimeFormat?: DateTimeFormat;
+  /**
+   * Export the current selection's audio to a file (save dialog + Rust decode
+   * + encode). Offered on the spectrogram's right-click context menu,
+   * disabled there when there is no selection. Omit to not offer export at all
+   * (e.g. a track type export doesn't apply to).
+   */
+  onExportSelection?: () => void;
 }
 
 export interface SpectrogramHandle {
@@ -187,9 +195,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   trackStartDate = null,
   timeDisplayUnit = 'seconds',
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
+  onExportSelection,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Screen position of a pending right-click context menu, or null when closed.
+  // Opened by the interaction hook's onContextMenu (a right-click that didn't
+  // turn into a pan drag — see useSpectrogramInteraction).
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   if (!offscreenCanvasRef.current && typeof document !== 'undefined') {
     offscreenCanvasRef.current = document.createElement('canvas');
@@ -428,6 +441,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setSuppressCustomCursor,
     lastManualScrollRef,
     isAltHeldRef: altHeldRef,
+    onContextMenu: (clientX, clientY) => setContextMenuPos({ x: clientX, y: clientY }),
   });
 
   // Reset scroll position to 0 when switching tracks
@@ -1438,6 +1452,20 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       })()}
 
       </div>{/* end spectrogram area */}
+      {contextMenuPos && (
+        <ContextMenu
+          x={contextMenuPos.x}
+          y={contextMenuPos.y}
+          onClose={() => setContextMenuPos(null)}
+          items={[
+            {
+              label: spectrogramView.exportSelectionLabel,
+              disabled: !selection || !onExportSelection,
+              onSelect: () => onExportSelection?.(),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 });
