@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Palette, Pin, PinOff, RotateCcw, Scissors, Settings, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
-import { BUZZDETECT_PALETTE, DEFAULT_BUZZDETECT_THRESHOLD, buzzdetectNeuronColor } from '../constants';
+import { BUZZDETECT_PALETTE, defaultBuzzdetectThreshold, buzzdetectNeuronColor } from '../constants';
 import { SubsetStats } from '../utils/buzzdetectStats';
 import { pickedNeuronsIn } from '../utils/buzzdetectSubset';
 import { clamp, formatTime } from '../utils/helpers';
@@ -244,7 +244,7 @@ function NeuronPalette({
     if (seriesMode === 'detectionRate') {
       return (
         <button
-          onClick={() => onSubsetThresholdChange(n, isSubset ? null : (thresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD))}
+          onClick={() => onSubsetThresholdChange(n, isSubset ? null : (thresholds[n] ?? defaultBuzzdetectThreshold(n)))}
           className={`p-0.5 rounded transition-colors ${isSubset ? 'text-[#e65161] bg-[#e65161]/15' : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60'}`}
           data-tooltip={tooltips.buzzdetectSubsetPick}
         >
@@ -305,7 +305,7 @@ function NeuronPalette({
                   neuron then never reaches a detection, so its dots all draw
                   open and it keeps nothing in a detection-rate subset. */}
               <DraftNumberInput
-                value={n in thresholds ? thresholds[n] : DEFAULT_BUZZDETECT_THRESHOLD}
+                value={n in thresholds ? thresholds[n] : defaultBuzzdetectThreshold(n)}
                 onCommit={(v) => onThresholdChange(n, v)}
                 allowEmpty
                 placeholder={copy.settingsThresholdOff}

@@ -254,7 +254,7 @@ export default function BuzzdetectPanel({
   // that PLOT a threshold (the dashed line, the auto Y-range) do need to skip
   // it, and check isFinite.
   const thresholdOf = useCallback(
-    (neuron: string) => detectionThreshold(thresholds[neuron]),
+    (neuron: string) => detectionThreshold(thresholds[neuron], neuron),
     [thresholds],
   );
 
@@ -401,7 +401,7 @@ export default function BuzzdetectPanel({
         : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
     }
     return single
-      ? (data.values[i][start] >= detectionThreshold(thresholds[data.neurons[i]]) ? 1 : 0)
+      ? (data.values[i][start] >= detectionThreshold(thresholds[data.neurons[i]], data.neurons[i]) ? 1 : 0)
       : (detectionPrefix ? rangeMean(detectionPrefix[i], start, end) : 0);
   }, [data, seriesMode, activationPrefix, detectionPrefix, thresholds]);
 

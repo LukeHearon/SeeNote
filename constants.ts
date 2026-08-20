@@ -162,9 +162,15 @@ export function migrateVideoMode(mode: VideoMode | string | undefined): VideoMod
 export const DEFAULT_BUZZDETECT_PANEL_HEIGHT = 180; // px
 export const MIN_BUZZDETECT_PANEL_HEIGHT = 80;
 export const MAX_BUZZDETECT_PANEL_HEIGHT = 600;
-// Logits: 0 is the natural decision boundary (sigmoid 0.5). Used per neuron
-// until the user sets a custom threshold.
-export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
+// No threshold by default: a neuron never registers a detection until the
+// user sets one, same as an explicitly cleared threshold (see
+// utils/buzzdetectThresholds.ts). ins_buzz ships pretrained, so it keeps a
+// real default instead.
+export const DEFAULT_BUZZDETECT_THRESHOLD = Infinity;
+export const INS_BUZZ_DEFAULT_THRESHOLD = -1.2;
+export function defaultBuzzdetectThreshold(neuron: string): number {
+  return neuron === 'ins_buzz' ? INS_BUZZ_DEFAULT_THRESHOLD : DEFAULT_BUZZDETECT_THRESHOLD;
+}
 // Detection-rate subsetting: keep a bin when at least half its frames fired.
 // A middling default — high enough that one stray frame doesn't keep a bin,
 // low enough that a real burst isn't thrown away for not being unanimous.

@@ -70,7 +70,7 @@
 // neighbours produce one span rather than a chain of padded ones.
 
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
-import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
+import { defaultBuzzdetectThreshold } from '../constants';
 import { bucketFrameRange } from './binIndex';
 import { buildAnyOverThresholdPrefix, buildPrefixSum, rangeMean, rangeSum } from './prefixSums';
 import { detectionThreshold } from './buzzdetectThresholds';
@@ -180,8 +180,8 @@ export function subsetCriteriaFrom(inputs: SubsetInputs): SubsetCriteria | null 
     // stored value is ignored.
     thresholdOf: (n: string) => (
       inputs.mode === 'activation'
-        ? inputs.subsetThresholds[n] ?? DEFAULT_BUZZDETECT_THRESHOLD
-        : detectionThreshold(inputs.thresholds[n])
+        ? inputs.subsetThresholds[n] ?? defaultBuzzdetectThreshold(n)
+        : detectionThreshold(inputs.thresholds[n], n)
     ),
     minDetectionRate: inputs.minDetectionRate,
     // Padding a kept region is a statement about a frame's surroundings, and

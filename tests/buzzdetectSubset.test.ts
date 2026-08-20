@@ -8,7 +8,6 @@ import {
   SubsetCriteria,
 } from '../utils/buzzdetectSubset';
 import { bucketFrameRange } from '../utils/binIndex';
-import { DEFAULT_BUZZDETECT_THRESHOLD } from '../constants';
 
 // Ten 1s frames at 0,1,...,9. `bee` fires at 1,2,3 and 7; `fly` fires at 5.
 const data: BuzzdetectData = {
@@ -308,7 +307,7 @@ describe('subsetCriteriaFrom', () => {
   it('cuts at the detection threshold in detection-rate mode', () => {
     const c = subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', subsetThresholds: { bee: -1.5 } })!;
     expect(c.thresholdOf('bee')).toBe(0.25);
-    expect(c.thresholdOf('wasp')).toBe(DEFAULT_BUZZDETECT_THRESHOLD);
+    expect(c.thresholdOf('wasp')).toBe(Infinity);
   });
 
   // A cleared threshold is a neuron that never detects, so a detection-rate cut

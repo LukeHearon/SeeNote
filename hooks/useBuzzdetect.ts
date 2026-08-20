@@ -4,7 +4,7 @@ import {
   DEFAULT_BUZZDETECT_PANEL_HEIGHT,
   DEFAULT_BUZZDETECT_MIN_DETECTION_RATE,
   DEFAULT_BUZZDETECT_SUBSET_BUFFER,
-  DEFAULT_BUZZDETECT_THRESHOLD,
+  defaultBuzzdetectThreshold,
 } from '../constants';
 import { readBuzzdetect } from '../utils/tauriCommands';
 
@@ -18,7 +18,7 @@ import { readBuzzdetect } from '../utils/tauriCommands';
 function migrateSubsetThresholds(ui: ProjectUiSettings | undefined): Record<string, number> {
   const subset = { ...(ui?.buzzdetectSubsetThresholds ?? {}) };
   for (const n of ui?.buzzdetectSubsetNeurons ?? []) {
-    if (!(n in subset)) subset[n] = ui?.buzzdetectThresholds?.[n] ?? DEFAULT_BUZZDETECT_THRESHOLD;
+    if (!(n in subset)) subset[n] = ui?.buzzdetectThresholds?.[n] ?? defaultBuzzdetectThreshold(n);
   }
   return subset;
 }
