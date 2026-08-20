@@ -305,7 +305,10 @@ function NeuronPalette({
                   neuron then never reaches a detection, so its dots all draw
                   open and it keeps nothing in a detection-rate subset. */}
               <DraftNumberInput
-                value={n in thresholds ? thresholds[n] : defaultBuzzdetectThreshold(n)}
+                value={(() => {
+                  const t = n in thresholds ? thresholds[n] : defaultBuzzdetectThreshold(n);
+                  return t === null || !isFinite(t) ? null : t;
+                })()}
                 onCommit={(v) => onThresholdChange(n, v)}
                 allowEmpty
                 placeholder={copy.settingsThresholdOff}
