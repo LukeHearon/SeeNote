@@ -310,6 +310,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // buzzdetect files.
   const ident = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
 
+  // Bumped by the header's manual refresh button to force useBuzzdetect's load
+  // effect to re-read the current track's activations from disk even when
+  // ident/dir/frameLength haven't changed. Declared here, ahead of
+  // useSyncManagement's own reloadNonce (which drives the file-tree/label
+  // refresh below), because useBuzzdetect is instantiated before that hook.
+  const [buzzdetectReloadNonce, setBuzzdetectReloadNonce] = useState(0);
+
   // buzzdetect activations panel UI state + load-by-ident effect. Instantiated
   // here, well before the hooks that consume it, because the subset timeline
   // derived from it (below) decides the DISPLAY duration and the effective
@@ -344,7 +351,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     toggleBuzzdetectIsolate,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
-  } = useBuzzdetect({ project, ident, addLog });
+  } = useBuzzdetect({ project, ident, reloadNonce: buzzdetectReloadNonce, addLog });
 
   // ── Subset mode ─────────────────────────────────────────────────────────────
   // The criteria the subset is keyed to, or null when it's off. Null here is
@@ -1187,6 +1194,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setHasLocalChanges,
     hasRemoteChanges,
     reloadNonce,
+    bumpReloadNonce,
     handleSync,
     confirmPendingClears,
     flushPendingAutosave,
@@ -1380,16 +1388,29 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [project, refreshAnnotatedSet]);
 
-  // After a git sync pulls new data, refresh the file tree so freshly-arrived
-  // annotation files show as annotated (and any new media files appear).
-  // reloadNonce only bumps on a successful pull; skip the initial 0.
+  // After a git sync pulls new data (or the header's manual refresh bumps the
+  // same nonce), refresh the file tree so freshly-arrived annotation files
+  // show as annotated (and any new media files appear), and reload annotation
+  // tools in case the project's tool set changed on disk too. reloadNonce only
+  // bumps on a successful pull or a manual refresh; skip the initial 0.
   useEffect(() => {
     if (reloadNonce === 0) return;
-    // A pull rewrites annotation files behind the app's back, so anything the
-    // Find & Rename index holds for other tracks is now stale.
+    // A pull (or manual refresh) rewrites files behind the app's back, so
+    // anything the Find & Rename index holds for other tracks is now stale.
     invalidateProjectLabelIndex();
     handleRefreshFiles();
-  }, [reloadNonce, handleRefreshFiles]);
+    loadAnnotationTools(project);
+  }, [reloadNonce, handleRefreshFiles, loadAnnotationTools]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // General-purpose refresh: re-scans the file tree, reloads annotation
+  // tools, re-reads the current track's labels from disk, and re-reads its
+  // buzzdetect activations. Reuses reloadNonce/bumpReloadNonce (normally bumped
+  // after a git pull) rather than a parallel mechanism, since a manual refresh
+  // is the same "something may have changed on disk" event a pull represents.
+  const handleRefreshAll = useCallback(() => {
+    bumpReloadNonce();
+    setBuzzdetectReloadNonce(n => n + 1);
+  }, [bumpReloadNonce]);
 
   const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings, updatedPreferences: ProjectPreferences) => {
     const prev = project.settings.mediaDirectory;
@@ -1918,7 +1939,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
-      refreshFiles: handleRefreshFiles,
       toggleFileFilter: handleToggleFileFilter,
       toggleShuffle: toggleShuffle,
       activateTool: handleToolActivate,
@@ -1950,6 +1970,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 data-tooltip={tooltips.backToProjects}
             >
                 <ArrowLeft size={18} />
+            </button>
+            <button
+                onClick={handleRefreshAll}
+                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                data-tooltip={tooltips.refreshAll}
+                data-help-target="header-refresh-btn"
+            >
+                <RefreshCw size={18} />
             </button>
             <button
                 onClick={() => setShowProjectSettings(true)}
@@ -2241,7 +2269,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               ? () => revealInFileManager(annotationDirectory).catch(() => {})
               : undefined,
             onImportAnnotations: handleImportAnnotations,
-            onRefresh: handleRefreshFiles,
             nonMediaFiles: allNonMediaFiles,
             filenameTimeInfo: {
               pattern: project.settings.filenameTimeFormat ?? '',

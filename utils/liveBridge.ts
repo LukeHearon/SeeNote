@@ -117,7 +117,6 @@ export interface LiveHandlers {
   // File panel. No-ops in single-file mode, which publishes `filePanel: null`
   // and so never gets a live copy of these buttons in the first place.
   toggleFileExpandCollapse(): void;
-  refreshFiles(): void;
   toggleFileFilter(): void;
   toggleShuffle(): void;
   // Tool palette. The ones that open a modal do so in the main window.

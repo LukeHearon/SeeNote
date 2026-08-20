@@ -126,6 +126,10 @@ export interface BuzzdetectParams {
   project: Project;
   // Ident of the active track (relative path without extension), or null.
   ident: string | null;
+  // Bumped to force a re-read of the current track's activations from disk
+  // (e.g. the header's manual refresh) even though ident/dir/frameLength
+  // haven't changed.
+  reloadNonce: number;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -136,7 +140,7 @@ export interface BuzzdetectParams {
  * transient panel height + loaded data, and the load effect that reads
  * activations by ident under the configured buzzdetect directory.
  */
-export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): BuzzdetectApi {
+export function useBuzzdetect({ project, ident, reloadNonce, addLog }: BuzzdetectParams): BuzzdetectApi {
   // buzzdetect activations panel — UI fields persisted in uiSettings.
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
   const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number | null>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
@@ -191,7 +195,7 @@ export function useBuzzdetect({ project, ident, addLog }: BuzzdetectParams): Buz
       .then(d => { if (!cancelled) setBuzzdetectData(d); })
       .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
     return () => { cancelled = true; };
-  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
   // null is kept in the map rather than deleted: an absent entry means "never

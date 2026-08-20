@@ -124,6 +124,7 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.layout.p1 },
           { kind: 'p', text: help.layout.p2 },
+          { kind: 'p', text: help.layout.p_refresh },
           { kind: 'h', id: 'resize', text: help.layout.h_resize },
           { kind: 'p', text: help.layout.p_resize },
           { kind: 'h', id: 'collapse', text: help.layout.h_collapse },
@@ -142,7 +143,6 @@ export const GUIDE: Part[] = [
             help.filePanel.li_filter,
             help.filePanel.li_shuffle,
             help.filePanel.li_expand,
-            help.filePanel.li_refresh,
           ] },
           { kind: 'live', control: 'file-panel-header' },
           { kind: 'h', id: 'folders', text: help.filePanel.h_folders },

@@ -366,7 +366,6 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => {},
-      refreshFiles: () => {},
       toggleFileFilter: () => {},
       toggleShuffle: () => {},
       activateTool: () => {},

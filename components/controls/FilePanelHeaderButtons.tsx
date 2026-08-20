@@ -1,4 +1,4 @@
-import { AlignJustify, Eye, EyeOff, Filter, FoldVertical, RefreshCw, Shuffle, UnfoldVertical } from 'lucide-react';
+import { AlignJustify, Eye, EyeOff, Filter, FoldVertical, Shuffle, UnfoldVertical } from 'lucide-react';
 import { tooltips } from '../../copy/tooltips';
 
 export type FileFilter = 'all' | 'annotated' | 'unannotated';
@@ -10,7 +10,6 @@ export interface FilePanelHeaderButtonsProps {
   anyExpanded: boolean;
   fileFilter: FileFilter;
   onToggleExpandCollapse: () => void;
-  onRefresh: () => void;
   onToggleFileFilter: () => void;
   onToggleShuffle: () => void;
 }
@@ -25,7 +24,6 @@ export function FilePanelHeaderButtons({
   anyExpanded,
   fileFilter,
   onToggleExpandCollapse,
-  onRefresh,
   onToggleFileFilter,
   onToggleShuffle,
 }: FilePanelHeaderButtonsProps) {
@@ -40,13 +38,6 @@ export function FilePanelHeaderButtons({
           {anyExpanded ? <FoldVertical size={13} /> : <UnfoldVertical size={13} />}
         </button>
       )}
-      <button
-        onClick={onRefresh}
-        className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-        data-tooltip={tooltips.refreshFileList}
-      >
-        <RefreshCw size={13} />
-      </button>
       <button
         onClick={onToggleFileFilter}
         className={`p-1 rounded hover:bg-slate-700 ${fileFilter !== 'all' ? 'text-[#e65161]' : 'text-slate-400 hover:text-white'}`}

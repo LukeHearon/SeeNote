@@ -76,7 +76,6 @@ export function ExampleFilePanel() {
         onRevealInFinder={() => {}}
         onRevealAnnotations={() => {}}
         onImportAnnotations={() => {}}
-        onRefresh={() => {}}
         nonMediaFiles={demoNonMediaFiles}
         filenameTimeInfo={{ pattern: '', dateTimeFormat: 'friendly' }}
       />

@@ -58,9 +58,12 @@ export function useSyncManagement({
   const [syncError, setSyncError] = useState<string | null>(null);
   const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const [hasRemoteChanges, setHasRemoteChanges] = useState(false);
-  // Bumped after a pull so the auto-load effect re-reads the active track's
-  // annotation file (which may have changed on disk during the merge).
+  // Bumped after a pull (or a manual refresh) so the auto-load effect re-reads
+  // the active track's annotation file, which may have changed on disk.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Exposed so a manual "refresh" action can force the same re-read a pull
+  // triggers, without pretending a sync actually happened.
+  const bumpReloadNonce = useCallback(() => setReloadNonce(n => n + 1), []);
 
   // The commit message the last sync ran with, so confirming a pending clear
   // re-runs the same sync rather than silently dropping a typed message.
@@ -269,6 +272,7 @@ export function useSyncManagement({
     setHasLocalChanges,
     hasRemoteChanges,
     reloadNonce,
+    bumpReloadNonce,
     handleSync,
     confirmPendingClears,
     flushPendingAutosave,

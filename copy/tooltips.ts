@@ -57,7 +57,7 @@ export const tooltips = {
   get showFileTree() { return getOverride('tooltips.showFileTree') ?? "Show file tree"; },
   get backToRoot() { return getOverride('tooltips.backToRoot') ?? "Back to root"; },
   get upOneFolder() { return getOverride('tooltips.upOneFolder') ?? "Up one folder"; },
-  get refreshFileList() { return getOverride('tooltips.refreshFileList') ?? "Refresh files"; },
+  get refreshAll() { return getOverride('tooltips.refreshAll') ?? "Refresh files, annotation tools, labels, and buzzdetect results"; },
   get collapseAll() { return getOverride('tooltips.collapseAll') ?? "Collapse all"; },
   get expandAll() { return getOverride('tooltips.expandAll') ?? "Expand all"; },
   get play() { return getOverride('tooltips.play') ?? "Play"; },

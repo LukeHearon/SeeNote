@@ -60,7 +60,6 @@ interface FileTreeProps {
   onRevealAnnotations: (audioFilePath: string) => void;
   onRevealAnnotationsRoot?: () => void;
   onImportAnnotations: (audioFilePath: string) => void;
-  onRefresh: () => void;
   initialEnteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
   nonMediaFiles?: string[];
@@ -391,7 +390,6 @@ function FileTree({
   onRevealAnnotations,
   onRevealAnnotationsRoot,
   onImportAnnotations,
-  onRefresh,
   initialEnteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
@@ -815,7 +813,6 @@ function FileTree({
           anyExpanded={isAnyExpanded}
           fileFilter={fileFilter}
           onToggleExpandCollapse={toggleExpandCollapse}
-          onRefresh={onRefresh}
           onToggleFileFilter={onToggleFileFilter}
           onToggleShuffle={onToggleShuffle}
         />

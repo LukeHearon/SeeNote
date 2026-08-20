@@ -321,7 +321,6 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
             anyExpanded={fp.anyExpanded}
             fileFilter={fp.fileFilter}
             onToggleExpandCollapse={() => act(() => client.call('toggleFileExpandCollapse'), () => setFp({ anyExpanded: !fp.anyExpanded }))}
-            onRefresh={() => act(() => client.call('refreshFiles'), () => {})}
             onToggleFileFilter={() => act(() => client.call('toggleFileFilter'), () => setFp({
               fileFilter: fp.fileFilter === 'all' ? 'unannotated' : fp.fileFilter === 'unannotated' ? 'annotated' : 'all',
             }))}
