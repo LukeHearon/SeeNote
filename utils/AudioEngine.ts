@@ -166,10 +166,14 @@ const LATENCY_PROBE_DELAY_SEC = 0.2;
  *  measurement noise; above it, the audio device or its buffer size changed
  *  under us, which moves the delay before sound. */
 const LATENCY_CHANGE_LOG_SEC = 0.005;
-/** How often the clock-drift monitor compares the context clock against the
- *  wall clock during a play (see _startClockDriftMonitor). */
-const CLOCK_DRIFT_SAMPLE_MS = 2000;
-/** Additional drift (seconds) beyond the last logged figure worth another line. */
+/** How often the playback clock monitor samples (see _startClockDriftMonitor).
+ *  Short enough that a one-second selection still produces a line. */
+const CLOCK_DRIFT_SAMPLE_MS = 500;
+/** Wall time that must pass before the monitor's first line: below this the
+ *  numbers are dominated by the sample interval itself. */
+const CLOCK_DRIFT_FIRST_LOG_SEC = 0.9;
+/** Additional drift or timer overshoot (seconds) beyond the last logged figure
+ *  worth another line. */
 const CLOCK_DRIFT_LOG_STEP_SEC = 0.1;
 
 const sleep = (ms: number): Promise<void> =>
@@ -373,6 +377,11 @@ export class AudioEngine implements PlaybackTransport {
     // before the prefetch loop tries to resolve a position on an empty axis.
     if (this.timeline.spans.length === 0) return;
 
+    // Stamped here, at the top, so every "Nms after play" line below measures
+    // from the call — including the cache-hit path, which returns before the
+    // streaming path's own bookkeeping.
+    this.playStartedAtMs = performance.now();
+
     this._cancelPlayback();
 
     // Reset time-origin fields so _computeMediaTime() never reads a stale
@@ -482,7 +491,6 @@ export class AudioEngine implements PlaybackTransport {
     // waiting on the first chunk. Diagnostic only — playback is not aborted.
     // The user can pause at any time; _cancelPlayback() handles the dangling
     // startPcmStream await via the playId guard.
-    this.playStartedAtMs = performance.now();
     this.slowDecodeTimer = setInterval(() => {
       if (this.playId !== myPlayId || this.chunksScheduled > 0) {
         if (this.slowDecodeTimer !== null) {
@@ -779,24 +787,31 @@ export class AudioEngine implements PlaybackTransport {
       this._log(
         `latency probe: reported out=${ol} base=${bl} — `
         + `measured(getOutputTimestamp)=${measured === null ? 'unavailable' : `${(measured * 1000).toFixed(1)}ms`} — `
-        + `compensating ${(this._outputLatencySec() * 1000).toFixed(1)}ms — `
+        + `compensating ${(this._outputLatencySec() * 1000).toFixed(1)}ms out `
+        + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
         + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
       );
     }, Math.max(0, dueInSec * 1000));
   }
 
   /**
-   * Compare the context clock against the wall clock for the length of a play.
+   * Watch the two clocks that can put a delay between an action and the sound,
+   * for the length of a play. One timer, two independent measurements:
    *
-   * `ctx.currentTime` is supposed to be the audio device's clock. If it instead
-   * advances on a render thread that outruns the device — which is what a
-   * resampling output path with a growing FIFO looks like from inside the page —
-   * it gains on `performance.now()`, and every sample we schedule lands that
-   * much further behind the speakers. That gap is the delay before sound, and
-   * unlike `getOutputTimestamp()` (which WKWebView reports as zero lag) nothing
-   * in the engine can fake this measurement: it is two independent clocks.
+   * - **ctx vs wall.** `ctx.currentTime` is supposed to be the audio device's
+   *   clock. If it instead advances on a render thread outrunning the device —
+   *   what an output path with a growing FIFO looks like from inside the page —
+   *   it gains on `performance.now()`, and every sample we schedule lands that
+   *   much further behind the speakers. `getOutputTimestamp()` is the API for
+   *   this and WKWebView answers it with zero lag; two independent clocks can't
+   *   be faked the same way.
+   * - **Timer overshoot.** How late this interval fires against its own period,
+   *   i.e. how far behind the event loop is running. A main thread backed up by
+   *   a second delays the keypress, the scheduling and the playhead together —
+   *   which sounds exactly like output latency but isn't, and is the reading
+   *   that tells the two apart.
    *
-   * A healthy device holds this within a few ms over a minute.
+   * A healthy play holds both within a few ms.
    */
   private _startClockDriftMonitor(myPlayId: number): void {
     this._stopClockDriftMonitor();
@@ -805,21 +820,29 @@ export class AudioEngine implements PlaybackTransport {
     this.driftCtxOrigin = ctx.currentTime;
     this.driftWallOriginMs = performance.now();
     this.driftLastLoggedSec = 0;
-    let firstSample = true;
+    let firstLogged = false;
+    let lastTickMs = this.driftWallOriginMs;
+    let maxOvershootSec = 0;
     this.driftTimer = setInterval(() => {
       if (this.playId !== myPlayId || !this.ctx) { this._stopClockDriftMonitor(); return; }
+      const nowMs = performance.now();
+      const overshootSec = (nowMs - lastTickMs - CLOCK_DRIFT_SAMPLE_MS) / 1000;
+      lastTickMs = nowMs;
+      if (overshootSec > maxOvershootSec) maxOvershootSec = overshootSec;
       const ctxElapsed = this.ctx.currentTime - this.driftCtxOrigin;
-      const wallElapsed = (performance.now() - this.driftWallOriginMs) / 1000;
+      const wallElapsed = (nowMs - this.driftWallOriginMs) / 1000;
       if (wallElapsed <= 0) return;
       const excess = ctxElapsed - wallElapsed;
-      const worthLogging = Math.abs(excess) >= this.driftLastLoggedSec + CLOCK_DRIFT_LOG_STEP_SEC;
-      if (!firstSample && !worthLogging) return;
-      firstSample = false;
-      if (worthLogging) this.driftLastLoggedSec = Math.abs(excess);
+      const worst = Math.max(Math.abs(excess), maxOvershootSec);
+      const worthLogging = worst >= this.driftLastLoggedSec + CLOCK_DRIFT_LOG_STEP_SEC;
+      if (!worthLogging && (firstLogged || wallElapsed < CLOCK_DRIFT_FIRST_LOG_SEC)) return;
+      firstLogged = true;
+      if (worthLogging) this.driftLastLoggedSec = worst;
       this._log(
-        `clock drift: ctx +${ctxElapsed.toFixed(3)}s vs wall +${wallElapsed.toFixed(3)}s `
-        + `— ctx clock ${excess >= 0 ? 'ahead' : 'behind'} by ${Math.abs(excess * 1000).toFixed(0)}ms `
-        + `(ratio ${(ctxElapsed / wallElapsed).toFixed(5)})`,
+        `clocks: ctx +${ctxElapsed.toFixed(3)}s vs wall +${wallElapsed.toFixed(3)}s `
+        + `— ctx ${excess >= 0 ? 'ahead' : 'behind'} by ${Math.abs(excess * 1000).toFixed(0)}ms `
+        + `— event loop worst overshoot ${(maxOvershootSec * 1000).toFixed(0)}ms `
+        + `— filter delay ${(this.filterGraph.getDelaySec() * 1000).toFixed(0)}ms`,
       );
     }, CLOCK_DRIFT_SAMPLE_MS);
   }
@@ -1449,6 +1472,10 @@ export class AudioEngine implements PlaybackTransport {
     this.chunksScheduled = 1;
     // Same check as the streamed path: a cache hit rules the decoder out
     // entirely, so a delay before sound here can only be the device.
+    this._log(
+      `cached slice scheduled ${Math.round(performance.now() - this.playStartedAtMs)}ms after play `
+      + `— starts in ${((this.playStartCtx - ctx.currentTime) * 1000).toFixed(0)}ms of ctx time`,
+    );
     this._armRenderCheck(this.playStartCtx, myPlayId);
     this._armLatencyProbe(this.playStartCtx, myPlayId);
     this._startClockDriftMonitor(myPlayId);
