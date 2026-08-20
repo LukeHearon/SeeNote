@@ -1756,11 +1756,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // track swapped). AudioEngine stops playback rather than remapping audio
   // already scheduled against the old axis.
   //
-  // The playhead and any selection are positions on an axis that no longer
-  // exists, so both are reset: the selection outright (its endpoints named
-  // audio by where it sat, and the cuts have moved), the playhead only where it
-  // now points past the end. Skipped on the first run, which is just the empty
-  // initial state.
+  // The selection is reset outright: its endpoints named audio by where they
+  // sat, and the cuts have moved. The playhead instead follows the source
+  // time it was actually at — read it off the OLD timeline before that
+  // timeline is replaced, then land on the nearest point the NEW timeline can
+  // express (exact, unless subsetting just hid that source time). That's what
+  // keeps "unclick subset" landing back on the real spot in the full track
+  // rather than reinterpreting the old display number under the new axis.
+  // Skipped on the first run, which is just the empty initial state.
   //
   // Everything here is gated on the timeline object actually changing, not just
   // on the effect running: `seek` and `handleSelectionChange` are callbacks whose
@@ -1768,12 +1771,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // so an ungated call would cut the audio at arbitrary moments mid-play.
   const prevTimelineRef = useRef(timeline);
   useEffect(() => {
-    const changed = prevTimelineRef.current !== timeline;
+    const prevTimeline = prevTimelineRef.current;
+    const changed = prevTimeline !== timeline;
     prevTimelineRef.current = timeline;
     if (!changed) return;
     engineRef.current?.setTimeline(timeline);
     handleSelectionChange(null);
-    if (currentTimeRef.current > displayDuration) seek(displayDuration);
+    const sourceTime = prevTimeline.toSource(currentTimeRef.current);
+    const newDisplayTime = displayOfNearestKept(timeline, sourceTime);
+    if (newDisplayTime !== currentTimeRef.current) seek(newDisplayTime);
     // A subset can be a few seconds of a multi-hour file. Fit the window to it
     // rather than leaving the user staring at one narrow band of content in a
     // screen of blank — the same courtesy handleOpenTrack does for short files.
