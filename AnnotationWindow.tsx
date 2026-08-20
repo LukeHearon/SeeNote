@@ -1524,7 +1524,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   [currentOwner?.key ?? '0']: currentAnnotation.text,
               };
               const savedText = reassignBufferRef.current[tool.key ?? ''];
-              const newText = savedText !== undefined ? savedText : (isCustom ? '' : tool.text);
+              // Custom has no canonical text to reassign to, so with nothing
+              // buffered yet, keep the annotation's current text — pressing 0
+              // should hand the existing label to Custom for editing, not blank it.
+              const newText = savedText !== undefined ? savedText : (isCustom ? currentAnnotation.text : tool.text);
               // A restored Custom text can coincidentally match a defined tool's
               // label; resolveLabelColor adopts that tool's color instead of the
               // generic Custom color (falls back to `tool.color` either way).
