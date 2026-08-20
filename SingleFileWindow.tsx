@@ -11,7 +11,7 @@ import TooltipLayer from './components/TooltipLayer';
 import { Selection, SpectrogramSettings, VideoMode } from './types';
 import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
-import { suggestExportFilename } from './utils/filenameTime';
+import { suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { getFileInfo, toAssetUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
@@ -241,7 +241,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     const dir = filePath.slice(0, filePath.length - filename.length);
     const suggested = suggestExportFilename(filename, selection.start);
     const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
-      { name: 'Audio File', extensions: ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'] },
+      { name: 'Audio File', extensions: audioExportExtensions(filename) },
     ]);
     if (!chosenPath) return;
     try {

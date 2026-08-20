@@ -258,3 +258,18 @@ export function suggestExportFilename(
 
   return withOffsetSuffix('_s');
 }
+
+/**
+ * Extensions to offer an audio-export save dialog for, with `sourceFilename`'s
+ * own extension listed first. Native save dialogs (Tauri's included) silently
+ * append the filter's own default extension when the typed name's extension
+ * isn't in the filter list — e.g. suggesting "foo.wma" against a filter of
+ * just wav/mp3/etc. would otherwise save as "foo.wma.wav". Listing the source
+ * extension keeps the suggested filename (see `suggestExportFilename`, which
+ * reuses it) intact.
+ */
+export function audioExportExtensions(sourceFilename: string): string[] {
+  const dotIndex = sourceFilename.lastIndexOf('.');
+  const sourceExt = dotIndex === -1 ? '' : sourceFilename.slice(dotIndex + 1).toLowerCase();
+  return Array.from(new Set([sourceExt, 'wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'].filter(Boolean)));
+}

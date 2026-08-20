@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, suggestExportFilename } from '../utils/filenameTime';
+import { parseFilenameTime, formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, suggestExportFilename, audioExportExtensions } from '../utils/filenameTime';
 
 const PATTERN = 'YYMMDD_HHMM';
 
@@ -137,5 +137,25 @@ describe('suggestExportFilename', () => {
 
   it('rounds a fractional start second', () => {
     expect(suggestExportFilename('buzz.wav', 20.6)).toBe('buzz_s21.wav');
+  });
+});
+
+describe('audioExportExtensions', () => {
+  it('lists the source extension first, so a save dialog does not silently swap it', () => {
+    expect(audioExportExtensions('20260717_115430.wma')).toEqual(
+      ['wma', 'wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'],
+    );
+  });
+
+  it('does not duplicate the source extension when it is already offered', () => {
+    expect(audioExportExtensions('buzz.wav')).toEqual(
+      ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'],
+    );
+  });
+
+  it('handles a name with no extension', () => {
+    expect(audioExportExtensions('buzz')).toEqual(
+      ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'],
+    );
   });
 });
