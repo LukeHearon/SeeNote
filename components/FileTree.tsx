@@ -196,7 +196,7 @@ interface TreeItemProps {
   onFileSelect: (path: string) => void;
   depth: number;
   expandedDirs: Set<string>;
-  toggleDir: (path: string) => void;
+  toggleDir: (node: TreeNode) => void;
   annotatedTracks: Set<string>;
   ancestorPaths: Set<string>;
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
@@ -244,7 +244,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
           data-crumb={isExpanded ? node.path : parentPath}
         >
           <button
-            onClick={() => toggleDir(node.path)}
+            onClick={() => toggleDir(node)}
             className="flex items-center gap-1 flex-1 min-w-0 px-2 py-1 text-left"
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
           >
@@ -515,12 +515,23 @@ function FileTree({
     });
   }, [currentTrack, effectiveRoot]);
 
-  const toggleDir = (path: string) => {
+  // Opening a folder that leads down an unbranched chain (each folder holding
+  // exactly one subfolder) expands the whole chain at once, so the user isn't
+  // stuck clicking through folders that offer no actual choice.
+  const toggleDir = (node: TreeNode) => {
     cancelPendingActiveScroll();
     setExpandedDirs(prev => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(node.path)) {
+        next.delete(node.path);
+      } else {
+        let current: TreeNode | undefined = node;
+        while (current) {
+          next.add(current.path);
+          const onlyChild = current.children.length === 1 ? current.children[0] : null;
+          current = onlyChild?.isDir ? onlyChild : undefined;
+        }
+      }
       return next;
     });
   };
