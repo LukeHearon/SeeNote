@@ -133,7 +133,7 @@ function Toolbar({
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }: ToolbarProps) {
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
+  const [volumePopoverAnchor, setVolumePopoverAnchor] = useState<{ x: number; y: number } | null>(null);
 
   // Priority-ordered collapse as the toolbar narrows: least-used controls
   // shrink to icons (or hide) first, transport/time/labels stay full-size.
@@ -161,7 +161,7 @@ function Toolbar({
   };
 
   return (
-    <div ref={toolbarRef} className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40" data-help-target="playback-controls">
+    <div ref={toolbarRef} className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40 overflow-hidden" data-help-target="playback-controls">
       <TransportButtons
         enabled={!!videoSrc}
         isPlaying={isPlaying}
@@ -180,18 +180,25 @@ function Toolbar({
       {/* Volume Control — collapses to a mute icon with a popover slider below a
           width threshold, since the slider is the widest low-priority group. */}
       {compactVolume ? (
-        <div className="relative ml-1">
+        <div className="ml-1">
           <button
-            onClick={() => setVolumePopoverOpen(o => !o)}
+            onClick={(e) => {
+              if (volumePopoverAnchor) { setVolumePopoverAnchor(null); return; }
+              const rect = e.currentTarget.getBoundingClientRect();
+              setVolumePopoverAnchor({ x: rect.left, y: rect.bottom + 4 });
+            }}
             className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-700"
             data-help-target="volume-control"
           >
             {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           </button>
-          {volumePopoverOpen && (
+          {/* Fixed, not absolute — the toolbar clips overflow (so it can be
+              measured for the collapse logic below), which would clip an
+              absolutely-positioned popover too. */}
+          {volumePopoverAnchor && (
             <>
-              <div className="fixed inset-0 z-50" onClick={() => setVolumePopoverOpen(false)} />
-              <div className="absolute z-50 top-full left-0 mt-1">
+              <div className="fixed inset-0 z-50" onClick={() => setVolumePopoverAnchor(null)} />
+              <div className="fixed z-50" style={{ left: volumePopoverAnchor.x, top: volumePopoverAnchor.y }}>
                 <VolumeControl
                   volume={volume}
                   muted={muted}
