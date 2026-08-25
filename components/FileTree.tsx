@@ -500,6 +500,18 @@ function FileTree({
     return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks);
   }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks]);
 
+  // Same fileCount/annotatedCount the tree rows show, summed over the top level —
+  // the header count for the entered dir, kept in lockstep with the tree's own totals.
+  const rootCounts = useMemo(() => {
+    let fileCount = 0;
+    let annotatedCount = 0;
+    for (const n of tree) {
+      fileCount += n.fileCount;
+      annotatedCount += n.annotatedCount;
+    }
+    return { fileCount, annotatedCount };
+  }, [tree]);
+
   // Preserve scroll position across tree rebuilds (refresh, file-list changes,
   // opening a folder's contents) as long as we're still viewing the same folder.
   // Only a genuine folder change (enter / step up / root change) resets to top.
@@ -836,7 +848,9 @@ function FileTree({
           <span className="text-xs text-slate-400 truncate" data-tooltip={effectiveRoot || ''}>
             {dirName}
           </span>
-          <span className="text-[10px] text-slate-600 flex-none">({effectiveFiles.length})</span>
+          <span className="text-[10px] text-slate-600 flex-none">
+            ({rootCounts.annotatedCount}/{rootCounts.fileCount})
+          </span>
         </>
       )}
       actions={(
