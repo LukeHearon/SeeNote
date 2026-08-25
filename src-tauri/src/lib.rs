@@ -131,7 +131,7 @@ pub fn run() {
             commands::filesystem::list_non_media_files_recursive,
             commands::filesystem::save_copy_overrides,
             commands::filesystem::apply_copy_overrides,
-            commands::archive::peek_archive_extract_path,
+            commands::archive::guess_project_folder_name,
             commands::archive::extract_archive,
             commands::projects::get_app_data_dir,
             commands::projects::load_projects,

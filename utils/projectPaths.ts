@@ -11,7 +11,10 @@ export function basename(p: string): string {
   return idx >= 0 ? stripped.slice(idx + 1) : stripped;
 }
 
-function joinPath(base: string, rest: string): string {
+/** Join a base directory with a relative segment, always with `/` (this
+ * codebase displays resolved paths with forward slashes regardless of
+ * platform — see `resolveInputPath`). Leading `./`/`/` on `rest` is stripped. */
+export function joinPath(base: string, rest: string): string {
   const baseClean = stripTrailingSep(base);
   const restClean = rest.replace(/^(?:\.[/\\]+)+/, '').replace(/^[/\\]+/, '');
   return restClean ? baseClean + '/' + restClean : baseClean;

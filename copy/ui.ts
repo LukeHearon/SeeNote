@@ -209,20 +209,23 @@ export const directoryField = {
 };
 
 export const openProjectModal = {
-  get title() { return getOverride('ui.openProjectModal.title') ?? "Open Project"; },
-  get tabFolder() { return getOverride('ui.openProjectModal.tabFolder') ?? "From Folder"; },
-  get tabArchive() { return getOverride('ui.openProjectModal.tabArchive') ?? "From Archive"; },
-  get folderPrompt() { return getOverride('ui.openProjectModal.folderPrompt') ?? "Choose the folder containing your project."; },
-  get chooseFolderButton() { return getOverride('ui.openProjectModal.chooseFolderButton') ?? "Choose Folder…"; },
+  get title() { return getOverride('ui.openProjectModal.title') ?? "Open Project From Archive"; },
   get archiveLabel() { return getOverride('ui.openProjectModal.archiveLabel') ?? "Archive"; },
   get archivePlaceholder() { return getOverride('ui.openProjectModal.archivePlaceholder') ?? "Choose a .zip, .tar, or .tar.gz file"; },
   get destinationLabel() { return getOverride('ui.openProjectModal.destinationLabel') ?? "Extract To"; },
   get destinationPlaceholder() { return getOverride('ui.openProjectModal.destinationPlaceholder') ?? "Choose a destination folder"; },
-  willExtractTo: (path: string) => `Will extract to: ${path}`,
+  get folderNameLabel() { return getOverride('ui.openProjectModal.folderNameLabel') ?? "Project Folder Name"; },
+  get folderNamePlaceholder() { return getOverride('ui.openProjectModal.folderNamePlaceholder') ?? "Project folder name"; },
+  projectLocation: (path: string) => `Project location: ${path}`,
   destinationExists: (path: string) => `"${path}" already exists. Choose a different destination.`,
   get cancelButton() { return getOverride('ui.openProjectModal.cancelButton') ?? "Cancel"; },
   get extractButton() { return getOverride('ui.openProjectModal.extractButton') ?? "Extract & Open"; },
   get extractingButton() { return getOverride('ui.openProjectModal.extractingButton') ?? "Extracting…"; },
+};
+
+export const openProjectMenu = {
+  get fromFolder() { return getOverride('ui.openProjectMenu.fromFolder') ?? "From Folder"; },
+  get fromArchive() { return getOverride('ui.openProjectMenu.fromArchive') ?? "From Archive"; },
 };
 
 export const repairProjectModal = {

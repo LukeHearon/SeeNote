@@ -139,20 +139,20 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
-/**
- * Where extracting `archivePath` into `destDir` would land — `{destDir}/{name}`,
- * where `name` is the archive's single top-level wrapping folder if it has
- * one, else the archive's filename stem. Used to show a "Will extract to: ..."
- * preview before the user commits; `extractArchive` resolves the same path.
- */
-export const peekArchiveExtractPath = (archivePath: string, destDir: string): Promise<string> =>
-  invoke('peek_archive_extract_path', { archivePath, destDir });
+/** Guess a project folder name from the archive's contents — its single
+ * top-level wrapping folder if it has one, else the archive's filename stem.
+ * A starting point for the user-editable "Project Folder Name" field, not a
+ * requirement `extractArchive` enforces. */
+export const guessProjectFolderName = (archivePath: string): Promise<string> =>
+  invoke('guess_project_folder_name', { archivePath });
 
-/** Extract a .zip, .tar, or .tar.gz/.tgz archive into a new folder inside
- * `destDir` (see `peekArchiveExtractPath`). Rejects if that folder already
- * exists. Resolves to the final extracted directory path. */
-export const extractArchive = (archivePath: string, destDir: string): Promise<string> =>
-  invoke('extract_archive', { archivePath, destDir });
+/** Extract a .zip, .tar, or .tar.gz/.tgz archive into `{destDir}/{folderName}`,
+ * stripping the archive's own top-level wrapping folder (if it has one) so
+ * `folderName` becomes the project root regardless of what the archive itself
+ * calls that folder. Rejects if the target folder already exists. Resolves to
+ * the final extracted directory path. */
+export const extractArchive = (archivePath: string, destDir: string, folderName: string): Promise<string> =>
+  invoke('extract_archive', { archivePath, destDir, folderName });
 
 /** Recursively list all non-audio/video files under path. */
 export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
