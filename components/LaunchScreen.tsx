@@ -359,18 +359,25 @@ export default function LaunchScreen({
                 {launchScreen.relinkButton}
               </button>
             )}
-            <button
-              onClick={e => handleStar(e, entry)}
-              className={
-                starred
-                  ? 'text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors'
-                  : 'text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors opacity-0 group-hover:opacity-100'
-              }
-              data-tooltip={starred ? tooltips.unstarProject : tooltips.starProject}
-            >
-              <Star size={15} fill={starred ? 'currentColor' : 'none'} />
-            </button>
-            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            {starred && (
+              <button
+                onClick={e => handleStar(e, entry)}
+                className="text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors"
+                data-tooltip={tooltips.unstarProject}
+              >
+                <Star size={15} fill="currentColor" />
+              </button>
+            )}
+            <div className="hidden group-hover:flex items-center gap-2">
+            {!starred && (
+              <button
+                onClick={e => handleStar(e, entry)}
+                className="text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors"
+                data-tooltip={tooltips.starProject}
+              >
+                <Star size={15} />
+              </button>
+            )}
             {isOk && (
               <button
                 onClick={e => handleGear(e, entry)}
@@ -543,7 +550,7 @@ export default function LaunchScreen({
                         </div>
                         <p className="text-gray-500 text-xs mt-1 truncate">{fileDir}</p>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="hidden group-hover:flex items-center gap-2 shrink-0">
                         <button
                           onClick={e => handleRemoveFile(e, file)}
                           className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
