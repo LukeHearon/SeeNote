@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp, SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../utils/helpers';
 import { isFilterAvailable } from '../utils/videoPlaybackMode';
+import { useElementWidth } from '../hooks/useElementWidth';
 import VolumeControl from './VolumeControl';
 import { TransportButtons } from './controls/TransportButtons';
 import { TimeReadout } from './controls/TimeReadout';
@@ -131,6 +133,16 @@ function Toolbar({
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }: ToolbarProps) {
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
+
+  // Priority-ordered collapse as the toolbar narrows: least-used controls
+  // shrink to icons (or hide) first, transport/time/labels stay full-size.
+  const [toolbarRef, toolbarWidth] = useElementWidth<HTMLDivElement>();
+  const known = toolbarWidth > 0;
+  const compactSpeed = known && toolbarWidth < 980;
+  const hideFilterSlider = known && toolbarWidth < 860;
+  const compactVolume = known && toolbarWidth < 720;
+  const hideSelectionFields = known && toolbarWidth < 560;
 
   const { min: speedMin, max: speedMax } = speedRangeFor(isAudioTrack ?? false, videoMode ?? 'fast');
   const filterUnavailable = !isFilterAvailable(isAudioTrack ?? false, videoMode ?? 'fast');
@@ -148,7 +160,7 @@ function Toolbar({
   };
 
   return (
-    <div className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40" data-help-target="playback-controls">
+    <div ref={toolbarRef} className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 border-b border-slate-700 select-none z-40" data-help-target="playback-controls">
       <TransportButtons
         enabled={!!videoSrc}
         isPlaying={isPlaying}
@@ -164,17 +176,44 @@ function Toolbar({
         onTogglePlayheadLock={() => onTogglePlayheadLock?.()}
       />
 
-      {/* Volume Control */}
-      <div className="ml-1">
-        <VolumeControl
-          volume={volume}
-          muted={muted}
-          setVolume={setVolume}
-          setMuted={setMuted}
-          helpTarget="volume-control"
-          onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
-        />
-      </div>
+      {/* Volume Control — collapses to a mute icon with a popover slider below a
+          width threshold, since the slider is the widest low-priority group. */}
+      {compactVolume ? (
+        <div className="relative ml-1">
+          <button
+            onClick={() => setVolumePopoverOpen(o => !o)}
+            className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-700"
+            data-help-target="volume-control"
+          >
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
+          {volumePopoverOpen && (
+            <>
+              <div className="fixed inset-0 z-50" onClick={() => setVolumePopoverOpen(false)} />
+              <div className="absolute z-50 top-full left-0 mt-1">
+                <VolumeControl
+                  volume={volume}
+                  muted={muted}
+                  setVolume={setVolume}
+                  setMuted={setMuted}
+                  onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="ml-1">
+          <VolumeControl
+            volume={volume}
+            muted={muted}
+            setVolume={setVolume}
+            setMuted={setMuted}
+            helpTarget="volume-control"
+            onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+          />
+        </div>
+      )}
 
       {volumeCtxMenu && onRestartAudio && (
         <>
@@ -207,38 +246,46 @@ function Toolbar({
           onUnitChange={u => onTimeDisplayUnitChange?.(u)}
         />
 
-        <div className="w-px bg-slate-600/50 self-stretch my-0.5" />
+        {!hideSelectionFields && (
+          <>
+            <div className="w-px bg-slate-600/50 self-stretch my-0.5" />
 
-        <SelectionTimeFields
-          selection={selection}
-          isPlaying={isPlaying}
-          duration={duration}
-          currentTimeStore={currentTimeStore}
-          unit={timeDisplayUnit}
-          trackStartDate={trackStartDate}
-          dateTimeFormat={dateTimeFormat}
-          timeline={timeline}
-          onApply={s => { onSelectionChange(s); onAnnotationBoundsChange?.(s.start, s.end); }}
-        />
+            <SelectionTimeFields
+              selection={selection}
+              isPlaying={isPlaying}
+              duration={duration}
+              currentTimeStore={currentTimeStore}
+              unit={timeDisplayUnit}
+              trackStartDate={trackStartDate}
+              dateTimeFormat={dateTimeFormat}
+              timeline={timeline}
+              onApply={s => { onSelectionChange(s); onAnnotationBoundsChange?.(s.start, s.end); }}
+            />
+          </>
+        )}
       </div>
 
       {/* Filter tool readiness (Shift+F). Band on/off lives on the adjacent
-          strength slider, so a band can persist after the tool is unreadied. */}
+          strength slider, so a band can persist after the tool is unreadied.
+          The slider itself is the first thing to go when space is tight — the
+          tool button (and Shift+F) still ready/unready it without it. */}
       <div className="ml-2">
         <FilterToolButton active={filterToolActive} unavailable={filterUnavailable} onToggle={onToggleFilterTool} />
       </div>
 
-      <FilterStrengthSlider
-        strength={filterStrength}
-        enabled={bandPassFilter !== null}
-        unavailable={filterUnavailable}
-        onSetStrength={s => {
-          setFilterStrength(s);
-          if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
-        }}
-        onDisable={() => { onDisableBandPassFilter(); setFilterStrength(0); }}
-        onEnable={onEnableBandPassFilter}
-      />
+      {!hideFilterSlider && (
+        <FilterStrengthSlider
+          strength={filterStrength}
+          enabled={bandPassFilter !== null}
+          unavailable={filterUnavailable}
+          onSetStrength={s => {
+            setFilterStrength(s);
+            if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
+          }}
+          onDisable={() => { onDisableBandPassFilter(); setFilterStrength(0); }}
+          onEnable={onEnableBandPassFilter}
+        />
+      )}
 
       <div className="ml-2">
         <PlaybackSpeedControl
@@ -248,6 +295,7 @@ function Toolbar({
           max={speedMax}
           onSpeedChange={setPlaybackSpeed}
           onLastDefinedSpeedChange={setLastDefinedSpeed}
+          compact={compactSpeed}
         />
       </div>
 

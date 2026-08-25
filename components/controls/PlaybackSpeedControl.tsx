@@ -12,6 +12,9 @@ export interface PlaybackSpeedControlProps {
   max: number;
   onSpeedChange: (speed: number) => void;
   onLastDefinedSpeedChange: (speed: number) => void;
+  /** Hides the numeric readout, leaving just the gauge icon; clicking the pill
+   *  still opens the editor. For narrow toolbars. */
+  compact?: boolean;
 }
 
 /**
@@ -27,6 +30,7 @@ export function PlaybackSpeedControl({
   max,
   onSpeedChange,
   onLastDefinedSpeedChange,
+  compact = false,
 }: PlaybackSpeedControlProps) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
@@ -67,12 +71,14 @@ export function PlaybackSpeedControl({
       ref={setEl}
       className="flex items-center gap-1.5 bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600"
       data-help-target="playback-speed"
+      data-tooltip={compact && !editing ? tooltips.setSpeed : undefined}
+      onClick={compact && !editing ? () => { setEditing(true); setRaw(speed.toFixed(2)); } : undefined}
     >
       <button
         type="button"
-        onClick={() => onSpeedChange(speed === 1 ? lastDefinedSpeed : 1)}
+        onClick={e => { e.stopPropagation(); onSpeedChange(speed === 1 ? lastDefinedSpeed : 1); }}
         className="flex-none p-0 leading-none"
-        data-tooltip={speed !== 1 ? tooltips.resetSpeed : tooltips.restoreSpeed}
+        data-tooltip={compact ? undefined : speed !== 1 ? tooltips.resetSpeed : tooltips.restoreSpeed}
       >
         <Gauge size={16} className={speed > 1 ? 'text-red-400' : speed < 1 ? 'text-blue-400' : 'text-slate-300'} />
       </button>
@@ -82,6 +88,7 @@ export function PlaybackSpeedControl({
           className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-12 outline-none text-center tabular-nums"
           value={raw}
           onChange={e => setRaw(e.target.value)}
+          onClick={e => e.stopPropagation()}
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -97,7 +104,7 @@ export function PlaybackSpeedControl({
             setEditing(false); setRaw('');
           }}
         />
-      ) : (
+      ) : !compact ? (
         <button
           className="text-xs font-mono text-slate-300 hover:text-white tabular-nums w-10 text-right"
           onClick={() => { setEditing(true); setRaw(speed.toFixed(2)); }}
@@ -105,7 +112,7 @@ export function PlaybackSpeedControl({
         >
           {speed.toFixed(2)}x
         </button>
-      )}
+      ) : null}
     </div>
   );
 }
