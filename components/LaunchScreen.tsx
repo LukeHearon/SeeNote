@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
@@ -25,6 +25,7 @@ interface Props {
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
   addExistingProject: (projectDir: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
+  toggleStarred: (id: string) => Promise<void>;
   relinkProject: (
     id: string,
     newProjectDir: string,
@@ -64,6 +65,7 @@ export default function LaunchScreen({
   createProject,
   addExistingProject,
   removeProject,
+  toggleStarred,
   relinkProject,
   reconnectProject,
   updateProjectSettings,
@@ -244,6 +246,11 @@ export default function LaunchScreen({
     setEditingEntry(entry);
   };
 
+  const handleStar = (e: React.MouseEvent, entry: ProjectListEntry) => {
+    e.stopPropagation();
+    toggleStarred(entry.registry.id).catch(() => {});
+  };
+
   const handleContextMenu = (e: React.MouseEvent, entry: ProjectListEntry) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, entryId: entry.registry.id });
@@ -270,8 +277,132 @@ export default function LaunchScreen({
 
   const fmLabel = fileManagerLabel();
 
+  const renderProjectRow = (entry: ProjectListEntry) => {
+    const isOk = entry.status === 'ok';
+    const isUnchecked = entry.status === 'unchecked';
+    // Grayed = we've already tried to resolve this entry and it
+    // didn't land cleanly. Unchecked rows look normal — they're
+    // assumed-good until the user clicks and we actually check.
+    const grayed = !isOk && !isUnchecked;
+    const name = isOk
+      ? entry.project.settings.projectName
+      : (entry.registry.name ?? basename(entry.registry.projectDir));
+    const gradientColors = isOk
+      ? entry.project.settings.nameGradientColors
+      : entry.registry.nameGradientColors;
+    const starred = !!entry.registry.starred;
+    const liClass = grayed
+      ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50'
+      : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all';
+
+    let pathLines: React.ReactNode = null;
+    if (entry.status === 'ok') {
+      const p = entry.project;
+      const mediaInside = isInsideProjectDir(p.projectDir, p.mediaDirectoryAbs);
+      const annInside = isInsideProjectDir(p.projectDir, p.annotationDirectoryAbs);
+      if (mediaInside && annInside) {
+        pathLines = (
+          <p className="text-gray-500 text-xs mt-1 truncate">{p.projectDir}</p>
+        );
+      } else {
+        pathLines = (
+          <>
+            <p className="text-gray-500 text-xs mt-1 truncate">Media: {p.mediaDirectoryAbs}</p>
+            <p className="text-gray-600 text-xs truncate">Annotations: {p.annotationDirectoryAbs}</p>
+          </>
+        );
+      }
+    } else if (entry.status === 'unchecked') {
+      pathLines = (
+        <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>
+      );
+    } else {
+      const tag = entry.status === 'missing-dir' ? launchScreen.projectNotFound : launchScreen.projectSettingsUnreadable;
+      pathLines = (
+        <p className="text-gray-500 text-xs mt-1 truncate">
+          {entry.registry.projectDir} <span className="italic">{tag}</span>
+        </p>
+      );
+    }
+
+    return (
+      <li
+        key={entry.registry.id}
+        onClick={() => { handleEntryClick(entry).catch(() => {}); }}
+        onContextMenu={e => handleContextMenu(e, entry)}
+        className={liClass}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-bold truncate">
+                {gradientColors && !grayed ? (
+                  <GradientProjectName name={name} nameGradientColors={gradientColors} />
+                ) : (
+                  <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
+                )}
+              </p>
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-950 text-gray-400 border border-gray-700">
+                {launchScreen.projectBadge}
+              </span>
+            </div>
+            {pathLines}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {grayed && (
+              <button
+                onClick={e => handleLocate(e, entry)}
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
+                data-tooltip={tooltips.relinkProject}
+              >
+                <FolderSearch size={13} />
+                {launchScreen.relinkButton}
+              </button>
+            )}
+            <button
+              onClick={e => handleStar(e, entry)}
+              className={
+                starred
+                  ? 'text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors'
+                  : 'text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors opacity-0 group-hover:opacity-100'
+              }
+              data-tooltip={starred ? tooltips.unstarProject : tooltips.starProject}
+            >
+              <Star size={15} fill={starred ? 'currentColor' : 'none'} />
+            </button>
+            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            {isOk && (
+              <button
+                onClick={e => handleGear(e, entry)}
+                className="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                data-tooltip={tooltips.projectSettings}
+              >
+                <Settings size={15} />
+              </button>
+            )}
+            <button
+              onClick={e => handleRemove(e, entry, name)}
+              className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
+              data-tooltip={tooltips.unlinkProject}
+            >
+              <X size={15} />
+            </button>
+            </div>
+          </div>
+        </div>
+        <p className="text-gray-600 text-xs mt-2">
+          {launchScreen.lastOpened(formatDate(entry.registry.lastOpened))}
+        </p>
+      </li>
+    );
+  };
+
+  const starredEntries = entries
+    .filter(entry => entry.registry.starred)
+    .sort((a, b) => b.registry.lastOpened.localeCompare(a.registry.lastOpened));
+
   const unified: UnifiedEntry[] = [
-    ...entries.map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
+    ...entries.filter(entry => !entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
     ...fileEntries.map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
   ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
 
@@ -375,7 +506,7 @@ export default function LaunchScreen({
             <Loader2 size={24} className="animate-spin mr-2" />
             <span className="text-sm">{launchScreen.loadingProjects}</span>
           </div>
-        ) : unified.length === 0 ? (
+        ) : unified.length === 0 && starredEntries.length === 0 ? (
           <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
             <p className="text-gray-500 text-sm mb-3">{launchScreen.noProjects}</p>
             <button
@@ -387,6 +518,10 @@ export default function LaunchScreen({
           </div>
         ) : (
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
+            {starredEntries.map(entry => renderProjectRow(entry))}
+            {starredEntries.length > 0 && unified.length > 0 && (
+              <li key="starred-divider" aria-hidden className="border-t border-gray-800 my-1" />
+            )}
             {unified.map(item => {
               if (item.kind === 'file') {
                 const file = item.entry;
@@ -425,112 +560,7 @@ export default function LaunchScreen({
                 );
               }
 
-              const entry = item.entry;
-              const isOk = entry.status === 'ok';
-              const isUnchecked = entry.status === 'unchecked';
-              // Grayed = we've already tried to resolve this entry and it
-              // didn't land cleanly. Unchecked rows look normal — they're
-              // assumed-good until the user clicks and we actually check.
-              const grayed = !isOk && !isUnchecked;
-              const name = isOk
-                ? entry.project.settings.projectName
-                : (entry.registry.name ?? basename(entry.registry.projectDir));
-              const gradientColors = isOk
-                ? entry.project.settings.nameGradientColors
-                : entry.registry.nameGradientColors;
-              const liClass = grayed
-                ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50'
-                : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all';
-
-              let pathLines: React.ReactNode = null;
-              if (entry.status === 'ok') {
-                const p = entry.project;
-                const mediaInside = isInsideProjectDir(p.projectDir, p.mediaDirectoryAbs);
-                const annInside = isInsideProjectDir(p.projectDir, p.annotationDirectoryAbs);
-                if (mediaInside && annInside) {
-                  pathLines = (
-                    <p className="text-gray-500 text-xs mt-1 truncate">{p.projectDir}</p>
-                  );
-                } else {
-                  pathLines = (
-                    <>
-                      <p className="text-gray-500 text-xs mt-1 truncate">Media: {p.mediaDirectoryAbs}</p>
-                      <p className="text-gray-600 text-xs truncate">Annotations: {p.annotationDirectoryAbs}</p>
-                    </>
-                  );
-                }
-              } else if (entry.status === 'unchecked') {
-                pathLines = (
-                  <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>
-                );
-              } else {
-                const tag = entry.status === 'missing-dir' ? launchScreen.projectNotFound : launchScreen.projectSettingsUnreadable;
-                pathLines = (
-                  <p className="text-gray-500 text-xs mt-1 truncate">
-                    {entry.registry.projectDir} <span className="italic">{tag}</span>
-                  </p>
-                );
-              }
-
-              return (
-                <li
-                  key={entry.registry.id}
-                  onClick={() => { handleEntryClick(entry).catch(() => {}); }}
-                  onContextMenu={e => handleContextMenu(e, entry)}
-                  className={liClass}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-bold truncate">
-                          {gradientColors && !grayed ? (
-                            <GradientProjectName name={name} nameGradientColors={gradientColors} />
-                          ) : (
-                            <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
-                          )}
-                        </p>
-                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-950 text-gray-400 border border-gray-700">
-                          {launchScreen.projectBadge}
-                        </span>
-                      </div>
-                      {pathLines}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {grayed && (
-                        <button
-                          onClick={e => handleLocate(e, entry)}
-                          className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
-                          data-tooltip={tooltips.relinkProject}
-                        >
-                          <FolderSearch size={13} />
-                          {launchScreen.relinkButton}
-                        </button>
-                      )}
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {isOk && (
-                        <button
-                          onClick={e => handleGear(e, entry)}
-                          className="text-gray-400 hover:text-white p-1 rounded transition-colors"
-                          data-tooltip={tooltips.projectSettings}
-                        >
-                          <Settings size={15} />
-                        </button>
-                      )}
-                      <button
-                        onClick={e => handleRemove(e, entry, name)}
-                        className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                        data-tooltip={tooltips.unlinkProject}
-                      >
-                        <X size={15} />
-                      </button>
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-gray-600 text-xs mt-2">
-                    {launchScreen.lastOpened(formatDate(entry.registry.lastOpened))}
-                  </p>
-                </li>
-              );
+              return renderProjectRow(item.entry);
             })}
           </ul>
         )}

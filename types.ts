@@ -406,6 +406,8 @@ export interface ProjectRegistryEntry {
   name?: string;
   /** Last-known gradient colors, mirrored from settings.json `nameGradientColors`. */
   nameGradientColors?: [string, string];
+  /** Whether the user has starred this project on the launch screen. */
+  starred?: boolean;
 }
 
 /**

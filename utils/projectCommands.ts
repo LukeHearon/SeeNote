@@ -9,6 +9,7 @@ interface RegistryEntryRecord {
   last_opened: string;
   name?: string | null;
   name_gradient_colors?: [string, string] | null;
+  starred?: boolean | null;
 }
 
 function toRegistry(r: RegistryEntryRecord): ProjectRegistryEntry {
@@ -18,6 +19,7 @@ function toRegistry(r: RegistryEntryRecord): ProjectRegistryEntry {
     lastOpened: r.last_opened,
     name: r.name ?? undefined,
     nameGradientColors: r.name_gradient_colors ?? undefined,
+    starred: r.starred ?? undefined,
   };
 }
 
@@ -28,6 +30,7 @@ function toRegistryRecord(e: ProjectRegistryEntry): RegistryEntryRecord {
     last_opened: e.lastOpened,
     name: e.name ?? null,
     name_gradient_colors: e.nameGradientColors ?? null,
+    starred: e.starred ?? null,
   };
 }
 

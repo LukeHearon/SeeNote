@@ -21,6 +21,9 @@ pub struct RegistryEntryRecord {
     /// Last-known gradient colors (mirrors settings.json `nameGradientColors`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_gradient_colors: Option<[String; 2]>,
+    /// Whether the user has starred this project on the launch screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starred: Option<bool>,
 }
 
 /// Slim registry entry stored in `{app_data}/.projects/files.json`. Tracks

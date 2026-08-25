@@ -27,7 +27,7 @@ export default function App() {
   const {
     entries, isLoading, loadError, projectsFilePath,
     createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,
-    removeProject, touchLastOpened, reconnectProject, relinkProject,
+    removeProject, toggleStarred, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
   const { fileEntries, isLoadingFiles, touchRecentFile, removeRecentFile } = useRecentFiles();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -117,6 +117,7 @@ export default function App() {
         createProject={createProject}
         addExistingProject={addExistingProject}
         removeProject={removeProject}
+        toggleStarred={toggleStarred}
         relinkProject={relinkProject}
         reconnectProject={reconnectProject}
         updateProjectSettings={updateProjectSettings}

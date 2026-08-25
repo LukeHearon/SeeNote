@@ -77,6 +77,7 @@ export const GUIDE: Part[] = [
           ] },
           { kind: 'h', id: 'entries', text: help.launch.h_entries },
           { kind: 'p', text: help.launch.p_entries },
+          { kind: 'p', text: help.launch.p_star },
           { kind: 'p', text: help.launch.p_missing },
         ],
       },

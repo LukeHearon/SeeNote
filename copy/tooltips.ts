@@ -30,6 +30,8 @@ export const tooltips = {
   get projectSettings() { return getOverride('tooltips.projectSettings') ?? "Project settings"; },
   get appSettings() { return getOverride('tooltips.appSettings') ?? "Application settings"; },
   get unlinkProject() { return getOverride('tooltips.unlinkProject') ?? "Unlink project"; },
+  get starProject() { return getOverride('tooltips.starProject') ?? "Star project"; },
+  get unstarProject() { return getOverride('tooltips.unstarProject') ?? "Unstar project"; },
   get unlinkFile() { return getOverride('tooltips.unlinkFile') ?? "Remove from Recent"; },
   get openDataFolder() { return getOverride('tooltips.openDataFolder') ?? "Open SeeNote’s internal data folder"; },
   get keepSeeNoteName() { return getOverride('tooltips.keepSeeNoteName') ?? "Keep SeeNote's name (rewrites .seenote/settings.json)"; },

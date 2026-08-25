@@ -207,6 +207,14 @@ export function useProjects() {
     await persistRegistry(next.map(e => e.registry));
   }, [persistRegistry, setBoth]);
 
+  const toggleStarred = useCallback(async (id: string): Promise<void> => {
+    const next = entriesRef.current.map(e =>
+      e.registry.id === id ? { ...e, registry: { ...e.registry, starred: !e.registry.starred } } : e
+    );
+    setBoth(next);
+    await persistRegistry(next.map(e => e.registry));
+  }, [persistRegistry, setBoth]);
+
   const touchLastOpened = useCallback(async (id: string): Promise<Project | undefined> => {
     const now = new Date().toISOString();
     const next = entriesRef.current.map(e => {
@@ -364,6 +372,7 @@ export function useProjects() {
     updateProjectSettings,
     updateProjectPreferences,
     removeProject,
+    toggleStarred,
     touchLastOpened,
     reconnectProject,
     relinkProject,
