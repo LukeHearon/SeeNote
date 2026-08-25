@@ -10,6 +10,22 @@ export const gainToSlider = (gain: number): number =>
 export const sliderToGain = (s: number): number =>
   s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 6;
 
+interface MuteButtonProps {
+  muted: boolean;
+  setMuted: (m: boolean) => void;
+  className?: string;
+}
+
+/** The mute-toggle icon alone. Used standalone as a hover-reveal trigger, and
+ *  internally by VolumeControl. */
+export function VolumeMuteButton({ muted, setMuted, className }: MuteButtonProps) {
+  return (
+    <button onClick={() => setMuted(!muted)} className={className ?? 'text-slate-300 hover:text-white'}>
+      {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+    </button>
+  );
+}
+
 interface Props {
   /** Linear gain (1.0 = unity, up to 4.0). */
   volume: number;
@@ -19,6 +35,9 @@ interface Props {
   /** Right-click handler (e.g. the main toolbar's "restart audio" menu). */
   onContextMenu?: (e: React.MouseEvent) => void;
   helpTarget?: string;
+  /** Omits the mute button, leaving just the slider — for a hover-reveal
+   *  panel where the icon is already shown as the trigger. */
+  hideIcon?: boolean;
 }
 
 /**
@@ -27,7 +46,7 @@ interface Props {
  * thumb when boosted above unity) with scroll-to-adjust. Extracted so both
  * places stay visually and behaviourally identical.
  */
-export default function VolumeControl({ volume, muted, setVolume, setMuted, onContextMenu, helpTarget }: Props) {
+export default function VolumeControl({ volume, muted, setVolume, setMuted, onContextMenu, helpTarget, hideIcon = false }: Props) {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
@@ -62,9 +81,7 @@ export default function VolumeControl({ volume, muted, setVolume, setMuted, onCo
       data-help-target={helpTarget}
       onContextMenu={onContextMenu}
     >
-      <button onClick={() => setMuted(!muted)} className="text-slate-300 hover:text-white">
-        {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-      </button>
+      {!hideIcon && <VolumeMuteButton muted={muted} setMuted={setMuted} />}
       <div className="relative w-20 h-5 flex items-center">
         <input
           type="range" min="0" max="1" step="0.005"

@@ -254,7 +254,7 @@ export const help = {
     get h_lock() { return getOverride('help.transport.h_lock') ?? "Playhead lock"; },
     get p_lock() { return getOverride('help.transport.p_lock') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely. Holding `Alt`/`Option` suspends the lock for as long as it's held (the icon pales), so alt-dragging annotations doesn't fight the auto-scroll."; },
     get h_volume() { return getOverride('help.transport.h_volume') ?? "Volume"; },
-    get p_volume() { return getOverride('help.transport.p_volume') ?? "The [volume slider](volume-control) supports up to 2× gain boost (slider past center). Press `M` to mute. Right-click the [volume control](volume-control) to access **Restart Audio**, which re-initialises the audio engine (useful after an audio device change on Windows)."; },
+    get p_volume() { return getOverride('help.transport.p_volume') ?? "Hover the [volume icon](volume-control) to reveal the slider, which supports up to 2× gain boost (past center). Press `M` to mute. Right-click the slider to access **Restart Audio**, which re-initialises the audio engine (useful after an audio device change on Windows)."; },
   },
 
   timeDisplay: {
@@ -268,14 +268,14 @@ export const help = {
   },
 
   speed: {
-    get p1() { return getOverride('help.speed.p1') ?? "The [speed slider](playback-speed) scrubs playback between `0.25x` and `4.0x`. Pitch is preserved, so slowing audio down to inspect a transient won't drop it into a different octave. Center snaps to `1.0x`; scroll-wheel over the slider also nudges the value."; },
+    get p1() { return getOverride('help.speed.p1') ?? "Hover the [speed icon](playback-speed) to reveal a click-to-type entry box; scroll over it to nudge the value. Speed ranges between `0.25x` and `4.0x`. Pitch is preserved, so slowing audio down to inspect a transient won't drop it into a different octave. Click the icon itself to snap to `1.0x` (or back to your last speed)."; },
     get note1() { return getOverride('help.speed.note1') ?? "Speed is saved per project. Video tracks follow the audio clock, so frames stay in sync at any speed."; },
   },
 
   filter: {
     get p1() { return getOverride('help.filter.p1') ?? "Press `Shift+F` (or click the [filter button](filter-tool)) to ready the filter tool — the cursor flips to a horizontal bar. Drag vertically on the spectrogram to draw a band: audio outside the band is attenuated in real time, the out-of-band region darkens, and the filter engages automatically."; },
     get h_tuning() { return getOverride('help.filter.h_tuning') ?? "Tuning the band"; },
-    get p_tuning() { return getOverride('help.filter.p_tuning') ?? "Drag the two horizontal cutoff lines to retune the band in place — they're grabbable any time a band is active, even when the filter tool isn't selected. Use the [strength slider](filter-strength) to mix between dry (0%, source untouched) and fully band-passed (100%). Dragging the slider up from 0 re-enables filtering at the new strength, restoring the last band you drew."; },
+    get p_tuning() { return getOverride('help.filter.p_tuning') ?? "Drag the two horizontal cutoff lines to retune the band in place — they're grabbable any time a band is active, even when the filter tool isn't selected. Hover the [filter button](filter-strength) to reveal the strength slider and mix between dry (0%, source untouched) and fully band-passed (100%). Dragging the slider up from 0 re-enables filtering at the new strength, restoring the last band you drew."; },
     get h_toggle() { return getOverride('help.filter.h_toggle') ?? "Toggling filtering"; },
     get p_toggle() { return getOverride('help.filter.p_toggle') ?? "**F toggles filtering on/off**, saving and restoring the last defined band — just like `Z` for [video zoom](@video-zoom). If you've never drawn a band, F engages a default 500 Hz–4 kHz band at 50% so you can hear something immediately and refine from there. Tool readiness (`Shift+F`) is independent: a drawn band keeps filtering even after the tool is unreadied."; },
     get p_esc() { return getOverride('help.filter.p_esc') ?? "`Esc` unwinds the most recent layer: first the band (and filtering), then the filter tool itself, then selection, then the annotation tool — in the order you turned them on."; },

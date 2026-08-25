@@ -3,6 +3,30 @@ import { Gauge } from 'lucide-react';
 import { clamp, speedToSlider, sliderToSpeed } from '../../utils/helpers';
 import { tooltips } from '../../copy/tooltips';
 
+export interface PlaybackSpeedIconProps {
+  speed: number;
+  /** The speed the gauge button restores when speed is 1.0x. */
+  lastDefinedSpeed: number;
+  onSpeedChange: (speed: number) => void;
+  className?: string;
+}
+
+/** The gauge button alone — colour-coded by speed, toggles 1.0x against the
+ *  last speed you chose. Used standalone as a hover-reveal trigger, and
+ *  internally by PlaybackSpeedControl. */
+export function PlaybackSpeedIcon({ speed, lastDefinedSpeed, onSpeedChange, className }: PlaybackSpeedIconProps) {
+  return (
+    <button
+      type="button"
+      onClick={e => { e.stopPropagation(); onSpeedChange(speed === 1 ? lastDefinedSpeed : 1); }}
+      className={className ?? 'flex-none p-0 leading-none'}
+      data-tooltip={speed !== 1 ? tooltips.resetSpeed : tooltips.restoreSpeed}
+    >
+      <Gauge size={16} className={speed > 1 ? 'text-red-400' : speed < 1 ? 'text-blue-400' : 'text-slate-300'} />
+    </button>
+  );
+}
+
 export interface PlaybackSpeedControlProps {
   speed: number;
   /** The speed the gauge button restores when speed is 1.0x. */
@@ -12,9 +36,9 @@ export interface PlaybackSpeedControlProps {
   max: number;
   onSpeedChange: (speed: number) => void;
   onLastDefinedSpeedChange: (speed: number) => void;
-  /** Hides the numeric readout, leaving just the gauge icon; clicking the pill
-   *  still opens the editor. For narrow toolbars. */
-  compact?: boolean;
+  /** Omits the gauge button, leaving just the numeric readout — for a
+   *  hover-reveal panel where the icon is already shown as the trigger. */
+  hideIcon?: boolean;
 }
 
 /**
@@ -30,7 +54,7 @@ export function PlaybackSpeedControl({
   max,
   onSpeedChange,
   onLastDefinedSpeedChange,
-  compact = false,
+  hideIcon = false,
 }: PlaybackSpeedControlProps) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
@@ -70,25 +94,19 @@ export function PlaybackSpeedControl({
     <div
       ref={setEl}
       className="flex items-center gap-1.5 bg-slate-700/50 rounded-full px-3 py-0.5 hover:bg-slate-700 transition-all border border-transparent hover:border-slate-600"
-      data-help-target="playback-speed"
-      data-tooltip={compact && !editing ? tooltips.setSpeed : undefined}
-      onClick={compact && !editing ? () => { setEditing(true); setRaw(speed.toFixed(2)); } : undefined}
+      // Omitted when hideIcon: the caller (a HoverReveal panel, whose
+      // always-present trigger already carries this target) is the anchor.
+      data-help-target={hideIcon ? undefined : 'playback-speed'}
     >
-      <button
-        type="button"
-        onClick={e => { e.stopPropagation(); onSpeedChange(speed === 1 ? lastDefinedSpeed : 1); }}
-        className="flex-none p-0 leading-none"
-        data-tooltip={compact ? undefined : speed !== 1 ? tooltips.resetSpeed : tooltips.restoreSpeed}
-      >
-        <Gauge size={16} className={speed > 1 ? 'text-red-400' : speed < 1 ? 'text-blue-400' : 'text-slate-300'} />
-      </button>
+      {!hideIcon && (
+        <PlaybackSpeedIcon speed={speed} lastDefinedSpeed={lastDefinedSpeed} onSpeedChange={onSpeedChange} />
+      )}
       {editing ? (
         <input
           autoFocus
           className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-12 outline-none text-center tabular-nums"
           value={raw}
           onChange={e => setRaw(e.target.value)}
-          onClick={e => e.stopPropagation()}
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -104,7 +122,7 @@ export function PlaybackSpeedControl({
             setEditing(false); setRaw('');
           }}
         />
-      ) : !compact ? (
+      ) : (
         <button
           className="text-xs font-mono text-slate-300 hover:text-white tabular-nums w-10 text-right"
           onClick={() => { setEditing(true); setRaw(speed.toFixed(2)); }}
@@ -112,7 +130,7 @@ export function PlaybackSpeedControl({
         >
           {speed.toFixed(2)}x
         </button>
-      ) : null}
+      )}
     </div>
   );
 }

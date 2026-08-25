@@ -1,17 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Volume2, VolumeX } from 'lucide-react';
 import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp, SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../utils/helpers';
 import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import { useOverflowCollapseLevel } from '../hooks/useOverflowCollapseLevel';
-import VolumeControl from './VolumeControl';
+import VolumeControl, { VolumeMuteButton } from './VolumeControl';
 import { TransportButtons } from './controls/TransportButtons';
 import { TimeReadout } from './controls/TimeReadout';
 import { SelectionTimeFields } from './controls/SelectionTimeFields';
-import { PlaybackSpeedControl } from './controls/PlaybackSpeedControl';
+import { PlaybackSpeedControl, PlaybackSpeedIcon } from './controls/PlaybackSpeedControl';
 import { FilterToolButton, FilterStrengthSlider } from './controls/FilterControls';
 import { SpectrogramSettingsButton } from './controls/ToolbarToggles';
+import { HoverReveal } from './controls/HoverReveal';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { DateTimeFormat } from '../utils/datetimeDisplay';
 import { Timeline } from '../utils/subsetTimeline';
@@ -133,17 +133,15 @@ function Toolbar({
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }: ToolbarProps) {
   const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [volumePopoverAnchor, setVolumePopoverAnchor] = useState<{ x: number; y: number } | null>(null);
 
-  // Priority-ordered collapse as the toolbar narrows: least-used controls
-  // shrink to icons (or hide) first, transport/time/labels stay full-size.
-  // The level is derived from actual overflow (content width vs. available
-  // width), not fixed breakpoints — see useOverflowCollapseLevel.
-  const [toolbarRef, collapseLevel] = useOverflowCollapseLevel<HTMLDivElement>(4);
-  const compactSpeed = collapseLevel >= 1;
-  const hideFilterSlider = collapseLevel >= 2;
-  const compactVolume = collapseLevel >= 3;
-  const hideSelectionFields = collapseLevel >= 4;
+  // Volume, filter strength, and playback speed are always icon-first with a
+  // hover-revealed panel (see HoverReveal) — not width-dependent. The only
+  // thing that still collapses under width pressure is the selection-time
+  // fields, once there's nowhere left to give: the level is derived from
+  // actual overflow (content width vs. available width), not a fixed
+  // breakpoint — see useOverflowCollapseLevel.
+  const [toolbarRef, collapseLevel] = useOverflowCollapseLevel<HTMLDivElement>(1);
+  const hideSelectionFields = collapseLevel >= 1;
 
   const { min: speedMin, max: speedMax } = speedRangeFor(isAudioTrack ?? false, videoMode ?? 'fast');
   const filterUnavailable = !isFilterAvailable(isAudioTrack ?? false, videoMode ?? 'fast');
@@ -177,51 +175,22 @@ function Toolbar({
         onTogglePlayheadLock={() => onTogglePlayheadLock?.()}
       />
 
-      {/* Volume Control — collapses to a mute icon with a popover slider below a
-          width threshold, since the slider is the widest low-priority group. */}
-      {compactVolume ? (
-        <div className="ml-1">
-          <button
-            onClick={(e) => {
-              if (volumePopoverAnchor) { setVolumePopoverAnchor(null); return; }
-              const rect = e.currentTarget.getBoundingClientRect();
-              setVolumePopoverAnchor({ x: rect.left, y: rect.bottom + 4 });
-            }}
-            className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-700"
-            data-help-target="volume-control"
-          >
-            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          </button>
-          {/* Fixed, not absolute — the toolbar clips overflow (so it can be
-              measured for the collapse logic below), which would clip an
-              absolutely-positioned popover too. */}
-          {volumePopoverAnchor && (
-            <>
-              <div className="fixed inset-0 z-50" onClick={() => setVolumePopoverAnchor(null)} />
-              <div className="fixed z-50" style={{ left: volumePopoverAnchor.x, top: volumePopoverAnchor.y }}>
-                <VolumeControl
-                  volume={volume}
-                  muted={muted}
-                  setVolume={setVolume}
-                  setMuted={setMuted}
-                  onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
-                />
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="ml-1">
+      {/* Volume — icon always visible; hover reveals the slider beneath. */}
+      <div className="ml-1">
+        <HoverReveal
+          helpTarget="volume-control"
+          trigger={<VolumeMuteButton muted={muted} setMuted={setMuted} className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-700" />}
+        >
           <VolumeControl
             volume={volume}
             muted={muted}
             setVolume={setVolume}
             setMuted={setMuted}
-            helpTarget="volume-control"
+            hideIcon
             onContextMenu={onRestartAudio ? (e) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); } : undefined}
           />
-        </div>
-      )}
+        </HoverReveal>
+      </div>
 
       {volumeCtxMenu && onRestartAudio && (
         <>
@@ -273,38 +242,45 @@ function Toolbar({
         )}
       </div>
 
-      {/* Filter tool readiness (Shift+F). Band on/off lives on the adjacent
-          strength slider, so a band can persist after the tool is unreadied.
-          The slider itself is the first thing to go when space is tight — the
-          tool button (and Shift+F) still ready/unready it without it. */}
+      {/* Filter tool readiness (Shift+F) — icon always visible; hover reveals
+          the strength slider beneath. Band on/off lives on that slider, so a
+          band can persist after the tool is unreadied. */}
       <div className="ml-2">
-        <FilterToolButton active={filterToolActive} unavailable={filterUnavailable} onToggle={onToggleFilterTool} />
+        <HoverReveal
+          helpTarget="filter-strength"
+          trigger={<FilterToolButton active={filterToolActive} unavailable={filterUnavailable} onToggle={onToggleFilterTool} />}
+        >
+          <FilterStrengthSlider
+            strength={filterStrength}
+            enabled={bandPassFilter !== null}
+            unavailable={filterUnavailable}
+            onSetStrength={s => {
+              setFilterStrength(s);
+              if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
+            }}
+            onDisable={() => { onDisableBandPassFilter(); setFilterStrength(0); }}
+            onEnable={onEnableBandPassFilter}
+          />
+        </HoverReveal>
       </div>
 
-      {!hideFilterSlider && (
-        <FilterStrengthSlider
-          strength={filterStrength}
-          enabled={bandPassFilter !== null}
-          unavailable={filterUnavailable}
-          onSetStrength={s => {
-            setFilterStrength(s);
-            if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
-          }}
-          onDisable={() => { onDisableBandPassFilter(); setFilterStrength(0); }}
-          onEnable={onEnableBandPassFilter}
-        />
-      )}
-
+      {/* Playback speed — icon always visible; hover reveals the numeric
+          entry box beneath. */}
       <div className="ml-2">
-        <PlaybackSpeedControl
-          speed={playbackSpeed}
-          lastDefinedSpeed={lastDefinedSpeed}
-          min={speedMin}
-          max={speedMax}
-          onSpeedChange={setPlaybackSpeed}
-          onLastDefinedSpeedChange={setLastDefinedSpeed}
-          compact={compactSpeed}
-        />
+        <HoverReveal
+          helpTarget="playback-speed"
+          trigger={<PlaybackSpeedIcon speed={playbackSpeed} lastDefinedSpeed={lastDefinedSpeed} onSpeedChange={setPlaybackSpeed} />}
+        >
+          <PlaybackSpeedControl
+            speed={playbackSpeed}
+            lastDefinedSpeed={lastDefinedSpeed}
+            min={speedMin}
+            max={speedMax}
+            onSpeedChange={setPlaybackSpeed}
+            onLastDefinedSpeedChange={setLastDefinedSpeed}
+            hideIcon
+          />
+        </HoverReveal>
       </div>
 
       {/* Right-aligned controls: spectrogram settings. The buzzdetect panel
