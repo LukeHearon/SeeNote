@@ -139,6 +139,21 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
+/**
+ * Where extracting `archivePath` into `destDir` would land — `{destDir}/{name}`,
+ * where `name` is the archive's single top-level wrapping folder if it has
+ * one, else the archive's filename stem. Used to show a "Will extract to: ..."
+ * preview before the user commits; `extractArchive` resolves the same path.
+ */
+export const peekArchiveExtractPath = (archivePath: string, destDir: string): Promise<string> =>
+  invoke('peek_archive_extract_path', { archivePath, destDir });
+
+/** Extract a .zip, .tar, or .tar.gz/.tgz archive into a new folder inside
+ * `destDir` (see `peekArchiveExtractPath`). Rejects if that folder already
+ * exists. Resolves to the final extracted directory path. */
+export const extractArchive = (archivePath: string, destDir: string): Promise<string> =>
+  invoke('extract_archive', { archivePath, destDir });
+
 /** Recursively list all non-audio/video files under path. */
 export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_non_media_files_recursive', { path });

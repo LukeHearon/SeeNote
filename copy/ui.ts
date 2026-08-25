@@ -208,6 +208,23 @@ export const directoryField = {
   get portabilityWarning() { return getOverride('ui.directoryField.portabilityWarning') ?? "This path is outside the project directory; SeeNote can read the files, but the project will not be portable to other machines."; },
 };
 
+export const openProjectModal = {
+  get title() { return getOverride('ui.openProjectModal.title') ?? "Open Project"; },
+  get tabFolder() { return getOverride('ui.openProjectModal.tabFolder') ?? "From Folder"; },
+  get tabArchive() { return getOverride('ui.openProjectModal.tabArchive') ?? "From Archive"; },
+  get folderPrompt() { return getOverride('ui.openProjectModal.folderPrompt') ?? "Choose the folder containing your project."; },
+  get chooseFolderButton() { return getOverride('ui.openProjectModal.chooseFolderButton') ?? "Choose Folder…"; },
+  get archiveLabel() { return getOverride('ui.openProjectModal.archiveLabel') ?? "Archive"; },
+  get archivePlaceholder() { return getOverride('ui.openProjectModal.archivePlaceholder') ?? "Choose a .zip, .tar, or .tar.gz file"; },
+  get destinationLabel() { return getOverride('ui.openProjectModal.destinationLabel') ?? "Extract To"; },
+  get destinationPlaceholder() { return getOverride('ui.openProjectModal.destinationPlaceholder') ?? "Choose a destination folder"; },
+  willExtractTo: (path: string) => `Will extract to: ${path}`,
+  destinationExists: (path: string) => `"${path}" already exists. Choose a different destination.`,
+  get cancelButton() { return getOverride('ui.openProjectModal.cancelButton') ?? "Cancel"; },
+  get extractButton() { return getOverride('ui.openProjectModal.extractButton') ?? "Extract & Open"; },
+  get extractingButton() { return getOverride('ui.openProjectModal.extractingButton') ?? "Extracting…"; },
+};
+
 export const repairProjectModal = {
   get title() { return getOverride('ui.repairProjectModal.title') ?? "Media directory not found"; },
   message: (projectName: string) => `The media directory for ${projectName} no longer exists. Please choose a new path.`,

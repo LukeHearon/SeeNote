@@ -12,6 +12,7 @@ import { useAppUpdate } from '../hooks/useAppUpdate';
 import { APP_VERSION } from '../utils/appVersion';
 import { versionBumpType } from '../utils/semver';
 import CreateProjectModal from './CreateProjectModal';
+import OpenProjectModal from './OpenProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
 
@@ -77,6 +78,7 @@ export default function LaunchScreen({
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
   const [showCreate, setShowCreate] = useState(false);
+  const [showOpenProject, setShowOpenProject] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [showAppSettings, setShowAppSettings] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -154,6 +156,7 @@ export default function LaunchScreen({
   };
 
   const handleOpenExisting = async () => {
+    setShowOpenProject(false);
     setOpenError(null);
     const dir = await openDirectoryDialog();
     if (!dir) return;
@@ -529,7 +532,7 @@ export default function LaunchScreen({
               {launchScreen.openFileButton}
             </button>
             <button
-              onClick={handleOpenExisting}
+              onClick={() => setShowOpenProject(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
             >
               <FolderOpen size={15} />
@@ -651,6 +654,15 @@ export default function LaunchScreen({
             setShowCreate(false);
             onOpenProject(project);
           }}
+        />
+      )}
+
+      {showOpenProject && (
+        <OpenProjectModal
+          onClose={() => setShowOpenProject(false)}
+          onOpenFolder={() => { handleOpenExisting().catch(() => {}); }}
+          addExistingProject={addExistingProject}
+          onOpenProject={onOpenProject}
         />
       )}
 

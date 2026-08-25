@@ -53,6 +53,10 @@ tiny_http = "0.12"
 http-range = "0.1"
 percent-encoding = "2"
 mime_guess = "2"
+# Archive extraction for "Open Project > From Archive" (commands/archive.rs).
+zip = "2"
+tar = "0.4"
+flate2 = "1"
 
 # Build dependencies optimized even in dev builds.
 #
