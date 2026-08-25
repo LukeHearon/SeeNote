@@ -4,7 +4,7 @@ import { Selection, BandPassFilter, VideoMode } from '../types';
 import { SpectrogramHandle } from './Spectrogram';
 import { clamp, SPEED_MIN, SPEED_MAX, TimeDisplayUnit } from '../utils/helpers';
 import { isFilterAvailable } from '../utils/videoPlaybackMode';
-import { useElementWidth } from '../hooks/useElementWidth';
+import { useOverflowCollapseLevel } from '../hooks/useOverflowCollapseLevel';
 import VolumeControl from './VolumeControl';
 import { TransportButtons } from './controls/TransportButtons';
 import { TimeReadout } from './controls/TimeReadout';
@@ -137,12 +137,13 @@ function Toolbar({
 
   // Priority-ordered collapse as the toolbar narrows: least-used controls
   // shrink to icons (or hide) first, transport/time/labels stay full-size.
-  const [toolbarRef, toolbarWidth] = useElementWidth<HTMLDivElement>();
-  const known = toolbarWidth > 0;
-  const compactSpeed = known && toolbarWidth < 980;
-  const hideFilterSlider = known && toolbarWidth < 860;
-  const compactVolume = known && toolbarWidth < 720;
-  const hideSelectionFields = known && toolbarWidth < 560;
+  // The level is derived from actual overflow (content width vs. available
+  // width), not fixed breakpoints — see useOverflowCollapseLevel.
+  const [toolbarRef, collapseLevel] = useOverflowCollapseLevel<HTMLDivElement>(4);
+  const compactSpeed = collapseLevel >= 1;
+  const hideFilterSlider = collapseLevel >= 2;
+  const compactVolume = collapseLevel >= 3;
+  const hideSelectionFields = collapseLevel >= 4;
 
   const { min: speedMin, max: speedMax } = speedRangeFor(isAudioTrack ?? false, videoMode ?? 'fast');
   const filterUnavailable = !isFilterAvailable(isAudioTrack ?? false, videoMode ?? 'fast');
