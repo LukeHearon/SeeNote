@@ -32,6 +32,7 @@ interface TreeNode {
   isDir: boolean;
   children: TreeNode[];
   fileCount: number; // precomputed — no recursive counting at render time
+  annotatedCount: number; // precomputed, alongside fileCount
   nonMediaFiles?: string[]; // non-audio/video files directly in this dir
 }
 
@@ -87,16 +88,30 @@ import { stripExt, basename } from '../utils/helpers';
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
 const finderLabel = isWindows ? 'File Explorer' : 'Finder';
 
-function computeFileCount(node: TreeNode): number {
-  if (!node.isDir) return 1;
+function computeFileCount(node: TreeNode, annotatedTracks: Set<string>): [number, number] {
+  if (!node.isDir) {
+    node.annotatedCount = annotatedTracks.has(node.path) ? 1 : 0;
+    return [1, node.annotatedCount];
+  }
   let count = 0;
-  for (const c of node.children) count += computeFileCount(c);
+  let annotated = 0;
+  for (const c of node.children) {
+    const [cCount, cAnnotated] = computeFileCount(c, annotatedTracks);
+    count += cCount;
+    annotated += cAnnotated;
+  }
   node.fileCount = count;
-  return count;
+  node.annotatedCount = annotated;
+  return [count, annotated];
 }
 
-function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = []): TreeNode[] {
-  const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0 };
+function buildTree(
+  rootDir: string,
+  files: string[],
+  nonMediaFiles: string[] = [],
+  annotatedTracks: Set<string> = new Set(),
+): TreeNode[] {
+  const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0, annotatedCount: 0 };
 
   for (const file of files) {
     const rel = file.substring(rootDir.length + 1);
@@ -108,7 +123,7 @@ function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = [
       const isLast = i === parts.length - 1;
 
       if (isLast) {
-        node.children.push({ name: part, path: file, isDir: false, children: [], fileCount: 1 });
+        node.children.push({ name: part, path: file, isDir: false, children: [], fileCount: 1, annotatedCount: 0 });
       } else {
         // Use a Map stored on the node for O(1) child lookups during tree building
         if (!(node as any)._dirMap) (node as any)._dirMap = new Map<string, TreeNode>();
@@ -116,7 +131,7 @@ function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = [
         let child = dirMap.get(part);
         if (!child) {
           const dirPath = rootDir + '/' + parts.slice(0, i + 1).join('/');
-          child = { name: part, path: dirPath, isDir: true, children: [], fileCount: 0 };
+          child = { name: part, path: dirPath, isDir: true, children: [], fileCount: 0, annotatedCount: 0 };
           dirMap.set(part, child);
           node.children.push(child);
         }
@@ -125,8 +140,8 @@ function buildTree(rootDir: string, files: string[], nonMediaFiles: string[] = [
     }
   }
 
-  // Precompute file counts bottom-up
-  for (const child of root.children) computeFileCount(child);
+  // Precompute file + annotated counts bottom-up
+  for (const child of root.children) computeFileCount(child, annotatedTracks);
 
   // Attach non-media files to their containing directory nodes
   if (nonMediaFiles.length > 0) {
@@ -254,7 +269,9 @@ const TreeItem: React.FC<TreeItemProps> = ({
             }
             <FolderOpen size={13} className={`flex-none ${isClosedAncestor ? 'text-[#e65161]/70' : 'text-slate-500 group-hover:text-slate-300'}`} />
             <span className="text-xs truncate">{node.name}</span>
-            <span className={`text-[10px] ml-auto flex-none pr-1 ${isClosedAncestor ? 'text-[#e65161]/50' : 'text-slate-600'}`}>{node.fileCount}</span>
+            <span className={`text-[10px] ml-auto flex-none pr-1 ${isClosedAncestor ? 'text-[#e65161]/50' : 'text-slate-600'}`}>
+              {node.annotatedCount}/{node.fileCount}
+            </span>
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onEnterFolder(node.path); }}
@@ -480,8 +497,8 @@ function FileTree({
   const tree = useMemo(() => {
     if (!effectiveRoot) return [];
     if (effectiveFiles.length === 0 && effectiveNonMediaFiles.length === 0) return [];
-    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles);
-  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles]);
+    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks);
+  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks]);
 
   // Preserve scroll position across tree rebuilds (refresh, file-list changes,
   // opening a folder's contents) as long as we're still viewing the same folder.
