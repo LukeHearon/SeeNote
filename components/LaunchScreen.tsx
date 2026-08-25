@@ -36,6 +36,7 @@ interface Props {
   fileEntries: RecentFileEntry[];
   isLoadingFiles: boolean;
   removeRecentFile: (id: string) => Promise<void>;
+  toggleFileStarred: (id: string) => Promise<void>;
 }
 
 type UnifiedEntry =
@@ -72,6 +73,7 @@ export default function LaunchScreen({
   fileEntries,
   isLoadingFiles,
   removeRecentFile,
+  toggleFileStarred,
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
   const [showCreate, setShowCreate] = useState(false);
@@ -232,6 +234,11 @@ export default function LaunchScreen({
   const handleRemoveFile = async (e: React.MouseEvent, file: RecentFileEntry) => {
     e.stopPropagation();
     await removeRecentFile(file.id);
+  };
+
+  const handleFileStar = (e: React.MouseEvent, file: RecentFileEntry) => {
+    e.stopPropagation();
+    toggleFileStarred(file.id).catch(() => {});
   };
 
   // Re-link button on a non-ok row. Same flow as launchRelink — the button is
@@ -404,13 +411,71 @@ export default function LaunchScreen({
     );
   };
 
-  const starredEntries = entries
-    .filter(entry => entry.registry.starred)
-    .sort((a, b) => b.registry.lastOpened.localeCompare(a.registry.lastOpened));
+  const renderFileRow = (file: RecentFileEntry) => {
+    const fileName = basename(file.path);
+    const fileDir = dirname(file.path);
+    const starred = !!file.starred;
+    return (
+      <li
+        key={file.id}
+        onClick={() => onOpenFile(file.path)}
+        className="group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-bold truncate text-gray-200">{fileName}</p>
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
+                {launchScreen.fileBadge}
+              </span>
+            </div>
+            <p className="text-gray-500 text-xs mt-1 truncate">{fileDir}</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {starred && (
+              <button
+                onClick={e => handleFileStar(e, file)}
+                className="text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors"
+                data-tooltip={tooltips.unstarProject}
+              >
+                <Star size={15} fill="currentColor" />
+              </button>
+            )}
+            <div className="hidden group-hover:flex items-center gap-2">
+              {!starred && (
+                <button
+                  onClick={e => handleFileStar(e, file)}
+                  className="text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors"
+                  data-tooltip={tooltips.starProject}
+                >
+                  <Star size={15} />
+                </button>
+              )}
+              <button
+                onClick={e => handleRemoveFile(e, file)}
+                className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
+                data-tooltip={tooltips.unlinkFile}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+        </div>
+        <p className="text-gray-600 text-xs mt-2">
+          {launchScreen.lastOpened(formatDate(file.lastOpened))}
+        </p>
+      </li>
+    );
+  };
+
+  const starredEntries: UnifiedEntry[] = [
+    ...entries.filter(entry => entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
+    ...fileEntries.filter(file => file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
+  ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
 
   const unified: UnifiedEntry[] = [
     ...entries.filter(entry => !entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
-    ...fileEntries.map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
+    ...fileEntries.filter(file => !file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
   ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
 
   const loading = isLoading || isLoadingFiles;
@@ -525,50 +590,15 @@ export default function LaunchScreen({
           </div>
         ) : (
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">
-            {starredEntries.map(entry => renderProjectRow(entry))}
+            {starredEntries.map(item =>
+              item.kind === 'file' ? renderFileRow(item.entry) : renderProjectRow(item.entry)
+            )}
             {starredEntries.length > 0 && unified.length > 0 && (
               <li key="starred-divider" aria-hidden className="border-t border-gray-800 my-1" />
             )}
-            {unified.map(item => {
-              if (item.kind === 'file') {
-                const file = item.entry;
-                const fileName = basename(file.path);
-                const fileDir = dirname(file.path);
-                return (
-                  <li
-                    key={file.id}
-                    onClick={() => onOpenFile(file.path)}
-                    className="group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-bold truncate text-gray-200">{fileName}</p>
-                          <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
-                            {launchScreen.fileBadge}
-                          </span>
-                        </div>
-                        <p className="text-gray-500 text-xs mt-1 truncate">{fileDir}</p>
-                      </div>
-                      <div className="hidden group-hover:flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={e => handleRemoveFile(e, file)}
-                          className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                          data-tooltip={tooltips.unlinkFile}
-                        >
-                          <X size={15} />
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-gray-600 text-xs mt-2">
-                      {launchScreen.lastOpened(formatDate(file.lastOpened))}
-                    </p>
-                  </li>
-                );
-              }
-
-              return renderProjectRow(item.entry);
-            })}
+            {unified.map(item =>
+              item.kind === 'file' ? renderFileRow(item.entry) : renderProjectRow(item.entry)
+            )}
           </ul>
         )}
 

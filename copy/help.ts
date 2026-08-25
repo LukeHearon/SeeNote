@@ -90,7 +90,7 @@ export const help = {
     get li_data() { return getOverride('help.launch.li_data') ?? "**App Data** — reveals SeeNote's own data folder, where the list of known projects and recent files is kept."; },
     get h_entries() { return getOverride('help.launch.h_entries') ?? "Working with entries"; },
     get p_entries() { return getOverride('help.launch.p_entries') ?? "Right-click an entry to reveal it in Finder / File Explorer or remove it from the list — removing only forgets the entry, it never deletes anything on disk. The gear on a project entry opens its settings without opening the project."; },
-    get p_star() { return getOverride('help.launch.p_star') ?? "Hover a project entry to reveal a star. Starred projects are pinned above a divider at the top of the list, sorted by recency among themselves."; },
+    get p_star() { return getOverride('help.launch.p_star') ?? "Hover an entry to reveal a star. Starred projects and files are pinned above a divider at the top of the list, sorted by recency among themselves."; },
     get p_missing() { return getOverride('help.launch.p_missing') ?? "An entry whose folder can't be found is greyed out and won't open. Its **Locate** button re-links it — see [When files move](@repair)."; },
   },
 

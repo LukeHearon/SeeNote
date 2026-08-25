@@ -67,5 +67,19 @@ export function useRecentFiles() {
     await persist(next);
   }, [persist, setBoth]);
 
-  return { fileEntries: entries, isLoadingFiles: isLoading, touchRecentFile, removeRecentFile };
+  const toggleFileStarred = useCallback(async (id: string): Promise<void> => {
+    const next = entriesRef.current.map(e =>
+      e.id === id ? { ...e, starred: !e.starred } : e
+    );
+    setBoth(next);
+    await persist(next);
+  }, [persist, setBoth]);
+
+  return {
+    fileEntries: entries,
+    isLoadingFiles: isLoading,
+    touchRecentFile,
+    removeRecentFile,
+    toggleFileStarred,
+  };
 }

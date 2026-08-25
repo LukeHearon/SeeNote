@@ -54,14 +54,15 @@ interface RecentFileRecord {
   id: string;
   path: string;
   last_opened: string;
+  starred?: boolean | null;
 }
 
 function toRecentFile(r: RecentFileRecord): RecentFileEntry {
-  return { id: r.id, path: r.path, lastOpened: r.last_opened };
+  return { id: r.id, path: r.path, lastOpened: r.last_opened, starred: r.starred ?? undefined };
 }
 
 function toRecentFileRecord(e: RecentFileEntry): RecentFileRecord {
-  return { id: e.id, path: e.path, last_opened: e.lastOpened };
+  return { id: e.id, path: e.path, last_opened: e.lastOpened, starred: e.starred ?? null };
 }
 
 export const loadRecentFiles = async (filesFile: string): Promise<RecentFileEntry[]> => {

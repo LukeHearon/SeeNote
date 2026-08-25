@@ -33,6 +33,9 @@ pub struct RecentFileRecord {
     pub id: String,
     pub path: String,
     pub last_opened: String,
+    /// Whether the user has starred this file on the launch screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starred: Option<bool>,
 }
 
 #[derive(Deserialize)]

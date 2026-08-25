@@ -29,7 +29,7 @@ export default function App() {
     createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,
     removeProject, toggleStarred, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
-  const { fileEntries, isLoadingFiles, touchRecentFile, removeRecentFile } = useRecentFiles();
+  const { fileEntries, isLoadingFiles, touchRecentFile, removeRecentFile, toggleFileStarred } = useRecentFiles();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
@@ -124,6 +124,7 @@ export default function App() {
         fileEntries={fileEntries}
         isLoadingFiles={isLoadingFiles}
         removeRecentFile={removeRecentFile}
+        toggleFileStarred={toggleFileStarred}
       />
       {repairProject && (
         <RepairProjectModal

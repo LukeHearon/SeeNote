@@ -477,4 +477,6 @@ export interface RecentFileEntry {
   id: string;
   path: string; // absolute, this-machine path
   lastOpened: string; // ISO timestamp
+  /** Whether the user has starred this file on the launch screen. */
+  starred?: boolean;
 }
