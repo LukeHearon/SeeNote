@@ -1,14 +1,13 @@
 import { Annotation, LoadedAnnotations } from '../types';
-import { writeTextFile } from './tauriCommands';
+import { writeTextFile, checkFileExists } from './tauriCommands';
 import { generateAudacityContent } from './helpers';
 
 /**
  * The single write decision for an annotation file. Both the debounced autosave
  * and the pre-sync flush go through here so the two paths cannot disagree.
  *
- * A track with no annotations is written as an EMPTY FILE — it is never deleted.
- * The three on-disk states each mean one thing, and the app only ever produces
- * the first two:
+ * Clearing a track's annotations writes an EMPTY FILE — the file is never
+ * deleted. The three on-disk states each mean one thing:
  *   - has records  -> the track's annotations
  *   - exists, empty -> the user deliberately cleared the track
  *   - absent        -> unknown; the sync layer treats it as no information
@@ -19,6 +18,12 @@ import { generateAudacityContent } from './helpers';
  * whole team. Never removing files means an accident can no longer be spelled
  * as an intent. (Committing the empty file is still gated on confirmation —
  * see stage_and_commit in git_sync/repo.rs.)
+ *
+ * The flip side of that: an empty list only *clears* when there is something to
+ * clear. If no file exists, an empty list is the never-annotated state and this
+ * writes nothing — creating the file would spell "the user cleared this track"
+ * on disk for a track they only opened, and would commit a file per visited
+ * track to everyone else's checkout.
  */
 export async function persistAnnotations(
   annotPath: string,
@@ -26,7 +31,7 @@ export async function persistAnnotations(
   decimals: number,
 ): Promise<'written' | 'cleared'> {
   if (annotations.length === 0) {
-    await writeTextFile(annotPath, '');
+    if (await checkFileExists(annotPath)) await writeTextFile(annotPath, '');
     return 'cleared';
   }
   await writeTextFile(annotPath, generateAudacityContent(annotations, decimals));

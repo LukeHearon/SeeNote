@@ -93,6 +93,10 @@ export function useAnnotationLoad({
     // Debounce saves by 300ms
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     const runSave = async () => {
+      // The timer has fired: nothing is pending any more. flushPendingAutosave
+      // reads this handle to decide whether a sync must flush first, and a
+      // stale truthy handle made it flush the just-loaded state back to disk.
+      autoSaveTimeoutRef.current = null;
       if (skipAutoSaveRef.current) return;
       // Guard: bail if the track changed while we were waiting.
       if (savedTrackPath !== trackPathRef.current) return;

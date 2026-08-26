@@ -4,11 +4,12 @@ import { Annotation } from '../types';
 vi.mock('../utils/tauriCommands', () => ({
   writeTextFile: vi.fn(() => Promise.resolve()),
   removeFile: vi.fn(() => Promise.resolve()),
+  checkFileExists: vi.fn(() => Promise.resolve(true)),
   saveFileDialog: vi.fn(),
   listDirectory: vi.fn(),
 }));
 
-import { writeTextFile, removeFile } from '../utils/tauriCommands';
+import { writeTextFile, removeFile, checkFileExists } from '../utils/tauriCommands';
 import { persistAnnotations } from '../utils/annotationPersist';
 
 const ann = (start: number, end: number, text = 'label'): Annotation => ({
@@ -23,6 +24,8 @@ describe('persistAnnotations', () => {
   beforeEach(() => {
     vi.mocked(writeTextFile).mockClear();
     vi.mocked(removeFile).mockClear();
+    vi.mocked(checkFileExists).mockClear();
+    vi.mocked(checkFileExists).mockResolvedValue(true);
   });
 
   it('writes the serialized content for a non-empty list', async () => {
@@ -32,14 +35,25 @@ describe('persistAnnotations', () => {
     expect(removeFile).not.toHaveBeenCalled();
   });
 
-  it('writes an EMPTY FILE for an empty list — never deletes', async () => {
+  it('empties an EXISTING file for an empty list — never deletes', async () => {
     // The three on-disk states each mean one thing: records, deliberately
-    // cleared (empty), unknown (absent). The app only ever produces the first
-    // two. Deleting the file would spell an accident exactly like an intent,
-    // which is how a bug wiped annotated recordings for the whole team.
+    // cleared (empty), unknown (absent). Deleting the file would spell an
+    // accident exactly like an intent, which is how a bug wiped annotated
+    // recordings for the whole team.
     const result = await persistAnnotations('/x/a.txt', [], 4);
     expect(result).toBe('cleared');
     expect(writeTextFile).toHaveBeenCalledWith('/x/a.txt', '');
+    expect(removeFile).not.toHaveBeenCalled();
+  });
+
+  it('creates nothing for an empty list when no file exists', async () => {
+    // Never-annotated is the "absent" state, not the "cleared" state. Creating
+    // the file here would mark a merely-opened track as deliberately cleared
+    // and commit a file per visited track to every collaborator.
+    vi.mocked(checkFileExists).mockResolvedValue(false);
+    const result = await persistAnnotations('/x/a.txt', [], 4);
+    expect(result).toBe('cleared');
+    expect(writeTextFile).not.toHaveBeenCalled();
     expect(removeFile).not.toHaveBeenCalled();
   });
 });
@@ -106,6 +120,7 @@ describe('resolveFlushTarget', () => {
 
     vi.mocked(writeTextFile).mockClear();
     vi.mocked(removeFile).mockClear();
+    vi.mocked(checkFileExists).mockResolvedValue(true); // the track has a file to clear
     await persistAnnotations(target!.annotPath, target!.annotations, 4);
     expect(writeTextFile).toHaveBeenCalledWith('/ann/a.wav.txt', '');
     expect(removeFile).not.toHaveBeenCalled();

@@ -307,6 +307,12 @@ pub async fn check_dir_exists(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn check_file_exists(path: String) -> Result<bool, String> {
+    let p = std::path::Path::new(&path);
+    Ok(p.is_file())
+}
+
+#[tauri::command]
 pub async fn remove_file(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if p.exists() {

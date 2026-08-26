@@ -302,6 +302,29 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 
 // ── Annotation file existence scanning ────────────────────────────────────────
 
+/// Which tracks actually carry annotations — the list the UI paints blue and
+/// counts in the file tree. A file that exists but holds no records means the
+/// track was deliberately cleared (see persistAnnotations), which is *not*
+/// annotated, so an empty file must not count. Zero-length is the common case;
+/// a tiny file is read to catch whitespace-only leftovers, and anything larger
+/// is taken as having records without paying for a read.
+fn has_records(path: &Path) -> bool {
+    let len = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return false,
+    };
+    if len == 0 {
+        return false;
+    }
+    if len <= 64 {
+        return match std::fs::read_to_string(path) {
+            Ok(s) => !s.trim().is_empty(),
+            Err(_) => false,
+        };
+    }
+    true
+}
+
 #[tauri::command]
 pub async fn list_annotation_files(
     annotation_dir: String,
@@ -327,6 +350,9 @@ fn scan_annotation_files(dir: &Path, root: &Path, ext: &str, results: &mut Vec<S
         if path.extension().and_then(|e| e.to_str()) != Some(ext) {
             return;
         }
+        if !has_records(path) {
+            return;
+        }
         if let Ok(rel) = path.strip_prefix(root) {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&dot_ext) {
@@ -337,4 +363,32 @@ fn scan_annotation_files(dir: &Path, root: &Path, ext: &str, results: &mut Vec<S
             results.push(rel_no_ext);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A track counts as annotated only when its file holds records. An existing
+    // but empty file means "deliberately cleared" (see persistAnnotations), and
+    // painting that track blue — or counting it in the file tree — reported
+    // annotations that don't exist.
+    #[test]
+    fn scan_annotation_files_skips_files_without_records() {
+        let root = std::env::temp_dir().join(format!("seenote_scan_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("has.txt"), "0.0000\t1.0000\tbee\n").unwrap();
+        std::fs::write(root.join("empty.txt"), "").unwrap();
+        std::fs::write(root.join("blank.txt"), "\n  \n").unwrap();
+        std::fs::write(root.join("sub/nested.txt"), "1.0\t2.0\twasp\n").unwrap();
+        std::fs::write(root.join("other.csv"), "1.0,2.0,wasp\n").unwrap();
+
+        let mut results = vec![];
+        scan_annotation_files(&root, &root, "txt", &mut results);
+        results.sort();
+        assert_eq!(results, vec!["has".to_string(), "sub/nested".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

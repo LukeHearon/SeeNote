@@ -139,6 +139,9 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
+export const checkFileExists = (path: string): Promise<boolean> =>
+  invoke('check_file_exists', { path });
+
 /** Guess a project folder name from the archive's contents — its single
  * top-level wrapping folder if it has one, else the archive's filename stem.
  * A starting point for the user-editable "Project Folder Name" field, not a
