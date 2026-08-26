@@ -70,6 +70,73 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
+// Inline "+ New tool" replacement: a text field that either assigns an
+// existing tool to `target` (typed prefix -> click a dropdown match, or the
+// full name -> Enter) or opens the create dialog prefilled with the typed
+// name when it doesn't match anything.
+function NewToolEntry({ target, annotationTools, onAssignExisting, onCreateNew, className }: {
+  target: DragTarget;
+  annotationTools: AnnotationTool[];
+  onAssignExisting: (toolIndex: number) => void;
+  onCreateNew: (text: string) => void;
+  className?: string;
+}) {
+  const [value, setValue] = useState('');
+  const [focused, setFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const trimmed = value.trim();
+  const matches = trimmed === ''
+    ? []
+    : annotationTools
+      .map((tool, toolIndex) => ({ tool, toolIndex }))
+      .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.text.toLowerCase().startsWith(trimmed.toLowerCase()));
+
+  const commit = () => {
+    if (trimmed === '') return;
+    const exactIndex = annotationTools.findIndex((t, i) => i !== 0 && t.text.toLowerCase() === trimmed.toLowerCase());
+    if (exactIndex !== -1) onAssignExisting(exactIndex);
+    else onCreateNew(trimmed);
+    setValue('');
+    inputRef.current?.blur();
+  };
+
+  const selectMatch = (toolIndex: number) => {
+    onAssignExisting(toolIndex);
+    setValue('');
+    inputRef.current?.blur();
+  };
+
+  return (
+    <div className={`relative flex items-center gap-1.5 min-w-0 ${className ?? ''}`}>
+      <Plus size={10} className="text-slate-500 flex-none" />
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+        placeholder={copy.toolNamePlaceholder}
+        className="flex-1 min-w-0 bg-transparent text-xs text-slate-300 placeholder:text-slate-500 outline-none"
+      />
+      {focused && matches.length > 0 && (
+        <div className="absolute left-0 top-full mt-1 w-full max-h-40 overflow-y-auto bg-slate-800 border border-slate-600 rounded shadow-lg z-10">
+          {matches.map(({ tool, toolIndex }) => (
+            <button
+              key={toolIndex}
+              onMouseDown={e => { e.preventDefault(); selectMatch(toolIndex); }}
+              className="w-full text-left px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 truncate"
+            >
+              {tool.text}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
   toolIndex: number;
@@ -148,11 +215,12 @@ export default function AnnotationToolsSettingsModal({
   // the delete-confirmation overlay. null = no dialog open.
   const [deletingToolIndex, setDeletingToolIndex] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
-  // Which bin is currently showing the inline create input: the Unassigned bin
-  // or a specific empty hotkey slot (its digit). null = none.
+  // Which bin has an open create dialog: the Unassigned bin or a specific
+  // empty hotkey slot (its digit). null = none.
   const [addingTo, setAddingTo] = useState<'unassigned' | Slot | null>(null);
-  // Which empty hotkey slot the pointer is over (drives the in-place affordance).
-  const [hoveredSlot, setHoveredSlot] = useState<Slot | null>(null);
+  // Name typed into a NewToolEntry that didn't match an existing tool —
+  // carried into the create dialog as its prefilled text.
+  const [prefillText, setPrefillText] = useState('');
 
   // Undo/redo stacks of {tools, annotations} snapshots, taken immediately
   // before each mutating action. Refs (not state) so the keydown listener reads
@@ -228,13 +296,29 @@ export default function AnnotationToolsSettingsModal({
   };
 
   // Commit a new tool from the create modal. Its hotkey comes from where the
-  // "+ New tool" button was clicked: a specific slot digit, or null for the
+  // "+ New tool" field was typed into: a specific slot digit, or null for the
   // Unassigned bin (`addingTo === 'unassigned'`).
   const commitNewTool = (text: string, color: string, description: string) => {
     if (addingTo === null) return;
     const key = addingTo === 'unassigned' ? null : addingTo;
     withSnapshot(() => onCreateTool(text, color, key, description));
     setAddingTo(null);
+    setPrefillText('');
+  };
+
+  // A NewToolEntry's typed text matched an existing tool exactly (or the user
+  // clicked a dropdown match): reassign that tool to the target slot, reusing
+  // the same swap-with-occupant logic as drag-and-drop.
+  const assignExistingTool = (toolIndex: number, target: DragTarget) => {
+    const newTools = applySwap(annotationTools, toolIndex, target);
+    withSnapshot(() => onReorderTools(newTools));
+  };
+
+  // A NewToolEntry's typed text didn't match any existing tool: open the
+  // create dialog, prefilled with what was typed, targeted at that slot.
+  const openCreateDialog = (target: 'unassigned' | Slot, text: string) => {
+    setPrefillText(text);
+    setAddingTo(target);
   };
 
   const isSlotHighlighted = (k: Slot) =>
@@ -333,24 +417,20 @@ export default function AnnotationToolsSettingsModal({
                       />
                     </div>
                   ) : (
-                    // Empty slot: dashed box, becomes a "+ New tool" affordance on
-                    // hover. Creating from here opens the tool modal pre-targeted
-                    // at this digit (the new tool takes it).
+                    // Empty slot: dashed box holding a NewToolEntry field. Typing
+                    // an existing tool's name assigns it here; typing a new name
+                    // opens the create dialog pre-targeted at this digit.
                     <div
-                      className="flex-1 h-8 rounded border-2 border-dashed"
+                      className="flex-1 h-8 rounded border-2 border-dashed px-2 flex items-center min-w-0"
                       style={{ borderColor: isSlotHighlighted(k) ? '#3b82f6' : '#334155' }}
-                      onMouseEnter={() => setHoveredSlot(k)}
-                      onMouseLeave={() => setHoveredSlot(s => (s === k ? null : s))}
                     >
-                      {hoveredSlot === k && !drag && (
-                        <button
-                          onClick={() => setAddingTo(k)}
-                          className="w-full h-full flex items-center justify-center rounded text-slate-500 hover:text-slate-300 transition-colors text-xs gap-1"
-                        >
-                          <Plus size={10} />
-                          {copy.newTool}
-                        </button>
-                      )}
+                      <NewToolEntry
+                        target={{ type: 'slot', key: k }}
+                        annotationTools={annotationTools}
+                        onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'slot', key: k })}
+                        onCreateNew={text => openCreateDialog(k, text)}
+                        className="w-full"
+                      />
                     </div>
                   )}
                 </div>
@@ -391,13 +471,14 @@ export default function AnnotationToolsSettingsModal({
                   </div>
                 ))}
             </div>
-            <button
-              onClick={() => setAddingTo('unassigned')}
-              className="mt-2 flex-none w-full flex items-center justify-center py-1 rounded border border-dashed border-slate-600 text-slate-500 hover:text-slate-300 hover:border-slate-400 transition-all text-xs gap-1"
-            >
-              <Plus size={10} />
-              {copy.newTool}
-            </button>
+            <div className="mt-2 flex-none w-full rounded border border-dashed border-slate-600 hover:border-slate-400 transition-colors px-2 py-1">
+              <NewToolEntry
+                target={{ type: 'unassigned' }}
+                annotationTools={annotationTools}
+                onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'unassigned' })}
+                onCreateNew={text => openCreateDialog('unassigned', text)}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -426,14 +507,15 @@ export default function AnnotationToolsSettingsModal({
 
       {addingTo !== null && (
         <AnnotationToolEditModal
-          // Blank tool seeded with the next unused palette color; `key` records
-          // the target slot ('unassigned' → null) so commitNewTool can assign it.
-          tool={{ id: '', key: addingTo === 'unassigned' ? null : addingTo, text: '', color: pickNextToolColor(annotationTools) }}
+          // Seeded with the typed-but-unmatched name and the next unused palette
+          // color; `key` records the target slot ('unassigned' → null) so
+          // commitNewTool can assign it.
+          tool={{ id: '', key: addingTo === 'unassigned' ? null : addingTo, text: prefillText, color: pickNextToolColor(annotationTools) }}
           toolIndex={-1}
           annotations={annotations}
           annotationTools={annotationTools}
           isCreate
-          onClose={() => setAddingTo(null)}
+          onClose={() => { setAddingTo(null); setPrefillText(''); }}
           onSave={commitNewTool}
         />
       )}
