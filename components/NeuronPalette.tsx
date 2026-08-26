@@ -497,7 +497,7 @@ function NeuronPalette({
 
   return (
     <SidebarSection
-      title={<span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{copy.header}</span>}
+      title={<span className="text-[10px] text-slate-400 normal-case tracking-wider font-medium">{copy.header}</span>}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
       keepActionsWhenCollapsed

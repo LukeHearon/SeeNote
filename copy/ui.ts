@@ -251,7 +251,7 @@ export const sidebarSection = {
 };
 
 export const neuronPalette = {
-  get header() { return getOverride('ui.neuronPalette.header') ?? "Neurons"; },
+  get header() { return getOverride('ui.neuronPalette.header') ?? "buzzdetect"; },
   get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
   get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
   get noData() { return getOverride('ui.neuronPalette.noData') ?? "No buzzdetect activations for this track"; },
