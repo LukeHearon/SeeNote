@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
-import { X, Pencil } from 'lucide-react';
+import { X, Pencil, Keyboard, Copy } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
 import { resolveLabelColor } from '../../utils/annotationTools';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
+import { pickNextToolColor, nextAvailableHotkey } from '../../constants';
+import ContextMenu, { ContextMenuItem } from '../ContextMenu';
 
 interface AnnotationOverlayProps {
   layeredAnnotations: AnnotationWithLayer[];
@@ -41,6 +43,16 @@ interface AnnotationOverlayProps {
   setEditingInputId: (id: string | null) => void;
   setPencilClickedId: (id: string | null) => void;
   setResizingAnnotation: (v: { id: string; side: 'start' | 'end'; originalTime: number } | null) => void;
+  // Right-click "Bind to hotkey": binds the label's existing tool, or creates
+  // a new one, to the next free hotkey digit.
+  onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
+  onBindHotkey: (toolId: string, key: string) => void;
+}
+
+interface AnnotationContextMenuState {
+  annotationId: string;
+  x: number;
+  y: number;
 }
 
 // Per-annotation positioned divs: resize handles, the text input (edit mode) vs
@@ -76,7 +88,41 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   setEditingInputId,
   setPencilClickedId,
   setResizingAnnotation,
+  onCreateTool,
+  onBindHotkey,
 }) => {
+  const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
+
+  const contextMenuItems = (state: AnnotationContextMenuState): ContextMenuItem[] => {
+    const ann = annotations.find(a => a.id === state.annotationId);
+    if (!ann) return [];
+    const existingTool = annotationTools.find(t => t.key !== '0' && t.text.toLowerCase() === ann.text.toLowerCase());
+    const nextKey = nextAvailableHotkey(annotationTools);
+    const alreadyBound = existingTool != null && existingTool.key !== null;
+    return [
+      {
+        label: copy.contextBindHotkey,
+        icon: <Keyboard size={12} />,
+        disabled: !ann.text || alreadyBound || nextKey === null,
+        onSelect: () => {
+          if (!nextKey) return;
+          if (existingTool) {
+            onBindHotkey(existingTool.id, nextKey);
+          } else {
+            onCreateTool(ann.text, pickNextToolColor(annotationTools), nextKey);
+          }
+        },
+      },
+      {
+        label: copy.contextCopyAnnotation,
+        icon: <Copy size={12} />,
+        onSelect: () => {
+          navigator.clipboard.writeText(`${ann.text} (${ann.start}, ${ann.end})`);
+        },
+      },
+    ];
+  };
+
   return (
     <>
       {layeredAnnotations.map((annotation) => {
@@ -154,6 +200,12 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                }}
                onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                onMouseLeave={onAnnotationMouseLeave}
+               onContextMenu={(e) => {
+                   e.preventDefault();
+                   e.stopPropagation();
+                   onSelectAnnotation(annotation.id);
+                   setContextMenu({ annotationId: annotation.id, x: e.clientX, y: e.clientY });
+               }}
                onMouseDown={(e) => {
                    e.stopPropagation();
                    // Middle Click Delete
@@ -354,6 +406,15 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
             </div>
         );
       })}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems(contextMenu)}
+          onClose={() => setContextMenu(null)}
+          minWidth={160}
+        />
+      )}
     </>
   );
 };

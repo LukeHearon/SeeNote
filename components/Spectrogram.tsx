@@ -104,6 +104,10 @@ interface SpectrogramProps {
    * (e.g. a track type export doesn't apply to).
    */
   onExportSelection?: () => void;
+  // Annotation label context menu's "Bind to hotkey" action: binds the
+  // label's existing tool, or creates a new one, to the next free hotkey.
+  onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
+  onBindHotkey: (toolId: string, key: string) => void;
 }
 
 export interface SpectrogramHandle {
@@ -196,6 +200,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   timeDisplayUnit = 'seconds',
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
   onExportSelection,
+  onCreateTool,
+  onBindHotkey,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1377,6 +1383,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            setEditingInputId={setEditingInputId}
            setPencilClickedId={setPencilClickedId}
            setResizingAnnotation={setResizingAnnotation}
+           onCreateTool={onCreateTool}
+           onBindHotkey={onBindHotkey}
          />
 
          {/* Selection region handles */}

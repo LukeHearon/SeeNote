@@ -3,7 +3,7 @@ import { annotationToolsSettingsModal as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
 import { AnnotationTool, Annotation } from '../types';
-import { pickNextToolColor } from '../constants';
+import { pickNextToolColor, HOTKEY_SLOTS } from '../constants';
 import { isMac } from '../utils/platform';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
 import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
@@ -42,7 +42,7 @@ interface Props {
 // both together.
 type ToolsSnapshot = { tools: AnnotationTool[]; annotations: Annotation[] };
 
-const SLOTS = ['1','2','3','4','5','6','7','8','9'] as const;
+const SLOTS = HOTKEY_SLOTS;
 type Slot = typeof SLOTS[number];
 
 type DragTarget =

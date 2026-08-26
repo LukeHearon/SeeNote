@@ -405,6 +405,7 @@ export const GUIDE: Part[] = [
             help.editing.li3,
             help.editing.li4,
             help.editing.li5,
+            help.editing.li6,
           ] },
         ],
       },

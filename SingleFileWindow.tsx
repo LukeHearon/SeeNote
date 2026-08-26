@@ -578,6 +578,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               playheadLocked={playheadLocked}
               hideLabels={hideLabels}
               onExportSelection={handleExportSelection}
+              onCreateTool={() => {}}
+              onBindHotkey={() => {}}
             />
           </div>
 

@@ -500,6 +500,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleRenameTool,
     handleDeleteTool,
     handlePreviewToolColor,
+    handleBindHotkey,
     handleReorderTools,
     handleImportExamples,
     handleImportExamplesToTool,
@@ -2602,6 +2603,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 timeDisplayUnit={shownTimeUnit}
                 dateTimeFormat={dateTimeFormat}
                 onExportSelection={handleExportSelection}
+                onCreateTool={handleCreateTool}
+                onBindHotkey={handleBindHotkey}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown
