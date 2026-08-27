@@ -6,6 +6,7 @@ import {
   trimProjectPrefix,
   resolveProjectPath,
   isInsideProjectDir,
+  isInsideDir,
   makeProjectPath,
 } from '../utils/projectPaths';
 
@@ -160,6 +161,25 @@ describe('isInsideProjectDir', () => {
 
   it('accepts a backslash-separated descendant (windows)', () => {
     expect(isInsideProjectDir(PROJ, `${PROJ}\\audio`)).toBe(true);
+  });
+});
+
+describe('isInsideDir', () => {
+  it('returns true for a strict descendant', () => {
+    expect(isInsideDir('/a/folder', '/a/folder/sub/clip.wav')).toBe(true);
+  });
+
+  it('returns false for the dir itself', () => {
+    expect(isInsideDir('/a/folder', '/a/folder')).toBe(false);
+  });
+
+  it('returns false for a sibling sharing the prefix', () => {
+    expect(isInsideDir('/a/foo', '/a/foobar/x')).toBe(false);
+  });
+
+  it('handles a trailing slash and backslash descendants', () => {
+    expect(isInsideDir('/a/folder/', '/a/folder/x')).toBe(true);
+    expect(isInsideDir('/a/folder', '/a/folder\\x')).toBe(true);
   });
 });
 

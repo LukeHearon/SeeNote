@@ -14,6 +14,7 @@ import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from
 import { resolveLabelColor } from './utils/annotationTools';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
+import { isInsideDir } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -944,14 +945,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // cache swap would only repeat the walk.
   }, [subsetSourceRanges]);
 
-  // The ordered list used for navigation (respects shuffle mode and fileFilter)
+  // The ordered list used for navigation. Mirrors what the file tree actually
+  // shows: shuffle order, the active fileFilter, and the entered-folder subtree —
+  // so {mod}+↑/↓ can never land on a track that isn't visible in the panel.
   const displayQueue = useMemo(() => {
     const base = shuffleMode ? shuffledFiles : allTracks;
     const filter = project?.preferences.fileFilter ?? 'all';
-    if (filter === 'annotated') return base.filter(f => annotatedTracks.has(f));
-    if (filter === 'unannotated') return base.filter(f => !annotatedTracks.has(f));
-    return base;
-  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter, annotatedTracks]);
+    let list = base;
+    if (filter === 'annotated') list = list.filter(f => annotatedTracks.has(f));
+    else if (filter === 'unannotated') list = list.filter(f => !annotatedTracks.has(f));
+    const entered = project?.preferences.enteredFolderPath;
+    if (entered && !shuffleMode) list = list.filter(f => isInsideDir(entered, f));
+    return list;
+  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter,
+      project?.preferences.enteredFolderPath, annotatedTracks]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {

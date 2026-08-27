@@ -127,9 +127,9 @@ export const help = {
   },
 
   filePanel: {
-    get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order."; },
+    get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order. Stepping stays within the tracks currently shown in the panel — it respects the active filter and the folder you've drilled into."; },
     get h_header() { return getOverride('help.filePanel.h_header') ?? "Header buttons"; },
-    get li_filter() { return getOverride('help.filePanel.li_filter') ?? "**Filter:** cycles the list between all tracks, only annotated ones, and only unannotated ones — the quickest way to find what's left to do."; },
+    get li_filter() { return getOverride('help.filePanel.li_filter') ?? "**Filter:** cycles the list between all tracks, only annotated ones, and only unannotated ones — the quickest way to find what's left to do. `{mod}+↑` / `{mod}+↓` then step only through the tracks the filter leaves visible."; },
     get li_shuffle() { return getOverride('help.filePanel.li_shuffle') ?? "**Shuffle:** replaces the folder tree with a randomly-ordered flat queue of every track. `{mod}+↑` / `{mod}+↓` then walk the shuffled order, which is what you want for unbiased sampling. Press it again to return to the sorted tree."; },
     get li_expand() { return getOverride('help.filePanel.li_expand') ?? "**Expand all / collapse all:** open or close every folder at once."; },
     get h_folders() { return getOverride('help.filePanel.h_folders') ?? "Folders"; },

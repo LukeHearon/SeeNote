@@ -49,6 +49,12 @@ export function trimProjectPrefix(projectDir: string, absPath: string): string {
   return absPath;
 }
 
+/** True if `absPath` sits strictly inside directory `dir` (accepts either separator). */
+export function isInsideDir(dir: string, absPath: string): boolean {
+  const root = stripTrailingSep(dir);
+  return absPath.startsWith(root + '/') || absPath.startsWith(root + '\\');
+}
+
 /** Resolve a `ProjectPath` against the project directory to an absolute path. */
 export function resolveProjectPath(projectDir: string, p: ProjectPath): string {
   if (p.kind === 'absolute') return p.path;
@@ -62,9 +68,7 @@ export function resolveProjectPath(projectDir: string, p: ProjectPath): string {
  * already does for path comparisons.
  */
 export function isInsideProjectDir(projectDir: string, absPath: string): boolean {
-  const root = stripTrailingSep(projectDir);
-  if (absPath === root) return true;
-  return absPath.startsWith(root + '/') || absPath.startsWith(root + '\\');
+  return absPath === stripTrailingSep(projectDir) || isInsideDir(projectDir, absPath);
 }
 
 /**
