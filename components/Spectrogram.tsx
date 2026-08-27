@@ -108,6 +108,7 @@ interface SpectrogramProps {
   // label's existing tool, or creates a new one, to the next free hotkey.
   onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
   onBindHotkey: (toolId: string, key: string) => void;
+  onListenExample: (toolId: string) => void;
 }
 
 export interface SpectrogramHandle {
@@ -202,6 +203,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onExportSelection,
   onCreateTool,
   onBindHotkey,
+  onListenExample,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1385,6 +1387,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            setResizingAnnotation={setResizingAnnotation}
            onCreateTool={onCreateTool}
            onBindHotkey={onBindHotkey}
+           onListenExample={onListenExample}
          />
 
          {/* Selection region handles */}

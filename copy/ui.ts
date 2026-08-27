@@ -326,6 +326,7 @@ export const annotationOverlay = {
   get namePlaceholder() { return getOverride('ui.annotationOverlay.namePlaceholder') ?? "Name..."; },
   get contextBindHotkey() { return getOverride('ui.annotationOverlay.contextBindHotkey') ?? "Bind to hotkey"; },
   get contextCopyAnnotation() { return getOverride('ui.annotationOverlay.contextCopyAnnotation') ?? "Copy annotation"; },
+  get contextListenExample() { return getOverride('ui.annotationOverlay.contextListenExample') ?? "Listen to example"; },
 };
 
 export const spectrogramView = {

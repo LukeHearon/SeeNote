@@ -542,6 +542,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return currentCount + diskCount;
   }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath]);
 
+  // Toggle the example-clip preview for a tool by id — shared by the `E`
+  // hotkey path, the tools-panel chips (via liveBridge), and the annotation
+  // label's "Listen to example" context action.
+  const handleListenExample = useCallback((toolId: string) => {
+    const tool = annotationTools.find(t => t.id === toolId);
+    if (tool) examplePlayer.toggle(tool);
+  }, [annotationTools, examplePlayer]);
+
   // An example clip is sounding via either path (chip preview or the modal).
   // While true the main track's audio is parked so the two never overlap, and
   // the spectrogram shows a dimmed "example audio is playing" veil.
@@ -1986,10 +1994,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       openFindLabel: () => setShowFindLabel(true),
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
-      playExample: toolId => {
-        const tool = annotationTools.find(t => t.id === toolId);
-        if (tool) examplePlayer.toggle(tool);
-      },
+      playExample: handleListenExample,
       showExamples: handleShowExamples,
     },
     currentTimeStoreRef.current,
@@ -2605,6 +2610,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onExportSelection={handleExportSelection}
                 onCreateTool={handleCreateTool}
                 onBindHotkey={handleBindHotkey}
+                onListenExample={handleListenExample}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown

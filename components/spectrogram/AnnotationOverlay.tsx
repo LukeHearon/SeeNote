@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
-import { X, Pencil, Keyboard, Copy } from 'lucide-react';
+import { X, Pencil, Keyboard, Copy, Volume2 } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
 import { resolveLabelColor } from '../../utils/annotationTools';
@@ -47,6 +47,9 @@ interface AnnotationOverlayProps {
   // a new one, to the next free hotkey digit.
   onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
   onBindHotkey: (toolId: string, key: string) => void;
+  // Right-click "Listen to example": toggles the example-clip preview for the
+  // tool matching this label — same action as the `E` hotkey.
+  onListenExample: (toolId: string) => void;
 }
 
 interface AnnotationContextMenuState {
@@ -90,6 +93,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   setResizingAnnotation,
   onCreateTool,
   onBindHotkey,
+  onListenExample,
 }) => {
   const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
 
@@ -111,6 +115,14 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
           } else {
             onCreateTool(ann.text, pickNextToolColor(annotationTools), nextKey);
           }
+        },
+      },
+      {
+        label: copy.contextListenExample,
+        icon: <Volume2 size={12} />,
+        disabled: existingTool == null || (existingTool.exampleFiles?.length ?? 0) === 0,
+        onSelect: () => {
+          if (existingTool) onListenExample(existingTool.id);
         },
       },
       {

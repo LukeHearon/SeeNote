@@ -580,6 +580,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               onExportSelection={handleExportSelection}
               onCreateTool={() => {}}
               onBindHotkey={() => {}}
+              onListenExample={() => {}}
             />
           </div>
 

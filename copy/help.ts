@@ -305,7 +305,7 @@ export const help = {
     get li3() { return getOverride('help.editing.li3') ?? "**Rename:** hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically."; },
     get li4() { return getOverride('help.editing.li4') ?? "**Delete:** select an annotation and press `Delete` / `Backspace`, or middle-click it directly."; },
     get li5() { return getOverride('help.editing.li5') ?? "**Undo/Redo:** `{mod}+Z` / `{mod}+Shift+Z`."; },
-    get li6() { return getOverride('help.editing.li6') ?? "**Right-click an annotation** for **Bind to hotkey** (matches its label to an existing tool, or creates one, on the next free hotkey digit — greyed out once all nine are taken or the label already has one) and **Copy annotation** (copies `label (start, end)` to the clipboard, times always in seconds)."; },
+    get li6() { return getOverride('help.editing.li6') ?? "**Right-click an annotation** for **Bind to hotkey** (matches its label to an existing tool, or creates one, on the next free hotkey digit — greyed out once all nine are taken or the label already has one) and **Copy annotation** (copies `label (start, end)` to the clipboard, times always in seconds). **Listen to example** plays the example clip for the label's tool — the same action as the `E` hotkey, greyed out when the tool has no example clips."; },
   },
 
   tools: {
