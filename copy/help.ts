@@ -297,6 +297,7 @@ export const help = {
     get li3() { return getOverride('help.creating.li3') ?? "**Whole track:** with a tool active, press `{mod}+A` to annotate the entire track (with no tool active it selects the whole track instead)."; },
     get li4() { return getOverride('help.creating.li4') ?? "**While listening:** hold `Alt`/`Option` and drag to annotate without moving the playhead or changing the selection — playback keeps rolling and playhead lock is suspended, so you can mark sounds as you hear them. With no tool active the same Alt-drag lays down a plain selection, again without disturbing playback."; },
     get li_sweep() { return getOverride('help.creating.li_sweep') ?? "**Hands off the mouse:** with a tool readied, hold `Shift` during playback and let go where the sound ends — the annotation is dropped over what you just heard. See [Selection vs. Tool mode](@modes)."; },
+    get li_copy() { return getOverride('help.creating.li_copy') ?? "**Copy & paste:** `{mod}+C` copies the selected annotation's label and length; `{mod}+V` drops a fresh copy starting at the playhead, trimmed to the end of the track (or of the current segment under a subset) if it would overrun."; },
   },
 
   editing: {

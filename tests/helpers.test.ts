@@ -5,6 +5,7 @@ import {
   formatTimeForUnit,
   decimalsForTimes,
   makeAnnotationFromTool,
+  makeAnnotationFromLabel,
   calculateAnnotationLayers,
   generateAudacityContent,
   parseAudacityContent,
@@ -190,6 +191,23 @@ describe('makeAnnotationFromTool', () => {
     const a = makeAnnotationFromTool(unassigned, 0, 1);
     expect(a.text).toBe('x');
     expect(a.color).toBe('#000');
+  });
+});
+
+describe('makeAnnotationFromLabel', () => {
+  it('carries the given label, color and span, with a fresh id', () => {
+    const a = makeAnnotationFromLabel('Bee', '#ff8800', 1.5, 3.25);
+    expect(a.text).toBe('Bee');
+    expect(a.color).toBe('#ff8800');
+    expect(a.start).toBe(1.5);
+    expect(a.end).toBe(3.25);
+    expect(a.id.length).toBeGreaterThan(0);
+  });
+
+  it('gives distinct ids on repeated calls', () => {
+    const a = makeAnnotationFromLabel('x', '#000', 0, 1);
+    const b = makeAnnotationFromLabel('x', '#000', 0, 1);
+    expect(a.id).not.toBe(b.id);
   });
 });
 

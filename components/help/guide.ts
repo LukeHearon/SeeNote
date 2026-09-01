@@ -391,6 +391,7 @@ export const GUIDE: Part[] = [
             help.creating.li3,
             help.creating.li4,
             help.creating.li_sweep,
+            help.creating.li_copy,
           ] },
         ],
       },

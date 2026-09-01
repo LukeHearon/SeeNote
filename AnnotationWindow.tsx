@@ -177,6 +177,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleAnnotationsCommit,
   } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  // Label + span (source seconds) yanked by Mod+C, replayed by Mod+V at the
+  // playhead. Persists across track switches (AnnotationWindow stays mounted).
+  const annotationClipboardRef = useRef<{ text: string; color?: string; duration: number } | null>(null);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -1623,6 +1626,28 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setBoundAnnotationId(null);
       }
   };
+  // Mod+C — yank the selected annotation's label and span. Mod+V then recreates
+  // that annotation starting at the playhead, its end trimmed to the track (or,
+  // under a subset, to the segment the playhead sits in).
+  const copyActiveAnnotation = () => {
+      const ann = annotations.find(a => a.id === selectedAnnotationId)
+          ?? annotations.find(a => a.id === boundAnnotationId);
+      if (!ann) return;
+      annotationClipboardRef.current = { text: ann.text, color: ann.color, duration: ann.end - ann.start };
+  };
+  const pasteAnnotationAtPlayhead = () => {
+      const clip = annotationClipboardRef.current;
+      if (!clip || displayDuration <= 0) return;
+      const startD = Math.max(0, Math.min(currentTimeRef.current, displayDuration));
+      const endD = Math.min(timeline.clampToSpanOfDisplay(startD, startD + clip.duration), displayDuration);
+      if (endD <= startD) return;
+      const src = selectionToSource({ start: startD, end: endD });
+      const color = resolveLabelColor(clip.text, annotationTools, clip.color ?? '#ffffff');
+      const newAnnotation = makeAnnotationFromLabel(clip.text, color, src.start, src.end);
+      handleAnnotationsCommit([...annotations, newAnnotation]);
+      setSelectedAnnotationId(newAnnotation.id);
+  };
+
   // Export the current selection's audio to a file (spectrogram's right-click
   // menu, and Mod+Shift+E below). The selection is in display time; the file
   // itself is read at its source time (selectionToSource), matching how
@@ -1673,6 +1698,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
       { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
+      { key: 'c', mods: ['mod'], handler: copyActiveAnnotation },
+      { key: 'v', mods: ['mod'], handler: pasteAnnotationAtPlayhead },
 
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
