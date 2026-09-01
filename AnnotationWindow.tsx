@@ -1646,7 +1646,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       const color = resolveLabelColor(clip.text, annotationTools, clip.color ?? '#ffffff');
       const newAnnotation = makeAnnotationFromLabel(clip.text, color, src.start, src.end);
       handleAnnotationsCommit([...annotations, newAnnotation]);
+      // Select and bind it, with the selection region on the pasted span —
+      // the same end state as creating an annotation from a drag or a tool key.
       setSelectedAnnotationId(newAnnotation.id);
+      setBoundAnnotationId(newAnnotation.id);
+      handleSelectionChange({ start: startD, end: endD });
   };
 
   // Export the current selection's audio to a file (spectrogram's right-click
