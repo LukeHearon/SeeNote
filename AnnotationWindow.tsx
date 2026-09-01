@@ -108,9 +108,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
-  // "+ Add tool" in the Labels palette: opens the create modal, pre-targeted at
-  // the next free hotkey.
-  const [panelCreatingTool, setPanelCreatingTool] = useState(false);
+  // Add-tool entry in the Labels palette: when the typed name matches no tool,
+  // this holds it and opens the create modal, pre-targeted at the next free
+  // hotkey. null = modal closed.
+  const [panelCreatingToolText, setPanelCreatingToolText] = useState<string | null>(null);
   // The "Find Label" toolbar entry point opens the merged find-and-rename
   // dialog. Query/scope live here (not inside the
   // dialog) so the last search is still there — and its results reappear —
@@ -2412,7 +2413,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
                   onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
-                  onAddTool={() => setPanelCreatingTool(true)}
+                  onAssignToolHotkey={(toolIndex) => {
+                    const key = nextAvailableHotkey(annotationTools);
+                    if (key) handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key } : t));
+                  }}
+                  onCreateToolForHotkey={(text) => setPanelCreatingToolText(text)}
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
                   onShowExamples={handleShowExamples}
@@ -2773,17 +2778,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           }}
         />
       )}
-      {panelCreatingTool && (
+      {panelCreatingToolText !== null && (
         <AnnotationToolEditModal
-          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: '', color: pickNextToolColor(annotationTools) }}
+          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: panelCreatingToolText, color: pickNextToolColor(annotationTools) }}
           toolIndex={-1}
           annotations={annotations}
           annotationTools={annotationTools}
           isCreate
-          onClose={() => setPanelCreatingTool(false)}
+          onClose={() => setPanelCreatingToolText(null)}
           onSave={(text, color, description) => {
             handleCreateTool(text, color, nextAvailableHotkey(annotationTools), description);
-            setPanelCreatingTool(false);
+            setPanelCreatingToolText(null);
           }}
         />
       )}

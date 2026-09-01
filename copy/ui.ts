@@ -243,7 +243,6 @@ export const annotationToolsPanel = {
   get showExamples() { return getOverride('ui.annotationToolsPanel.showExamples') ?? "Show examples"; },
   get contextEdit() { return getOverride('ui.annotationToolsPanel.contextEdit') ?? "Edit"; },
   get contextDelete() { return getOverride('ui.annotationToolsPanel.contextDelete') ?? "Delete"; },
-  get addTool() { return getOverride('ui.annotationToolsPanel.addTool') ?? "Add tool"; },
 };
 
 export const sidebarSection = {
