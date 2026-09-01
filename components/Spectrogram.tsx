@@ -7,6 +7,7 @@ import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../util
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { spanBetween } from '../utils/selectionExtend';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import {
   MIN_SEGMENT_JOIN_PX,
   Timeline,
@@ -344,6 +345,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Last width the ResizeObserver reported, so a notification that carries no
   // actual size change can skip the scroll rescale entirely.
   const lastObservedWidthRef = useRef(0);
+  // The container's CSS box, cached from the ResizeObserver. Every draw sizes
+  // its own canvas bitmap from this at the CURRENT dpr (see utils/canvasDpr),
+  // so a dpr change that leaves the box alone can't leave a bitmap behind.
+  // Cached rather than read live because the draws run inside a rAF loop, where
+  // a layout read costs a forced reflow every frame.
+  const containerSizeRef = useRef({ width: 0, height: 0 });
 
   // True while the visible viewport still has chunks resolving (first load or a
   // settings-driven rebuild). Drives the "building spectrogram" veil. Reconciled
@@ -524,6 +531,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     settings,
     isProcessing,
     canvasRef,
+    containerSizeRef,
     offscreenCanvasRef,
     setIsBuilding,
   });
@@ -540,11 +548,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // so the playhead is always the value the media clock produced this frame.
     const currentTime = currentTimeStore.get();
 
-    const dpr = window.devicePixelRatio || 1;
-    // Use the container's CSS width rather than canvas.width/dpr to avoid
-    // 1-physical-pixel rounding fluctuations that shift tick positions during playback.
-    const width = containerRef.current?.clientWidth ?? canvas.width / dpr;
-    const height = canvas.height / dpr;
+    // Size the bitmap and take the dpr in one step, from the container's cached
+    // CSS box: the box (not canvas.width/dpr) is what keeps tick positions from
+    // fluctuating by a physical pixel during playback.
+    const { dpr, width, height } = syncCanvasBitmap(
+      canvas, containerSizeRef.current.width, containerSizeRef.current.height);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -793,9 +801,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = containerRef.current?.clientWidth ?? canvas.width / dpr;
-    const height = canvas.height / dpr;
+    const { dpr, width, height } = syncCanvasBitmap(
+      canvas, containerSizeRef.current.width, containerSizeRef.current.height);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -858,9 +865,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
+    // The gutter is a fixed CSS width; only its height follows the container.
+    const { dpr, width, height } = syncCanvasBitmap(
+      canvas, Y_AXIS_WIDTH, containerSizeRef.current.height);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -1051,25 +1058,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
         lastObservedWidthRef.current = newWidth;
         setContainerWidth(newWidth);
-        const dpr = window.devicePixelRatio || 1;
-        if (canvasRef.current) {
-          canvasRef.current.width = Math.max(1, Math.round(newWidth * dpr));
-          canvasRef.current.height = Math.max(1, Math.round(height * dpr));
-        }
-        if (overlayCanvasRef.current) {
-          overlayCanvasRef.current.width = newWidth * dpr;
-          overlayCanvasRef.current.height = height * dpr;
-        }
-        if (filterOverlayCanvasRef.current) {
-          filterOverlayCanvasRef.current.width = newWidth * dpr;
-          filterOverlayCanvasRef.current.height = height * dpr;
-        }
-        if (yAxisCanvasRef.current) {
-          yAxisCanvasRef.current.width = Y_AXIS_WIDTH * dpr;
-          yAxisCanvasRef.current.height = height * dpr;
-        }
-        // Resizing a canvas clears it, so repaint every layer immediately rather
-        // than waiting a frame for the rAF loop's dirty flags.
+        // Publish the new box; each draw sizes its own bitmap from it. Repaint
+        // every layer immediately rather than waiting a frame for the rAF loop's
+        // dirty flags — a resized bitmap comes back cleared.
+        containerSizeRef.current = { width: newWidth, height: Math.max(1, height) };
         drawRef.current();
         drawOverlayRef.current();
         drawFilterOverlayRef.current();
@@ -1082,6 +1074,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
     return () => resizeObserver.disconnect();
   }, []);
+
+  // A dpr change (webview zoom step, a drag onto a display with a different
+  // scale factor) leaves the CSS box alone, so the ResizeObserver above never
+  // fires for it. Repaint explicitly: the draws re-size their bitmaps to the new
+  // ratio, which is what keeps the fixed-px axis labels at their intended size.
+  useEffect(() => onDprChange(() => {
+    drawRef.current();
+    drawOverlayRef.current();
+    drawFilterOverlayRef.current();
+    drawYAxisRef.current();
+  }), []);
 
   // --- Annotation navigation ---
 

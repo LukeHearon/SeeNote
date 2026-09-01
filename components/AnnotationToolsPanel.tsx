@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
+import { Settings, Trash2, Play, Square, Search, Images, Plus } from 'lucide-react';
 import { AnnotationTool } from '../types';
+import { HOTKEY_SLOTS } from '../constants';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
@@ -23,6 +24,11 @@ interface AnnotationToolsPanelProps {
   onOpenFindLabel: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
+  // Middle-click a keyed tool chip to free its hotkey (tool kept, key -> null).
+  // Optional: the live guide copy has no project to mutate.
+  onUnassignTool?: (toolIndex: number) => void;
+  // "+ Add tool" affordance, shown while unused hotkey slots remain.
+  onAddTool?: () => void;
   // Example-clip playback: id of the tool currently auditioning (null = none),
   // a toggle to play/stop a tool's next example, and the "Show examples" library.
   playingExampleToolId: string | null;
@@ -41,6 +47,8 @@ function AnnotationToolsPanel({
   onOpenFindLabel,
   onEditTool,
   onRequestDeleteTool,
+  onUnassignTool,
+  onAddTool,
   playingExampleToolId,
   onPlayExample,
   onShowExamples,
@@ -168,6 +176,7 @@ function AnnotationToolsPanel({
                 key={tool.key}
                 className="relative"
                 onContextMenu={e => openContextMenu(e, toolIndex, true)}
+                onMouseDown={e => { if (e.button === 1) { e.preventDefault(); onUnassignTool?.(toolIndex); } }}
                 onMouseEnter={() => setHoveredToolKey(tool.key!)}
                 onMouseLeave={() => setHoveredToolKey(null)}
               >
@@ -213,6 +222,15 @@ function AnnotationToolsPanel({
               </div>
             );
           })}
+          {definedTools.length < HOTKEY_SLOTS.length && (
+            <button
+              onClick={() => onAddTool?.()}
+              className="w-full flex items-center justify-center gap-1 rounded border border-dashed border-slate-700 hover:border-slate-500 text-slate-500 hover:text-slate-300 transition-colors text-[11px] py-1"
+            >
+              <Plus size={11} />
+              {copy.addTool}
+            </button>
+          )}
         </div>
       </div>
 

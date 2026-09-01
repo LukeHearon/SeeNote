@@ -3,6 +3,7 @@ import { SpectrogramSettings } from '../types';
 import { drawSpectrogramChunk, sampleChunkColumnInto } from '../utils/audioProcessing';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { resolveRenderCps } from '../utils/viewportTransform';
+import { syncCanvasBitmap } from '../utils/canvasDpr';
 import { Timeline, sourceRangesForDisplayRange } from '../utils/subsetTimeline';
 
 // TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
@@ -39,6 +40,10 @@ export interface ChunkRendererParams {
   settings: SpectrogramSettings;
   isProcessing: boolean;
   canvasRef: React.RefObject<HTMLCanvasElement>;
+  // The canvas's displayed CSS box, cached by the caller's ResizeObserver. draw()
+  // sizes the bitmap from it at the current dpr rather than trusting whatever
+  // dpr the bitmap was last sized with — see utils/canvasDpr.
+  containerSizeRef: React.MutableRefObject<{ width: number; height: number }>;
   offscreenCanvasRef: React.MutableRefObject<HTMLCanvasElement | null>;
   setIsBuilding: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -73,6 +78,7 @@ export function useChunkRenderer({
   settings,
   isProcessing,
   canvasRef,
+  containerSizeRef,
   offscreenCanvasRef,
   setIsBuilding,
 }: ChunkRendererParams): ChunkRendererApi {
@@ -134,8 +140,11 @@ export function useChunkRenderer({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.width / dpr;   // canvas.width is now in physical px (see resize)
+    // Sizing the bitmap here, from the cached CSS box at the live dpr, keeps
+    // canvas.width and the dpr this frame draws with from ever disagreeing.
+    const { dpr, width: cssWidth } = syncCanvasBitmap(
+      canvas, containerSizeRef.current.width, containerSizeRef.current.height);
+    if (cssWidth <= 0) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 

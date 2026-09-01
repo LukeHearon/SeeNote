@@ -21,6 +21,7 @@ import {
 import { clamp, decimalsForTimes, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import type { DateTimeFormat } from '../utils/datetimeDisplay';
 import { timeToX, xToTime } from '../utils/viewportTransform';
+import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import type { FrameUnit } from '../utils/binIndex';
 import {
   forEachUnitInSpan,
@@ -450,10 +451,12 @@ export default function BuzzdetectPanel({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
     const width = areaSize.width;
     const h = areaSize.height;
     if (width <= 0 || h <= 0) return;
+    // Bitmap and draw scale in one step, so a dpr change can't leave the two
+    // disagreeing (which shows up as mis-sized fixed-px text) — see canvasDpr.
+    const { dpr } = syncCanvasBitmap(canvas, width, h);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -847,6 +850,7 @@ export default function BuzzdetectPanel({
     if (yCanvas) {
       const yctx = yCanvas.getContext('2d');
       if (yctx) {
+        syncCanvasBitmap(yCanvas, Y_AXIS_WIDTH, h);
         yctx.clearRect(0, 0, yCanvas.width, yCanvas.height);
         yctx.save();
         yctx.scale(dpr, dpr);
@@ -889,11 +893,11 @@ export default function BuzzdetectPanel({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
     const width = areaSize.width;
     const h = areaSize.height;
+    if (width <= 0 || h <= 0) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+    const { dpr } = syncCanvasBitmap(canvas, width, h);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (width <= 0 || h <= 0) return;
     ctx.save();
     ctx.scale(dpr, dpr);
 
@@ -969,6 +973,13 @@ export default function BuzzdetectPanel({
   }), [viewportStore]);
   // Playback ticks only move the playhead line — no need to touch the data canvas.
   useEffect(() => currentTimeStore.subscribe(() => { overlayDirtyRef.current = true; }), [currentTimeStore]);
+  // A dpr change (webview zoom, a move to a display with a different scale
+  // factor) leaves the CSS box — and so the ResizeObserver — alone, but the
+  // bitmaps now need resizing. Redrawing does that.
+  useEffect(() => onDprChange(() => {
+    drawDirtyRef.current = true;
+    overlayDirtyRef.current = true;
+  }), []);
 
   useEffect(() => {
     let raf: number;
@@ -990,20 +1001,8 @@ export default function BuzzdetectPanel({
       if (!r) return;
       const w = Math.max(1, r.width);
       const hh = Math.max(1, r.height);
+      // The draws size their own bitmaps from this box at the live dpr.
       setAreaSize({ width: w, height: hh });
-      const dpr = window.devicePixelRatio || 1;
-      if (canvasRef.current) {
-        canvasRef.current.width = Math.round(w * dpr);
-        canvasRef.current.height = Math.round(hh * dpr);
-      }
-      if (overlayCanvasRef.current) {
-        overlayCanvasRef.current.width = Math.round(w * dpr);
-        overlayCanvasRef.current.height = Math.round(hh * dpr);
-      }
-      if (yAxisCanvasRef.current) {
-        yAxisCanvasRef.current.width = Math.round(Y_AXIS_WIDTH * dpr);
-        yAxisCanvasRef.current.height = Math.round(hh * dpr);
-      }
     });
     ro.observe(el);
     return () => ro.disconnect();

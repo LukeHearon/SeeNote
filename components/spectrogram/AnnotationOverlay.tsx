@@ -226,6 +226,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        deleteAnnotation();
                        return;
                    }
+                   // Right-click: leave selection/drag state alone so the
+                   // container's mouseup doesn't also fire a bound selection —
+                   // onContextMenu handles selecting and opening the menu.
+                   if (e.button === 2) return;
                    onSelectAnnotation(annotation.id);
                    // Track for click vs drag detection
                    clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };

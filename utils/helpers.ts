@@ -138,6 +138,17 @@ export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end:
   };
 };
 
+// A fresh annotation carrying a known label + color, with no owning tool object
+// to hand — used by annotation copy/paste. Colour resolution against the tool
+// set is the caller's job (see resolveLabelColor).
+export const makeAnnotationFromLabel = (text: string, color: string, start: number, end: number): Annotation => ({
+  id: generateId(),
+  start,
+  end,
+  text,
+  color,
+});
+
 // Calculate vertical dodging for overlapping annotations.
 // Returns new objects (inputs are never mutated) sorted by start time,
 // each with a layerIndex assigned by a greedy earliest-available-layer pass.

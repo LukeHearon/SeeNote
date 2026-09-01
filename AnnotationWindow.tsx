@@ -7,8 +7,8 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
@@ -108,6 +108,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
+  // "+ Add tool" in the Labels palette: opens the create modal, pre-targeted at
+  // the next free hotkey.
+  const [panelCreatingTool, setPanelCreatingTool] = useState(false);
   // The "Find Label" toolbar entry point opens the merged find-and-rename
   // dialog. Query/scope live here (not inside the
   // dialog) so the last search is still there — and its results reappear —
@@ -2381,6 +2384,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onOpenFindLabel={() => setShowFindLabel(true)}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
+                  onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
+                  onAddTool={() => setPanelCreatingTool(true)}
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
                   onShowExamples={handleShowExamples}
@@ -2738,6 +2743,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onSave={(text, color, description) => {
             handleRenameTool(panelEditingToolIndex, text, color, description);
             setPanelEditingToolIndex(null);
+          }}
+        />
+      )}
+      {panelCreatingTool && (
+        <AnnotationToolEditModal
+          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: '', color: pickNextToolColor(annotationTools) }}
+          toolIndex={-1}
+          annotations={annotations}
+          annotationTools={annotationTools}
+          isCreate
+          onClose={() => setPanelCreatingTool(false)}
+          onSave={(text, color, description) => {
+            handleCreateTool(text, color, nextAvailableHotkey(annotationTools), description);
+            setPanelCreatingTool(false);
           }}
         />
       )}

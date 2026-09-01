@@ -3,6 +3,7 @@ import { SpectrogramSettings } from '../types';
 import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
 import { drawSpectrogramChunk, freqToY, freqAxisTicks } from '../utils/audioProcessing';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
+import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
 interface Props {
@@ -40,6 +41,9 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const cacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const cacheVersionRef = useRef(0);
+  // Container CSS box, cached from the ResizeObserver below; the draws size
+  // their bitmaps from it at the live dpr (see utils/canvasDpr).
+  const sizeRef = useRef({ width: 0, height: 0 });
 
   // Draw the frequency (Y) axis into its own canvas. Mirrors Spectrogram.tsx's
   // drawYAxis, using the shared freqToY/freqAxisTicks so ticks stay in lockstep
@@ -49,9 +53,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
+    const { dpr, width, height } = syncCanvasBitmap(canvas, Y_AXIS_WIDTH, sizeRef.current.height);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -97,9 +99,8 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = canvas.width / dpr;
-    const cssH = canvas.height / dpr;
+    const { dpr, width: cssW, height: cssH } = syncCanvasBitmap(
+      canvas, sizeRef.current.width, sizeRef.current.height);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -153,7 +154,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
     const cache = cacheRef.current;
     if (!canvas || !cache || duration <= 0) return;
 
-    const cssWidth = canvas.width / (window.devicePixelRatio || 1);
+    const { width: cssWidth } = syncCanvasBitmap(canvas, sizeRef.current.width, sizeRef.current.height);
     if (cssWidth <= 0) return;
     const tier = cache.selectTier(duration, cssWidth);
     cache.prefetchViewport(0, duration, tier.tier);
@@ -223,26 +224,25 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
   // Redraw the playhead/ruler on every time-store tick.
   useEffect(() => currentTimeStore.subscribe(paint), [currentTimeStore, paint]);
 
-  // Keep the canvas backing store sized to the container (DPR-aware).
+  // Track the container's CSS box; the draws size their own bitmaps from it.
   useEffect(() => {
     const container = containerRef.current;
-    const canvas = canvasRef.current;
-    if (!container || !canvas) return;
+    if (!container) return;
     const ro = new ResizeObserver(() => {
-      const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.floor(container.clientWidth * dpr));
-      const h = Math.max(1, Math.floor(container.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-        const yAxis = yAxisCanvasRef.current;
-        if (yAxis) { yAxis.width = Y_AXIS_WIDTH * dpr; yAxis.height = h; }
+      const w = Math.max(1, container.clientWidth);
+      const h = Math.max(1, container.clientHeight);
+      if (sizeRef.current.width !== w || sizeRef.current.height !== h) {
+        sizeRef.current = { width: w, height: h };
         renderSpectrogram();
       }
     });
     ro.observe(container);
     return () => ro.disconnect();
   }, [renderSpectrogram]);
+
+  // The CSS box doesn't change when the device pixel ratio does (webview zoom, a
+  // different display), so re-render to resize the bitmaps to the new ratio.
+  useEffect(() => onDprChange(renderSpectrogram), [renderSpectrogram]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (duration <= 0) return;
