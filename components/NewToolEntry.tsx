@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
 
-// A text field that replaces a "+ New tool" button: typing a prefix pops a
+// A text field that replaces a "+ New tool" button: typing a substring pops a
 // dropdown of matching tools (click, arrow keys + Enter, or type the full name
 // + Enter, to pick one); typing a name that matches nothing calls onCreateNew.
 // While the dropdown is open the field lifts into it as its top row. Shared by
@@ -30,7 +30,7 @@ export default function NewToolEntry({ annotationTools, onAssignExisting, onCrea
     ? []
     : annotationTools
       .map((tool, toolIndex) => ({ tool, toolIndex }))
-      .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.text.toLowerCase().startsWith(trimmed.toLowerCase()));
+      .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.text.toLowerCase().includes(trimmed.toLowerCase()));
   const open = focused && matches.length > 0;
 
   // Keep the highlighted row valid as the query narrows, and scroll it into view.
