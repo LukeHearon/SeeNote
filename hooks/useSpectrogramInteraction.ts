@@ -61,7 +61,7 @@ export interface SpectrogramInteractionApi {
   creatingAnnotation: { start: number; current: number } | null;
   /** Commit a drawn span (pinned end, dragged end) as an annotation or a selection. */
   commitSpan: (anchor: number, edge: number, quiet?: boolean) => void;
-  creatingSelection: { start: number; current: number } | null;
+  creatingSelection: { start: number; current: number; quiet?: boolean } | null;
   creatingFilter: { y0: number; y1: number } | null;
   dragStart: { x: number; scroll: number } | null;
   // Refs shared with AnnotationOverlay (prop contract).
@@ -140,7 +140,7 @@ export function useSpectrogramInteraction({
   const [draggedAnnotation, setDraggedAnnotation] = useState<{ id: string; startOffset: number } | null>(null);
 
   // Selection Mode interaction state
-  const [creatingSelection, setCreatingSelection] = useState<{ start: number; current: number } | null>(null);
+  const [creatingSelection, setCreatingSelection] = useState<{ start: number; current: number; quiet?: boolean } | null>(null);
   const [resizingSelectionHandle, setResizingSelectionHandle] = useState<'start' | 'end' | null>(null);
 
   // Filter tool interaction state
@@ -155,7 +155,7 @@ export function useSpectrogramInteraction({
   // Pending drag intent: recorded at mousedown but not promoted to visible state until
   // shouldPromoteDragIntent says the pointer has moved far enough or been held long enough.
   // Using refs (not state) so no re-render/gray-out happens until the threshold is crossed.
-  const pendingSelectionRef = useRef<{ start: number; startX: number; startTime: number } | null>(null);
+  const pendingSelectionRef = useRef<{ start: number; startX: number; startTime: number; quiet: boolean } | null>(null);
   const pendingAnnotationRef = useRef<{ start: number; startX: number; startTime: number; quiet: boolean } | null>(null);
 
   const pendingAnnotationsRef = useRef<Annotation[]>(annotations);
@@ -546,8 +546,13 @@ export function useSpectrogramInteraction({
       // playhead, clearing the selection, or changing what's selected — so you can
       // keep listening while marking the sounds you just heard.
       if (e.altKey) {
-        if (activeAnnotationTool === null) return;
-        pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: true };
+        // With a tool armed: quiet annotation drag. With no tool: quiet selection
+        // drag — draw out a selection without seeking, clearing, or snapping playback.
+        if (activeAnnotationTool === null) {
+          pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: true };
+        } else {
+          pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: true };
+        }
         return;
       }
 
@@ -562,7 +567,7 @@ export function useSpectrogramInteraction({
       if (selection && t >= selection.start && t <= selection.end) {
         onSeek(t);
         if (activeAnnotationTool === null) {
-          pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
+          pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: false };
         } else {
           pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: false };
         }
@@ -575,7 +580,7 @@ export function useSpectrogramInteraction({
       onSelectionChange(null);
       onSeek(t);
       if (activeAnnotationTool === null) {
-        pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now() };
+        pendingSelectionRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: false };
       } else {
         pendingAnnotationRef.current = { start: t, startX: e.clientX, startTime: Date.now(), quiet: false };
       }
@@ -667,10 +672,13 @@ export function useSpectrogramInteraction({
 
     if (pendingSelectionRef.current) {
       if (promote(pendingSelectionRef.current)) {
-        onSelectAnnotation(null);
-        onBoundAnnotationChange(null);
-        onSelectionChange(null);
-        setCreatingSelection({ start: pendingSelectionRef.current.start, current: holdInSpan(pendingSelectionRef.current.start, t) });
+        const quiet = pendingSelectionRef.current.quiet;
+        if (!quiet) {
+          onSelectAnnotation(null);
+          onBoundAnnotationChange(null);
+          onSelectionChange(null);
+        }
+        setCreatingSelection({ start: pendingSelectionRef.current.start, current: holdInSpan(pendingSelectionRef.current.start, t), quiet });
         pendingSelectionRef.current = null;
       }
       return;
@@ -812,7 +820,9 @@ export function useSpectrogramInteraction({
     }
 
     if (creatingSelection) {
-      commitSpan(creatingSelection.start, creatingSelection.current);
+      // Quiet (Alt) selection: commit the range without pulling playback to it.
+      // Read Alt live too, matching the annotation path, so toggling Alt mid-drag lands right.
+      commitSpan(creatingSelection.start, creatingSelection.current, isAltHeldRef.current || !!creatingSelection.quiet);
       setCreatingSelection(null);
     }
 
