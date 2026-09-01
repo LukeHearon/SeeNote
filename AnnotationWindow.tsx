@@ -1527,6 +1527,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
+  // Enter the annotation-tool layer: push its activation-stack entry and drop
+  // the filter tool. The three side effects that always accompany readying a
+  // tool, in one place.
+  const enterAnnotationToolLayer = useCallback(() => {
+      activationStack.pushIfAbsent('annotationTool');
+      setFilterToolActive(false);
+      activationStack.remove('filterTool');
+  }, [activationStack]);
+
+  // Ready a tool by key, unconditionally (no toggle-off, no selection/bound
+  // side effects). Used when a tool has just been added from the palette.
+  const readyTool = useCallback((key: string) => {
+      setActiveToolKey(key);
+      enterAnnotationToolLayer();
+  }, [enterAnnotationToolLayer]);
+
   // Shared handler for activating an annotation tool by key — used by both
   // number hotkeys and palette clicks. Also manages the `annotationTool` entry
   // in the activation stack: pushIfAbsent on activate, remove when this
@@ -1560,9 +1576,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               );
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
-              activationStack.pushIfAbsent('annotationTool');
-              setFilterToolActive(false);
-              activationStack.remove('filterTool');
+              enterAnnotationToolLayer();
               if (isCustom) {
                   setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
               }
@@ -1574,22 +1588,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setSelectedAnnotationId(newAnnotation.id);
           setBoundAnnotationId(newAnnotation.id);
           setActiveToolKey(key);
-          activationStack.pushIfAbsent('annotationTool');
-          setFilterToolActive(false);
-          activationStack.remove('filterTool');
+          enterAnnotationToolLayer();
+      } else if (activeToolKey === key) {
+          setActiveToolKey(null);
+          activationStack.remove('annotationTool');
       } else {
-          setActiveToolKey(prev => {
-            if (prev === key) {
-              activationStack.remove('annotationTool');
-              return null;
-            }
-            activationStack.pushIfAbsent('annotationTool');
-            setFilterToolActive(false);
-            activationStack.remove('filterTool');
-            return key;
-          });
+          readyTool(key);
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource, enterAnnotationToolLayer, readyTool]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
@@ -2419,7 +2425,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
                   onAssignToolHotkey={(toolIndex) => {
                     const key = nextAvailableHotkey(annotationTools);
-                    if (key) handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key } : t));
+                    if (!key) return;
+                    handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key } : t));
+                    readyTool(key);
                   }}
                   onCreateToolForHotkey={(text) => setPanelCreatingToolText(text)}
                   playingExampleToolId={examplePlayer.playingToolId}
@@ -2791,8 +2799,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           isCreate
           onClose={() => setPanelCreatingToolText(null)}
           onSave={(text, color, description) => {
-            handleCreateTool(text, color, nextAvailableHotkey(annotationTools), description);
+            const key = nextAvailableHotkey(annotationTools);
+            handleCreateTool(text, color, key, description);
             setPanelCreatingToolText(null);
+            if (key) readyTool(key);
           }}
         />
       )}
