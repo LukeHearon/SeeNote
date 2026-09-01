@@ -84,6 +84,9 @@ function NewToolEntry({ target, annotationTools, onAssignExisting, onCreateNew, 
   const [value, setValue] = useState('');
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Rows past this many scroll inside the dropdown.
+  const MAX_VISIBLE_MATCHES = 6;
+  const ROW_H = 32;
 
   const trimmed = value.trim();
   const matches = trimmed === ''
@@ -115,20 +118,24 @@ function NewToolEntry({ target, annotationTools, onAssignExisting, onCreateNew, 
         value={value}
         onChange={e => setValue(e.target.value)}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onBlur={() => { setFocused(false); setValue(''); }}
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
         placeholder={copy.toolNamePlaceholder}
         className="flex-1 min-w-0 bg-transparent text-xs text-slate-300 placeholder:text-slate-500 outline-none"
       />
       {focused && matches.length > 0 && (
-        <div className="absolute left-0 top-full mt-1 w-full max-h-40 overflow-y-auto bg-slate-800 border border-slate-600 rounded shadow-lg z-10">
+        <div
+          className="absolute left-0 top-full mt-1 w-full overflow-y-auto bg-slate-900 border border-slate-600 rounded shadow-lg z-10 p-1 space-y-1"
+          style={{ maxHeight: MAX_VISIBLE_MATCHES * ROW_H + 8 }}
+        >
           {matches.map(({ tool, toolIndex }) => (
             <button
               key={toolIndex}
               onMouseDown={e => { e.preventDefault(); selectMatch(toolIndex); }}
-              className="w-full text-left px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 truncate"
+              className="w-full flex items-center gap-2 h-8 px-2 rounded bg-slate-800 hover:bg-slate-700 transition-colors"
+              style={{ borderLeft: `3px solid ${tool.color}` }}
             >
-              {tool.text}
+              <span className="text-xs text-white truncate">{tool.text}</span>
             </button>
           ))}
         </div>
@@ -421,8 +428,8 @@ export default function AnnotationToolsSettingsModal({
                     // an existing tool's name assigns it here; typing a new name
                     // opens the create dialog pre-targeted at this digit.
                     <div
-                      className="flex-1 h-8 rounded border-2 border-dashed px-2 flex items-center min-w-0"
-                      style={{ borderColor: isSlotHighlighted(k) ? '#3b82f6' : '#334155' }}
+                      className={`flex-1 h-8 rounded border-2 border-dashed px-2 flex items-center min-w-0 transition-colors ${isSlotHighlighted(k) ? '' : 'border-slate-700 hover:border-slate-500'}`}
+                      style={isSlotHighlighted(k) ? { borderColor: '#3b82f6' } : undefined}
                     >
                       <NewToolEntry
                         target={{ type: 'slot', key: k }}
@@ -471,14 +478,13 @@ export default function AnnotationToolsSettingsModal({
                   </div>
                 ))}
             </div>
-            <div className="mt-2 flex-none w-full rounded border border-dashed border-slate-600 hover:border-slate-400 transition-colors px-2 py-1">
-              <NewToolEntry
-                target={{ type: 'unassigned' }}
-                annotationTools={annotationTools}
-                onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'unassigned' })}
-                onCreateNew={text => openCreateDialog('unassigned', text)}
-              />
-            </div>
+            <button
+              onClick={() => openCreateDialog('unassigned', '')}
+              className="mt-2 flex-none w-full flex items-center justify-center gap-1 rounded border border-dashed border-slate-600 hover:border-slate-400 text-slate-500 hover:text-slate-300 transition-colors text-xs px-2 py-1.5"
+            >
+              <Plus size={10} />
+              {copy.newTool}
+            </button>
           </div>
         </div>
       </div>

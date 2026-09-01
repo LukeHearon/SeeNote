@@ -116,7 +116,7 @@ export const annotationToolEditModal = {
 };
 
 export const annotationToolsSettingsModal = {
-  get toolNamePlaceholder() { return getOverride('ui.annotationToolsSettingsModal.toolNamePlaceholder') ?? "Tool name…"; },
+  get toolNamePlaceholder() { return getOverride('ui.annotationToolsSettingsModal.toolNamePlaceholder') ?? "Add tool"; },
   get hotkeysHeading() { return getOverride('ui.annotationToolsSettingsModal.hotkeysHeading') ?? "Hotkeys"; },
   get newTool() { return getOverride('ui.annotationToolsSettingsModal.newTool') ?? "New tool"; },
   get unassignedHeading() { return getOverride('ui.annotationToolsSettingsModal.unassignedHeading') ?? "Unassigned"; },
