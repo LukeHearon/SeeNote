@@ -445,7 +445,7 @@ export function usePlaybackTransport({
     const tick = () => {
       const reduction = engineRef.current?.getLimiterReduction() ?? 0;
       const now = performance.now();
-      if (reduction < -0.8) heldUntil = now + 250;
+      if (reduction < -1.5) heldUntil = now + 250;
       const next = now < heldUntil;
       setLimiting(prev => (prev === next ? prev : next));
       raf = requestAnimationFrame(tick);

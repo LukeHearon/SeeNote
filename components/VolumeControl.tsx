@@ -78,6 +78,10 @@ export default function VolumeControl({ volume, muted, limiting = false, setVolu
   };
   const sliderPct = gainToSlider(muted ? 0 : volume) * 100;
   const isBoosted = !muted && volume > 1;
+  // Only surface "LIMIT" once the user has actually pushed past unity — the
+  // limiter also nips already-hot source files at unity gain, which isn't
+  // something the user did and shouldn't flash at them.
+  const showLimit = limiting && isBoosted;
 
   return (
     <div
@@ -105,12 +109,24 @@ export default function VolumeControl({ volume, muted, limiting = false, setVolu
         />
         {/* Hash mark at center = gain 1.0 (50% of slider range) */}
         <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }} />
-        {limiting && (
+        {showLimit && (
           <>
-            <style>{`@keyframes seenote-limit-blink{0%,49.9%{background-color:#ef4444;color:#fff}50%,100%{background-color:#fff;color:#ef4444}}@media(prefers-reduced-motion:reduce){.seenote-limit-blink{animation:none!important;background-color:#ef4444!important;color:#fff!important}}`}</style>
+            <style>{`
+              @keyframes seenote-limit-bar{0%,49.9%{background-color:#ef4444}50%,100%{background-color:#64748b}}
+              @keyframes seenote-limit-text{0%,49.9%{color:#fff}50%,100%{color:#ef4444}}
+              @media(prefers-reduced-motion:reduce){
+                .seenote-limit-bar{animation:none!important;background-color:#ef4444!important}
+                .seenote-limit-text{animation:none!important;color:#fff!important}
+              }
+            `}</style>
+            {/* Flash the track bar itself, not a box over the whole control. */}
             <div
-              className="seenote-limit-blink absolute inset-0 flex items-center justify-center rounded-sm text-[9px] font-bold tracking-widest pointer-events-none select-none"
-              style={{ animation: 'seenote-limit-blink 0.33s step-end infinite' }}
+              className="seenote-limit-bar absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1 rounded-lg pointer-events-none"
+              style={{ animation: 'seenote-limit-bar 0.33s step-end infinite' }}
+            />
+            <div
+              className="seenote-limit-text absolute inset-0 flex items-center justify-center text-[9px] font-bold tracking-widest pointer-events-none select-none"
+              style={{ animation: 'seenote-limit-text 0.33s step-end infinite', textShadow: '0 0 2px rgba(0,0,0,0.9)' }}
             >
               LIMIT
             </div>
