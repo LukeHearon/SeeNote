@@ -185,8 +185,6 @@ export class AudioEngine implements PlaybackTransport {
   // Brickwall-ish limiter sitting between the master gain and the output device.
   // Protects the listener when the volume slider (or normalization) drives the
   // signal hot: output can't run far past the threshold no matter the gain.
-  // Its `reduction` (dB, 0 = clean, negative = clamping) drives the "LIMIT"
-  // indicator on the volume control.
   private limiterNode: DynamicsCompressorNode | null = null;
   // Gain value applied at next gainNode creation (set via setGain before play)
   private _currentGain = 1;
@@ -621,13 +619,6 @@ export class AudioEngine implements PlaybackTransport {
     } else {
       this.gainNode.gain.value = gain;
     }
-  }
-
-  /** Current limiter gain reduction in dB: 0 when passing clean, negative while
-   *  clamping. Polled by the transport to drive the volume control's "LIMIT"
-   *  indicator. */
-  getLimiterReduction(): number {
-    return this.limiterNode?.reduction ?? 0;
   }
 
   /**

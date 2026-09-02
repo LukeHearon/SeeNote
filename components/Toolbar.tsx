@@ -28,7 +28,6 @@ interface ToolbarProps {
   selection: Selection | null;
   volume: number;
   muted: boolean;
-  limiting: boolean;
   canGoPrevAnnotation: boolean;
   canGoNextAnnotation: boolean;
   spectrogramRef: React.RefObject<SpectrogramHandle | null>;
@@ -97,7 +96,6 @@ function Toolbar({
   selection,
   volume,
   muted,
-  limiting,
   canGoPrevAnnotation,
   canGoNextAnnotation,
   spectrogramRef,
@@ -179,7 +177,6 @@ function Toolbar({
     <VolumeControl
       volume={volume}
       muted={muted}
-      limiting={limiting}
       setVolume={setVolume}
       setMuted={setMuted}
       hideIcon={hideIcon}

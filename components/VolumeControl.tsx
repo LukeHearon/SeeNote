@@ -5,8 +5,7 @@ import { clamp } from '../utils/helpers';
 // Nonlinear volume mapping: slider [0,1] → gain [0,8], with gain=1.0 at slider=0.5.
 // Lower half [0,0.5] covers gain 0→1 (finer resolution for quieting);
 // upper half [0.5,1] covers gain 1→8 (coarser resolution for boosting). The
-// output limiter (AudioEngine) keeps the loud end from hurting; the "LIMIT"
-// blink tells the user when it's engaged.
+// output limiter (AudioEngine) keeps the loud end from hurting.
 export const gainToSlider = (gain: number): number =>
   gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 14;
 export const sliderToGain = (s: number): number =>
@@ -32,9 +31,6 @@ interface Props {
   /** Linear gain (1.0 = unity, up to 8.0). */
   volume: number;
   muted: boolean;
-  /** True while the output limiter is clamping — flashes a "LIMIT" overlay
-   *  across the slider track. */
-  limiting?: boolean;
   setVolume: (v: number) => void;
   setMuted: (m: boolean) => void;
   /** Right-click handler (e.g. the main toolbar's "restart audio" menu). */
@@ -51,7 +47,7 @@ interface Props {
  * thumb when boosted above unity) with scroll-to-adjust. Extracted so both
  * places stay visually and behaviourally identical.
  */
-export default function VolumeControl({ volume, muted, limiting = false, setVolume, setMuted, onContextMenu, helpTarget, hideIcon = false }: Props) {
+export default function VolumeControl({ volume, muted, setVolume, setMuted, onContextMenu, helpTarget, hideIcon = false }: Props) {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
@@ -78,10 +74,6 @@ export default function VolumeControl({ volume, muted, limiting = false, setVolu
   };
   const sliderPct = gainToSlider(muted ? 0 : volume) * 100;
   const isBoosted = !muted && volume > 1;
-  // Only surface "LIMIT" once the user has actually pushed past unity — the
-  // limiter also nips already-hot source files at unity gain, which isn't
-  // something the user did and shouldn't flash at them.
-  const showLimit = limiting && isBoosted;
 
   return (
     <div
@@ -109,29 +101,6 @@ export default function VolumeControl({ volume, muted, limiting = false, setVolu
         />
         {/* Hash mark at center = gain 1.0 (50% of slider range) */}
         <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }} />
-        {showLimit && (
-          <>
-            <style>{`
-              @keyframes seenote-limit-bar{0%,49.9%{background-color:#ef4444}50%,100%{background-color:#64748b}}
-              @keyframes seenote-limit-text{0%,49.9%{color:#fff}50%,100%{color:#ef4444}}
-              @media(prefers-reduced-motion:reduce){
-                .seenote-limit-bar{animation:none!important;background-color:#ef4444!important}
-                .seenote-limit-text{animation:none!important;color:#fff!important}
-              }
-            `}</style>
-            {/* Flash the track bar itself, not a box over the whole control. */}
-            <div
-              className="seenote-limit-bar absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1 rounded-lg pointer-events-none"
-              style={{ animation: 'seenote-limit-bar 0.33s step-end infinite' }}
-            />
-            <div
-              className="seenote-limit-text absolute inset-0 flex items-center justify-center text-[9px] font-bold tracking-widest pointer-events-none select-none"
-              style={{ animation: 'seenote-limit-text 0.33s step-end infinite', textShadow: '0 0 2px rgba(0,0,0,0.9)' }}
-            >
-              LIMIT
-            </div>
-          </>
-        )}
       </div>
     </div>
   );

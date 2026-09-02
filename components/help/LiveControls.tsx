@@ -65,7 +65,6 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     isBuffering: false,
     volume: 0.8,
     muted: false,
-    limiting: false,
     playbackSpeed: 1,
     lastDefinedSpeed: 0.5,
     speedMin: SPEED_MIN,
@@ -250,7 +249,6 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <VolumeControl
             volume={s.volume}
             muted={s.muted}
-            limiting={s.limiting}
             setVolume={v => act(() => client.call('setVolume', v), () => demo.set({ volume: v }))}
             setMuted={m => act(() => client.call('setMuted', m), () => demo.set({ muted: m }))}
           />

@@ -36,8 +36,6 @@ export interface LiveSnapshot {
   isBuffering: boolean;
   volume: number;
   muted: boolean;
-  /** Output limiter is currently clamping — the volume control flashes "LIMIT". */
-  limiting: boolean;
   playbackSpeed: number;
   lastDefinedSpeed: number;
   speedMin: number;
