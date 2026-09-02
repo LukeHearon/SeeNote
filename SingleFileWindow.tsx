@@ -114,7 +114,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
 
   const {
     isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
-    volume, setVolume, muted, setMuted, playheadLocked, setPlayheadLocked,
+    volume, setVolume, muted, setMuted, limiting, playheadLocked, setPlayheadLocked,
     timeDisplayUnit, setTimeDisplayUnit,
     engineRef, currentTimeRef, currentTimeStoreRef,
     togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
@@ -323,6 +323,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       isBuffering,
       volume,
       muted,
+      limiting,
       playbackSpeed,
       lastDefinedSpeed,
       speedMin: liveSpeedRange.min,
@@ -504,6 +505,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
             selection={selection}
             volume={volume}
             muted={muted}
+            limiting={limiting}
             canGoPrevAnnotation={false}
             canGoNextAnnotation={false}
             spectrogramRef={spectrogramRef}

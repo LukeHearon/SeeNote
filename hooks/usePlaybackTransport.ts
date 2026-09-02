@@ -121,9 +121,13 @@ export function usePlaybackTransport({
     if (u !== 'datetime') setFallbackTimeDisplayUnit(u);
   }, []);
 
-  // Volume: 0 to 4 (400% or +12dB approx)
+  // Volume: 0 to 8 (800% / +18dB approx). The output limiter keeps the hot end
+  // from hurting; `limiting` below reflects when it's actually clamping.
   const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
   const [muted, setMuted] = useState(false);
+  // True while the AudioEngine limiter is pulling the signal down — drives the
+  // volume control's "LIMIT" blink. Polled on rAF only while playing.
+  const [limiting, setLimiting] = useState(false);
 
   // Pitch-preserving playback speed (0.25–4.0, persisted per-project).
   const [playbackSpeed, setPlaybackSpeed] = useState(project.preferences.uiSettings?.playbackSpeed ?? DEFAULT_UI_SETTINGS.playbackSpeed);
@@ -432,6 +436,24 @@ export function usePlaybackTransport({
     videoEngineRef.current?.setGain(gain);
   }, [volume, muted]);
 
+  // Poll the limiter while playing so the volume control can flash "LIMIT".
+  // A short hold keeps a brief transient clamp visible rather than strobing.
+  useEffect(() => {
+    if (!isPlaying) { setLimiting(false); return; }
+    let raf = 0;
+    let heldUntil = 0;
+    const tick = () => {
+      const reduction = engineRef.current?.getLimiterReduction() ?? 0;
+      const now = performance.now();
+      if (reduction < -0.8) heldUntil = now + 250;
+      const next = now < heldUntil;
+      setLimiting(prev => (prev === next ? prev : next));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
+
   // Sync playback speed to both transports. AudioEngine preserves pitch; the
   // <video> element does not (an accepted limitation of Fast mode).
   useEffect(() => {
@@ -482,6 +504,7 @@ export function usePlaybackTransport({
     lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume,
     muted, setMuted,
+    limiting,
     playheadLocked, setPlayheadLocked,
     timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,

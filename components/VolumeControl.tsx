@@ -105,6 +105,17 @@ export default function VolumeControl({ volume, muted, limiting = false, setVolu
         />
         {/* Hash mark at center = gain 1.0 (50% of slider range) */}
         <div className="absolute top-0 bottom-0 w-[1px] bg-white/30 pointer-events-none" style={{ left: 'calc((100% - 12px) * 0.5 + 6px)' }} />
+        {limiting && (
+          <>
+            <style>{`@keyframes seenote-limit-blink{0%,49.9%{background-color:#ef4444;color:#fff}50%,100%{background-color:#fff;color:#ef4444}}@media(prefers-reduced-motion:reduce){.seenote-limit-blink{animation:none!important;background-color:#ef4444!important;color:#fff!important}}`}</style>
+            <div
+              className="seenote-limit-blink absolute inset-0 flex items-center justify-center rounded-sm text-[9px] font-bold tracking-widest pointer-events-none select-none"
+              style={{ animation: 'seenote-limit-blink 0.33s step-end infinite' }}
+            >
+              LIMIT
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

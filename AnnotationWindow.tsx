@@ -600,6 +600,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume,
     muted, setMuted,
+    limiting,
     playheadLocked, setPlayheadLocked,
     timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,
@@ -1971,6 +1972,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       isBuffering: isBuffering || exampleAudioActive,
       volume,
       muted,
+      limiting,
       playbackSpeed,
       lastDefinedSpeed,
       speedMin: liveSpeedRange.min,
@@ -2596,6 +2598,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                selection={selection}
                volume={volume}
                muted={muted}
+               limiting={limiting}
                canGoPrevAnnotation={canGoPrevAnnotation}
                canGoNextAnnotation={canGoNextAnnotation}
                spectrogramRef={spectrogramRef}
