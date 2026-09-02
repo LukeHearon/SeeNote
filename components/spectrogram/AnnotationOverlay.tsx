@@ -3,8 +3,8 @@ import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
 import { X, Pencil, Keyboard, Copy, Volume2 } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
-import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
-import { resolveLabelColor } from '../../utils/annotationTools';
+import { annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
+import AnnotationLabelInput from './AnnotationLabelInput';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 import { pickNextToolColor, nextAvailableHotkey } from '../../constants';
@@ -276,76 +276,20 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    // When editing (pencil or new empty annotation): show an input.
                    // Otherwise: show a read-only span with ellipsis truncation.
                    (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
-                       <input
-                           ref={(el) => { inputRefs.current[annotation.id] = el; }}
-                           type="text"
-                           value={annotation.text}
-                           onChange={(e) => {
-                               const newText = e.target.value;
-                               const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
-                                   // Typing a label that matches a defined tool adopts that tool's
-                                   // canonical text + color; anything else is a Custom label.
-                                   const matchingTool = annotationTools.find(t => t.key !== "0" && t.text.toLowerCase() === newText.toLowerCase());
-                                   const customColor = annotationTools.find(t => t.key === "0")?.color ?? "#ffffff";
-                                   return {
-                                       ...a,
-                                       text: matchingTool ? matchingTool.text : newText,
-                                       color: resolveLabelColor(newText, annotationTools, customColor),
-                                   };
-                               });
-                               pendingAnnotationsRef.current = newAnnotations;
-                               onAnnotationsChange(newAnnotations);
-                           }}
-                           onKeyDown={(e) => {
-                               e.stopPropagation();
-                               if (e.key === 'Enter') {
-                                   onSelectAnnotation(null);
-                                   (e.target as HTMLInputElement).blur();
-                               }
-                               if (e.key === 'Escape') {
-                                   (e.target as HTMLInputElement).blur();
-                               }
-                           }}
-                           onFocus={() => {
-                               // Promote to explicit edit mode so the input stays mounted
-                               // once the user types. Without this, an auto-focused new
-                               // annotation (rendered only via `isSelected && text === ''`)
-                               // unmounts the moment the first character makes text non-empty,
-                               // dropping focus. Setting editingInputId keeps it rendered.
-                               setEditingInputId(annotation.id);
-                           }}
-                           onBlur={() => {
-                               setEditingInputId(null);
-                               if (annotation.text.trim() === "") {
-                                   const filtered = annotations.filter(a => a.id !== annotation.id);
-                                   onAnnotationsCommit(filtered);
-                                   onSelectAnnotation(null);
-                               } else {
-                                   onAnnotationsCommit(pendingAnnotationsRef.current);
-                               }
-                           }}
-                           className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
-                           style={{
-                               ...labelStyle,
-                               textAlign: 'left',
-                               color: '#ffffff',
-                               fontWeight: 'bold',
-                               textShadow: '0 1px 2px black',
-                           }}
+                       <AnnotationLabelInput
+                           annotation={annotation}
+                           annotations={annotations}
+                           annotationTools={annotationTools}
+                           isSelected={isSelected}
+                           labelStyle={labelStyle}
+                           inputRefs={inputRefs}
+                           pendingAnnotationsRef={pendingAnnotationsRef}
+                           onAnnotationsChange={onAnnotationsChange}
+                           onAnnotationsCommit={onAnnotationsCommit}
+                           onSelectAnnotation={onSelectAnnotation}
+                           setEditingInputId={setEditingInputId}
+                           deleteAnnotation={deleteAnnotation}
                            placeholder={copy.namePlaceholder}
-                           onMouseDown={(e) => {
-                               if (e.button === 1) {
-                                   e.preventDefault();
-                                   e.stopPropagation();
-                                   deleteAnnotation();
-                                   return;
-                               }
-                               e.stopPropagation();
-                           }}
-                           autoFocus={isSelected && annotation.text === ""}
-                           autoCorrect="off"
-                           autoComplete="off"
-                           spellCheck={false}
                        />
                    ) : (
                        <span

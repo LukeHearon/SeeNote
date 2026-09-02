@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
+import { useToolNameMatches } from '../hooks/useToolNameMatches';
+import ToolMatchDropdown from './ToolMatchDropdown';
 
 // A text field that replaces a "+ New tool" button: typing a substring pops a
 // dropdown of matching tools (click, arrow keys + Enter, or type the full name
@@ -18,26 +20,13 @@ export default function NewToolEntry({ annotationTools, onAssignExisting, onCrea
 }) {
   const [value, setValue] = useState('');
   const [focused, setFocused] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // Rows past this many scroll inside the dropdown.
-  const MAX_VISIBLE_MATCHES = 6;
-  const ROW_H = 32;
 
   const trimmed = value.trim();
-  const matches = trimmed === ''
-    ? []
-    : annotationTools
-      .map((tool, toolIndex) => ({ tool, toolIndex }))
-      .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.text.toLowerCase().includes(trimmed.toLowerCase()));
+  // Start with the first match highlighted so a bare Enter picks it.
+  const { matches, activeIndex, setActiveIndex, itemRefs, handleArrowKeys } =
+    useToolNameMatches(annotationTools, value, focused && trimmed !== '', 0);
   const open = focused && matches.length > 0;
-
-  // Keep the highlighted row valid as the query narrows, and scroll it into view.
-  useEffect(() => { setActiveIndex(0); }, [trimmed]);
-  useEffect(() => {
-    if (open) itemRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
-  }, [activeIndex, open]);
 
   const reset = () => { setValue(''); inputRef.current?.blur(); };
 
@@ -55,13 +44,8 @@ export default function NewToolEntry({ annotationTools, onAssignExisting, onCrea
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown' && open) {
-      e.preventDefault();
-      setActiveIndex(i => Math.min(i + 1, matches.length - 1));
-    } else if (e.key === 'ArrowUp' && open) {
-      e.preventDefault();
-      setActiveIndex(i => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
+    if (handleArrowKeys(e)) return;
+    if (e.key === 'Enter') {
       e.preventDefault();
       if (open && matches[activeIndex]) selectMatch(matches[activeIndex].toolIndex);
       else commit();
@@ -98,23 +82,13 @@ export default function NewToolEntry({ annotationTools, onAssignExisting, onCrea
       >
         {field}
         {open && (
-          <div
-            className="overflow-y-auto flex flex-col gap-1"
-            style={{ maxHeight: MAX_VISIBLE_MATCHES * ROW_H }}
-          >
-            {matches.map(({ tool, toolIndex }, i) => (
-              <button
-                key={toolIndex}
-                ref={el => { itemRefs.current[i] = el; }}
-                onMouseDown={e => { e.preventDefault(); selectMatch(toolIndex); }}
-                onMouseEnter={() => setActiveIndex(i)}
-                className={`w-full flex items-center gap-2 h-8 px-2 rounded transition-colors ${i === activeIndex ? 'bg-slate-700' : 'bg-slate-800 hover:bg-slate-700'}`}
-                style={{ borderLeft: `3px solid ${tool.color}` }}
-              >
-                <span className="text-xs text-white truncate">{tool.text}</span>
-              </button>
-            ))}
-          </div>
+          <ToolMatchDropdown
+            matches={matches}
+            activeIndex={activeIndex}
+            setActiveIndex={setActiveIndex}
+            itemRefs={itemRefs}
+            onPick={selectMatch}
+          />
         )}
       </div>
     </div>

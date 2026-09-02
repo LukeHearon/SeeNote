@@ -42,6 +42,26 @@ export const resolveLabelColor = (
   return matchingTool ? matchingTool.color : customColor;
 };
 
+export interface ToolMatch {
+  tool: AnnotationTool;
+  /** Index of the tool within the array that was searched. */
+  toolIndex: number;
+}
+
+/**
+ * Tools whose label contains `query` as a case-insensitive substring, keeping
+ * the source-array index. The Custom tool (key "0") is never a match. Shared by
+ * the Add-tool field and the inline annotation-label editor so the two
+ * name-completion dropdowns can't drift apart.
+ */
+export const matchToolsByText = (tools: AnnotationTool[], query: string): ToolMatch[] => {
+  const q = query.trim().toLowerCase();
+  if (q === '') return [];
+  return tools
+    .map((tool, toolIndex) => ({ tool, toolIndex }))
+    .filter(({ tool }) => tool.key !== '0' && tool.text.toLowerCase().includes(q));
+};
+
 const fromFolderTool = (ft: FolderTool, key: string | null, id: string): AnnotationTool => ({
   id,
   key,
