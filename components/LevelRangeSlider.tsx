@@ -1,4 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { RotateCcw } from 'lucide-react';
+import { DEFAULT_SPECTROGRAM_SETTINGS } from '../constants';
+import { tooltips } from '../copy/tooltips';
+
+const DEFAULT_FLOOR = DEFAULT_SPECTROGRAM_SETTINGS.displayFloor;
+const DEFAULT_CEIL = DEFAULT_SPECTROGRAM_SETTINGS.displayCeil;
 
 interface Props {
   /** dBFS lower display bound. */
@@ -87,24 +93,48 @@ export default function LevelRangeSlider({ floor, ceil, onChange, label = 'Level
       </div>
       {showInputs && (
         <div className="flex justify-between">
-          <input
-            type="text"
-            inputMode="numeric"
-            value={floorDraft}
-            onChange={(e) => setFloorDraft(e.target.value)}
-            onBlur={() => commitFloor(floorDraft)}
-            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
-          />
-          <input
-            type="text"
-            inputMode="numeric"
-            value={ceilDraft}
-            onChange={(e) => setCeilDraft(e.target.value)}
-            onBlur={() => commitCeil(ceilDraft)}
-            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            className="w-12 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
-          />
+          <div className="relative w-16">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={floorDraft}
+              onChange={(e) => setFloorDraft(e.target.value)}
+              onBlur={() => commitFloor(floorDraft)}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+              className="w-full bg-slate-900 border border-slate-700 rounded pl-1 pr-5 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+            />
+            {floor !== DEFAULT_FLOOR && (
+              <button
+                type="button"
+                onClick={() => commitFloor(String(DEFAULT_FLOOR))}
+                className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-500 hover:text-[#e65161]"
+                data-tooltip={tooltips.resetLevelFloor}
+              >
+                <RotateCcw size={11} />
+              </button>
+            )}
+          </div>
+          <div className="relative w-16">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={ceilDraft}
+              onChange={(e) => setCeilDraft(e.target.value)}
+              onBlur={() => commitCeil(ceilDraft)}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+              className="w-full bg-slate-900 border border-slate-700 rounded pl-1 pr-5 py-0.5 text-xs text-center focus:border-[#e65161] outline-none"
+            />
+            {ceil !== DEFAULT_CEIL && (
+              <button
+                type="button"
+                onClick={() => commitCeil(String(DEFAULT_CEIL))}
+                className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-500 hover:text-[#e65161]"
+                data-tooltip={tooltips.resetLevelCeil}
+              >
+                <RotateCcw size={11} />
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
