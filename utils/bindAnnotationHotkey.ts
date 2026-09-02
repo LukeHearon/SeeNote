@@ -29,16 +29,17 @@ export const canBindAnnotationToHotkey = (
   return nextAvailableHotkey(tools) !== null;
 };
 
-/** Bind the annotation's label to the next free hotkey. Returns true if it acted. */
+/** Bind the annotation's label to the next free hotkey. Returns the key it bound
+ *  to, or null if it couldn't act. */
 export const bindAnnotationToHotkey = (
   annotation: Pick<Annotation, 'text'>,
   tools: AnnotationTool[],
   handlers: BindAnnotationHotkeyHandlers,
-): boolean => {
-  if (!canBindAnnotationToHotkey(annotation, tools)) return false;
+): string | null => {
+  if (!canBindAnnotationToHotkey(annotation, tools)) return null;
   const key = nextAvailableHotkey(tools)!;
   const existing = annotationMatchingTool(annotation, tools);
   if (existing) handlers.onBindHotkey(existing.id, key);
   else handlers.onCreateTool(annotation.text, pickNextToolColor(tools), key);
-  return true;
+  return key;
 };

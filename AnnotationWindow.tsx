@@ -1649,10 +1649,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const bindSelectedAnnotationToHotkey = () => {
       const ann = annotations.find(a => a.id === selectedAnnotationId);
       if (!ann) return;
-      bindAnnotationToHotkey(ann, annotationTools, {
+      const key = bindAnnotationToHotkey(ann, annotationTools, {
           onBindHotkey: handleBindHotkey,
           onCreateTool: handleCreateTool,
       });
+      // Ready the freshly bound tool so it's immediately usable.
+      if (key) readyTool(key);
   };
   const pasteAnnotationAtPlayhead = () => {
       const clip = annotationClipboardRef.current;

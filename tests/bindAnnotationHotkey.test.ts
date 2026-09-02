@@ -36,8 +36,8 @@ describe('bindAnnotationToHotkey', () => {
   it('assigns an existing unassigned tool to the next free key', () => {
     const onBindHotkey = vi.fn();
     const onCreateTool = vi.fn();
-    const acted = bindAnnotationToHotkey({ text: 'wind' }, [...baseTools, tool(null, 'wind')], { onBindHotkey, onCreateTool });
-    expect(acted).toBe(true);
+    const boundKey = bindAnnotationToHotkey({ text: 'wind' }, [...baseTools, tool(null, 'wind')], { onBindHotkey, onCreateTool });
+    expect(boundKey).toBe('2');
     expect(onBindHotkey).toHaveBeenCalledWith('id-wind', '2');
     expect(onCreateTool).not.toHaveBeenCalled();
   });
@@ -49,10 +49,10 @@ describe('bindAnnotationToHotkey', () => {
     expect(onCreateTool).toHaveBeenCalledWith('frog', expect.any(String), '2');
   });
 
-  it('does nothing and returns false when it cannot act', () => {
+  it('does nothing and returns null when it cannot act', () => {
     const onBindHotkey = vi.fn();
     const onCreateTool = vi.fn();
-    expect(bindAnnotationToHotkey({ text: 'Bird' }, baseTools, { onBindHotkey, onCreateTool })).toBe(false);
+    expect(bindAnnotationToHotkey({ text: 'Bird' }, baseTools, { onBindHotkey, onCreateTool })).toBe(null);
     expect(onBindHotkey).not.toHaveBeenCalled();
     expect(onCreateTool).not.toHaveBeenCalled();
   });
