@@ -105,11 +105,47 @@ function computeFileCount(node: TreeNode, annotatedTracks: Set<string>): [number
   return [count, annotated];
 }
 
+// Directory (annotated, total) counts derived from a flat file list, keyed by
+// the same `/`-joined dir paths buildTree assigns to its nodes.
+function dirCountsFromFiles(
+  rootDir: string,
+  files: string[],
+  annotatedTracks: Set<string>,
+): Map<string, [number, number]> {
+  const counts = new Map<string, [number, number]>();
+  for (const file of files) {
+    if (!file.startsWith(rootDir + '/') && !file.startsWith(rootDir + '\\')) continue;
+    const rel = file.substring(rootDir.length + 1);
+    const parts = rel.split(/[\\/]/);
+    const isAnnotated = annotatedTracks.has(file) ? 1 : 0;
+    let path = rootDir;
+    for (let i = 0; i < parts.length - 1; i++) {
+      path += '/' + parts[i];
+      const cur = counts.get(path) ?? [0, 0];
+      cur[0] += 1;
+      cur[1] += isAnnotated;
+      counts.set(path, cur);
+    }
+  }
+  return counts;
+}
+
+// Overwrite every dir node's counts with the unfiltered totals so the file-tree
+// counts stay fixed regardless of the annotated/unannotated filter.
+function applyDirCounts(node: TreeNode, counts: Map<string, [number, number]>): void {
+  if (!node.isDir) return;
+  const [total, annotated] = counts.get(node.path) ?? [0, 0];
+  node.fileCount = total;
+  node.annotatedCount = annotated;
+  for (const c of node.children) applyDirCounts(c, counts);
+}
+
 function buildTree(
   rootDir: string,
   files: string[],
   nonMediaFiles: string[] = [],
   annotatedTracks: Set<string> = new Set(),
+  countFiles?: string[],
 ): TreeNode[] {
   const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0, annotatedCount: 0 };
 
@@ -142,6 +178,14 @@ function buildTree(
 
   // Precompute file + annotated counts bottom-up
   for (const child of root.children) computeFileCount(child, annotatedTracks);
+
+  // When a filter is active, `files` is the filtered subset but the displayed
+  // counts should still reflect the whole project — recompute dir counts from
+  // the unfiltered list.
+  if (countFiles) {
+    const counts = dirCountsFromFiles(rootDir, countFiles, annotatedTracks);
+    for (const child of root.children) applyDirCounts(child, counts);
+  }
 
   // Attach non-media files to their containing directory nodes
   if (nonMediaFiles.length > 0) {
@@ -497,20 +541,16 @@ function FileTree({
   const tree = useMemo(() => {
     if (!effectiveRoot) return [];
     if (effectiveFiles.length === 0 && effectiveNonMediaFiles.length === 0) return [];
-    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks);
-  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks]);
+    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, effectiveTotalFiles);
+  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, effectiveTotalFiles]);
 
-  // Same fileCount/annotatedCount the tree rows show, summed over the top level —
-  // the header count for the entered dir, kept in lockstep with the tree's own totals.
+  // Header count for the entered dir — the whole (unfiltered) project total, so
+  // it doesn't move when the annotated/unannotated filter is toggled.
   const rootCounts = useMemo(() => {
-    let fileCount = 0;
     let annotatedCount = 0;
-    for (const n of tree) {
-      fileCount += n.fileCount;
-      annotatedCount += n.annotatedCount;
-    }
-    return { fileCount, annotatedCount };
-  }, [tree]);
+    for (const f of effectiveTotalFiles) if (annotatedTracks.has(f)) annotatedCount += 1;
+    return { fileCount: effectiveTotalFiles.length, annotatedCount };
+  }, [effectiveTotalFiles, annotatedTracks]);
 
   // Preserve scroll position across tree rebuilds (refresh, file-list changes,
   // opening a folder's contents) as long as we're still viewing the same folder.

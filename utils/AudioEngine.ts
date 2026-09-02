@@ -182,6 +182,12 @@ const sleep = (ms: number): Promise<void> =>
 export class AudioEngine implements PlaybackTransport {
   private ctx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
+  // Brickwall-ish limiter sitting between the master gain and the output device.
+  // Protects the listener when the volume slider (or normalization) drives the
+  // signal hot: output can't run far past the threshold no matter the gain.
+  // Its `reduction` (dB, 0 = clean, negative = clamping) drives the "LIMIT"
+  // indicator on the volume control.
+  private limiterNode: DynamicsCompressorNode | null = null;
   // Gain value applied at next gainNode creation (set via setGain before play)
   private _currentGain = 1;
 
@@ -319,6 +325,7 @@ export class AudioEngine implements PlaybackTransport {
       await this.ctx.close().catch(() => {});
       this.ctx = null;
       this.gainNode = null;
+      this.limiterNode = null;
       this._teardownFilterGraph();
     }
 
@@ -424,7 +431,14 @@ export class AudioEngine implements PlaybackTransport {
       }
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
-      this.gainNode.connect(this.ctx.destination);
+      this.limiterNode = this.ctx.createDynamicsCompressor();
+      this.limiterNode.threshold.value = -2;   // dBFS ceiling
+      this.limiterNode.knee.value = 0;         // hard knee — acts as a limiter
+      this.limiterNode.ratio.value = 20;
+      this.limiterNode.attack.value = 0.003;
+      this.limiterNode.release.value = 0.1;
+      this.gainNode.connect(this.limiterNode);
+      this.limiterNode.connect(this.ctx.destination);
       this._buildFilterGraph();
       // A context that suspends or is interrupted mid-play keeps ctx.currentTime
       // (and so the playhead) advancing on some implementations while nothing
@@ -600,7 +614,20 @@ export class AudioEngine implements PlaybackTransport {
 
   setGain(gain: number): void {
     this._currentGain = gain;
-    if (this.gainNode) this.gainNode.gain.value = gain;
+    if (!this.gainNode) return;
+    // Short ramp so a big slider jump (or a scroll flick) doesn't click.
+    if (this.ctx) {
+      this.gainNode.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+    } else {
+      this.gainNode.gain.value = gain;
+    }
+  }
+
+  /** Current limiter gain reduction in dB: 0 when passing clean, negative while
+   *  clamping. Polled by the transport to drive the volume control's "LIMIT"
+   *  indicator. */
+  getLimiterReduction(): number {
+    return this.limiterNode?.reduction ?? 0;
   }
 
   /**
@@ -653,6 +680,7 @@ export class AudioEngine implements PlaybackTransport {
       await this.ctx.close().catch(() => {});
       this.ctx = null;
       this.gainNode = null;
+      this.limiterNode = null;
       this._teardownFilterGraph();
     }
   }
@@ -668,6 +696,7 @@ export class AudioEngine implements PlaybackTransport {
       this.ctx = null;
     }
     this.gainNode = null;
+    this.limiterNode = null;
     this._teardownFilterGraph();
     this.timeStretch.dispose();
     this.filePath = null;
