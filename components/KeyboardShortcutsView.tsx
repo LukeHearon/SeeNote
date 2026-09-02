@@ -81,6 +81,7 @@ const GROUPS: Group[] = [
       { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
       { codes: ['KeyC'], display: '{mod}+C', label: 'Copy selected annotation' },
       { codes: ['KeyV'], display: '{mod}+V', label: 'Paste annotation at playhead' },
+      { codes: ['KeyB'], display: '{mod}+B', label: 'Bind selected annotation to a hotkey' },
       { codes: ['KeyZ'], display: '{mod}+Z', label: 'Undo' },
       { codes: ['KeyZ'], display: '{mod}+Shift+Z', label: 'Redo' },
       { codes: ['KeyY'], display: '{mod}+Y', label: 'Redo' },

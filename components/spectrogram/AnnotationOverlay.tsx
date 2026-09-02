@@ -7,7 +7,7 @@ import { annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '.
 import AnnotationLabelInput from './AnnotationLabelInput';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
-import { pickNextToolColor, nextAvailableHotkey } from '../../constants';
+import { annotationMatchingTool, canBindAnnotationToHotkey, bindAnnotationToHotkey } from '../../utils/bindAnnotationHotkey';
 import ContextMenu, { ContextMenuItem } from '../ContextMenu';
 
 interface AnnotationOverlayProps {
@@ -100,22 +100,13 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   const contextMenuItems = (state: AnnotationContextMenuState): ContextMenuItem[] => {
     const ann = annotations.find(a => a.id === state.annotationId);
     if (!ann) return [];
-    const existingTool = annotationTools.find(t => t.key !== '0' && t.text.toLowerCase() === ann.text.toLowerCase());
-    const nextKey = nextAvailableHotkey(annotationTools);
-    const alreadyBound = existingTool != null && existingTool.key !== null;
+    const existingTool = annotationMatchingTool(ann, annotationTools);
     return [
       {
         label: copy.contextBindHotkey,
         icon: <Keyboard size={12} />,
-        disabled: !ann.text || alreadyBound || nextKey === null,
-        onSelect: () => {
-          if (!nextKey) return;
-          if (existingTool) {
-            onBindHotkey(existingTool.id, nextKey);
-          } else {
-            onCreateTool(ann.text, pickNextToolColor(annotationTools), nextKey);
-          }
-        },
+        disabled: !canBindAnnotationToHotkey(ann, annotationTools),
+        onSelect: () => bindAnnotationToHotkey(ann, annotationTools, { onBindHotkey, onCreateTool }),
       },
       {
         label: copy.contextListenExample,

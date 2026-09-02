@@ -12,6 +12,7 @@ import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stri
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
+import { bindAnnotationToHotkey } from './utils/bindAnnotationHotkey';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
 import { isInsideDir } from './utils/projectPaths';
@@ -1642,6 +1643,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (!ann) return;
       annotationClipboardRef.current = { text: ann.text, color: ann.color, duration: ann.end - ann.start };
   };
+  // Mod+B — bind the selected annotation's label to the next free hotkey,
+  // creating a tool for it if none carries that label yet. Same action as the
+  // annotation context menu's "Bind to hotkey".
+  const bindSelectedAnnotationToHotkey = () => {
+      const ann = annotations.find(a => a.id === selectedAnnotationId);
+      if (!ann) return;
+      bindAnnotationToHotkey(ann, annotationTools, {
+          onBindHotkey: handleBindHotkey,
+          onCreateTool: handleCreateTool,
+      });
+  };
   const pasteAnnotationAtPlayhead = () => {
       const clip = annotationClipboardRef.current;
       if (!clip || displayDuration <= 0) return;
@@ -1711,6 +1723,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
       { key: 'c', mods: ['mod'], handler: copyActiveAnnotation },
       { key: 'v', mods: ['mod'], handler: pasteAnnotationAtPlayhead },
+      { key: 'b', mods: ['mod'], handler: bindSelectedAnnotationToHotkey },
 
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
