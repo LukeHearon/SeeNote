@@ -290,6 +290,11 @@ describe('generateAudacityContent', () => {
     expect(out).toBe('0.000\t1.000\ta,b "c"\n');
   });
 
+  it('skips unnamed (blank-label) annotations — they stay on screen but never reach disk', () => {
+    const out = generateAudacityContent([ann(0, 1, 'hello'), ann(2, 3, ''), ann(4, 5, '   ')], 1);
+    expect(out).toBe('0.0\t1.0\thello\n');
+  });
+
   it('respects decimals argument', () => {
     const out = generateAudacityContent([ann(1.23456789, 2, 'x')], 4);
     expect(out).toBe('1.2346\t2.0000\tx\n');

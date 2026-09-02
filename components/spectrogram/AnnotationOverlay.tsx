@@ -41,7 +41,8 @@ interface AnnotationOverlayProps {
   onAnnotationMouseEnter: (id: string) => void;
   onAnnotationMouseLeave: () => void;
   setEditingInputId: (id: string | null) => void;
-  setPencilClickedId: (id: string | null) => void;
+  /** Open an annotation's label editor and put the caret in it (pencil click). */
+  focusAnnotationInput: (id: string) => void;
   setResizingAnnotation: (v: { id: string; side: 'start' | 'end'; originalTime: number } | null) => void;
   // Right-click "Bind to hotkey": binds the label's existing tool, or creates
   // a new one, to the next free hotkey digit.
@@ -89,7 +90,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   onAnnotationMouseEnter,
   onAnnotationMouseLeave,
   setEditingInputId,
-  setPencilClickedId,
+  focusAnnotationInput,
   setResizingAnnotation,
   onCreateTool,
   onBindHotkey,
@@ -161,6 +162,15 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         // Convert container-px placement to a style relative to the
         // annotation div (whose origin is at container x = left).
         const labelStyle = { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
+        // The label is clipped to the box, but the editor can't be: pinned to
+        // both edges of a sliver of a box it collapses to zero width, so a
+        // zoomed-out edit has nowhere to put the caret. Below the readable
+        // width it drops the right pin and takes a fixed width of its own,
+        // overhanging the box (and carrying the dropdown with it).
+        const MIN_EDITOR_WIDTH = 140;
+        const editorStyle = width > 30
+            ? labelStyle
+            : { left: labelStyle.left, right: 'auto', width: `${MIN_EDITOR_WIDTH}px` };
 
         // Screen-right pinning for the edit/delete hover buttons, mirroring the
         // label's screen-left pin: when the annotation's end scrolls off the
@@ -263,16 +273,19 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    {width > 20 && <div className="w-[1px] h-3 bg-white/50" />}
                </div>
 
-               {width > 30 ? (
-                   // When editing (pencil or new empty annotation): show an input.
-                   // Otherwise: show a read-only span with ellipsis truncation.
-                   (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
+               {/* When editing (pencil or new empty annotation): show an input.
+                   Otherwise: show a read-only span with ellipsis truncation.
+                   The editor is NOT gated on width — zooming out until the box
+                   is a sliver used to unmount it mid-word, dropping the caret
+                   and the matching-tool dropdown. A box too narrow to hold the
+                   text still gets a typeable editor (see editorStyle). */}
+               {(editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
                        <AnnotationLabelInput
                            annotation={annotation}
                            annotations={annotations}
                            annotationTools={annotationTools}
                            isSelected={isSelected}
-                           labelStyle={labelStyle}
+                           labelStyle={editorStyle}
                            inputRefs={inputRefs}
                            pendingAnnotationsRef={pendingAnnotationsRef}
                            onAnnotationsChange={onAnnotationsChange}
@@ -282,7 +295,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            deleteAnnotation={deleteAnnotation}
                            placeholder={copy.namePlaceholder}
                        />
-                   ) : (
+                   ) : width > 30 ? (
                        <span
                            className="absolute top-0 bottom-0 flex items-center text-xs font-bold pointer-events-none"
                            style={{
@@ -299,8 +312,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        >
                            {annotation.text || <span className="opacity-30">{copy.namePlaceholder}</span>}
                        </span>
-                   )
-               ) : null}
+                   ) : null}
 
                {/* Pencil icon — appears on hover for Custom annotations only, click to focus text input */}
                {isHovered && isCustomAnnotation && (
@@ -314,8 +326,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                      onMouseDown={(e) => e.stopPropagation()}
                      onClick={(e) => {
                        e.stopPropagation();
-                       setEditingInputId(annotation.id);
-                       setPencilClickedId(annotation.id);
+                       focusAnnotationInput(annotation.id);
                      }}
                      data-tooltip={tooltips.editAnnotationName}
                    >
@@ -331,8 +342,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                      onMouseDown={(e) => e.stopPropagation()}
                      onClick={(e) => {
                        e.stopPropagation();
-                       setEditingInputId(annotation.id);
-                       setPencilClickedId(annotation.id);
+                       focusAnnotationInput(annotation.id);
                      }}
                      data-tooltip={tooltips.editAnnotationName}
                    >

@@ -18,7 +18,9 @@ export default function AnnotationLabelInput({
   annotations: Annotation[];
   annotationTools: AnnotationTool[];
   isSelected: boolean;
-  labelStyle: { left: string; right: string };
+  // left/right/width placement; a box too narrow to hold the label sends a
+  // fixed-width style instead of one pinned to both edges (see AnnotationOverlay).
+  labelStyle: { left: string; right: string; width?: string };
   inputRefs: React.MutableRefObject<Record<string, HTMLInputElement | null>>;
   pendingAnnotationsRef: React.MutableRefObject<Annotation[]>;
   onAnnotationsChange: (annotations: Annotation[]) => void;
@@ -89,13 +91,11 @@ export default function AnnotationLabelInput({
         }}
         onBlur={() => {
           setEditingInputId(null);
-          if (annotation.text.trim() === '') {
-            const filtered = annotations.filter(a => a.id !== annotation.id);
-            onAnnotationsCommit(filtered);
-            onSelectAnnotation(null);
-          } else {
-            onAnnotationsCommit(pendingAnnotationsRef.current);
-          }
+          // An annotation left unnamed stays on screen — clicking away used to
+          // delete it, so a stray click destroyed the box the user had just
+          // drawn. It simply never reaches disk (isPersistableAnnotation), so
+          // leaving the track is what discards it.
+          onAnnotationsCommit(pendingAnnotationsRef.current);
         }}
         className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
         style={{

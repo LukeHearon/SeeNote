@@ -46,6 +46,22 @@ describe('persistAnnotations', () => {
     expect(removeFile).not.toHaveBeenCalled();
   });
 
+  it('omits unnamed (blank-label) annotations from what it writes', async () => {
+    const result = await persistAnnotations('/x/a.txt', [ann(0, 1, 'bee'), ann(2, 3, '  ')], 4);
+    expect(result).toBe('written');
+    expect(writeTextFile).toHaveBeenCalledWith('/x/a.txt', '0.0000\t1.0000\tbee\n');
+  });
+
+  it('treats a list of nothing but unnamed annotations as empty, not as a write', async () => {
+    // Taking the 'written' path would create the file with empty content, which
+    // on disk reads as "the user cleared this track" for a track they only drew
+    // an unnamed box on.
+    vi.mocked(checkFileExists).mockResolvedValue(false);
+    const result = await persistAnnotations('/x/a.txt', [ann(0, 1, '')], 4);
+    expect(result).toBe('cleared');
+    expect(writeTextFile).not.toHaveBeenCalled();
+  });
+
   it('creates nothing for an empty list when no file exists', async () => {
     // Never-annotated is the "absent" state, not the "cleared" state. Creating
     // the file here would mark a merely-opened track as deliberately cleared

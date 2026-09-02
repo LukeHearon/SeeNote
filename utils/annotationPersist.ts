@@ -1,6 +1,6 @@
 import { Annotation, LoadedAnnotations } from '../types';
 import { writeTextFile, checkFileExists } from './tauriCommands';
-import { generateAudacityContent } from './helpers';
+import { generateAudacityContent, isPersistableAnnotation } from './helpers';
 
 /**
  * The single write decision for an annotation file. Both the debounced autosave
@@ -30,11 +30,16 @@ export async function persistAnnotations(
   annotations: Annotation[],
   decimals: number,
 ): Promise<'written' | 'cleared'> {
-  if (annotations.length === 0) {
+  // Unnamed (blank-label) boxes never reach disk — see isPersistableAnnotation.
+  // Filtering here as well as in generateAudacityContent is what keeps a list of
+  // nothing but unnamed boxes from taking the 'written' path and creating an
+  // empty file, which on disk would read as "the user cleared this track".
+  const persistable = annotations.filter(isPersistableAnnotation);
+  if (persistable.length === 0) {
     if (await checkFileExists(annotPath)) await writeTextFile(annotPath, '');
     return 'cleared';
   }
-  await writeTextFile(annotPath, generateAudacityContent(annotations, decimals));
+  await writeTextFile(annotPath, generateAudacityContent(persistable, decimals));
   return 'written';
 }
 

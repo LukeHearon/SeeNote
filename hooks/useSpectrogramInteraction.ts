@@ -39,6 +39,8 @@ export interface SpectrogramInteractionParams {
   onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
+  /** Open (and focus) an annotation's inline label editor. */
+  onEditAnnotationText: (id: string) => void;
   onBandPassFilterChange: (f: BandPassFilter | null) => void;
   onBandPassFilterDrawn: (f: BandPassFilter) => void;
   // Cursor-tracking setters (drag triggers no re-render, but mouse-move does).
@@ -120,6 +122,7 @@ export function useSpectrogramInteraction({
   onSelectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
+  onEditAnnotationText,
   onBandPassFilterChange,
   onBandPassFilterDrawn,
   setCursorPos,
@@ -214,12 +217,20 @@ export function useSpectrogramInteraction({
     if (!activeAnnotationTool) return;
     const newAnnotation = makeAnnotationFromTool(activeAnnotationTool, start, end);
     onAnnotationsCommit([...annotations, newAnnotation]);
-    if (quiet) return;
+    if (quiet) {
+      // The Custom tool creates an unnamed annotation, and the only way to name
+      // one is its inline editor — which the quiet path never opened, because it
+      // mounts off the selection Alt deliberately leaves alone. Open it
+      // explicitly instead: typing a label disturbs neither playback nor the
+      // selection, so it stays within Alt's promise.
+      if (newAnnotation.text === '') onEditAnnotationText(newAnnotation.id);
+      return;
+    }
     onSelectAnnotation(newAnnotation.id);
     onBoundAnnotationChange(newAnnotation.id);
     onSelectionChange({ start, end });
     snapPlayheadIfOutside(start, end);
-  }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange, snapPlayheadIfOutside]);
+  }, [activeAnnotationTool, annotations, onAnnotationsCommit, onSelectAnnotation, onBoundAnnotationChange, onSelectionChange, onEditAnnotationText, snapPlayheadIfOutside]);
 
   /**
    * Turn a span the user has just drawn out into whatever the current mode

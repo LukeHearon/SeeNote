@@ -272,6 +272,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Tracks which annotation is currently in text-edit mode (only via pencil)
   const [editingInputId, setEditingInputId] = useState<string | null>(null);
 
+  // Open one annotation's inline label editor and put the caret in it. Shared
+  // by the imperative handle, the pencil button, and the Alt-drag creation of
+  // an unnamed Custom annotation.
+  const focusAnnotationInput = useCallback((id: string) => {
+    setEditingInputId(id);
+    setPencilClickedId(id);
+  }, []);
+
   const handleAnnotationMouseEnter = useCallback((id: string) => {
     if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
     setHoveredAnnotationId(id);
@@ -450,6 +458,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     onSelectAnnotation,
     onSelectionChange,
     onBoundAnnotationChange,
+    onEditAnnotationText: focusAnnotationInput,
     onBandPassFilterChange,
     onBandPassFilterDrawn,
     setCursorPos,
@@ -1280,11 +1289,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     applyWheel,
     zoomIn,
     zoomOut,
-    focusAnnotationInput: (id: string) => {
-      setEditingInputId(id);
-      setPencilClickedId(id);
-    },
-  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut]);
+    focusAnnotationInput,
+  }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut, focusAnnotationInput]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
@@ -1386,7 +1392,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            onAnnotationMouseEnter={handleAnnotationMouseEnter}
            onAnnotationMouseLeave={handleAnnotationMouseLeave}
            setEditingInputId={setEditingInputId}
-           setPencilClickedId={setPencilClickedId}
+           focusAnnotationInput={focusAnnotationInput}
            setResizingAnnotation={setResizingAnnotation}
            onCreateTool={onCreateTool}
            onBindHotkey={onBindHotkey}
