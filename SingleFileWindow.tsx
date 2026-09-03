@@ -357,6 +357,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       // copies of those fall back to their demos rather than to dead buttons.
       filePanel: null,
       toolPalette: null,
+      debugLogs,
     },
     {
       play: togglePlay,

@@ -14,6 +14,7 @@ import { BuzzdetectToggle, IsolateToggle, SubsetToggle, SpectrogramSettingsButto
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
+import { DebugConsolePanel } from '../DebugConsole';
 import { ExampleBuzzdetectPanel, ExampleFilePanel, ExampleFindLabel } from './ExamplePanels';
 import VolumeControl from '../VolumeControl';
 
@@ -34,7 +35,8 @@ export type LiveControlId =
   | 'file-panel'
   | 'tool-palette'
   | 'buzzdetect-panel'
-  | 'find-label';
+  | 'find-label'
+  | 'debug';
 
 // ---------------------------------------------------------------------------
 // Demo state
@@ -45,6 +47,14 @@ export type LiveControlId =
 // ---------------------------------------------------------------------------
 
 const DEMO_FILE_PANEL = { fileFilter: 'all' as const, shuffleMode: false, anyExpanded: false };
+
+// Stand-in log lines so the console shows its shape with no project open. The
+// real ones come from playback and video-decode diagnostics.
+const DEMO_DEBUG_LOGS = [
+  { time: '00:00:01', msg: 'Video mode: Fast (element playback)', type: 'info' as const },
+  { time: '00:00:03', msg: 'Selection playback: decoded 16.25s PCM in 214ms', type: 'info' as const },
+  { time: '00:00:12', msg: 'Frame source: seek to 42.500s (keyframe at 41.960s)', type: 'info' as const },
+];
 
 const DEMO_PALETTE = {
   tools: demoAnnotationTools,
@@ -95,6 +105,7 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     sampleRate: DEMO_SAMPLE_RATE,
     filePanel: DEMO_FILE_PANEL,
     toolPalette: DEMO_PALETTE,
+    debugLogs: DEMO_DEBUG_LOGS,
   });
   const set = (patch: Partial<LiveSnapshot>) => setSnapshot(s => ({ ...s, ...patch }));
   return { snapshot, set, store: storeRef.current };
@@ -129,7 +140,7 @@ function Frame({ mode, wide, children }: { mode: Mode; wide?: boolean; children:
 const EXAMPLE_ONLY: ReadonlySet<LiveControlId> = new Set(['file-panel', 'buzzdetect-panel', 'find-label']);
 
 /** Controls that want the content column's full width rather than hugging. */
-const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel', 'find-label']);
+const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel', 'find-label', 'debug']);
 
 /**
  * Whether this control has something to drive in the main window. Most follow
@@ -334,6 +345,14 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
         return <ExampleBuzzdetectPanel />;
       case 'find-label':
         return <ExampleFindLabel />;
+      case 'debug':
+        // The real modal chrome, minus the backdrop — same panel the app shows.
+        // Live when a project is open (its actual diagnostics), demo otherwise.
+        return (
+          <div className="w-full h-[26rem] bg-slate-800 rounded-lg border border-slate-700 p-4">
+            <DebugConsolePanel logs={s.debugLogs} />
+          </div>
+        );
       case 'tool-palette': {
         const tp = s.toolPalette ?? DEMO_PALETTE;
         const setTp = (patch: Partial<typeof tp>) => demo.set({ toolPalette: { ...tp, ...patch } });

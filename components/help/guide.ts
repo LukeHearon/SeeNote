@@ -299,6 +299,7 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.debug.p1 },
           { kind: 'p', text: help.debug.p2 },
+          { kind: 'live', control: 'debug' },
           { kind: 'note', text: help.debug.note_copy },
         ],
       },

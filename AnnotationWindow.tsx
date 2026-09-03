@@ -2018,6 +2018,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         activeToolKey,
         playingExampleToolId: examplePlayer.playingToolId,
       },
+      debugLogs,
     },
     {
       play: togglePlay,
