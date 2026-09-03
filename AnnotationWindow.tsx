@@ -2672,6 +2672,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onAnnotationsChange={handleDisplayAnnotationsChange}
                 onAnnotationsCommit={handleDisplayAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
+                onDeselectAnnotation={deselectAnnotation}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}

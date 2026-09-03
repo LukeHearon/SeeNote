@@ -12,7 +12,7 @@ import ToolMatchDropdown from '../ToolMatchDropdown';
 export default function AnnotationLabelInput({
   annotation, annotations, annotationTools, isSelected, labelStyle, inputRefs,
   pendingAnnotationsRef, onAnnotationsChange, onAnnotationsCommit, onSelectAnnotation,
-  setEditingInputId, deleteAnnotation, placeholder,
+  onDeselect, setEditingInputId, deleteAnnotation, placeholder,
 }: {
   annotation: Annotation;
   annotations: Annotation[];
@@ -26,6 +26,9 @@ export default function AnnotationLabelInput({
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
+  // Full deselect (also drops the bound annotation + its selection region).
+  // Falls back to onSelectAnnotation(null) when not supplied.
+  onDeselect?: () => void;
   setEditingInputId: (id: string | null) => void;
   deleteAnnotation: () => void;
   placeholder: string;
@@ -75,7 +78,7 @@ export default function AnnotationLabelInput({
               pickMatch(matches[activeIndex].toolIndex);
               return;
             }
-            onSelectAnnotation(null);
+            if (onDeselect) onDeselect(); else onSelectAnnotation(null);
             (e.target as HTMLInputElement).blur();
           }
           if (e.key === 'Escape') {

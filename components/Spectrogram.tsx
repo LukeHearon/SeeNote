@@ -75,6 +75,8 @@ interface SpectrogramProps {
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
+  // Full deselect used by the label editor's Enter key (see AnnotationOverlay).
+  onDeselectAnnotation?: () => void;
   onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
@@ -190,6 +192,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onAnnotationsChange,
   onAnnotationsCommit,
   onSelectAnnotation,
+  onDeselectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
   onZoomChange,
@@ -1385,6 +1388,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            playheadFollowsAnnotationStartRef={playheadFollowsAnnotationStartRef}
            getPointerTime={getPointerTime}
            onSelectAnnotation={onSelectAnnotation}
+           onDeselectAnnotation={onDeselectAnnotation}
            onAnnotationsChange={onAnnotationsChange}
            onAnnotationsCommit={onAnnotationsCommit}
            onBoundAnnotationChange={onBoundAnnotationChange}

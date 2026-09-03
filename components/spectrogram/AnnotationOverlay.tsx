@@ -34,6 +34,9 @@ interface AnnotationOverlayProps {
   playheadFollowsAnnotationStartRef: React.MutableRefObject<boolean>;
   getPointerTime: (e: React.MouseEvent) => number;
   onSelectAnnotation: (id: string | null) => void;
+  // Enter in the label editor: full deselect (clears the bound annotation and
+  // its selection region too), matching the window-level Enter shortcut.
+  onDeselectAnnotation?: () => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -83,6 +86,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   playheadFollowsAnnotationStartRef,
   getPointerTime,
   onSelectAnnotation,
+  onDeselectAnnotation,
   onAnnotationsChange,
   onAnnotationsCommit,
   onBoundAnnotationChange,
@@ -291,6 +295,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            onAnnotationsChange={onAnnotationsChange}
                            onAnnotationsCommit={onAnnotationsCommit}
                            onSelectAnnotation={onSelectAnnotation}
+                           onDeselect={onDeselectAnnotation}
                            setEditingInputId={setEditingInputId}
                            deleteAnnotation={deleteAnnotation}
                            placeholder={copy.namePlaceholder}

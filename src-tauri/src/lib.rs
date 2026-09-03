@@ -1,3 +1,4 @@
+#[cfg(test)] mod probe_push_ref;
 mod audio;
 mod commands;
 
