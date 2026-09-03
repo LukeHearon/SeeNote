@@ -346,6 +346,7 @@ export default function LaunchScreen({
       <li
         key={entry.registry.id}
         onClick={() => { handleEntryClick(entry).catch(() => {}); }}
+        onAuxClick={e => { if (e.button === 1) handleRemove(e, entry, name); }}
         onContextMenu={e => handleContextMenu(e, entry)}
         className={liClass}
       >
@@ -429,6 +430,7 @@ export default function LaunchScreen({
       <li
         key={file.id}
         onClick={() => onOpenFile(file.path)}
+        onAuxClick={e => { if (e.button === 1) handleRemoveFile(e, file); }}
         className="group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all"
       >
         <div className="flex items-start justify-between gap-3">
