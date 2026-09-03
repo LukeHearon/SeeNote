@@ -293,7 +293,20 @@ export function usePlaybackTransport({
     videoEngineRef.current?.attach(el);
   }, []);
 
-  const togglePlay = useCallback(async () => {
+  // `e` is passed only by the spacebar binding. Every "Nms after play" figure in
+  // the engine's log is stamped inside AudioEngine.play(), i.e. after the main
+  // thread got around to the keystroke — so a main thread running seconds behind
+  // (spectrogram work, GC, a React commit storm) is invisible in those numbers
+  // and looks exactly like output latency. `KeyboardEvent.timeStamp` is on the
+  // same clock as `performance.now()`, so their difference is the one reading
+  // that tells "the app was slow to react" apart from "the sound was late".
+  const togglePlay = useCallback(async (e?: KeyboardEvent) => {
+      // Guarded on the event type, not just its presence: togglePlay is also
+      // wired straight to the toolbar's onClick, which hands it a React
+      // synthetic mouse event this reading would mislabel.
+      const inputLagMs = e?.type === 'keydown' && typeof e.timeStamp === 'number'
+        ? performance.now() - e.timeStamp
+        : null;
       const transport = activeTransport();
       if (isPlaying || isBuffering) {
           // Invalidate any in-flight preroll so its resolution can't start playback
@@ -329,7 +342,8 @@ export function usePlaybackTransport({
       }
       setIsBuffering(true);
       const token = ++playTokenRef.current;
-      addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`);
+      addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`
+        + (inputLagMs !== null ? ` keypress->handler=${inputLagMs.toFixed(0)}ms` : ''));
       // Canvas path only: pre-roll so the first frame at startSec is decoded
       // BEFORE the engine schedules audio (short selections could otherwise end
       // before any frame renders). The <video>-element transport decodes itself,

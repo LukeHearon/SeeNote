@@ -413,20 +413,27 @@ export class AudioEngine implements PlaybackTransport {
       // resamples each one), and a buffer's duration in seconds is
       // frames / its own rate either way.
       //
-      // Set localStorage['seenote.audioContextRate'] = 'file' to force the old
-      // behaviour for an A/B on the latency.
-      const deviceRate = this._probeDeviceSampleRate();
+      // A context constructed with no `sampleRate` option opens at the device
+      // rate BY DEFINITION, so that's how we ask for it — and `ctx.sampleRate`
+      // then reports what we got, for free. We used to name the rate explicitly
+      // and get it from a throwaway probe context; see _recordDeviceSampleRate
+      // for why that had to go.
+      //
+      // Set localStorage['seenote.audioContextRate'] = 'file' to force the file's
+      // rate instead, for an A/B on the latency.
       let forceFileRate = false;
       try { forceFileRate = localStorage.getItem('seenote.audioContextRate') === 'file'; } catch { /* no storage */ }
-      const wantedRate = !forceFileRate && deviceRate > 0 ? deviceRate : this.fileSampleRate;
       try {
-        this.ctx = new AudioContext({ sampleRate: wantedRate });
+        this.ctx = forceFileRate
+          ? new AudioContext({ sampleRate: this.fileSampleRate })
+          : new AudioContext();
       } catch {
         this.ctx = new AudioContext();
         console.warn(
-          `AudioEngine: ${wantedRate} Hz not supported, using ${this.ctx.sampleRate} Hz`,
+          `AudioEngine: ${this.fileSampleRate} Hz not supported, using ${this.ctx.sampleRate} Hz`,
         );
       }
+      this._recordDeviceSampleRate(forceFileRate ? 0 : this.ctx.sampleRate);
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
       this.limiterNode = this.ctx.createDynamicsCompressor();
@@ -754,41 +761,32 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
-   * Hardware sample rate of the default output device, measured fresh.
+   * Note the output device's rate, taken from the context we just opened at it,
+   * and log a change since the last one. `rate` is 0 when we deliberately opened
+   * at the file's rate instead (the A/B flag), in which case the context tells
+   * us nothing about the device and the last reading stands.
    *
-   * We open our context at the device's rate: when it isn't, the audio subsystem
-   * resamples on the way out, and that resampler's buffering is deep and is not
-   * reported in `outputLatency` — a delay before sound that nothing in the logs
-   * explains. Measured from a throwaway context created with no `sampleRate`
-   * option (which therefore opens at the device rate) and closed immediately.
+   * This used to be a *probe*: a throwaway AudioContext opened with no
+   * `sampleRate` option, read, and closed, whose rate was then named explicitly
+   * when constructing the real one. That is two AudioContexts alive at once —
+   * `close()` is async and was not awaited (it cannot be; the real context has
+   * to be constructed inside the user gesture) — so CoreAudio was picking an IO
+   * configuration for our real context while a second one was still tearing
+   * down. A race at exactly the moment the output path's buffering is decided,
+   * whose outcome then holds for the whole life of the context, is a strong
+   * candidate for the intermittent "playhead runs ahead of the sound" reports:
+   * bad for every play in one session, fine for every play in the next.
    *
-   * Re-probed on every context creation, never cached across one. The device can
-   * change under a running app — headphones plugged in, output switched, a
-   * display or interface waking — and a rate remembered from the last device is
-   * exactly how we end up asking for the wrong one and buying the resampler we
-   * opened at the device rate to avoid. That failure survives file switches
-   * (which rebuild the context but would reuse the stale number) and clears only
-   * on a fresh engine, which is what "quit and reopen fixes it" looks like.
-   *
-   * Called when our own context is created, never while audio is playing: a
-   * second context opening can make CoreAudio reconsider the device, and a
-   * measurement that disturbs what it measures is worse than none.
+   * Constructing with no options gets the same rate with no second context, so
+   * there is nothing left to race.
    */
-  private _probeDeviceSampleRate(): number {
+  private _recordDeviceSampleRate(rate: number): void {
+    if (rate <= 0) return;
     const prev = this.deviceSampleRate;
-    try {
-      const probe = new AudioContext();
-      this.deviceSampleRate = probe.sampleRate;
-      probe.close().catch(() => {});
-    } catch {
-      // Probe failed: keep the last good reading rather than falling back to the
-      // file's rate, which is the resampling case we're trying to avoid.
-      this.deviceSampleRate = prev ?? 0;
+    this.deviceSampleRate = rate;
+    if (prev !== null && prev !== rate) {
+      this._log(`output device rate changed ${prev}Hz -> ${rate}Hz`);
     }
-    if (prev !== null && prev !== this.deviceSampleRate) {
-      this._log(`output device rate changed ${prev}Hz -> ${this.deviceSampleRate}Hz`);
-    }
-    return this.deviceSampleRate;
   }
 
   /**
@@ -829,7 +827,7 @@ export class AudioEngine implements PlaybackTransport {
         + `measured(getOutputTimestamp)=${measuredStr} — `
         + `compensating ${(this._outputLatencySec() * 1000).toFixed(1)}ms out `
         + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
-        + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'} (probed at ctx open)`,
+        + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
       );
     }, Math.max(0, dueInSec * 1000));
   }
