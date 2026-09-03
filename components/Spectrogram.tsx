@@ -1099,6 +1099,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       if (entries[0]) {
         const { width, height } = entries[0].contentRect;
         const newWidth = Math.max(1, width);
+        const newHeight = Math.max(1, height);
+        // A notification carrying the size we already have has nothing to do,
+        // and doing it anyway is not free: the four synchronous redraws below
+        // include a full spectrogram rebuild. In the `_6` profile this callback
+        // was 1118ms of the 8160ms sampled, nearly all of it inside
+        // useChunkRenderer's draw. ResizeObserver does deliver duplicates, and
+        // a drag-resize delivers a stream of them. A dpr change leaves the CSS
+        // box alone and is handled by its own effect below, so nothing that
+        // needs a repaint is lost by returning here.
+        if (newWidth === containerSizeRef.current.width &&
+            newHeight === containerSizeRef.current.height) return;
         diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
         // Preserve the left-edge time across resize: scrollLeft is in pixels and
         // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
@@ -1123,7 +1134,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         // Publish the new box; each draw sizes its own bitmap from it. Repaint
         // every layer immediately rather than waiting a frame for the rAF loop's
         // dirty flags — a resized bitmap comes back cleared.
-        containerSizeRef.current = { width: newWidth, height: Math.max(1, height) };
+        containerSizeRef.current = { width: newWidth, height: newHeight };
         drawRef.current();
         drawOverlayRef.current();
         drawFilterOverlayRef.current();
