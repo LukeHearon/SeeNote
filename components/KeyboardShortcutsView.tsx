@@ -79,6 +79,7 @@ const GROUPS: Group[] = [
       { codes: ['KeyE'], display: '{mod}+Shift+E', label: 'Export selected audio' },
       { codes: ['KeyF'], display: '{mod}+F', label: 'Find & rename label' },
       { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
+      { codes: ['Enter'], display: '↵', label: 'Deselect annotation, clear its selection region' },
       { codes: ['KeyC'], display: '{mod}+C', label: 'Copy selected annotation' },
       { codes: ['KeyV'], display: '{mod}+V', label: 'Paste annotation at playhead' },
       { codes: ['KeyB'], display: '{mod}+B', label: 'Bind selected annotation to a hotkey and ready its tool' },

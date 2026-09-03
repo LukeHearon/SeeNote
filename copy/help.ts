@@ -302,7 +302,7 @@ export const help = {
 
   editing: {
     get li1() { return getOverride('help.editing.li1') ?? "**Resize:** drag the left or right edge handle."; },
-    get li2() { return getOverride('help.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Use `Alt+←` / `Alt+→` to jump between annotations."; },
+    get li2() { return getOverride('help.editing.li2') ?? "**Bound selection:** click the center of an annotation to bind the playhead loop to it. Press `Enter` to deselect it and clear that selection region. Use `Alt+←` / `Alt+→` to jump between annotations."; },
     get li3() { return getOverride('help.editing.li3') ?? "**Rename:** hover an annotation and click the pencil icon to edit inline. Custom tool annotations open for editing automatically. An annotation left with no name stays on screen so a stray click can't destroy it, but it is never saved — leave the track and it's gone. Typing a partial label pops a dropdown of matching tool names — arrow-key down into it (or click) to adopt that tool's label and color, or just press Enter to keep what you typed as a one-off Custom label."; },
     get li4() { return getOverride('help.editing.li4') ?? "**Delete:** select an annotation and press `Delete` / `Backspace`, or middle-click it directly."; },
     get li5() { return getOverride('help.editing.li5') ?? "**Undo/Redo:** `{mod}+Z` / `{mod}+Shift+Z`."; },

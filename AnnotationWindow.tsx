@@ -1624,6 +1624,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           handleSelectionChange(span);
       }
   };
+  // Enter — deselect the current annotation, dropping the audio selection
+  // region that selecting it created. No-op when nothing is selected.
+  const deselectAnnotation = () => {
+      if (selectedAnnotationId === null) return;
+      setSelectedAnnotationId(null);
+      setBoundAnnotationId(null);
+      handleSelectionChange(null);
+  };
   const deleteSelectedAnnotation = () => {
       if (!selectedAnnotationId) return;
       handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
@@ -1738,6 +1746,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
       // be nothing to subset by.
       { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
+      { key: 'Enter', handler: deselectAnnotation },
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);
