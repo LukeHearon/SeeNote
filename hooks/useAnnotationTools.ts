@@ -275,6 +275,13 @@ export function useAnnotationTools({
     ));
   }, []);
 
+  // Assigns a specific hotkey digit to an existing tool by id — used by the
+  // annotation-label context menu's "Bind to hotkey" action, which already
+  // knows the tool has no key and which digit is next-available.
+  const handleBindHotkey = useCallback((toolId: string, key: string) => {
+    setAnnotationTools(prev => prev.map(t => t.id === toolId ? { ...t, key } : t));
+  }, []);
+
   const handleReorderTools = useCallback((newTools: AnnotationTool[]) => {
     const snapshot = annotationTools;
     if (newTools.length !== snapshot.length) return;
@@ -318,6 +325,7 @@ export function useAnnotationTools({
     handleRenameTool,
     handleDeleteTool,
     handlePreviewToolColor,
+    handleBindHotkey,
     handleReorderTools,
     handleImportExamples,
     handleImportExamplesToTool,

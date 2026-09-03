@@ -299,6 +299,7 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.debug.p1 },
           { kind: 'p', text: help.debug.p2 },
+          { kind: 'live', control: 'debug' },
           { kind: 'note', text: help.debug.note_copy },
         ],
       },
@@ -391,6 +392,7 @@ export const GUIDE: Part[] = [
             help.creating.li3,
             help.creating.li4,
             help.creating.li_sweep,
+            help.creating.li_copy,
           ] },
         ],
       },
@@ -405,6 +407,7 @@ export const GUIDE: Part[] = [
             help.editing.li3,
             help.editing.li4,
             help.editing.li5,
+            help.editing.li6,
           ] },
         ],
       },

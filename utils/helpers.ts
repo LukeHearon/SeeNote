@@ -138,6 +138,17 @@ export const makeAnnotationFromTool = (tool: AnnotationTool, start: number, end:
   };
 };
 
+// A fresh annotation carrying a known label + color, with no owning tool object
+// to hand — used by annotation copy/paste. Colour resolution against the tool
+// set is the caller's job (see resolveLabelColor).
+export const makeAnnotationFromLabel = (text: string, color: string, start: number, end: number): Annotation => ({
+  id: generateId(),
+  start,
+  end,
+  text,
+  color,
+});
+
 // Calculate vertical dodging for overlapping annotations.
 // Returns new objects (inputs are never mutated) sorted by start time,
 // each with a layerIndex assigned by a greedy earliest-available-layer pass.
@@ -245,12 +256,22 @@ const rawLineStillMatches = (a: Annotation): boolean => {
         && parts.slice(2).join('\t') === a.text;
 };
 
+// An annotation with no label is an in-progress box: the user has drawn it with
+// the Custom tool but not yet named it. It stays on screen so a stray click
+// doesn't destroy the drag they just made, but it is never written to disk —
+// a nameless record means nothing to anyone else, and syncing one would push a
+// half-finished edit to the whole team. The consequence is that navigating away
+// and back drops it, which is the intended way to abandon one.
+export const isPersistableAnnotation = (a: Annotation): boolean => a.text.trim() !== '';
+
 // Serialize annotations to Audacity TXT. Untouched records are written back
 // byte-for-byte as they were read (see `Annotation.raw`) so a save only rewrites
 // what changed — without this every save reformats every line at `decimals` and
 // shows up in git sync as the whole file being re-added.
 export const generateAudacityContent = (annotations: Annotation[], decimals: number = 7): string => {
-    const lines = annotations.map(a => (rawLineStillMatches(a) ? a.raw! : formatAnnotationLine(a, decimals)));
+    const lines = annotations
+        .filter(isPersistableAnnotation)
+        .map(a => (rawLineStillMatches(a) ? a.raw! : formatAnnotationLine(a, decimals)));
     // Sort by start time, ties broken by line text: the same order the set-merge
     // emits (`utils/annotationMerge.ts` / `git_sync/annotate.rs`), so a merged
     // file and a locally-saved one agree and neither reorders the other.

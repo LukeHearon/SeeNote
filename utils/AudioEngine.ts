@@ -182,6 +182,10 @@ const sleep = (ms: number): Promise<void> =>
 export class AudioEngine implements PlaybackTransport {
   private ctx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
+  // Brickwall-ish limiter sitting between the master gain and the output device.
+  // Protects the listener when the volume slider (or normalization) drives the
+  // signal hot: output can't run far past the threshold no matter the gain.
+  private limiterNode: DynamicsCompressorNode | null = null;
   // Gain value applied at next gainNode creation (set via setGain before play)
   private _currentGain = 1;
 
@@ -265,9 +269,11 @@ export class AudioEngine implements PlaybackTransport {
   private driftCtxOrigin = 0;
   private driftWallOriginMs = 0;
   private driftLastLoggedSec = 0;
-  /** Hardware sample rate of the default output device, as reported by a
-   *  throwaway context created without a `sampleRate` option. Null until probed;
-   *  0 if the probe failed. */
+  /** Hardware sample rate of the default output device as of the most recent
+   *  context creation, from a throwaway context opened without a `sampleRate`
+   *  option. Null until first probed; 0 if the probe failed with nothing
+   *  previously measured. Never treated as still true for the next context —
+   *  see _probeDeviceSampleRate. */
   private deviceSampleRate: number | null = null;
 
   private callbacks: AudioEngineCallbacks;
@@ -317,6 +323,7 @@ export class AudioEngine implements PlaybackTransport {
       await this.ctx.close().catch(() => {});
       this.ctx = null;
       this.gainNode = null;
+      this.limiterNode = null;
       this._teardownFilterGraph();
     }
 
@@ -422,7 +429,14 @@ export class AudioEngine implements PlaybackTransport {
       }
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
-      this.gainNode.connect(this.ctx.destination);
+      this.limiterNode = this.ctx.createDynamicsCompressor();
+      this.limiterNode.threshold.value = -2;   // dBFS ceiling
+      this.limiterNode.knee.value = 0;         // hard knee — acts as a limiter
+      this.limiterNode.ratio.value = 20;
+      this.limiterNode.attack.value = 0.003;
+      this.limiterNode.release.value = 0.1;
+      this.gainNode.connect(this.limiterNode);
+      this.limiterNode.connect(this.ctx.destination);
       this._buildFilterGraph();
       // A context that suspends or is interrupted mid-play keeps ctx.currentTime
       // (and so the playhead) advancing on some implementations while nothing
@@ -598,7 +612,13 @@ export class AudioEngine implements PlaybackTransport {
 
   setGain(gain: number): void {
     this._currentGain = gain;
-    if (this.gainNode) this.gainNode.gain.value = gain;
+    if (!this.gainNode) return;
+    // Short ramp so a big slider jump (or a scroll flick) doesn't click.
+    if (this.ctx) {
+      this.gainNode.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+    } else {
+      this.gainNode.gain.value = gain;
+    }
   }
 
   /**
@@ -651,6 +671,7 @@ export class AudioEngine implements PlaybackTransport {
       await this.ctx.close().catch(() => {});
       this.ctx = null;
       this.gainNode = null;
+      this.limiterNode = null;
       this._teardownFilterGraph();
     }
   }
@@ -666,6 +687,7 @@ export class AudioEngine implements PlaybackTransport {
       this.ctx = null;
     }
     this.gainNode = null;
+    this.limiterNode = null;
     this._teardownFilterGraph();
     this.timeStretch.dispose();
     this.filePath = null;
@@ -732,28 +754,39 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
-   * Hardware sample rate of the default output device.
+   * Hardware sample rate of the default output device, measured fresh.
    *
-   * We ask for a context at the file's rate so playback is sample-exact with no
-   * resampling in our own graph — but when that rate isn't the device's, the
-   * audio subsystem resamples on the way out, and that resampler's buffering is
-   * not included in `outputLatency`. So the mismatch is worth knowing about when
-   * diagnosing a delay the reported latency doesn't explain. Probed once, from a
-   * throwaway context created with no `sampleRate` option (which therefore opens
-   * at the device rate) and closed immediately.
+   * We open our context at the device's rate: when it isn't, the audio subsystem
+   * resamples on the way out, and that resampler's buffering is deep and is not
+   * reported in `outputLatency` — a delay before sound that nothing in the logs
+   * explains. Measured from a throwaway context created with no `sampleRate`
+   * option (which therefore opens at the device rate) and closed immediately.
+   *
+   * Re-probed on every context creation, never cached across one. The device can
+   * change under a running app — headphones plugged in, output switched, a
+   * display or interface waking — and a rate remembered from the last device is
+   * exactly how we end up asking for the wrong one and buying the resampler we
+   * opened at the device rate to avoid. That failure survives file switches
+   * (which rebuild the context but would reuse the stale number) and clears only
+   * on a fresh engine, which is what "quit and reopen fixes it" looks like.
    *
    * Called when our own context is created, never while audio is playing: a
    * second context opening can make CoreAudio reconsider the device, and a
    * measurement that disturbs what it measures is worse than none.
    */
   private _probeDeviceSampleRate(): number {
-    if (this.deviceSampleRate !== null) return this.deviceSampleRate;
+    const prev = this.deviceSampleRate;
     try {
       const probe = new AudioContext();
       this.deviceSampleRate = probe.sampleRate;
       probe.close().catch(() => {});
     } catch {
-      this.deviceSampleRate = 0;
+      // Probe failed: keep the last good reading rather than falling back to the
+      // file's rate, which is the resampling case we're trying to avoid.
+      this.deviceSampleRate = prev ?? 0;
+    }
+    if (prev !== null && prev !== this.deviceSampleRate) {
+      this._log(`output device rate changed ${prev}Hz -> ${this.deviceSampleRate}Hz`);
     }
     return this.deviceSampleRate;
   }
@@ -784,12 +817,19 @@ export class AudioEngine implements PlaybackTransport {
       const bl = typeof c.baseLatency === 'number' ? `${(c.baseLatency * 1000).toFixed(1)}ms` : 'n/a';
       const measured = this._renderLagSec();
       const dev = this.deviceSampleRate ?? 0;
+      // An exact 0 means getOutputTimestamp() handed back contextTime ===
+      // currentTime, which WKWebView does whatever the device is doing. Marked,
+      // because read as a measurement it says "no real latency" and is the one
+      // reading here that cannot say that.
+      const measuredStr = measured === null ? 'unavailable'
+        : measured === 0 ? '0.0ms (contextTime===currentTime; not a real reading)'
+        : `${(measured * 1000).toFixed(1)}ms`;
       this._log(
         `latency probe: reported out=${ol} base=${bl} — `
-        + `measured(getOutputTimestamp)=${measured === null ? 'unavailable' : `${(measured * 1000).toFixed(1)}ms`} — `
+        + `measured(getOutputTimestamp)=${measuredStr} — `
         + `compensating ${(this._outputLatencySec() * 1000).toFixed(1)}ms out `
         + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
-        + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
+        + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'} (probed at ctx open)`,
       );
     }, Math.max(0, dueInSec * 1000));
   }

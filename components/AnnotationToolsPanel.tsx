@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
 import { AnnotationTool } from '../types';
+import { HOTKEY_SLOTS } from '../constants';
+import NewToolEntry from './NewToolEntry';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
@@ -23,6 +25,13 @@ interface AnnotationToolsPanelProps {
   onOpenFindLabel: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
+  // Middle-click a keyed tool chip to free its hotkey (tool kept, key -> null).
+  // Optional: the live guide copy has no project to mutate.
+  onUnassignTool?: (toolIndex: number) => void;
+  // Add-tool entry (shown while a hotkey slot is free): assign an existing tool
+  // to the next free key, or open the editor to create one from the typed name.
+  onAssignToolHotkey?: (toolIndex: number) => void;
+  onCreateToolForHotkey?: (text: string) => void;
   // Example-clip playback: id of the tool currently auditioning (null = none),
   // a toggle to play/stop a tool's next example, and the "Show examples" library.
   playingExampleToolId: string | null;
@@ -41,6 +50,9 @@ function AnnotationToolsPanel({
   onOpenFindLabel,
   onEditTool,
   onRequestDeleteTool,
+  onUnassignTool,
+  onAssignToolHotkey,
+  onCreateToolForHotkey,
   playingExampleToolId,
   onPlayExample,
   onShowExamples,
@@ -168,6 +180,7 @@ function AnnotationToolsPanel({
                 key={tool.key}
                 className="relative"
                 onContextMenu={e => openContextMenu(e, toolIndex, true)}
+                onMouseDown={e => { if (e.button === 1) { e.preventDefault(); onUnassignTool?.(toolIndex); } }}
                 onMouseEnter={() => setHoveredToolKey(tool.key!)}
                 onMouseLeave={() => setHoveredToolKey(null)}
               >
@@ -215,6 +228,20 @@ function AnnotationToolsPanel({
           })}
         </div>
       </div>
+
+      {/* Add-tool entry — pinned below the scrolling list (so its match dropdown
+          isn't clipped) whenever a hotkey slot is still free. Same search-then-
+          create behaviour as the empty slots in Annotation Tool Settings. */}
+      {definedTools.length < HOTKEY_SLOTS.length && (
+        <div className="flex-none mx-1.5 mb-1.5 px-2 py-1 rounded border border-dashed border-slate-700 hover:border-slate-500 transition-colors">
+          <NewToolEntry
+            annotationTools={annotationTools}
+            onAssignExisting={onAssignToolHotkey ?? (() => {})}
+            onCreateNew={onCreateToolForHotkey ?? (() => {})}
+            dropUp
+          />
+        </div>
+      )}
 
       {contextMenu && (
         <ContextMenu

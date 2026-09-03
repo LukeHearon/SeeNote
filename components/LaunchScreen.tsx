@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
 import { isInsideProjectDir, basename } from '../utils/projectPaths';
 import { findFirstValidAncestor } from '../utils/helpers';
 import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
-import { launchScreen } from '../copy/ui';
+import { launchScreen, openProjectMenu } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useAppUpdate } from '../hooks/useAppUpdate';
 import { APP_VERSION } from '../utils/appVersion';
 import { versionBumpType } from '../utils/semver';
 import CreateProjectModal from './CreateProjectModal';
+import OpenProjectModal from './OpenProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
 
@@ -77,6 +78,8 @@ export default function LaunchScreen({
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
   const [showCreate, setShowCreate] = useState(false);
+  const [showOpenProject, setShowOpenProject] = useState(false);
+  const [showOpenProjectMenu, setShowOpenProjectMenu] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ProjectListEntry | null>(null);
   const [showAppSettings, setShowAppSettings] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -143,6 +146,13 @@ export default function LaunchScreen({
     document.body.addEventListener('mousedown', onDown);
     return () => document.body.removeEventListener('mousedown', onDown);
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!showOpenProjectMenu) return;
+    const onDown = () => setShowOpenProjectMenu(false);
+    document.body.addEventListener('mousedown', onDown);
+    return () => document.body.removeEventListener('mousedown', onDown);
+  }, [showOpenProjectMenu]);
 
   // No background re-validation: see useProjects.ts for the rationale —
   // proactively stat'ing registered projects costs macOS TCC consent prompts.
@@ -528,13 +538,37 @@ export default function LaunchScreen({
               <File size={15} />
               {launchScreen.openFileButton}
             </button>
-            <button
-              onClick={handleOpenExisting}
-              className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
-            >
-              <FolderOpen size={15} />
-              {launchScreen.openExistingButton}
-            </button>
+            <div className="relative">
+              <button
+                onClick={e => { e.stopPropagation(); setShowOpenProjectMenu(prev => !prev); }}
+                className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
+              >
+                <FolderOpen size={15} />
+                {launchScreen.openExistingButton}
+                <ChevronDown size={13} />
+              </button>
+              {showOpenProjectMenu && (
+                <div
+                  className="absolute z-[70] top-full mt-1 right-0 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-full whitespace-nowrap"
+                  onMouseDown={e => e.stopPropagation()}
+                >
+                  <button
+                    onClick={() => { setShowOpenProjectMenu(false); handleOpenExisting().catch(() => {}); }}
+                    className="flex items-center gap-2 w-full text-left px-4 py-1.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                  >
+                    <FolderOpen size={14} />
+                    {openProjectMenu.fromFolder}
+                  </button>
+                  <button
+                    onClick={() => { setShowOpenProjectMenu(false); setShowOpenProject(true); }}
+                    className="flex items-center gap-2 w-full text-left px-4 py-1.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                  >
+                    <Archive size={14} />
+                    {openProjectMenu.fromArchive}
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowCreate(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
@@ -651,6 +685,14 @@ export default function LaunchScreen({
             setShowCreate(false);
             onOpenProject(project);
           }}
+        />
+      )}
+
+      {showOpenProject && (
+        <OpenProjectModal
+          onClose={() => setShowOpenProject(false)}
+          addExistingProject={addExistingProject}
+          onOpenProject={onOpenProject}
         />
       )}
 

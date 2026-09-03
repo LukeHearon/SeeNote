@@ -1,4 +1,5 @@
 pub mod annotation_tools;
+pub mod archive;
 pub mod audio;
 pub mod buzzdetect;
 pub mod credentials;

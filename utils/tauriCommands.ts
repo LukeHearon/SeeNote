@@ -139,6 +139,24 @@ export const removeFile = (path: string): Promise<void> =>
 export const checkDirExists = (path: string): Promise<boolean> =>
   invoke('check_dir_exists', { path });
 
+export const checkFileExists = (path: string): Promise<boolean> =>
+  invoke('check_file_exists', { path });
+
+/** Guess a project folder name from the archive's contents — its single
+ * top-level wrapping folder if it has one, else the archive's filename stem.
+ * A starting point for the user-editable "Project Folder Name" field, not a
+ * requirement `extractArchive` enforces. */
+export const guessProjectFolderName = (archivePath: string): Promise<string> =>
+  invoke('guess_project_folder_name', { archivePath });
+
+/** Extract a .zip, .tar, or .tar.gz/.tgz archive into `{destDir}/{folderName}`,
+ * stripping the archive's own top-level wrapping folder (if it has one) so
+ * `folderName` becomes the project root regardless of what the archive itself
+ * calls that folder. Rejects if the target folder already exists. Resolves to
+ * the final extracted directory path. */
+export const extractArchive = (archivePath: string, destDir: string, folderName: string): Promise<string> =>
+  invoke('extract_archive', { archivePath, destDir, folderName });
+
 /** Recursively list all non-audio/video files under path. */
 export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
   invoke('list_non_media_files_recursive', { path });

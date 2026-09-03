@@ -5,6 +5,7 @@ import {
   formatTimeForUnit,
   decimalsForTimes,
   makeAnnotationFromTool,
+  makeAnnotationFromLabel,
   calculateAnnotationLayers,
   generateAudacityContent,
   parseAudacityContent,
@@ -193,6 +194,23 @@ describe('makeAnnotationFromTool', () => {
   });
 });
 
+describe('makeAnnotationFromLabel', () => {
+  it('carries the given label, color and span, with a fresh id', () => {
+    const a = makeAnnotationFromLabel('Bee', '#ff8800', 1.5, 3.25);
+    expect(a.text).toBe('Bee');
+    expect(a.color).toBe('#ff8800');
+    expect(a.start).toBe(1.5);
+    expect(a.end).toBe(3.25);
+    expect(a.id.length).toBeGreaterThan(0);
+  });
+
+  it('gives distinct ids on repeated calls', () => {
+    const a = makeAnnotationFromLabel('x', '#000', 0, 1);
+    const b = makeAnnotationFromLabel('x', '#000', 0, 1);
+    expect(a.id).not.toBe(b.id);
+  });
+});
+
 describe('calculateAnnotationLayers', () => {
   it('returns [] for empty input', () => {
     expect(calculateAnnotationLayers([])).toEqual([]);
@@ -270,6 +288,11 @@ describe('generateAudacityContent', () => {
   it('does NOT escape commas or quotes in the label (Audacity format is tab-delimited)', () => {
     const out = generateAudacityContent([ann(0, 1, 'a,b "c"')], 3);
     expect(out).toBe('0.000\t1.000\ta,b "c"\n');
+  });
+
+  it('skips unnamed (blank-label) annotations — they stay on screen but never reach disk', () => {
+    const out = generateAudacityContent([ann(0, 1, 'hello'), ann(2, 3, ''), ann(4, 5, '   ')], 1);
+    expect(out).toBe('0.0\t1.0\thello\n');
   });
 
   it('respects decimals argument', () => {

@@ -121,7 +121,8 @@ export function usePlaybackTransport({
     if (u !== 'datetime') setFallbackTimeDisplayUnit(u);
   }, []);
 
-  // Volume: 0 to 4 (400% or +12dB approx)
+  // Volume: 0 to 8 (800% / +18dB approx). The output limiter keeps the hot end
+  // from hurting.
   const [volume, setVolume] = useState(project.preferences.uiSettings?.volume ?? DEFAULT_UI_SETTINGS.volume);
   const [muted, setMuted] = useState(false);
 

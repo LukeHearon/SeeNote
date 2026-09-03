@@ -9,8 +9,10 @@ import {
   mergeImportedTools,
   toPersistedTools,
   diffToolFolders,
+  matchToolsByText,
   PersistedTool,
 } from '../utils/annotationTools';
+import type { AnnotationTool } from '../types';
 import type { FolderTool } from '../utils/tauriCommands';
 
 const folder = (name: string, color = '#111111', description = '', example_files: string[] = []): FolderTool =>
@@ -31,6 +33,29 @@ describe('makeCustomTool', () => {
     expect(makeCustomTool('#abc123')).toEqual({
       id: CUSTOM_TOOL_ID, key: '0', text: 'Custom', color: '#abc123', description: '',
     });
+  });
+});
+
+describe('matchToolsByText', () => {
+  const tool = (key: string | null, text: string): AnnotationTool => ({ id: text, key, text, color: '#111' });
+  const tools = [
+    tool('0', 'Custom'),
+    tool('1', 'mech_auto_motorcycle'),
+    tool('2', 'bird_song'),
+    tool('3', 'Motor boat'),
+  ];
+
+  it('returns nothing for a blank query', () => {
+    expect(matchToolsByText(tools, '   ')).toEqual([]);
+  });
+
+  it('matches any case-insensitive substring, keeping the source index', () => {
+    expect(matchToolsByText(tools, 'moto').map(m => [m.toolIndex, m.tool.text]))
+      .toEqual([[1, 'mech_auto_motorcycle'], [3, 'Motor boat']]);
+  });
+
+  it('never matches the Custom tool even when its label matches', () => {
+    expect(matchToolsByText(tools, 'cust')).toEqual([]);
   });
 });
 

@@ -7,13 +7,15 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
+import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
+import { isInsideDir } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -107,6 +109,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showToolSettings, setShowToolSettings] = useState(false);
+  // Add-tool entry in the Labels palette: when the typed name matches no tool,
+  // this holds it and opens the create modal, pre-targeted at the next free
+  // hotkey. null = modal closed.
+  const [panelCreatingToolText, setPanelCreatingToolText] = useState<string | null>(null);
   // The "Find Label" toolbar entry point opens the merged find-and-rename
   // dialog. Query/scope live here (not inside the
   // dialog) so the last search is still there — and its results reappear —
@@ -173,6 +179,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleAnnotationsCommit,
   } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  // Label + span (source seconds) yanked by Mod+C, replayed by Mod+V at the
+  // playhead. Persists across track switches (AnnotationWindow stays mounted).
+  const annotationClipboardRef = useRef<{ text: string; color?: string; duration: number } | null>(null);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -500,6 +509,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleRenameTool,
     handleDeleteTool,
     handlePreviewToolColor,
+    handleBindHotkey,
     handleReorderTools,
     handleImportExamples,
     handleImportExamplesToTool,
@@ -540,6 +550,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, matcher, newText);
     return currentCount + diskCount;
   }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath]);
+
+  // Toggle the example-clip preview for a tool by id — shared by the `E`
+  // hotkey path, the tools-panel chips (via liveBridge), and the annotation
+  // label's "Listen to example" context action.
+  const handleListenExample = useCallback((toolId: string) => {
+    const tool = annotationTools.find(t => t.id === toolId);
+    if (tool) examplePlayer.toggle(tool);
+  }, [annotationTools, examplePlayer]);
 
   // An example clip is sounding via either path (chip preview or the modal).
   // While true the main track's audio is parked so the two never overlap, and
@@ -935,14 +953,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // cache swap would only repeat the walk.
   }, [subsetSourceRanges]);
 
-  // The ordered list used for navigation (respects shuffle mode and fileFilter)
+  // The ordered list used for navigation. Mirrors what the file tree actually
+  // shows: shuffle order, the active fileFilter, and the entered-folder subtree —
+  // so {mod}+↑/↓ can never land on a track that isn't visible in the panel.
   const displayQueue = useMemo(() => {
     const base = shuffleMode ? shuffledFiles : allTracks;
     const filter = project?.preferences.fileFilter ?? 'all';
-    if (filter === 'annotated') return base.filter(f => annotatedTracks.has(f));
-    if (filter === 'unannotated') return base.filter(f => !annotatedTracks.has(f));
-    return base;
-  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter, annotatedTracks]);
+    let list = base;
+    if (filter === 'annotated') list = list.filter(f => annotatedTracks.has(f));
+    else if (filter === 'unannotated') list = list.filter(f => !annotatedTracks.has(f));
+    const entered = project?.preferences.enteredFolderPath;
+    if (entered && !shuffleMode) list = list.filter(f => isInsideDir(entered, f));
+    return list;
+  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter,
+      project?.preferences.enteredFolderPath, annotatedTracks]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {
@@ -1504,6 +1528,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
+  // Enter the annotation-tool layer: push its activation-stack entry and drop
+  // the filter tool. The three side effects that always accompany readying a
+  // tool, in one place.
+  const enterAnnotationToolLayer = useCallback(() => {
+      activationStack.pushIfAbsent('annotationTool');
+      setFilterToolActive(false);
+      activationStack.remove('filterTool');
+  }, [activationStack]);
+
+  // Ready a tool by key, unconditionally (no toggle-off, no selection/bound
+  // side effects). Used when a tool has just been added from the palette.
+  const readyTool = useCallback((key: string) => {
+      setActiveToolKey(key);
+      enterAnnotationToolLayer();
+  }, [enterAnnotationToolLayer]);
+
   // Shared handler for activating an annotation tool by key — used by both
   // number hotkeys and palette clicks. Also manages the `annotationTool` entry
   // in the activation stack: pushIfAbsent on activate, remove when this
@@ -1537,9 +1577,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               );
               handleAnnotationsCommit(updated);
               setActiveToolKey(key);
-              activationStack.pushIfAbsent('annotationTool');
-              setFilterToolActive(false);
-              activationStack.remove('filterTool');
+              enterAnnotationToolLayer();
               if (isCustom) {
                   setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
               }
@@ -1551,22 +1589,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setSelectedAnnotationId(newAnnotation.id);
           setBoundAnnotationId(newAnnotation.id);
           setActiveToolKey(key);
-          activationStack.pushIfAbsent('annotationTool');
-          setFilterToolActive(false);
-          activationStack.remove('filterTool');
+          enterAnnotationToolLayer();
+      } else if (activeToolKey === key) {
+          setActiveToolKey(null);
+          activationStack.remove('annotationTool');
       } else {
-          setActiveToolKey(prev => {
-            if (prev === key) {
-              activationStack.remove('annotationTool');
-              return null;
-            }
-            activationStack.pushIfAbsent('annotationTool');
-            setFilterToolActive(false);
-            activationStack.remove('filterTool');
-            return key;
-          });
+          readyTool(key);
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource, enterAnnotationToolLayer, readyTool]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
@@ -1594,6 +1624,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           handleSelectionChange(span);
       }
   };
+  // Enter — deselect the current annotation, dropping the audio selection
+  // region that selecting it created. No-op when nothing is selected.
+  const deselectAnnotation = () => {
+      if (selectedAnnotationId === null) return;
+      setSelectedAnnotationId(null);
+      setBoundAnnotationId(null);
+      handleSelectionChange(null);
+  };
   const deleteSelectedAnnotation = () => {
       if (!selectedAnnotationId) return;
       handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
@@ -1604,6 +1642,51 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           setBoundAnnotationId(null);
       }
   };
+  // Mod+C — yank the selected annotation's label and span. Mod+V then recreates
+  // that annotation starting at the playhead, its end trimmed to the track (or,
+  // under a subset, to the segment the playhead sits in).
+  const copyActiveAnnotation = () => {
+      const ann = annotations.find(a => a.id === selectedAnnotationId)
+          ?? annotations.find(a => a.id === boundAnnotationId);
+      if (!ann) return;
+      annotationClipboardRef.current = { text: ann.text, color: ann.color, duration: ann.end - ann.start };
+  };
+  // Mod+B — bind the selected annotation's label to the next free hotkey,
+  // creating a tool for it if none carries that label yet. If the label already
+  // sits on a hotkey, just ready that tool instead. Same bind action as the
+  // annotation context menu's "Bind to hotkey".
+  const bindSelectedAnnotationToHotkey = () => {
+      const ann = annotations.find(a => a.id === selectedAnnotationId);
+      if (!ann) return;
+      const existing = annotationMatchingTool(ann, annotationTools);
+      if (existing?.key != null) {
+          readyTool(existing.key);
+          return;
+      }
+      const key = bindAnnotationToHotkey(ann, annotationTools, {
+          onBindHotkey: handleBindHotkey,
+          onCreateTool: handleCreateTool,
+      });
+      // Ready the freshly bound tool so it's immediately usable.
+      if (key) readyTool(key);
+  };
+  const pasteAnnotationAtPlayhead = () => {
+      const clip = annotationClipboardRef.current;
+      if (!clip || displayDuration <= 0) return;
+      const startD = Math.max(0, Math.min(currentTimeRef.current, displayDuration));
+      const endD = Math.min(timeline.clampToSpanOfDisplay(startD, startD + clip.duration), displayDuration);
+      if (endD <= startD) return;
+      const src = selectionToSource({ start: startD, end: endD });
+      const color = resolveLabelColor(clip.text, annotationTools, clip.color ?? '#ffffff');
+      const newAnnotation = makeAnnotationFromLabel(clip.text, color, src.start, src.end);
+      handleAnnotationsCommit([...annotations, newAnnotation]);
+      // Select and bind it, with the selection region on the pasted span —
+      // the same end state as creating an annotation from a drag or a tool key.
+      setSelectedAnnotationId(newAnnotation.id);
+      setBoundAnnotationId(newAnnotation.id);
+      handleSelectionChange({ start: startD, end: endD });
+  };
+
   // Export the current selection's audio to a file (spectrogram's right-click
   // menu, and Mod+Shift+E below). The selection is in display time; the file
   // itself is read at its source time (selectionToSource), matching how
@@ -1654,6 +1737,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'ArrowUp', mods: ['mod'], handler: () => navigateFile('prev') },
       { key: 'ArrowDown', mods: ['mod'], handler: () => navigateFile('next') },
       { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
+      { key: 'c', mods: ['mod'], handler: copyActiveAnnotation },
+      { key: 'v', mods: ['mod'], handler: pasteAnnotationAtPlayhead },
+      { key: 'b', mods: ['mod'], handler: bindSelectedAnnotationToHotkey },
 
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
@@ -1666,6 +1752,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
       // be nothing to subset by.
       { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
+      { key: 'Enter', handler: deselectAnnotation },
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);
@@ -1937,6 +2024,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         activeToolKey,
         playingExampleToolId: examplePlayer.playingToolId,
       },
+      debugLogs,
     },
     {
       play: togglePlay,
@@ -1985,10 +2073,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       openFindLabel: () => setShowFindLabel(true),
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
-      playExample: toolId => {
-        const tool = annotationTools.find(t => t.id === toolId);
-        if (tool) examplePlayer.toggle(tool);
-      },
+      playExample: handleListenExample,
       showExamples: handleShowExamples,
     },
     currentTimeStoreRef.current,
@@ -2368,6 +2453,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onOpenFindLabel={() => setShowFindLabel(true)}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
+                  onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
+                  onAssignToolHotkey={(toolIndex) => {
+                    const key = nextAvailableHotkey(annotationTools);
+                    if (!key) return;
+                    handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key } : t));
+                    readyTool(key);
+                  }}
+                  onCreateToolForHotkey={(text) => setPanelCreatingToolText(text)}
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
                   onShowExamples={handleShowExamples}
@@ -2585,6 +2678,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onAnnotationsChange={handleDisplayAnnotationsChange}
                 onAnnotationsCommit={handleDisplayAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
+                onDeselectAnnotation={deselectAnnotation}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
@@ -2602,6 +2696,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 timeDisplayUnit={shownTimeUnit}
                 dateTimeFormat={dateTimeFormat}
                 onExportSelection={handleExportSelection}
+                onCreateTool={handleCreateTool}
+                onBindHotkey={handleBindHotkey}
+                onListenExample={handleListenExample}
              />
              {/* Veil while a tool-chip example preview is sounding: the main
                  track is parked, so dim the spectrogram and say why. Not shown
@@ -2722,6 +2819,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onSave={(text, color, description) => {
             handleRenameTool(panelEditingToolIndex, text, color, description);
             setPanelEditingToolIndex(null);
+          }}
+        />
+      )}
+      {panelCreatingToolText !== null && (
+        <AnnotationToolEditModal
+          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: panelCreatingToolText, color: pickNextToolColor(annotationTools) }}
+          toolIndex={-1}
+          annotations={annotations}
+          annotationTools={annotationTools}
+          isCreate
+          onClose={() => setPanelCreatingToolText(null)}
+          onSave={(text, color, description) => {
+            const key = nextAvailableHotkey(annotationTools);
+            handleCreateTool(text, color, key, description);
+            setPanelCreatingToolText(null);
+            if (key) readyTool(key);
           }}
         />
       )}

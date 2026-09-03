@@ -116,7 +116,7 @@ export const annotationToolEditModal = {
 };
 
 export const annotationToolsSettingsModal = {
-  get toolNamePlaceholder() { return getOverride('ui.annotationToolsSettingsModal.toolNamePlaceholder') ?? "Tool name…"; },
+  get toolNamePlaceholder() { return getOverride('ui.annotationToolsSettingsModal.toolNamePlaceholder') ?? "Add tool"; },
   get hotkeysHeading() { return getOverride('ui.annotationToolsSettingsModal.hotkeysHeading') ?? "Hotkeys"; },
   get newTool() { return getOverride('ui.annotationToolsSettingsModal.newTool') ?? "New tool"; },
   get unassignedHeading() { return getOverride('ui.annotationToolsSettingsModal.unassignedHeading') ?? "Unassigned"; },
@@ -208,6 +208,26 @@ export const directoryField = {
   get portabilityWarning() { return getOverride('ui.directoryField.portabilityWarning') ?? "This path is outside the project directory; SeeNote can read the files, but the project will not be portable to other machines."; },
 };
 
+export const openProjectModal = {
+  get title() { return getOverride('ui.openProjectModal.title') ?? "Open Project From Archive"; },
+  get archiveLabel() { return getOverride('ui.openProjectModal.archiveLabel') ?? "Archive"; },
+  get archivePlaceholder() { return getOverride('ui.openProjectModal.archivePlaceholder') ?? "Choose a .zip, .tar, or .tar.gz file"; },
+  get destinationLabel() { return getOverride('ui.openProjectModal.destinationLabel') ?? "Extract To"; },
+  get destinationPlaceholder() { return getOverride('ui.openProjectModal.destinationPlaceholder') ?? "Choose a destination folder"; },
+  get folderNameLabel() { return getOverride('ui.openProjectModal.folderNameLabel') ?? "Project Folder Name"; },
+  get folderNamePlaceholder() { return getOverride('ui.openProjectModal.folderNamePlaceholder') ?? "Project folder name"; },
+  projectLocation: (path: string) => `Project location: ${path}`,
+  destinationExists: (path: string) => `"${path}" already exists. Choose a different destination.`,
+  get cancelButton() { return getOverride('ui.openProjectModal.cancelButton') ?? "Cancel"; },
+  get extractButton() { return getOverride('ui.openProjectModal.extractButton') ?? "Extract & Open"; },
+  get extractingButton() { return getOverride('ui.openProjectModal.extractingButton') ?? "Extracting…"; },
+};
+
+export const openProjectMenu = {
+  get fromFolder() { return getOverride('ui.openProjectMenu.fromFolder') ?? "From Folder"; },
+  get fromArchive() { return getOverride('ui.openProjectMenu.fromArchive') ?? "From Archive"; },
+};
+
 export const repairProjectModal = {
   get title() { return getOverride('ui.repairProjectModal.title') ?? "Media directory not found"; },
   message: (projectName: string) => `The media directory for ${projectName} no longer exists. Please choose a new path.`,
@@ -231,7 +251,7 @@ export const sidebarSection = {
 };
 
 export const neuronPalette = {
-  get header() { return getOverride('ui.neuronPalette.header') ?? "Neurons"; },
+  get header() { return getOverride('ui.neuronPalette.header') ?? "buzzdetect"; },
   get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
   get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
   get noData() { return getOverride('ui.neuronPalette.noData') ?? "No buzzdetect activations for this track"; },
@@ -304,6 +324,9 @@ export const annotationToolLibrary = {
 
 export const annotationOverlay = {
   get namePlaceholder() { return getOverride('ui.annotationOverlay.namePlaceholder') ?? "Name..."; },
+  get contextBindHotkey() { return getOverride('ui.annotationOverlay.contextBindHotkey') ?? "Bind to hotkey"; },
+  get contextCopyAnnotation() { return getOverride('ui.annotationOverlay.contextCopyAnnotation') ?? "Copy annotation"; },
+  get contextListenExample() { return getOverride('ui.annotationOverlay.contextListenExample') ?? "Listen to example"; },
 };
 
 export const spectrogramView = {

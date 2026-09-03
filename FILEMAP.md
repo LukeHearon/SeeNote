@@ -89,6 +89,7 @@ Quick reference for agents. One phrase per file.
 
 ## Rust commands
 - `src-tauri/src/commands/filesystem.rs` — file listing, reveal-in-finder, directory ops
+- `src-tauri/src/commands/archive.rs` — extracts .zip/.tar/.tar.gz archives for "Open Project > From Archive", resolving the same extraction-target path the frontend previews
 - `src-tauri/src/commands/projects.rs` — project CRUD and annotation read/write
 - `src-tauri/src/commands/audio.rs` — spectrogram decode and PCM range commands
 - `src-tauri/src/commands/buzzdetect.rs` — parses `{ident}_buzzdetect.csv` activations (CSV only; bin width inferred)

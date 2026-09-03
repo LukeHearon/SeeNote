@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
-import { X, Pencil } from 'lucide-react';
+import { X, Pencil, Keyboard, Copy, Volume2 } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
-import { updateAnnotation, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
-import { resolveLabelColor } from '../../utils/annotationTools';
+import { annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
+import AnnotationLabelInput from './AnnotationLabelInput';
 import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
+import { annotationMatchingTool, canBindAnnotationToHotkey, bindAnnotationToHotkey } from '../../utils/bindAnnotationHotkey';
+import ContextMenu, { ContextMenuItem } from '../ContextMenu';
 
 interface AnnotationOverlayProps {
   layeredAnnotations: AnnotationWithLayer[];
@@ -32,6 +34,9 @@ interface AnnotationOverlayProps {
   playheadFollowsAnnotationStartRef: React.MutableRefObject<boolean>;
   getPointerTime: (e: React.MouseEvent) => number;
   onSelectAnnotation: (id: string | null) => void;
+  // Enter in the label editor: full deselect (clears the bound annotation and
+  // its selection region too), matching the window-level Enter shortcut.
+  onDeselectAnnotation?: () => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -39,8 +44,22 @@ interface AnnotationOverlayProps {
   onAnnotationMouseEnter: (id: string) => void;
   onAnnotationMouseLeave: () => void;
   setEditingInputId: (id: string | null) => void;
-  setPencilClickedId: (id: string | null) => void;
+  /** Open an annotation's label editor and put the caret in it (pencil click). */
+  focusAnnotationInput: (id: string) => void;
   setResizingAnnotation: (v: { id: string; side: 'start' | 'end'; originalTime: number } | null) => void;
+  // Right-click "Bind to hotkey": binds the label's existing tool, or creates
+  // a new one, to the next free hotkey digit.
+  onCreateTool: (text: string, color: string, key?: string | null, description?: string) => void;
+  onBindHotkey: (toolId: string, key: string) => void;
+  // Right-click "Listen to example": toggles the example-clip preview for the
+  // tool matching this label — same action as the `E` hotkey.
+  onListenExample: (toolId: string) => void;
+}
+
+interface AnnotationContextMenuState {
+  annotationId: string;
+  x: number;
+  y: number;
 }
 
 // Per-annotation positioned divs: resize handles, the text input (edit mode) vs
@@ -67,6 +86,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   playheadFollowsAnnotationStartRef,
   getPointerTime,
   onSelectAnnotation,
+  onDeselectAnnotation,
   onAnnotationsChange,
   onAnnotationsCommit,
   onBoundAnnotationChange,
@@ -74,9 +94,43 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   onAnnotationMouseEnter,
   onAnnotationMouseLeave,
   setEditingInputId,
-  setPencilClickedId,
+  focusAnnotationInput,
   setResizingAnnotation,
+  onCreateTool,
+  onBindHotkey,
+  onListenExample,
 }) => {
+  const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
+
+  const contextMenuItems = (state: AnnotationContextMenuState): ContextMenuItem[] => {
+    const ann = annotations.find(a => a.id === state.annotationId);
+    if (!ann) return [];
+    const existingTool = annotationMatchingTool(ann, annotationTools);
+    return [
+      {
+        label: copy.contextBindHotkey,
+        icon: <Keyboard size={12} />,
+        disabled: !canBindAnnotationToHotkey(ann, annotationTools),
+        onSelect: () => bindAnnotationToHotkey(ann, annotationTools, { onBindHotkey, onCreateTool }),
+      },
+      {
+        label: copy.contextListenExample,
+        icon: <Volume2 size={12} />,
+        disabled: existingTool == null || (existingTool.exampleFiles?.length ?? 0) === 0,
+        onSelect: () => {
+          if (existingTool) onListenExample(existingTool.id);
+        },
+      },
+      {
+        label: copy.contextCopyAnnotation,
+        icon: <Copy size={12} />,
+        onSelect: () => {
+          navigator.clipboard.writeText(`${ann.text} (${ann.start}, ${ann.end})`);
+        },
+      },
+    ];
+  };
+
   return (
     <>
       {layeredAnnotations.map((annotation) => {
@@ -112,6 +166,15 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         // Convert container-px placement to a style relative to the
         // annotation div (whose origin is at container x = left).
         const labelStyle = { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
+        // The label is clipped to the box, but the editor can't be: pinned to
+        // both edges of a sliver of a box it collapses to zero width, so a
+        // zoomed-out edit has nowhere to put the caret. Below the readable
+        // width it drops the right pin and takes a fixed width of its own,
+        // overhanging the box (and carrying the dropdown with it).
+        const MIN_EDITOR_WIDTH = 140;
+        const editorStyle = width > 30
+            ? labelStyle
+            : { left: labelStyle.left, right: 'auto', width: `${MIN_EDITOR_WIDTH}px` };
 
         // Screen-right pinning for the edit/delete hover buttons, mirroring the
         // label's screen-left pin: when the annotation's end scrolls off the
@@ -154,6 +217,12 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                }}
                onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                onMouseLeave={onAnnotationMouseLeave}
+               onContextMenu={(e) => {
+                   e.preventDefault();
+                   e.stopPropagation();
+                   onSelectAnnotation(annotation.id);
+                   setContextMenu({ annotationId: annotation.id, x: e.clientX, y: e.clientY });
+               }}
                onMouseDown={(e) => {
                    e.stopPropagation();
                    // Middle Click Delete
@@ -162,6 +231,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        deleteAnnotation();
                        return;
                    }
+                   // Right-click: leave selection/drag state alone so the
+                   // container's mouseup doesn't also fire a bound selection —
+                   // onContextMenu handles selecting and opening the menu.
+                   if (e.button === 2) return;
                    onSelectAnnotation(annotation.id);
                    // Track for click vs drag detection
                    clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };
@@ -204,82 +277,30 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    {width > 20 && <div className="w-[1px] h-3 bg-white/50" />}
                </div>
 
-               {width > 30 ? (
-                   // When editing (pencil or new empty annotation): show an input.
-                   // Otherwise: show a read-only span with ellipsis truncation.
-                   (editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
-                       <input
-                           ref={(el) => { inputRefs.current[annotation.id] = el; }}
-                           type="text"
-                           value={annotation.text}
-                           onChange={(e) => {
-                               const newText = e.target.value;
-                               const newAnnotations = updateAnnotation(annotations, annotation.id, a => {
-                                   // Typing a label that matches a defined tool adopts that tool's
-                                   // canonical text + color; anything else is a Custom label.
-                                   const matchingTool = annotationTools.find(t => t.key !== "0" && t.text.toLowerCase() === newText.toLowerCase());
-                                   const customColor = annotationTools.find(t => t.key === "0")?.color ?? "#ffffff";
-                                   return {
-                                       ...a,
-                                       text: matchingTool ? matchingTool.text : newText,
-                                       color: resolveLabelColor(newText, annotationTools, customColor),
-                                   };
-                               });
-                               pendingAnnotationsRef.current = newAnnotations;
-                               onAnnotationsChange(newAnnotations);
-                           }}
-                           onKeyDown={(e) => {
-                               e.stopPropagation();
-                               if (e.key === 'Enter') {
-                                   onSelectAnnotation(null);
-                                   (e.target as HTMLInputElement).blur();
-                               }
-                               if (e.key === 'Escape') {
-                                   (e.target as HTMLInputElement).blur();
-                               }
-                           }}
-                           onFocus={() => {
-                               // Promote to explicit edit mode so the input stays mounted
-                               // once the user types. Without this, an auto-focused new
-                               // annotation (rendered only via `isSelected && text === ''`)
-                               // unmounts the moment the first character makes text non-empty,
-                               // dropping focus. Setting editingInputId keeps it rendered.
-                               setEditingInputId(annotation.id);
-                           }}
-                           onBlur={() => {
-                               setEditingInputId(null);
-                               if (annotation.text.trim() === "") {
-                                   const filtered = annotations.filter(a => a.id !== annotation.id);
-                                   onAnnotationsCommit(filtered);
-                                   onSelectAnnotation(null);
-                               } else {
-                                   onAnnotationsCommit(pendingAnnotationsRef.current);
-                               }
-                           }}
-                           className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
-                           style={{
-                               ...labelStyle,
-                               textAlign: 'left',
-                               color: '#ffffff',
-                               fontWeight: 'bold',
-                               textShadow: '0 1px 2px black',
-                           }}
+               {/* When editing (pencil or new empty annotation): show an input.
+                   Otherwise: show a read-only span with ellipsis truncation.
+                   The editor is NOT gated on width — zooming out until the box
+                   is a sliver used to unmount it mid-word, dropping the caret
+                   and the matching-tool dropdown. A box too narrow to hold the
+                   text still gets a typeable editor (see editorStyle). */}
+               {(editingInputId === annotation.id || (isSelected && annotation.text === '')) ? (
+                       <AnnotationLabelInput
+                           annotation={annotation}
+                           annotations={annotations}
+                           annotationTools={annotationTools}
+                           isSelected={isSelected}
+                           labelStyle={editorStyle}
+                           inputRefs={inputRefs}
+                           pendingAnnotationsRef={pendingAnnotationsRef}
+                           onAnnotationsChange={onAnnotationsChange}
+                           onAnnotationsCommit={onAnnotationsCommit}
+                           onSelectAnnotation={onSelectAnnotation}
+                           onDeselect={onDeselectAnnotation}
+                           setEditingInputId={setEditingInputId}
+                           deleteAnnotation={deleteAnnotation}
                            placeholder={copy.namePlaceholder}
-                           onMouseDown={(e) => {
-                               if (e.button === 1) {
-                                   e.preventDefault();
-                                   e.stopPropagation();
-                                   deleteAnnotation();
-                                   return;
-                               }
-                               e.stopPropagation();
-                           }}
-                           autoFocus={isSelected && annotation.text === ""}
-                           autoCorrect="off"
-                           autoComplete="off"
-                           spellCheck={false}
                        />
-                   ) : (
+                   ) : width > 30 ? (
                        <span
                            className="absolute top-0 bottom-0 flex items-center text-xs font-bold pointer-events-none"
                            style={{
@@ -296,8 +317,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        >
                            {annotation.text || <span className="opacity-30">{copy.namePlaceholder}</span>}
                        </span>
-                   )
-               ) : null}
+                   ) : null}
 
                {/* Pencil icon — appears on hover for Custom annotations only, click to focus text input */}
                {isHovered && isCustomAnnotation && (
@@ -311,8 +331,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                      onMouseDown={(e) => e.stopPropagation()}
                      onClick={(e) => {
                        e.stopPropagation();
-                       setEditingInputId(annotation.id);
-                       setPencilClickedId(annotation.id);
+                       focusAnnotationInput(annotation.id);
                      }}
                      data-tooltip={tooltips.editAnnotationName}
                    >
@@ -328,8 +347,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                      onMouseDown={(e) => e.stopPropagation()}
                      onClick={(e) => {
                        e.stopPropagation();
-                       setEditingInputId(annotation.id);
-                       setPencilClickedId(annotation.id);
+                       focusAnnotationInput(annotation.id);
                      }}
                      data-tooltip={tooltips.editAnnotationName}
                    >
@@ -354,6 +372,15 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
             </div>
         );
       })}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems(contextMenu)}
+          onClose={() => setContextMenu(null)}
+          minWidth={160}
+        />
+      )}
     </>
   );
 };

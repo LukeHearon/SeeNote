@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnnotationTool, BandPassFilter, Selection, SpectrogramSettings } from '../types';
 import type { FileFilter } from '../components/controls/FilePanelHeaderButtons';
+import type { DebugLog } from '../components/DebugConsole';
 import { CurrentTimeStore, createCurrentTimeStore } from './currentTimeStore';
 import { TimeDisplayUnit } from './helpers';
 import type { DateTimeFormat } from './datetimeDisplay';
@@ -82,6 +83,12 @@ export interface LiveSnapshot {
   filePanel: { fileFilter: FileFilter; shuffleMode: boolean; anyExpanded: boolean } | null;
   /** Annotation tools, or null in single-file mode (no tool palette). */
   toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null } | null;
+  /**
+   * The debug console's log lines. Bounded in practice — diagnostics, not a
+   * firehose — and only re-serialized when a line is appended, so shipping the
+   * whole list keeps the guide's copy showing exactly what the real console does.
+   */
+  debugLogs: DebugLog[];
 }
 
 /**

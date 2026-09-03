@@ -457,3 +457,13 @@ export function pickNextToolColor(existingTools: AnnotationTool[]): string {
   }
   return HOTKEY_COLORS[1];
 }
+
+// Assignable hotkey digits. "0" is excluded — it's permanently reserved for
+// the Custom Annotation Tool (see the DEFAULT_TOOL_SEED note above).
+export const HOTKEY_SLOTS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
+
+/** The lowest-numbered hotkey digit not already assigned to a tool, or null if all 9 are taken. */
+export function nextAvailableHotkey(existingTools: Pick<AnnotationTool, 'key'>[]): string | null {
+  const used = new Set(existingTools.map(t => t.key));
+  return HOTKEY_SLOTS.find(k => !used.has(k)) ?? null;
+}

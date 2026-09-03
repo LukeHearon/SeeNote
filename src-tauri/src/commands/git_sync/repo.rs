@@ -306,8 +306,14 @@ pub(crate) fn remote_is_ahead(repo: &Repository, branch: &str) -> Result<bool, S
     Ok(behind > 0)
 }
 
-/// True if annotation files on disk differ from HEAD, or HEAD is ahead of the
-/// remote tracking branch (unpushed commits).
+/// True if there is annotation work a sync could actually push: HEAD is ahead of
+/// the remote tracking branch (unpushed commits), or a file on disk has a record
+/// set that differs from HEAD.
+///
+/// The two disk states `stage_and_commit` deliberately refuses to act on are
+/// excluded here too, or the status dot lights for work no sync can ever resolve:
+///   - an empty file HEAD doesn't track — staging drops it (carries no records)
+///   - a tracked file absent from disk — "unknown", never staged as a deletion
 pub(crate) fn has_local_annotation_changes(
     repo: &Repository,
     project_path: &Path,
@@ -333,10 +339,14 @@ pub(crate) fn has_local_annotation_changes(
     let head_blobs = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
         Some(tree) => annotation_blobs(repo, &tree)?,
         None => {
-            // No commits yet — any annotation file counts as a local change.
+            // No commits yet — a file with records counts; an empty one does
+            // not (staging drops it).
             let mut found = false;
             walk_files(&ann_abs, &mut |p| {
-                if p.extension().and_then(|e| e.to_str()) == Some(ANNOTATION_EXT) {
+                if p.extension().and_then(|e| e.to_str()) != Some(ANNOTATION_EXT) {
+                    return;
+                }
+                if std::fs::read_to_string(p).is_ok_and(|c| !line_key_set(&c).is_empty()) {
                     found = true;
                 }
             });
@@ -362,17 +372,19 @@ pub(crate) fn has_local_annotation_changes(
     // not read as a local change and light the status dot.
     for (path, content) in &disk {
         match head_blobs.get(path.as_str()) {
+            // Same record set — nothing to sync.
             Some(head_content) if line_key_set(content) == line_key_set(head_content) => {}
+            // Empty file HEAD never tracked — staging drops it, so not syncable.
+            // (An empty file whose HEAD blob HAS records is the pending-clear
+            // path and still counts, through the catch-all arm below.)
+            None if line_key_set(content).is_empty() => {}
             _ => return Ok(true),
         }
     }
 
-    let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
-    for path in head_blobs.keys() {
-        if path.starts_with(&ann_rel_posix) && !disk.contains_key(path.as_str()) {
-            return Ok(true); // deleted on disk
-        }
-    }
+    // No check for files tracked in HEAD but missing from disk: staging never
+    // stages a deletion (see stage_and_commit), so a sync leaves HEAD untouched
+    // and the dot would stay lit forever with nothing able to clear it.
 
     Ok(false)
 }
@@ -574,6 +586,52 @@ mod tests {
         // Annotation dir at the repo root: nothing to strip but the extension.
         assert_eq!(ident_of("a.txt", ""), "a");
         assert_eq!(ident_of("a.txt", "."), "a");
+    }
+
+    #[test]
+    fn local_changes_ignores_a_file_that_vanished_from_disk() {
+        // A tracked annotation file whose recording was renamed/moved/removed.
+        // Staging refuses to delete it, so the status dot must not light — else
+        // it stays lit forever and every sync is a silent no-op.
+        let (repo, root, ann_rel) = init_repo("localdot_missing");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        write_ann(&root, "b.txt", "3.0\t4.0\tb\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        std::fs::remove_file(root.join("ann").join("a.txt")).unwrap();
+        assert!(!has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn local_changes_ignores_an_empty_untracked_file() {
+        // An empty annotation file HEAD never tracked (a track opened and left
+        // blank, or cleared before its first sync). stage_and_commit drops it,
+        // so it is not a syncable change.
+        let (repo, root, ann_rel) = init_repo("localdot_empty");
+        write_ann(&root, "real.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        write_ann(&root, "ghost.txt", "");
+        assert!(!has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+
+        // A non-empty untracked file IS a real change (staging commits it).
+        write_ann(&root, "ghost.txt", "5.0\t6.0\tz\n");
+        assert!(has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn local_changes_still_flags_a_cleared_tracked_file() {
+        // Empty on disk but records in HEAD: the pending-clear path. This is a
+        // real change the user made and must still light the dot.
+        let (repo, root, ann_rel) = init_repo("localdot_clear");
+        write_ann(&root, "a.txt", "1.0\t2.0\ta\n");
+        stage_and_commit(&repo, &root, &ann_rel, &sig(), "m", &[]).unwrap();
+
+        write_ann(&root, "a.txt", "");
+        assert!(has_local_annotation_changes(&repo, &root, &ann_rel).unwrap());
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

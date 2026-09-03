@@ -2,13 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { clamp } from '../utils/helpers';
 
-// Nonlinear volume mapping: slider [0,1] → gain [0,4], with gain=1.0 at slider=0.5.
+// Nonlinear volume mapping: slider [0,1] → gain [0,8], with gain=1.0 at slider=0.5.
 // Lower half [0,0.5] covers gain 0→1 (finer resolution for quieting);
-// upper half [0.5,1] covers gain 1→4 (coarser resolution for boosting).
+// upper half [0.5,1] covers gain 1→8 (coarser resolution for boosting). The
+// output limiter (AudioEngine) keeps the loud end from hurting.
 export const gainToSlider = (gain: number): number =>
-  gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 6;
+  gain <= 1 ? gain / 2 : 0.5 + (gain - 1) / 14;
 export const sliderToGain = (s: number): number =>
-  s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 6;
+  s <= 0.5 ? s * 2 : 1 + (s - 0.5) * 14;
 
 interface MuteButtonProps {
   muted: boolean;
@@ -27,7 +28,7 @@ export function VolumeMuteButton({ muted, setMuted, className }: MuteButtonProps
 }
 
 interface Props {
-  /** Linear gain (1.0 = unity, up to 4.0). */
+  /** Linear gain (1.0 = unity, up to 8.0). */
   volume: number;
   muted: boolean;
   setVolume: (v: number) => void;
