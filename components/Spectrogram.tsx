@@ -1002,16 +1002,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     filterOverlayDirtyRef.current = true;
   }, [drawFilterOverlay]);
 
-  // The spectrogram background no longer reads scrollLeft from a prop (draw reads
-  // scrollLeftRef.current), so a scroll step during playback no longer recreates
-  // `draw` and trips the useLayoutEffect dirty flag. Mark the background dirty on
-  // each media-clock tick while playing so it redraws every frame and tracks the
-  // auto-scroll smoothly — matching the overlay's cadence. Scrolling while
-  // stopped is covered by setScroll, which dirties every layer directly.
-  useEffect(() => {
-    if (!isPlaying) return;
-    return currentTimeStore.subscribe(() => { drawDirtyRef.current = true; });
-  }, [currentTimeStore, isPlaying]);
+  // NOTE: there is deliberately no "mark the background dirty on every media
+  // clock tick while playing" subscription here. There used to be, from before
+  // setScroll marked the layers itself. It is redundant now — auto-scroll moves
+  // the view through setScroll, which dirties every layer synchronously, and new
+  // chunk data changes `draw`'s identity, which dirties it through the effect
+  // above. What the subscription did do was repaint the full-size background
+  // canvas ~50 times a second during playback with the view standing still
+  // (playhead unlocked), producing identical pixels: in the `_5` profile the two
+  // full-canvas layers together accounted for 2.1 paints per rendered frame and
+  // 71% of every pixel painted. The playhead lives on the overlay canvas and
+  // still ticks at 50Hz; only the background stopped repainting for nothing.
 
   useEffect(() => {
     let lastTs = performance.now();
@@ -1414,12 +1415,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       )}
 
       {/* Band-pass filter darkening canvas — below annotation HTML divs (z-5 < z-10/20)
-          so filter darkening never dims annotation labels. */}
-      <canvas
-        ref={filterOverlayCanvasRef}
-        className="absolute top-0 left-0 w-full h-full pointer-events-none"
-        style={{ zIndex: 5 }}
-      />
+          so filter darkening never dims annotation labels.
+
+          Mounted only when there is a band to draw. A full-viewport canvas is a
+          compositing layer whether or not a single pixel of it is opaque, and
+          without a filter set (the usual state) every frame was blending a
+          wholly transparent one. `creatingFilter` and `bandPassFilter` are both
+          deps of drawFilterOverlay, so the commit that mounts it also marks it
+          dirty and the rAF loop fills it on the next frame. */}
+      {(creatingFilter || bandPassFilter) && (
+        <canvas
+          ref={filterOverlayCanvasRef}
+          className="absolute top-0 left-0 w-full h-full pointer-events-none"
+          style={{ zIndex: 5 }}
+        />
+      )}
 
       {/* Layer 2: annotation HTML divs and selection handles */}
       <div className="absolute top-0 left-0 w-full h-full">
