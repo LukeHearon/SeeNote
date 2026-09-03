@@ -12,7 +12,7 @@ import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stri
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
-import { bindAnnotationToHotkey } from './utils/bindAnnotationHotkey';
+import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import { githubRepoPageUrl } from './utils/gitSync';
 import { isInsideDir } from './utils/projectPaths';
@@ -1652,11 +1652,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       annotationClipboardRef.current = { text: ann.text, color: ann.color, duration: ann.end - ann.start };
   };
   // Mod+B — bind the selected annotation's label to the next free hotkey,
-  // creating a tool for it if none carries that label yet. Same action as the
+  // creating a tool for it if none carries that label yet. If the label already
+  // sits on a hotkey, just ready that tool instead. Same bind action as the
   // annotation context menu's "Bind to hotkey".
   const bindSelectedAnnotationToHotkey = () => {
       const ann = annotations.find(a => a.id === selectedAnnotationId);
       if (!ann) return;
+      const existing = annotationMatchingTool(ann, annotationTools);
+      if (existing?.key != null) {
+          readyTool(existing.key);
+          return;
+      }
       const key = bindAnnotationToHotkey(ann, annotationTools, {
           onBindHotkey: handleBindHotkey,
           onCreateTool: handleCreateTool,
