@@ -279,9 +279,10 @@ export function useChunkRenderer({
         //
         // Incremental path: the offscreen canvas already contains the rendered
         // spectrogram for the previous bbStartCol. If the viewport only shifted
-        // forward by a small number of columns (columnsShifted ≤ half the buffer),
-        // we can self-blit the offscreen canvas to scroll it left and only render
-        // the new right-edge columns — typically 1-2 per frame at 1× playback.
+        // by a small number of columns in either direction (|columnsShifted| ≤ half
+        // the buffer), we can self-blit the offscreen canvas to scroll it and only
+        // render the newly-exposed edge columns — typically 1-2 per frame at 1×
+        // playback, and the mirror of that when panning backwards.
         // This reduces per-pixel work from O(bbWidth × height) to O(delta × height),
         // matching what any native scrolling spectrogram (e.g. Audacity) does.
         //
@@ -319,12 +320,12 @@ export function useChunkRenderer({
         // columnsShifted === 0 is the common steady-playback case: the view moved
         // forward by less than one whole column since last frame, so the offscreen
         // buffer is still exactly correct and we only need to re-blit it with the
-        // updated sub-pixel offset — no rebuild, no shift. Allowing it here (>= 0)
-        // re-blits the already-correct buffer instead of falling through to a full
-        // redraw every such frame (~80% of playback frames) — the stutter fix.
+        // updated sub-pixel offset — no rebuild, no shift. Allowing it here re-blits
+        // the already-correct buffer instead of falling through to a full redraw
+        // every such frame (~80% of playback frames) — the stutter fix.
         //
         // The incremental path self-blits the buffer and then only TOUCHES columns
-        // that changed: the newly-exposed right edge, plus any interior columns whose
+        // that changed: the newly-exposed edge, plus any interior columns whose
         // data arrived (or resolved to a finer tier) since last frame — tracked via
         // offTier. So it stays correct while the viewport is still building; it does
         // NOT need a full redraw just because data is streaming in. It falls back to
@@ -338,20 +339,21 @@ export function useChunkRenderer({
         // Cap the incremental shift at half the buffer. The path's saving is
         // O(touched cols × height) vs the full O(bbWidth×height); once the shift
         // exceeds ~half the buffer most columns are new anyway, so the self-blit
-        // (which discards everything left of the shift) stops paying for itself and a
+        // (which discards everything shifted out of view) stops paying for itself and a
         // full redraw is the same cost. The scratch canvas that renders the new
         // columns grows to fit newCols, so any shift up to this cap is painted right.
+        // Applies in both directions: the backward self-blit is the exact mirror
+        // of the forward one, exposing new columns on the left instead of the right.
         const maxIncrCols = Math.floor(bbWidth / 2);
+        const shiftAbs = Math.abs(columnsShifted);
         const canIncremental =
-            columnsShifted >= 0 &&
-            columnsShifted <= maxIncrCols &&
+            shiftAbs <= maxIncrCols &&
             offscreenReady &&
             !cpsChanged;
 
         if (DIAG_FRAME_TIMING && prevStartCol !== null && !canIncremental) {
           const why =
-            columnsShifted < 0 ? `back-step(${columnsShifted}col)`
-            : columnsShifted > maxIncrCols ? `big-jump(${columnsShifted}col)`
+            shiftAbs > maxIncrCols ? `big-jump(${columnsShifted}col)`
             : !offscreenReady ? 'resize'
             : cpsChanged ? 'tier-change(cps)'
             : '?';
@@ -423,24 +425,38 @@ export function useChunkRenderer({
 
         if (canIncremental) {
           // ── Incremental path ────────────────────────────────────────────────
-          // 1. Shift the offscreen buffer (and its tier record) left by
-          //    columnsShifted, then repaint only the newly-exposed right edge.
+          // 1. Shift the offscreen buffer (and its tier record) by columnsShifted,
+          //    then repaint only the newly-exposed edge. Forward (positive) moves
+          //    content left and exposes columns on the right; backward is the exact
+          //    mirror — content right, new columns on the left.
           //    columnsShifted === 0 (sub-column steady-playback move) skips both —
           //    the buffer is already correct and only the sub-pixel re-blit changes.
-          if (columnsShifted > 0) {
+          if (columnsShifted !== 0) {
+            const forward = columnsShifted > 0;
+            // Columns that survive the shift, and where they land afterwards.
+            const keptWidth = bbWidth - shiftAbs;
+            const keptStart = forward ? 0 : shiftAbs;
+            // Where the newly-exposed run lands.
+            const newStart = forward ? keptWidth : 0;
+            // drawImage of a canvas onto itself is specified to read the whole
+            // source before writing, so the overlap is safe in either direction.
             offCtx.drawImage(offscreen, -columnsShifted, 0);
-            offTier.copyWithin(0, columnsShifted, bbWidth);
-            offTier.fill(0, bbWidth - columnsShifted, bbWidth);
+            if (forward) {
+              offTier.copyWithin(0, shiftAbs, bbWidth);
+            } else {
+              offTier.copyWithin(shiftAbs, 0, keptWidth);
+            }
+            offTier.fill(0, newStart, newStart + shiftAbs);
             // The self-blit composites source-over, so source columns that carry
             // no data (fully transparent) leave the destination's PREVIOUS pixels
             // untouched instead of clearing them. Scrolling into a not-yet-fetched
             // region therefore smears already-rendered content across it, which
             // reads as duplicated chunks. offTier already records which columns
             // should be blank, so clear those runs explicitly after the shift.
-            const shiftedWidth = bbWidth - columnsShifted;
+            const keptEnd = keptStart + keptWidth;
             let blankStart = -1;
-            for (let i = 0; i <= shiftedWidth; i++) {
-              const blank = i < shiftedWidth && offTier[i] === 0;
+            for (let i = keptStart; i <= keptEnd; i++) {
+              const blank = i < keptEnd && offTier[i] === 0;
               if (blank) {
                 if (blankStart === -1) blankStart = i;
               } else if (blankStart !== -1) {
@@ -448,7 +464,7 @@ export function useChunkRenderer({
                 blankStart = -1;
               }
             }
-            paintColumns(shiftedWidth, columnsShifted);
+            paintColumns(newStart, shiftAbs);
           }
 
           // 2. Repaint interior columns whose data changed since last frame — newly

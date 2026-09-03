@@ -1036,9 +1036,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const canGoNextRef = useRef(false);
   const recomputeCanGo = useCallback(() => {
     const t = currentTimeStoreRef.current.get();
+    // The list is sorted by start, so the earliest and latest answer both
+    // questions — this runs on every playback tick, and a linear scan of every
+    // annotation twice per tick is work proportional to a number that grows all
+    // session.
     const anns = sortedDisplayAnnotationsRef.current;
-    const prev = anns.some(a => a.start < t - 0.05);
-    const next = anns.some(a => a.start > t + 0.05);
+    const prev = anns.length > 0 && anns[0].start < t - 0.05;
+    const next = anns.length > 0 && anns[anns.length - 1].start > t + 0.05;
     if (prev !== canGoPrevRef.current) { canGoPrevRef.current = prev; setCanGoPrevAnnotation(prev); }
     if (next !== canGoNextRef.current) { canGoNextRef.current = next; setCanGoNextAnnotation(next); }
   }, []);

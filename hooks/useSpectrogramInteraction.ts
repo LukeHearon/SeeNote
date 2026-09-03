@@ -14,7 +14,6 @@ export interface SpectrogramInteractionParams {
   pixelsPerSecondRef: React.MutableRefObject<number>;
   durationRef: React.MutableRefObject<number>;
   setScroll: (v: number, source?: string) => void;
-  scrollLeft: number;
   pixelsPerSecond: number;
   duration: number;
   // Display->source map, read live. Under a subset it says where the cuts are,
@@ -103,7 +102,6 @@ export function useSpectrogramInteraction({
   pixelsPerSecondRef,
   durationRef,
   setScroll,
-  scrollLeft,
   pixelsPerSecond,
   duration,
   timelineRef,
@@ -266,7 +264,7 @@ export function useSpectrogramInteraction({
     if (!containerRef.current) return 0;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const t = xToTime(x, scrollLeft, pixelsPerSecond);
+    const t = xToTime(x, scrollLeftRef.current, pixelsPerSecondRef.current);
     return clamp(t, 0, duration);
   };
 
@@ -533,7 +531,7 @@ export function useSpectrogramInteraction({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
       e.preventDefault();
-      setDragStart({ x: e.clientX, scroll: scrollLeft });
+      setDragStart({ x: e.clientX, scroll: scrollLeftRef.current });
       rightClickStartRef.current = { x: e.clientX, y: e.clientY };
       return;
     }

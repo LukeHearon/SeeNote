@@ -230,11 +230,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Y-axis canvas: separate element to the left of the spectrogram area, never layered on top of spectrogram content.
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Internal scroll state (in pixels)
-  const [scrollLeft, setScrollLeft] = useState(0);
+  // Internal scroll position (in pixels). Ref only — there is deliberately no
+  // React state mirroring it. Mirroring meant a commit of this whole subtree on
+  // every scroll write, i.e. once per frame throughout playback and panning;
+  // every consumer either reads the ref live at draw/event time or is driven
+  // from the rAF loop below, so no render ever needed the value.
   const scrollLeftRef = useRef(0);
-  // scrollLeftRef is the source of truth, written synchronously by setScroll;
-  // the state is a render mirror. There must be NO backward state→ref sync:
+  // scrollLeftRef is the source of truth, written synchronously by setScroll.
+  // There must be NO backward state→ref sync:
   // React commits from different tasks (wheel vs ResizeObserver) can land out
   // of order, and syncing the ref from a stale commit regresses it — the
   // resize handler then re-derives scroll from the regressed ref and re-queues
@@ -245,7 +248,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
     }
     scrollLeftRef.current = v;
-    setScrollLeft(v);
     // Every layer's geometry is a function of scrollLeft, and all three read it
     // live from scrollLeftRef rather than from a prop — so moving the view is
     // exactly the event that dirties them. Marking them here (not leaning on a
@@ -320,6 +322,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const drawDirtyRef = useRef(true);
   const drawRef = useRef<() => void>(() => {});
   const drawYAxisRef = useRef<() => void>(() => {});
+  // The frequency gutter is a function of the frequency settings and the
+  // container height alone — nothing the playhead or the scroll does touches
+  // it. Its own dirty flag keeps it out of the per-frame path, where it used to
+  // ride along with the spectrogram background and redraw its ticks and labels
+  // 60 times a second to produce the same pixels.
+  const yAxisDirtyRef = useRef(true);
 
   // Shared geometry refs read by the render path (drawOverlay, ResizeObserver,
   // autoScroll, applyWheel) AND by the interaction hook's auto-pan loop. Owned
@@ -356,7 +364,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // that rounding turn the resize handler's scroll rescale into a small
   // constant multiplier instead of an identity.
   const [containerWidth, setContainerWidth] = useState(0);
-  // Diagnostic mirror only (see DIAG_SCROLL).
+  // Live mirror, read from the rAF loop (which publishes the viewport) and by
+  // the scroll diagnostics.
   const containerWidthRef = useRef(0);
   containerWidthRef.current = containerWidth;
   // Last width the ResizeObserver reported, so a notification that carries no
@@ -448,7 +457,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef,
     durationRef,
     setScroll,
-    scrollLeft,
     pixelsPerSecond,
     duration,
     timelineRef,
@@ -486,14 +494,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // for, so a large/lingering selection doesn't freeze auto-scroll indefinitely.
   const lastSuppressedSelectionRef = useRef<Selection | null>(null);
 
-  // Publish the time→pixel transform whenever it changes (scroll, zoom, resize).
-  // Also fires when `onViewportChange` itself becomes available (e.g. the panel
-  // is toggled on) so a freshly-mounted consumer gets the current viewport
-  // immediately instead of waiting for the next scroll. AnnotationWindow passes
-  // a stable setter, so this never loops.
-  useEffect(() => {
-    onViewportChange?.({ scrollLeft, pixelsPerSecond, containerWidth });
-  }, [onViewportChange, scrollLeft, pixelsPerSecond, containerWidth]);
+  // Publish the time→pixel transform. Driven from the rAF loop below rather
+  // than from an effect on the values, because scroll no longer passes through
+  // React: the loop reads the same live refs the draws do, so a consumer gets
+  // the transform in the frame it applies to. The store dedupes, so publishing
+  // every frame costs one comparison while the view is still, and a consumer
+  // that mounts later (a panel toggled on) picks the current viewport up on the
+  // next frame.
+  const onViewportChangeRef = useRef(onViewportChange);
+  onViewportChangeRef.current = onViewportChange;
+  const publishedViewportRef = useRef({ scrollLeft: -1, pixelsPerSecond: -1, containerWidth: -1 });
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
   // currently-visible window. Suppressed for a single tick right after a new selection
@@ -508,9 +518,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   //
   // Driven by the currentTime store rather than React state: the store fires its
   // subscribers on each media-clock tick (same cadence as the old per-tick render),
-  // and we run the identical centering check imperatively. setScrollLeft only fires
-  // when the playhead reaches the visible centre, so this triggers a render only on
-  // an actual scroll step — never the whole-tree per-tick render we used to pay.
+  // and we run the identical centering check imperatively. setScroll writes a ref
+  // and marks the layers dirty, so a centering step triggers no React render at
+  // all — never mind the whole-tree per-tick render we used to pay.
   // Re-subscribes only when these (infrequently changing) inputs change; reads the
   // live time from the store so the playhead and the scroll stay in lockstep.
   useEffect(() => {
@@ -816,7 +826,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [scrollLeft, pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -950,9 +960,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // useLayoutEffect so the flag is set before the useEffect below can read it.
   useLayoutEffect(() => {
     drawRef.current = draw;
-    drawYAxisRef.current = drawYAxis;
     drawDirtyRef.current = true;
-  }, [draw, drawYAxis]);
+  }, [draw]);
+
+  useLayoutEffect(() => {
+    drawYAxisRef.current = drawYAxis;
+    yAxisDirtyRef.current = true;
+  }, [drawYAxis]);
 
   // The overlay (playhead/selection/ruler) must animate every frame during
   // playback, but playback time no longer flows through React state — so we can't
@@ -960,6 +974,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // self-scheduling rAF loop runs for the component's lifetime and repaints each
   // layer only when its dirty flag is set:
   //   • drawDirty  — expensive spectrogram background (scroll/zoom/data/settings)
+  //   • yAxisDirty — the frequency gutter (frequency settings, resize)
   //   • overlayDirty — cheap overlay (playhead moved, selection/filter changed)
   // When idle both flags stay clear and the loop costs two boolean checks/frame.
   const drawOverlayRef = useRef(drawOverlay);
@@ -1016,8 +1031,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       }
       if (drawDirtyRef.current) {
         drawRef.current();
-        drawYAxisRef.current();
         drawDirtyRef.current = false;
+      }
+      if (yAxisDirtyRef.current) {
+        drawYAxisRef.current();
+        yAxisDirtyRef.current = false;
       }
       if (overlayDirtyRef.current) {
         drawOverlayRef.current();
@@ -1032,6 +1050,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // the draws above, so they can't lag the spectrogram they annotate. Cheap
       // and self-gating — each layer returns immediately when scroll is unchanged.
       scrollSyncRef.current.run(scrollLeftRef.current);
+      // Compared here rather than leaning on the store's own dedupe, so a still
+      // view doesn't allocate a viewport object every frame just to have it
+      // discarded.
+      const pub = publishedViewportRef.current;
+      if (scrollLeftRef.current !== pub.scrollLeft ||
+          pixelsPerSecondRef.current !== pub.pixelsPerSecond ||
+          containerWidthRef.current !== pub.containerWidth) {
+        pub.scrollLeft = scrollLeftRef.current;
+        pub.pixelsPerSecond = pixelsPerSecondRef.current;
+        pub.containerWidth = containerWidthRef.current;
+        onViewportChangeRef.current?.({ ...pub });
+      }
       requestRef.current = requestAnimationFrame(tick);
     };
     requestRef.current = requestAnimationFrame(tick);
@@ -1222,7 +1252,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
 
   const applyWheel = useCallback((deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => {
-    diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollState=${scrollLeft.toFixed(2)} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
+    diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
     if (ctrlKey || metaKey) {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
@@ -1232,7 +1262,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // has to agree exactly with the pps the resize handler derives, or the
       // two disagree by the integer rounding for as long as the zoom lasts.
       const currentPps = containerWidth / zoomSec;
-      const timeAtMouse = (scrollLeft + mouseX) / currentPps;
+      const timeAtMouse = (scrollLeftRef.current + mouseX) / currentPps;
       const zoomFactor = 1.25;
       // Trackpad inertia tails deliver horizontal-only events (deltaY === 0).
       // `deltaY > 0 ? 1 : -1` would treat every one of those as a zoom-in step,
@@ -1266,7 +1296,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
-  }, [zoomSec, scrollLeft, duration, pixelsPerSecond, containerWidth, onZoomChange, playheadLocked, isPlaying]);
+  }, [zoomSec, duration, pixelsPerSecond, containerWidth, onZoomChange, playheadLocked, isPlaying]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
