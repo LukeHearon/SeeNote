@@ -58,9 +58,9 @@ Quick reference for agents. One phrase per file.
 
 ## Audio / spectrogram
 - `components/Spectrogram.tsx` — thin spectrogram orchestrator; delegates tile rendering to useChunkRenderer, pointer/selection logic to useSpectrogramInteraction, and overlays to the spectrogram/ leaf components
-- `components/spectrogram/SelectionHandles.tsx` — selection rectangle and its drag handles overlay
+- `components/spectrogram/SelectionHandles.tsx` — selection rectangle and its drag handles overlay (a scroll-transform layer)
 - `components/spectrogram/FilterHandles.tsx` — band-pass filter band and its drag handles overlay
-- `components/spectrogram/AnnotationOverlay.tsx` — annotation boxes, labels, and text-input editing overlay
+- `components/spectrogram/AnnotationOverlay.tsx` — annotation boxes, labels, and text-input editing overlay; laid out in content pixels and scrolled by transform, not by React
 - `src-tauri/src/audio/decoder.rs` — PCM decoder with seek-margin logic (canonical sample-accuracy contract); dispatches to `ffmpeg_stream` for formats symphonia can't decode
 - `src-tauri/src/audio/ffmpeg_stream.rs` — fallback decode backend for `.wma` (no Rust decoder exists), shells out to a system ffmpeg/ffprobe binary rather than linking libavcodec
 - `src-tauri/src/audio/fft.rs` — FFT / spectrogram chunk computation
@@ -74,6 +74,7 @@ Quick reference for agents. One phrase per file.
 - `utils/BandPassFilterGraph.ts` — persistent Butterworth band-pass filter graph plus async group-delay measurement
 - `utils/PhaseVocoder.ts` — phase vocoder for time-stretching (slow-down playback)
 - `utils/rafTicker.ts` — shared requestAnimationFrame scheduler; owns the rAF handle for the playback engines' tick loops
+- `utils/scrollSyncHub.ts` — per-frame scroll broadcast that keeps the HTML overlay layers on the same clock as the canvas draws
 - `utils/selectionExtend.ts` — the anchor/edge gesture math behind Shift+arrow selections
 - `utils/arrowScrub.ts` — arrow-key movement math: the coarse 10%-of-window step and the held-key acceleration ramp
 - `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
@@ -117,6 +118,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useSyncManagement.ts` — git-sync status polling and sync/commit actions
 - `hooks/useChunkRenderer.ts` — draws cached spectrogram tiles to the canvas as the viewport moves
 - `hooks/useChunkCacheVersion.ts` — chunk-cache version counter, coalesced to one React update per animation frame
+- `hooks/useScrollTransformLayer.ts` — makes one HTML overlay layer scroll by transform on the rAF clock (subscribes to the scroll-sync hub)
 - `hooks/useAnnotationTools.ts` — annotation tool CRUD, hotkey map, and example import
 - `hooks/useImportAnnotations.ts` — imports Audacity/annotation files into the current track
 - `hooks/useSpectrogramInteraction.ts` — spectrogram pointer logic: selection, annotation drag/create, filter draw

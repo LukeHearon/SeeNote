@@ -1,14 +1,16 @@
-import React, { useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { annotationOverlay as copy } from '../../copy/ui';
 import { tooltips } from '../../copy/tooltips';
 import { X, Pencil, Keyboard, Copy, Volume2 } from 'lucide-react';
 import { Annotation, AnnotationWithLayer, AnnotationTool, Selection, SpectrogramSettings } from '../../types';
 import { annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../../utils/helpers';
 import AnnotationLabelInput from './AnnotationLabelInput';
-import { timeToX, computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
+import { computeLabelPlacement, computeButtonAnchorX } from '../../utils/viewportTransform';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 import { annotationMatchingTool, canBindAnnotationToHotkey, bindAnnotationToHotkey } from '../../utils/bindAnnotationHotkey';
 import ContextMenu, { ContextMenuItem } from '../ContextMenu';
+import type { ScrollSyncHub } from '../../utils/scrollSyncHub';
+import { useScrollTransformLayer } from '../../hooks/useScrollTransformLayer';
 
 interface AnnotationOverlayProps {
   layeredAnnotations: AnnotationWithLayer[];
@@ -20,7 +22,11 @@ interface AnnotationOverlayProps {
   annotationTools: AnnotationTool[];
   selection: Selection | null;
   settings: SpectrogramSettings;
-  scrollLeft: number;
+  // Live scroll position (pixels). Read at render for the first paint; the
+  // per-frame updates come through the hub instead — see the note below.
+  scrollLeftRef: React.MutableRefObject<number>;
+  // Spectrogram's rAF loop drives this once per frame with the live scroll.
+  scrollSync: ScrollSyncHub;
   pixelsPerSecond: number;
   containerWidth: number;
   hideLabels: boolean;
@@ -62,10 +68,98 @@ interface AnnotationContextMenuState {
   y: number;
 }
 
+const LABEL_INSET = 8;
+// The label is clipped to the box, but the editor can't be: pinned to both
+// edges of a sliver of a box it collapses to zero width, so a zoomed-out edit
+// has nowhere to put the caret. Below the readable width it drops the right pin
+// and takes a fixed width of its own, overhanging the box (and carrying the
+// dropdown with it).
+const MIN_EDITOR_WIDTH = 140;
+const PENCIL_INSET = 20; // matches the removed `right-5` (1.25rem)
+// The delete badge overhangs the annotation's own edge (-right-3), but when
+// pinned it must stay fully inside the viewport, so the pinned inset is a
+// positive margin rather than reusing the overhang value.
+const DELETE_NATURAL_INSET = -12; // matches the removed `-right-3` (-0.75rem)
+const DELETE_PINNED_INSET = 12;
+
+// Which of an annotation's children need a scroll-dependent position fix-up
+// each frame (see the pinning note on `syncScroll`).
+type PinnedKind = 'label' | 'dropdown' | 'pencil' | 'delete';
+
+interface AnnotationEls {
+  els: Partial<Record<PinnedKind, HTMLElement>>;
+  // Last values written, so a frame that changes nothing writes no styles.
+  labelLeft: number;
+  pencilRight: number;
+  deleteRight: number;
+}
+
+interface VisibleAnnotation {
+  ann: AnnotationWithLayer;
+  // Content-space pixels: time * pixelsPerSecond, independent of scroll.
+  startX: number;
+  endX: number;
+  width: number;
+}
+
+const emptyEls = (): AnnotationEls => ({ els: {}, labelLeft: NaN, pencilRight: NaN, deleteRight: NaN });
+
+// Label placement in *screen* pixels for one annotation at a given scroll.
+// Handles screen-left pinning (annotation start scrolled off the left) and the
+// selection "pop": an overlapping selection pushes the label right.
+const labelLeftFor = (
+  v: { startX: number; endX: number },
+  scrollLeft: number,
+  selStartX: number | null,
+  selEndX: number | null,
+): number => {
+  const annStartX = v.startX - scrollLeft;
+  const { leftX } = computeLabelPlacement({
+    annStartX,
+    annEndX: v.endX - scrollLeft,
+    selStartX: selStartX === null ? null : selStartX - scrollLeft,
+    selEndX: selEndX === null ? null : selEndX - scrollLeft,
+    inset: LABEL_INSET,
+    textWidth: 0,
+  });
+  // Relative to the annotation div, whose origin is the annotation's start.
+  return leftX - annStartX;
+};
+
+// Screen-right pinning for the edit/delete hover buttons, mirroring the label's
+// screen-left pin: when the annotation's end scrolls off the right of the
+// viewport, the buttons pin near the viewport's right edge instead of sitting
+// off-screen past the annotation's actual end.
+const buttonRightFor = (
+  v: { startX: number; endX: number },
+  scrollLeft: number,
+  containerWidth: number,
+  naturalInset: number,
+  pinnedInset: number,
+  minMargin: number,
+): number => {
+  const annStartX = v.startX - scrollLeft;
+  const annEndX = v.endX - scrollLeft;
+  return annEndX - computeButtonAnchorX(annStartX, annEndX, containerWidth, naturalInset, pinnedInset, minMargin);
+};
+
 // Per-annotation positioned divs: resize handles, the text input (edit mode) vs
 // read-only span, pencil icon, delete button, colors and selection/bound visual
 // states. Render-only — the center-drag/resize interaction state is owned by
 // Spectrogram.tsx and reached via callbacks and shared refs.
+//
+// Scrolling does NOT go through React here. The boxes are laid out in content
+// pixels (time × pixelsPerSecond) inside one wrapper div, and the wrapper is
+// translated imperatively from Spectrogram's rAF loop — the same clock and the
+// same frame as the canvas draws, so labels and spectrogram can't drift apart.
+// Routing scroll through props instead meant the labels only moved when React
+// committed a render of the whole spectrogram subtree, which on a slow machine
+// lands every 2-4 frames and always after the canvas has already moved: the
+// canvas glided, the labels stepped.
+//
+// React re-renders remain for what actually changes shape — annotations,
+// selection, zoom — plus a coarse cull window (below) that only advances once
+// per half-viewport of scrolling.
 const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   layeredAnnotations,
   annotations,
@@ -75,7 +169,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   editingInputId,
   annotationTools,
   selection,
-  scrollLeft,
+  scrollLeftRef,
+  scrollSync,
   pixelsPerSecond,
   containerWidth,
   hideLabels,
@@ -101,6 +196,113 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   onListenExample,
 }) => {
   const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
+
+  // Cull anchor: the scroll position the currently-mounted set was chosen for.
+  // Mounted range is [anchor - w, anchor + 2w], so the anchor can go stale by
+  // half a viewport before the visible span could reach an edge of it. Advancing
+  // it is the ONLY React render a scroll causes, and it happens roughly once per
+  // half-viewport scrolled rather than once per playback tick.
+  const [cullAnchor, setCullAnchor] = useState(() => scrollLeftRef.current);
+  const cullAnchorRef = useRef(cullAnchor);
+  cullAnchorRef.current = cullAnchor;
+
+  const overlayWidth = containerWidth || 1000;
+  const containerWidthRef = useRef(overlayWidth);
+  containerWidthRef.current = overlayWidth;
+
+  const selStartX = selection ? selection.start * pixelsPerSecond : null;
+  const selEndX = selection ? selection.end * pixelsPerSecond : null;
+  const selRef = useRef({ selStartX, selEndX });
+  selRef.current = { selStartX, selEndX };
+
+  const visible = useMemo<VisibleAnnotation[]>(() => {
+    const rangeMin = cullAnchor - overlayWidth;
+    const rangeMax = cullAnchor + 2 * overlayWidth;
+    const out: VisibleAnnotation[] = [];
+    for (const ann of layeredAnnotations) {
+      const startX = ann.start * pixelsPerSecond;
+      const endX = ann.end * pixelsPerSecond;
+      if (endX < rangeMin || startX > rangeMax) continue;
+      out.push({ ann, startX, endX, width: endX - startX });
+    }
+    return out;
+  }, [layeredAnnotations, pixelsPerSecond, cullAnchor, overlayWidth]);
+  // Ref mirror so the per-frame sync reads the current geometry without being
+  // rebuilt. Assigned during render (like the mirrors above) so it is already
+  // fresh when the layer hook's effect re-pins after this commit.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
+  // Element registry for the per-frame pin fix-ups. Ref callbacks are cached per
+  // (id, kind) so a re-render doesn't detach and re-attach every node.
+  const elsRef = useRef(new Map<string, AnnotationEls>());
+  const refCbRef = useRef(new Map<string, (node: HTMLElement | null) => void>());
+  const elRef = useCallback((id: string, kind: PinnedKind) => {
+    const key = `${id}:${kind}`;
+    let cb = refCbRef.current.get(key);
+    if (!cb) {
+      cb = (node: HTMLElement | null) => {
+        let rec = elsRef.current.get(id);
+        if (!rec) { rec = emptyEls(); elsRef.current.set(id, rec); }
+        if (node) rec.els[kind] = node;
+        else delete rec.els[kind];
+      };
+      refCbRef.current.set(key, cb);
+    }
+    return cb;
+  }, []);
+
+  // The shared layer transform carries every box; this is the remainder — the
+  // handful of elements whose placement is pinned to a viewport edge (the label's
+  // screen-left pin, the hover buttons' screen-right pin), plus the cull anchor.
+  // Each gets a style write only when its pinned value actually changed.
+  const syncPins = useCallback((scrollLeft: number) => {
+    const cw = containerWidthRef.current;
+    const { selStartX: sx, selEndX: ex } = selRef.current;
+    for (const v of visibleRef.current) {
+      const rec = elsRef.current.get(v.ann.id);
+      if (!rec) continue;
+      const { label, dropdown, pencil, delete: del } = rec.els;
+      const input = inputRefs.current[v.ann.id];
+      if (label || dropdown || input) {
+        const left = labelLeftFor(v, scrollLeft, sx, ex);
+        if (left !== rec.labelLeft) {
+          rec.labelLeft = left;
+          const px = `${left}px`;
+          if (label) label.style.left = px;
+          if (input) input.style.left = px;
+          if (dropdown) dropdown.style.left = px;
+        }
+      }
+      if (pencil) {
+        const right = buttonRightFor(v, scrollLeft, cw, PENCIL_INSET, PENCIL_INSET, 24);
+        if (right !== rec.pencilRight) { rec.pencilRight = right; pencil.style.right = `${right}px`; }
+      }
+      if (del) {
+        const right = buttonRightFor(v, scrollLeft, cw, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
+        if (right !== rec.deleteRight) { rec.deleteRight = right; del.style.right = `${right}px`; }
+      }
+    }
+
+    if (Math.abs(scrollLeft - cullAnchorRef.current) > cw * 0.5) {
+      cullAnchorRef.current = scrollLeft;
+      setCullAnchor(scrollLeft);
+    }
+  }, [inputRefs]);
+
+  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, syncPins);
+
+  // Drop registry entries for annotations that just unmounted. No dep array:
+  // the mounted set can change on any render.
+  useLayoutEffect(() => {
+    const live = new Set(visible.map(v => v.ann.id));
+    for (const id of Array.from(elsRef.current.keys())) {
+      if (!live.has(id)) elsRef.current.delete(id);
+    }
+    for (const key of Array.from(refCbRef.current.keys())) {
+      if (!live.has(key.slice(0, key.lastIndexOf(':')))) refCbRef.current.delete(key);
+    }
+  });
 
   const contextMenuItems = (state: AnnotationContextMenuState): ContextMenuItem[] => {
     const ann = annotations.find(a => a.id === state.annotationId);
@@ -131,15 +333,30 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
     ];
   };
 
+  // Scroll at render time: the initial style values below are the same ones
+  // syncPins would write, so the first paint of a newly-mounted box is already
+  // pinned correctly (the layer's effect re-pins after the commit anyway).
+  const scrollLeft = scrollLeftRef.current;
+
   return (
     <>
-      {layeredAnnotations.map((annotation) => {
-        const left = timeToX(annotation.start, scrollLeft, pixelsPerSecond);
-        const width = (annotation.end - annotation.start) * pixelsPerSecond;
+      <div
+        ref={layer.ref}
+        className="absolute top-0 left-0 w-full h-full"
+        // The transform makes this wrapper a stacking context, so the boxes'
+        // own z-indices (10 / 20) no longer compete with their former siblings.
+        // z-10 restores the layer's place: above the filter darkening canvas
+        // (z-5), below the playhead/ruler canvas (z-30). Selection and filter
+        // handles (z-15) now sit above a *selected* box too, not just the
+        // unselected ones — which also makes a handle lying over an annotation
+        // grabbable again.
+        style={{ ...layer.style, zIndex: 10 }}
+      >
+      {visible.map((v) => {
+        const annotation = v.ann;
+        const { startX: left, width } = v;
         const isSelected = selectedAnnotationId === annotation.id;
         const isBound = boundAnnotationId === annotation.id;
-
-        if (left + width < 0 || left > containerWidth) return null;
 
         const top = annotationBoxTop(annotation.layerIndex);
 
@@ -149,45 +366,13 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 
         const isHovered = hoveredAnnotationId === annotation.id;
 
-        // Horizontal placement of the name label. Handles screen-left pinning
-        // (annotation start scrolled off the left) and the selection "pop":
-        // an overlapping selection pushes the label right. The label is always
-        // left-aligned; long text is truncated with an ellipsis. LABEL_INSET
-        // matches the 8px inset used below.
-        const LABEL_INSET = 8;
-        const labelPlacement = computeLabelPlacement({
-            annStartX: left,
-            annEndX: left + width,
-            selStartX: selection ? timeToX(selection.start, scrollLeft, pixelsPerSecond) : null,
-            selEndX: selection ? timeToX(selection.end, scrollLeft, pixelsPerSecond) : null,
-            inset: LABEL_INSET,
-            textWidth: 0,
-        });
-        // Convert container-px placement to a style relative to the
-        // annotation div (whose origin is at container x = left).
-        const labelStyle = { left: `${labelPlacement.leftX - left}px`, right: `${LABEL_INSET}px` };
-        // The label is clipped to the box, but the editor can't be: pinned to
-        // both edges of a sliver of a box it collapses to zero width, so a
-        // zoomed-out edit has nowhere to put the caret. Below the readable
-        // width it drops the right pin and takes a fixed width of its own,
-        // overhanging the box (and carrying the dropdown with it).
-        const MIN_EDITOR_WIDTH = 140;
+        const labelStyle = { left: `${labelLeftFor(v, scrollLeft, selStartX, selEndX)}px`, right: `${LABEL_INSET}px` };
         const editorStyle = width > 30
             ? labelStyle
             : { left: labelStyle.left, right: 'auto', width: `${MIN_EDITOR_WIDTH}px` };
 
-        // Screen-right pinning for the edit/delete hover buttons, mirroring the
-        // label's screen-left pin: when the annotation's end scrolls off the
-        // right of the viewport, the buttons pin near the viewport's right edge
-        // instead of sitting off-screen past the annotation's actual end.
-        const PENCIL_INSET = 20; // matches the removed `right-5` (1.25rem)
-        const pencilRight = (left + width) - computeButtonAnchorX(left, left + width, containerWidth, PENCIL_INSET, PENCIL_INSET, 24);
-        // The delete badge overhangs the annotation's own edge (-right-3), but
-        // when pinned it must stay fully inside the viewport, so the pinned
-        // inset is a positive margin rather than reusing the overhang value.
-        const DELETE_NATURAL_INSET = -12; // matches the removed `-right-3` (-0.75rem)
-        const DELETE_PINNED_INSET = 12;
-        const deleteRight = (left + width) - computeButtonAnchorX(left, left + width, containerWidth, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
+        const pencilRight = buttonRightFor(v, scrollLeft, overlayWidth, PENCIL_INSET, PENCIL_INSET, 24);
+        const deleteRight = buttonRightFor(v, scrollLeft, overlayWidth, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
 
         const deleteAnnotation = () => {
             onAnnotationsCommit(annotations.filter(a => a.id !== annotation.id));
@@ -291,6 +476,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            isSelected={isSelected}
                            labelStyle={editorStyle}
                            inputRefs={inputRefs}
+                           dropdownRef={elRef(annotation.id, 'dropdown')}
                            pendingAnnotationsRef={pendingAnnotationsRef}
                            onAnnotationsChange={onAnnotationsChange}
                            onAnnotationsCommit={onAnnotationsCommit}
@@ -302,6 +488,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        />
                    ) : width > 30 ? (
                        <span
+                           ref={elRef(annotation.id, 'label')}
                            className="absolute top-0 bottom-0 flex items-center text-xs font-bold pointer-events-none"
                            style={{
                                // Horizontal placement: left-aligned, clipped to annotation right edge.
@@ -324,6 +511,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                  width > 60 ? (
                    // Render inside the annotation
                    <button
+                     ref={elRef(annotation.id, 'pencil')}
                      className="absolute top-0 bottom-0 flex items-center justify-center z-20 opacity-70 hover:opacity-100 transition-opacity"
                      style={{ right: `${pencilRight}px` }}
                      onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
@@ -358,6 +546,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 
                {/* Delete button */}
                <button
+                   ref={elRef(annotation.id, 'delete')}
                    className={`absolute -top-3 ${isHovered ? 'flex' : 'hidden'} bg-red-500 rounded-full p-0.5 z-30`}
                    style={{ right: `${deleteRight}px` }}
                    onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
@@ -372,6 +561,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
             </div>
         );
       })}
+      </div>
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -385,4 +575,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   );
 };
 
-export default AnnotationOverlay;
+// Memoised because the whole point of the transform above is that a scroll step
+// costs no React work: Spectrogram still re-renders on one (`scrollLeft` state
+// feeds the canvas dirty flags and the pointer handlers), and without this the
+// overlay would re-render with it and hand back the cost we just removed.
+export default React.memo(AnnotationOverlay);

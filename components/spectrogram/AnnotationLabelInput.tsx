@@ -10,7 +10,7 @@ import ToolMatchDropdown from '../ToolMatchDropdown';
 // dropdown as the Add-tool field: ArrowDown/ArrowUp highlight a row and Enter
 // picks it; with nothing highlighted Enter commits the typed text as-is.
 export default function AnnotationLabelInput({
-  annotation, annotations, annotationTools, isSelected, labelStyle, inputRefs,
+  annotation, annotations, annotationTools, isSelected, labelStyle, inputRefs, dropdownRef,
   pendingAnnotationsRef, onAnnotationsChange, onAnnotationsCommit, onSelectAnnotation,
   onDeselect, setEditingInputId, deleteAnnotation, placeholder,
 }: {
@@ -22,6 +22,10 @@ export default function AnnotationLabelInput({
   // fixed-width style instead of one pinned to both edges (see AnnotationOverlay).
   labelStyle: { left: string; right: string; width?: string };
   inputRefs: React.MutableRefObject<Record<string, HTMLInputElement | null>>;
+  // Registers the match dropdown with AnnotationOverlay's pin registry: its
+  // left edge tracks the label's, which the overlay re-pins per frame while
+  // the view scrolls (see AnnotationOverlay's syncScroll).
+  dropdownRef?: (el: HTMLDivElement | null) => void;
   pendingAnnotationsRef: React.MutableRefObject<Annotation[]>;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
@@ -125,6 +129,7 @@ export default function AnnotationLabelInput({
       />
       {open && (
         <div
+          ref={dropdownRef}
           className="absolute z-50 flex flex-col gap-1 bg-slate-900 border border-slate-600 rounded shadow-lg p-1 min-w-[160px] max-w-[260px]"
           style={{ left: labelStyle.left, top: `${ANNOTATION_BOX_HEIGHT + 2}px` }}
           onMouseDown={(e) => e.stopPropagation()}

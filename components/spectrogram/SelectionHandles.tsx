@@ -1,62 +1,59 @@
 import React from 'react';
 import { Selection } from '../../types';
-import { timeToX } from '../../utils/viewportTransform';
+import type { ScrollSyncHub } from '../../utils/scrollSyncHub';
+import { useScrollTransformLayer } from '../../hooks/useScrollTransformLayer';
 
 interface SelectionHandlesProps {
   selection: Selection | null;
   creatingSelection: { start: number; current: number } | null;
-  scrollLeft: number;
+  // Live scroll (pixels) — read once for the first paint; per-frame movement
+  // comes from the hub, so the handles track the canvas selection exactly.
+  scrollLeftRef: React.MutableRefObject<number>;
+  scrollSync: ScrollSyncHub;
   pixelsPerSecond: number;
-  containerWidth: number;
   onBeginResize: (side: 'start' | 'end') => void;
 }
 
 // Render selection region handles (draggable). Render-only — interaction logic
 // (the drag itself) lives in Spectrogram.tsx; this calls back via onBeginResize.
+//
+// Positioned in content pixels inside a transform layer (see
+// `utils/scrollSyncHub.ts`), so scrolling moves them on the rAF clock rather
+// than on a React commit. Off-screen handles are clipped by the spectrogram
+// container's own overflow rather than culled here — the previous
+// `0 <= x <= containerWidth` test was itself a scroll dependency.
 const SelectionHandles: React.FC<SelectionHandlesProps> = ({
   selection,
   creatingSelection,
-  scrollLeft,
+  scrollLeftRef,
+  scrollSync,
   pixelsPerSecond,
-  containerWidth,
   onBeginResize,
 }) => {
-  const activeSelection = selection;
-  if (!activeSelection || creatingSelection) return null;
-
-  const leftX = timeToX(activeSelection.start, scrollLeft, pixelsPerSecond);
-  const rightX = timeToX(activeSelection.end, scrollLeft, pixelsPerSecond);
+  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef);
+  const activeSelection = creatingSelection ? null : selection;
 
   return (
-    <>
-      {/* Left handle — 1px white line with slightly wider invisible hit area */}
-      {leftX >= 0 && leftX <= containerWidth && (
+    <div ref={layer.ref} className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ ...layer.style, zIndex: 15 }}>
+      {activeSelection && [
+        { side: 'start' as const, x: activeSelection.start * pixelsPerSecond },
+        { side: 'end' as const, x: activeSelection.end * pixelsPerSecond },
+      ].map(({ side, x }) => (
+        // 1px white line with a slightly wider invisible hit area
         <div
-          className="absolute top-0 bottom-0 cursor-ew-resize"
-          style={{ left: `${leftX - 4}px`, width: '9px', zIndex: 15 }}
+          key={side}
+          className="absolute top-0 bottom-0 cursor-ew-resize pointer-events-auto"
+          style={{ left: `${x - 4}px`, width: '9px' }}
           onMouseDown={(e) => {
             e.stopPropagation();
-            onBeginResize('start');
+            onBeginResize(side);
           }}
         >
           <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
         </div>
-      )}
-      {/* Right handle — 1px white line with slightly wider invisible hit area */}
-      {rightX >= 0 && rightX <= containerWidth && (
-        <div
-          className="absolute top-0 bottom-0 cursor-ew-resize"
-          style={{ left: `${rightX - 4}px`, width: '9px', zIndex: 15 }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            onBeginResize('end');
-          }}
-        >
-          <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
-        </div>
-      )}
-    </>
+      ))}
+    </div>
   );
 };
 
-export default SelectionHandles;
+export default React.memo(SelectionHandles);

@@ -21,6 +21,7 @@ import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
+import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
 import { useAltHeld } from '../hooks/useAltHeld';
@@ -257,6 +258,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     overlayDirtyRef.current = true;
     filterOverlayDirtyRef.current = true;
   }, []);
+  // Per-frame scroll sync for the HTML overlay layers (annotation boxes,
+  // selection handles). They register here and the rAF loop below drives them
+  // with the live scroll, in the same frame as the canvas draws — see
+  // `utils/scrollSyncHub.ts`.
+  const scrollSyncRef = useRef(createScrollSyncHub());
   // Timestamp (ms) of the last user-initiated scroll. Used to suppress auto-scroll
   // for a brief window after manual panning so the two don't fight each other.
   const lastManualScrollRef = useRef(0);
@@ -1013,6 +1019,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawFilterOverlayRef.current();
         filterOverlayDirtyRef.current = false;
       }
+      // Annotation boxes and selection handles are HTML, not canvas, but they
+      // move on this same clock: one transform per layer, in the same frame as
+      // the draws above, so they can't lag the spectrogram they annotate. Cheap
+      // and self-gating — each layer returns immediately when scroll is unchanged.
+      scrollSyncRef.current.run(scrollLeftRef.current);
       requestRef.current = requestAnimationFrame(tick);
     };
     requestRef.current = requestAnimationFrame(tick);
@@ -1297,6 +1308,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
 
+  // Stable identity for the memoised AnnotationOverlay: getPointerTime is a plain
+  // function rebuilt every render (it closes over scrollLeft), so passing it
+  // directly would defeat the memo on every scroll step.
+  const getPointerTimeRef = useRef(getPointerTime);
+  getPointerTimeRef.current = getPointerTime;
+  const stableGetPointerTime = useCallback((e: React.MouseEvent) => getPointerTimeRef.current(e), []);
+
   return (
     <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
       {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
@@ -1377,16 +1395,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            annotationTools={annotationTools}
            selection={selection}
            settings={settings}
-           scrollLeft={scrollLeft}
+           scrollLeftRef={scrollLeftRef}
+           scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
-           containerWidth={containerRef.current?.clientWidth || 1000}
+           containerWidth={containerWidth}
            hideLabels={hideLabels}
            currentTimeStore={currentTimeStore}
            inputRefs={inputRefs}
            pendingAnnotationsRef={pendingAnnotationsRef}
            clickDownRef={clickDownRef}
            playheadFollowsAnnotationStartRef={playheadFollowsAnnotationStartRef}
-           getPointerTime={getPointerTime}
+           getPointerTime={stableGetPointerTime}
            onSelectAnnotation={onSelectAnnotation}
            onDeselectAnnotation={onDeselectAnnotation}
            onAnnotationsChange={onAnnotationsChange}
@@ -1407,9 +1426,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
          <SelectionHandles
            selection={selection}
            creatingSelection={creatingSelection}
-           scrollLeft={scrollLeft}
+           scrollLeftRef={scrollLeftRef}
+           scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
-           containerWidth={containerRef.current?.clientWidth ?? 1000}
            onBeginResize={setResizingSelectionHandle}
          />
 
