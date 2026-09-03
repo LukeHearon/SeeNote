@@ -1738,14 +1738,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
       // be nothing to subset by.
       { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
-      // `Enter`: deselect the readied annotation tool, dropping back to
-      // selection mode. Same effect as `S`, but only when a tool is active —
-      // otherwise Enter is left alone.
-      { key: 'Enter', handler: () => {
-          if (activeToolKey === null) return;
-          setActiveToolKey(null);
-          activationStack.remove('annotationTool');
-      }},
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);

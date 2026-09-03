@@ -59,7 +59,6 @@ const GROUPS: Group[] = [
     shortcuts: [
       { codes: ['Digit0','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'], display: '0–9', label: 'Ready annotation tool' },
       { codes: ['KeyS'], display: 'S', label: 'Selection mode (unready tools)' },
-      { codes: ['Enter'], display: '↵', label: 'Deselect the readied annotation tool' },
       { codes: ['KeyS'], display: 'Shift+S', label: 'Subset track to buzzdetect detections' },
       { codes: ['KeyE'], display: 'E', label: 'Play / stop example clip for active tool' },
       { codes: ['KeyF'], display: 'Shift+F', label: 'Ready audio filter tool' },
