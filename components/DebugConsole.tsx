@@ -1,16 +1,77 @@
 import React, { useState } from 'react';
-import { Bug, Copy, Check, X } from 'lucide-react';
+import { Bug, Copy, Check, X, Activity, Loader2 } from 'lucide-react';
 import { tooltips } from '../copy/tooltips';
 import { debugConsole } from '../copy/ui';
 import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
 import { APP_VERSION } from '../utils/appVersion';
+import { measureLoopbackLatency, formatLoopbackResult } from '../utils/audioLoopback';
 
 export interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
+
+/** True only under `npm run tauri dev`. Vite replaces this at build time, so
+ *  the loopback test and everything it imports are dropped from a release. */
+const DEV_MODE = import.meta.env.DEV;
 
 interface DebugConsolePanelProps {
   logs: DebugLog[];
   /** When set, the header shows a close button. Omitted by the guide's copy. */
   onClose?: () => void;
+}
+
+/**
+ * Dev-only microphone loopback test — see utils/audioLoopback.ts for what it
+ * measures and why nothing else can. Self-contained (it opens its own context
+ * and mic), so it works in both hosts of this panel without either of them
+ * handing it engine access.
+ *
+ * Its strings are inline rather than in `copy/ui.ts` on purpose: the copy module
+ * is always reachable, so keys added there survive into the release bundle and
+ * show up in the copy editor for a feature that release builds don't contain.
+ */
+function LoopbackTest() {
+  const [state, setState] = useState<'idle' | 'running'>('idle');
+  const [lines, setLines] = useState<string[]>([]);
+  const [failed, setFailed] = useState(false);
+
+  const run = async () => {
+    setState('running');
+    setFailed(false);
+    setLines([]);
+    const push = (m: string) => setLines(prev => [...prev, m]);
+    try {
+      const result = await measureLoopbackLatency({ onProgress: push });
+      push(formatLoopbackResult(result));
+      push(`per click: ${result.perClickSec.map(s => `${(s * 1000).toFixed(0)}ms`).join(', ')}`);
+    } catch (err) {
+      setFailed(true);
+      push(String(err instanceof Error ? err.message : err));
+    } finally {
+      setState('idle');
+    }
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-700">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={run}
+          disabled={state === 'running'}
+          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-default text-slate-200 transition-colors"
+        >
+          {state === 'running'
+            ? <Loader2 size={13} className="animate-spin" />
+            : <Activity size={13} />}
+          Measure audio latency
+        </button>
+        <span className="text-xs text-slate-500">dev only · needs the mic, speakers on</span>
+      </div>
+      {lines.length > 0 && (
+        <div className={`mt-2 font-mono text-xs ${failed ? 'text-amber-400' : 'text-slate-300'}`}>
+          {lines.map((l, i) => <div key={i} className="mb-0.5">{l}</div>)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -68,6 +129,7 @@ export function DebugConsolePanel({ logs, onClose }: DebugConsolePanelProps) {
           ))
         )}
       </div>
+      {DEV_MODE && <LoopbackTest />}
     </div>
   );
 }
