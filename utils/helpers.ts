@@ -1,6 +1,7 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
 import { formatDateTime, DateTimeFormat } from './datetimeDisplay';
+import { formatGrouped } from './numberFormat';
 
 // Clamp `v` into the inclusive range [lo, hi]. Assumes lo <= hi.
 export const clamp = (v: number, lo: number, hi: number): number =>
@@ -31,9 +32,11 @@ export type TimeDisplayUnit = 'seconds' | 'hms' | 'datetime';
 /** The units that are always available — 'datetime' needs a parsed track start. */
 export type ElapsedTimeDisplayUnit = 'seconds' | 'hms';
 
-// Plain seconds with a thousands separator, e.g. "123,456.78s".
+// Plain seconds with a thousands separator, e.g. "123,456.78s". Runs on every
+// media-clock tick from the time readout, so it goes through the cached
+// formatters rather than toLocaleString's per-call Intl construction.
 export const formatSeconds = (seconds: number, decimals: number = 2): string =>
-  `${seconds.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}s`;
+  `${formatGrouped(seconds, decimals)}s`;
 
 /**
  * The unit actually used for display. 'datetime' is only honoured when the

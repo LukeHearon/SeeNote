@@ -9,6 +9,7 @@ import type { Timeline } from './subsetTimeline';
 // threshold cascade doesn't account for how much wider that makes each
 // label, so ticks must be chosen by the actual pixel gap instead.
 import { parseDatetimeInput } from './datetimeDisplay';
+import { formatGrouped } from './numberFormat';
 
 const NICE_TIME_STEPS = [
   0.25, 0.5, 1, 2, 5, 10, 15, 30,
@@ -45,7 +46,9 @@ export function chooseTimeStep(pixelsPerSecond: number, minSpacingPx: number = M
  */
 export function formatRulerTime(s: number, timeStep: number, viewSpan: number, plain: boolean = false): string {
   if (plain) {
-    return `${Math.round(s).toLocaleString('en-US')}s`;
+    // Cached formatter: this runs once per visible tick inside the spectrogram's
+    // rAF loop, where toLocaleString's per-call Intl construction dominates.
+    return `${formatGrouped(Math.round(s))}s`;
   }
   if (timeStep < 1) {
     return `${s.toFixed(2)}s`;

@@ -244,14 +244,13 @@ export const drawSpectrogramChunk = (
     : _scratchPixels.subarray(0, needed);
   const imgData = new ImageData(data, canvasWidth, canvasHeight);
 
-  // Pre-fill with the spectrogram background color (#0f172a = r:15 g:23 b:42)
-  // so zero-value areas show navy rather than colormap-dark. Columns flagged
-  // unbuilt by colMask are overwritten to fully transparent below, letting the
-  // build-progress sweep behind the canvas show through; they read identically
-  // to navy when no sweep is present (the container background is #0f172a too).
-  for (let i = 0; i < data.length; i += 4) {
-    data[i] = 15; data[i + 1] = 23; data[i + 2] = 42; data[i + 3] = 255;
-  }
+  // NOTE: there is deliberately no whole-buffer background pre-fill here. Every
+  // call site passes specWidth === canvasWidth, so the column loop below writes
+  // all four bytes of every pixel — colormap for built columns, the background
+  // colour at zero alpha for the ones colMask flags unbuilt. A pre-fill pass was
+  // therefore pure dead work: on a 2400x760 physical-pixel canvas it stored
+  // 7.3MB per call, every frame, and not one byte survived. It measured at ~17%
+  // of all JS execution (local/profile/FINDINGS.md).
 
   // Pre-calculate Pixel Y -> Frequency Bin interpolation map.
   // Cached by the parameters that determine the mapping; recomputed only on change.
@@ -282,11 +281,20 @@ export const drawSpectrogramChunk = (
   for (let x = 0; x < canvasWidth; x++) {
     const colOffset = x * specHeight;
 
-    // Unbuilt columns: leave fully transparent (skip the per-pixel colormap work).
+    // Unbuilt columns: the spectrogram background colour (#0f172a) at zero
+    // alpha, so the build-progress sweep behind the canvas shows through and
+    // they read identically to navy when no sweep is present (the container
+    // background is #0f172a too). Written in full rather than as an alpha-only
+    // stripe because the scratch buffer is reused across calls and still holds
+    // the previous frame's colours. Skips the per-pixel colormap work.
     // specWidth === canvasWidth in this pipeline, so colMask is indexed by x.
     if (colMask && colMask[x] === 0) {
       for (let y = 0; y < canvasHeight; y++) {
-        data[(y * canvasWidth + x) * 4 + 3] = 0;
+        const pixelIdx = (y * canvasWidth + x) * 4;
+        data[pixelIdx]     = 15;
+        data[pixelIdx + 1] = 23;
+        data[pixelIdx + 2] = 42;
+        data[pixelIdx + 3] = 0;
       }
       continue;
     }

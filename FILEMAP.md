@@ -138,3 +138,4 @@ Quick reference for agents. One phrase per file.
 - `utils/timeAxis.ts` — tick-spacing cascade and elapsed-time ruler label formatting/parsing
 - `utils/filenameTime.ts` — parses/renders the timestamp embedded in media filenames from a project pattern like `YYMMDD_HHMM`
 - `utils/datetimeDisplay.ts` — wall-clock rendering of track times: readouts, ruler tick alignment and labels, datetime input parsing
+- `utils/numberFormat.ts` — cached `Intl.NumberFormat`s for the ruler labels and time readout, which format per frame

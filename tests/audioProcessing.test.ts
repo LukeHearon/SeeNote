@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto } from '../utils/audioProcessing';
+import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk } from '../utils/audioProcessing';
 
 const H = 500;            // canvas height
 const MIN_F = 20;
@@ -265,5 +265,68 @@ describe('sampleChunkColumnInto', () => {
     sampleChunkColumnInto(b, 0, 1, wide, 1, 4096, 0, 4096);
     expect(a[0]).toBe(123);
     expect(b[0]).toBe(123);
+  });
+});
+
+// drawSpectrogramChunk writes into a module-scope scratch buffer that is reused
+// across calls and never cleared. It used to open with a whole-buffer background
+// pre-fill; that was removed because the column loop already writes all four
+// bytes of every pixel. These tests pin that invariant — if a future edit leaves
+// any pixel unwritten, the canvas would show stale colours from the previous
+// call rather than the background.
+describe('drawSpectrogramChunk pixel coverage', () => {
+  const W = 7;
+  const H2 = 5;
+
+  // Minimal ImageData/2D-context stubs: the node test env has neither, and all
+  // we need is to capture the buffer handed to putImageData.
+  class FakeImageData {
+    constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+  }
+
+  const draw = (colMask?: Uint8Array) => {
+    const prevImageData = (globalThis as any).ImageData;
+    (globalThis as any).ImageData = FakeImageData;
+    let captured: Uint8ClampedArray | null = null;
+    const ctx = { putImageData: (img: FakeImageData) => { captured = img.data; } };
+    // Ascending values so no bin resolves to the same colour by accident.
+    const spec = new Uint16Array(W * H2);
+    for (let i = 0; i < spec.length; i++) spec[i] = (i * 997) % 65535;
+    drawSpectrogramChunk(
+      ctx as unknown as CanvasRenderingContext2D,
+      spec, W, H2, W, H2,
+      20, 22050, 44100, 'linear', -100, 0,
+      colMask,
+    );
+    (globalThis as any).ImageData = prevImageData;
+    return captured!.slice(0, W * H2 * 4);
+  };
+
+  it('writes every pixel when no column is masked', () => {
+    // Poison the scratch buffer via a first call, then assert the second call's
+    // output owes nothing to it: an identical draw must be byte-identical, and
+    // a differently-masked draw must not leak the first call's colours.
+    const a = draw();
+    const b = draw();
+    expect(Array.from(b)).toEqual(Array.from(a));
+    // Every pixel opaque — no gaps left for a background fill to cover.
+    for (let p = 3; p < a.length; p += 4) expect(a[p]).toBe(255);
+  });
+
+  it('writes masked columns as transparent background, not stale pixels', () => {
+    draw(); // leaves the scratch buffer full of colormap colours
+    const mask = new Uint8Array(W).fill(1);
+    mask[2] = 0;
+    mask[5] = 0;
+    const out = draw(mask);
+    for (let y = 0; y < H2; y++) {
+      for (const x of [2, 5]) {
+        const i = (y * W + x) * 4;
+        expect([out[i], out[i + 1], out[i + 2], out[i + 3]]).toEqual([15, 23, 42, 0]);
+      }
+      // A neighbouring built column is still painted opaque.
+      const j = (y * W + 3) * 4;
+      expect(out[j + 3]).toBe(255);
+    }
   });
 });

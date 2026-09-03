@@ -523,7 +523,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                   return;
               }
           }
-          const containerWidth = containerRef.current.clientWidth;
+          // From the ResizeObserver's cached box, never `clientWidth`: this runs
+          // on every media-clock tick, and a live layout read there costs a
+          // forced reflow per tick (~6% of all JS in the 89s profile — see
+          // local/profile/FINDINGS.md). The cache is fractional where
+          // clientWidth is integer-rounded, which is only safe because the width
+          // is used for centering and the fits-on-screen guard below, never to
+          // derive pixelsPerSecond. Falls back to the live read before the
+          // observer has reported once.
+          const containerWidth = containerSizeRef.current.width || containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
           const targetScroll = t * pps - containerWidth / 2;
