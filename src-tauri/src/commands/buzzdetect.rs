@@ -6,7 +6,16 @@ use std::path::Path;
 /// `values` is indexed `[neuron][frame]` so the frontend can plot one polyline
 /// per neuron without transposing. `neurons` holds display labels (the optional
 /// `activation_` column prefix is stripped here so old and new CSVs render the
-/// same). Times come from the CSV `start` column.
+/// same, unless the project turns that off — see `trim_activation_prefix`).
+/// Times come from the CSV `start` column.
+///
+/// A cell can be missing (empty, "NA", "N/A", "NaN", "null", "none" — see
+/// [`is_missing_token`]) without failing the read: it comes back as `None` so
+/// the frontend can skip it rather than plot a bogus value. `None` rather than
+/// `f32::NAN` because JSON has no NaN literal — this serializes to `null`.
+/// A column that contains real non-numeric content (not just missing tokens)
+/// is dropped from `neurons`/`values` entirely rather than failing the read,
+/// so one ill-formed extra column doesn't take the whole file down.
 ///
 /// Two separate numbers describe the frame grid, because the model's two
 /// parameters are separate and a CSV only reveals one of them:
@@ -28,7 +37,7 @@ pub struct BuzzdetectData {
     pub frame_hop: f32,
     pub neurons: Vec<String>,
     pub starts: Vec<f32>,
-    pub values: Vec<Vec<f32>>,
+    pub values: Vec<Vec<Option<f32>>>,
 }
 
 /// Strip one surrounding pair of double quotes from a CSV header cell, then trim.
@@ -39,25 +48,44 @@ fn unquote(cell: &str) -> String {
     t.trim().to_string()
 }
 
+/// Common tokens meaning "no value" in a CSV cell, checked case-insensitively
+/// after trimming. Covers plain-empty, R's `NA`, and the handful of spellings
+/// pandas/numpy and hand-written CSVs use for a missing float.
+fn is_missing_token(cell: &str) -> bool {
+    matches!(
+        cell.trim().to_ascii_lowercase().as_str(),
+        "" | "na" | "n/a" | "nan" | "null" | "none"
+    )
+}
+
 /// Read `{buzzdetect_dir}/{ident}_buzzdetect.csv` (or, when a run is still in
 /// progress, `{ident}_buzzpart.csv`) and parse it into [`BuzzdetectData`].
 /// Returns `Ok(None)` when neither file exists for this ident so the UI can
 /// simply show no panel rather than treating it as an error.
 ///
 /// CSV contract (see local/buzzdetect.md): first column `start` is the time
-/// axis in seconds; every other column is a neuron, optionally prefixed with
-/// `activation_`. Values are raw logits. The frame HOP is inferred from the
-/// spacing of the first few `start` values and the parse fails if that spacing
-/// is inconsistent — we never silently assume a fixed spacing. `frame_length`,
-/// when set (the project's buzzdetect override setting), is the frame's extent;
-/// it does not change the hop, and only stands in for it when the CSV is too
-/// short or too noisy to infer one.
+/// axis in seconds; every other column with numeric content is a neuron,
+/// optionally prefixed with `activation_` — arbitrary per-frame values (SPL,
+/// loss, ...) work the same as a model's activations, prefixed or not. Values
+/// are raw logits or whatever the column represents. The frame HOP is inferred
+/// from the spacing of the first few `start` values and the parse fails if
+/// that spacing is inconsistent — we never silently assume a fixed spacing.
+/// `frame_length`, when set (the project's buzzdetect override setting), is
+/// the frame's extent; it does not change the hop, and only stands in for it
+/// when the CSV is too short or too noisy to infer one.
+///
+/// `trim_activation_prefix` (defaults to `true`) controls whether a leading
+/// `activation_` is stripped from a neuron's display name; the project-level
+/// setting exists for the arbitrary-column case, where a literal `activation_`
+/// prefix might be a real part of the name a user wants to keep.
 #[tauri::command]
 pub async fn read_buzzdetect(
     buzzdetect_dir: String,
     ident: String,
     frame_length: Option<f32>,
+    trim_activation_prefix: Option<bool>,
 ) -> Result<Option<BuzzdetectData>, String> {
+    let trim_activation_prefix = trim_activation_prefix.unwrap_or(true);
     let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
     let finished_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
     let partial_path = Path::new(dir).join(format!("{}_buzzpart.csv", ident));
@@ -96,16 +124,28 @@ pub async fn read_buzzdetect(
             header
         ));
     }
-    // First column is the `start` time axis; the rest are neurons. Strip the
-    // optional `activation_` prefix so both current and older CSVs label alike.
+    // First column is the `start` time axis; the rest are candidate neurons.
+    // Strip the optional `activation_` prefix so both current and older CSVs
+    // label alike, unless the project has turned that off.
     let neurons: Vec<String> = header_cells[1..]
         .iter()
-        .map(|c| c.strip_prefix("activation_").unwrap_or(c).to_string())
+        .map(|c| {
+            if trim_activation_prefix {
+                c.strip_prefix("activation_").unwrap_or(c).to_string()
+            } else {
+                c.to_string()
+            }
+        })
         .collect();
     let n_neurons = neurons.len();
 
     let mut starts: Vec<f32> = Vec::new();
-    let mut values: Vec<Vec<f32>> = vec![Vec::new(); n_neurons];
+    let mut values: Vec<Vec<Option<f32>>> = vec![Vec::new(); n_neurons];
+    // A column stays numeric until a cell in it fails to parse as a float AND
+    // isn't a recognized missing-value token — one genuinely non-numeric
+    // column (e.g. a text label column someone appended) shouldn't take the
+    // whole file down, so it's dropped from the output instead of erroring.
+    let mut column_numeric: Vec<bool> = vec![true; n_neurons];
 
     for (row_idx, line) in lines.enumerate() {
         let cells: Vec<&str> = line.split(',').collect();
@@ -124,10 +164,29 @@ pub async fn read_buzzdetect(
             .map_err(|_| format!("'{}' row {}: bad start '{}'", csv_path.display(), row_idx + 2, cells[0]))?;
         starts.push(start);
         for (n, cell) in cells[1..].iter().enumerate() {
-            let v: f32 = cell.trim().parse().map_err(|_| {
-                format!("'{}' row {}: bad value '{}'", csv_path.display(), row_idx + 2, cell)
-            })?;
-            values[n].push(v);
+            let trimmed = cell.trim();
+            if is_missing_token(trimmed) {
+                values[n].push(None);
+            } else {
+                match trimmed.parse::<f32>() {
+                    Ok(v) => values[n].push(Some(v)),
+                    Err(_) => {
+                        values[n].push(None);
+                        column_numeric[n] = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Drop any column that turned out not to be numeric, rather than
+    // returning it full of holes.
+    let mut kept_neurons: Vec<String> = Vec::new();
+    let mut kept_values: Vec<Vec<Option<f32>>> = Vec::new();
+    for (n, is_numeric) in column_numeric.into_iter().enumerate() {
+        if is_numeric {
+            kept_neurons.push(neurons[n].clone());
+            kept_values.push(std::mem::take(&mut values[n]));
         }
     }
 
@@ -144,10 +203,98 @@ pub async fn read_buzzdetect(
     Ok(Some(BuzzdetectData {
         frame_length: frame_length.unwrap_or(hop),
         frame_hop: hop,
-        neurons,
+        neurons: kept_neurons,
         starts,
-        values,
+        values: kept_values,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Writes `contents` as `{ident}_buzzdetect.csv` under a fresh temp dir and
+    /// returns the dir, so `read_buzzdetect` can be pointed at it. The dir is
+    /// unique per call (PID + a counter) so parallel tests don't collide.
+    fn write_csv(ident: &str, contents: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "seenote_buzzdetect_test_{}_{}",
+            std::process::id(),
+            n
+        ));
+        let file_dir = dir.join(Path::new(ident).parent().unwrap_or(Path::new("")));
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(dir.join(format!("{}_buzzdetect.csv", ident)), contents).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn missing_cells_become_none_and_dont_fail_the_read() {
+        let dir = write_csv(
+            "t",
+            "start,activation_a,activation_b\n0,1.0,2.0\n0.96,,4.0\n1.92,NA,6.0\n",
+        );
+        let data = read_buzzdetect(dir.to_string_lossy().to_string(), "t".to_string(), None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.neurons, vec!["a", "b"]);
+        assert_eq!(data.values[0], vec![Some(1.0), None, None]);
+        assert_eq!(data.values[1], vec![Some(2.0), Some(4.0), Some(6.0)]);
+    }
+
+    #[tokio::test]
+    async fn a_non_numeric_column_is_dropped_not_fatal() {
+        let dir = write_csv(
+            "t",
+            "start,activation_a,label\n0,1.0,quiet\n0.96,2.0,loud\n",
+        );
+        let data = read_buzzdetect(dir.to_string_lossy().to_string(), "t".to_string(), None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.neurons, vec!["a"]);
+        assert_eq!(data.values.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn arbitrary_column_names_are_read_like_activation_columns() {
+        let dir = write_csv("t", "start,spl,loss\n0,55.2,0.3\n0.96,56.1,0.25\n");
+        let data = read_buzzdetect(dir.to_string_lossy().to_string(), "t".to_string(), None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.neurons, vec!["spl", "loss"]);
+    }
+
+    #[tokio::test]
+    async fn trim_activation_prefix_can_be_turned_off() {
+        let dir = write_csv("t", "start,activation_a\n0,1.0\n0.96,2.0\n");
+        let trimmed = read_buzzdetect(dir.to_string_lossy().to_string(), "t".to_string(), None, Some(true))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(trimmed.neurons, vec!["a"]);
+        let untrimmed = read_buzzdetect(dir.to_string_lossy().to_string(), "t".to_string(), None, Some(false))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(untrimmed.neurons, vec!["activation_a"]);
+    }
+
+    #[test]
+    fn is_missing_token_covers_common_spellings() {
+        for tok in ["", "NA", "na", "N/A", "NaN", "nan", "NULL", "None", "  na  "] {
+            assert!(is_missing_token(tok), "expected {:?} to be missing", tok);
+        }
+        for tok in ["0", "1.5", "-2.3e1", "not-a-number-either"] {
+            assert!(!is_missing_token(tok), "expected {:?} to not be missing", tok);
+        }
+    }
 }
 
 /// Infer the frame hop from the spacing between the first few `start` values,

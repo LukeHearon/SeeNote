@@ -165,13 +165,26 @@ export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
  * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to
  * `null` when no file exists for this ident. `frameLength`, when given,
  * overrides auto-detection of the bin width from the CSV's `start` column.
+ * `trimActivationPrefix` (default `true`) controls whether a leading
+ * `activation_` is stripped from a column's name before it's used as a
+ * neuron label.
+ *
+ * The Rust side reports a missing cell as `null` (JSON has no NaN literal);
+ * this wrapper converts those to `NaN` so the rest of the app can treat
+ * `BuzzdetectData.values` as plain `number[][]` and just check `isNaN`.
  */
 export const readBuzzdetect = (
   buzzdetectDir: string,
   ident: string,
   frameLength?: number,
+  trimActivationPrefix?: boolean,
 ): Promise<BuzzdetectData | null> =>
-  invoke('read_buzzdetect', { buzzdetectDir, ident, frameLength: frameLength ?? null });
+  invoke<Omit<BuzzdetectData, 'values'> & { values: (number | null)[][] } | null>('read_buzzdetect', {
+    buzzdetectDir,
+    ident,
+    frameLength: frameLength ?? null,
+    trimActivationPrefix: trimActivationPrefix ?? true,
+  }).then(data => data && { ...data, values: data.values.map(row => row.map(v => v ?? NaN)) });
 
 export const createDirAll = (path: string): Promise<void> =>
   invoke('create_dir_all', { path });

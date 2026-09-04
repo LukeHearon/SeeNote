@@ -199,6 +199,8 @@ export const projectBaseFields = {
   get buzzdetectFrameLengthAutoHelp() { return getOverride('ui.projectBaseFields.buzzdetectFrameLengthAutoHelp') ?? "auto-detected per file from the CSV"; },
   get buzzdetectFrameLengthOverrideHelp() { return getOverride('ui.projectBaseFields.buzzdetectFrameLengthOverrideHelp') ?? "used for every file; clear to auto-detect"; },
   get buzzdetectFrameLengthPlaceholder() { return getOverride('ui.projectBaseFields.buzzdetectFrameLengthPlaceholder') ?? "auto"; },
+  get buzzdetectTrimPrefixLabel() { return getOverride('ui.projectBaseFields.buzzdetectTrimPrefixLabel') ?? "Trim \"activation_\" from column names"; },
+  get buzzdetectTrimPrefixHint() { return getOverride('ui.projectBaseFields.buzzdetectTrimPrefixHint') ?? "Off if a CSV column genuinely starts with \"activation_\" and that should stay in its neuron label."; },
   get syncLabel() { return getOverride('ui.projectBaseFields.syncLabel') ?? "Sync"; },
   get repoUrlLabel() { return getOverride('ui.projectBaseFields.repoUrlLabel') ?? "Repository URL"; },
   get repoUrlPlaceholder() { return getOverride('ui.projectBaseFields.repoUrlPlaceholder') ?? "https://github.com/your-lab/annotations.git"; },
@@ -364,6 +366,7 @@ export const buzzdetectPanel = {
   get timeReadoutHeader() { return getOverride('ui.buzzdetectPanel.timeReadoutHeader') ?? "Time"; },
   get rawActivationsHeader() { return getOverride('ui.buzzdetectPanel.rawActivationsHeader') ?? "Activations"; },
   get avgActivationsHeader() { return getOverride('ui.buzzdetectPanel.avgActivationsHeader') ?? "Mean Activations"; },
+  get noValue() { return getOverride('ui.buzzdetectPanel.noValue') ?? "–"; },
 };
 
 export const debugConsole = {

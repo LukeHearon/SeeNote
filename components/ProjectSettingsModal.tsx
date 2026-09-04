@@ -38,6 +38,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
     project?.settings.buzzdetectFrameLength ?? null,
   );
+  const [buzzdetectTrimActivationPrefix, setBuzzdetectTrimActivationPrefix] = useState(
+    project?.settings.buzzdetectTrimActivationPrefix ?? true,
+  );
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
     project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
   );
@@ -153,6 +156,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
       buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
       buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
+      buzzdetectTrimActivationPrefix,
       filenameTimeFormat: filenameTimeFormat.trim() || undefined,
       filenameTimeOffsetSeparator: filenameTimeOffsetSeparator.trim() || undefined,
       outputRoundingDecimals,
@@ -326,6 +330,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                 onBuzzdetectDirChange={setBuzzdetectDir}
                 buzzdetectFrameLength={buzzdetectFrameLength}
                 onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
+                buzzdetectTrimActivationPrefix={buzzdetectTrimActivationPrefix}
+                onBuzzdetectTrimActivationPrefixChange={setBuzzdetectTrimActivationPrefix}
                 advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
                 syncRemoteUrl={syncRemoteUrl}
                 onSyncRemoteUrlChange={setSyncRemoteUrl}

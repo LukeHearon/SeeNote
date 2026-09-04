@@ -15,12 +15,30 @@
 // `prefix` has length `frameCount + 1` and an INCLUSIVE range [start, end]
 // resolves to `prefix[end + 1] - prefix[start]`.
 
-/** Cumulative sums of `values`. Length is `values.length + 1`. */
+/**
+ * Cumulative sums of `values`. Length is `values.length + 1`. A missing frame
+ * (`NaN` — see `BuzzdetectData`) contributes 0 rather than poisoning every
+ * later prefix entry with NaN; pair with `buildValidCountPrefix` so a range's
+ * mean divides by how many frames actually had a value, not the range width.
+ */
 export function buildPrefixSum(values: readonly number[]): Float64Array {
   const out = new Float64Array(values.length + 1);
   let acc = 0;
   for (let i = 0; i < values.length; i++) {
-    acc += values[i];
+    if (!Number.isNaN(values[i])) acc += values[i];
+    out[i + 1] = acc;
+  }
+  return out;
+}
+
+/** Cumulative count of non-missing (`!Number.isNaN`) entries. Length is
+ *  `values.length + 1`. Pair with `buildPrefixSum` to average over only the
+ *  frames that actually had a value. */
+export function buildValidCountPrefix(values: readonly number[]): Float64Array {
+  const out = new Float64Array(values.length + 1);
+  let acc = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (!Number.isNaN(values[i])) acc++;
     out[i + 1] = acc;
   }
   return out;
@@ -69,8 +87,24 @@ export function rangeSum(prefix: Float64Array, start: number, end: number): numb
   return prefix[end + 1] - prefix[start];
 }
 
-/** Mean over the INCLUSIVE index range [start, end]; 0 for an inverted range. */
-export function rangeMean(prefix: Float64Array, start: number, end: number): number {
+/**
+ * Mean over the INCLUSIVE index range [start, end]; 0 for an inverted range.
+ * Pass `validCountPrefix` (from `buildValidCountPrefix` on the same source
+ * values) to divide by how many frames in the range actually had a value
+ * instead of the range's width, so missing frames don't drag the average
+ * toward 0. A range whose frames are ALL missing then has nothing to average
+ * and reads as `NaN` rather than 0 — a real 0 would misrepresent "no data" as
+ * a measured value — which callers should treat the same as a missing single
+ * frame (skip it rather than plotting it).
+ */
+export function rangeMean(
+  prefix: Float64Array,
+  start: number,
+  end: number,
+  validCountPrefix?: Float64Array,
+): number {
   if (end < start) return 0;
-  return (prefix[end + 1] - prefix[start]) / (end - start + 1);
+  if (!validCountPrefix) return (prefix[end + 1] - prefix[start]) / (end - start + 1);
+  const count = rangeSum(validCountPrefix, start, end);
+  return count > 0 ? (prefix[end + 1] - prefix[start]) / count : NaN;
 }
