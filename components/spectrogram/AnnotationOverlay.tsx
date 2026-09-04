@@ -95,6 +95,8 @@ interface AnnotationEls {
   labelLeft: number;
   pencilRight: number;
   deleteRight: number;
+  // Last counter-scale written to the text and icons (see syncPins).
+  inverse: string;
 }
 
 interface VisibleAnnotation {
@@ -105,7 +107,7 @@ interface VisibleAnnotation {
   width: number;
 }
 
-const emptyEls = (): AnnotationEls => ({ els: {}, labelLeft: NaN, pencilRight: NaN, deleteRight: NaN });
+const emptyEls = (): AnnotationEls => ({ els: {}, labelLeft: NaN, pencilRight: NaN, deleteRight: NaN, inverse: '' });
 
 // Label placement in *screen* pixels for one annotation at a given scroll.
 // Handles screen-left pinning (annotation start scrolled off the left) and the
@@ -269,12 +271,29 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
     // they divide it out again.
     const sx = selStartX === null ? null : selStartX * scale;
     const ex = selEndX === null ? null : selEndX * scale;
+    // The layer's scaleX is the right transform for the boxes — it is their
+    // geometry — but it also squashes the glyphs and icons inside them, which
+    // pop back to normal width the moment React commits. Text and icons get the
+    // inverse so they stay at their true width. A transform, not a size, so
+    // this dirties no layout; and it is the empty string (no write at all) in
+    // every steady state, which is to say during all of playback and scrolling.
+    const inverse = scale === 1 ? '' : `scaleX(${1 / scale})`;
     for (const v of visibleRef.current) {
       const rec = elsRef.current.get(v.ann.id);
       if (!rec) continue;
       const scaled = scale === 1 ? v : { startX: v.startX * scale, endX: v.endX * scale };
       const { label, dropdown, pencil, delete: del } = rec.els;
       const input = inputRefs.current[v.ann.id];
+      if (inverse !== rec.inverse) {
+        rec.inverse = inverse;
+        // transform-origin is static in the JSX: the left-pinned text grows from
+        // its left edge, the right-pinned buttons from their right.
+        if (label) label.style.transform = inverse;
+        if (input) input.style.transform = inverse;
+        if (dropdown) dropdown.style.transform = inverse;
+        if (pencil) pencil.style.transform = inverse;
+        if (del) del.style.transform = inverse;
+      }
       if (label || dropdown || input) {
         const left = labelLeftFor(scaled, scrollLeft, sx, ex) / scale;
         if (left !== rec.labelLeft) {
@@ -514,6 +533,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                                textOverflow: 'ellipsis',
                                display: 'block',
                                lineHeight: '30px',
+                               // Anchor for the zoom counter-scale (see syncPins).
+                               transformOrigin: 'left center',
                            }}
                        >
                            {annotation.text || <span className="opacity-30">{copy.namePlaceholder}</span>}
@@ -527,7 +548,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    <button
                      ref={elRef(annotation.id, 'pencil')}
                      className="absolute top-0 bottom-0 flex items-center justify-center z-20 opacity-70 hover:opacity-100 transition-opacity"
-                     style={{ right: `${pencilRight}px` }}
+                     style={{ right: `${pencilRight}px`, transformOrigin: 'right center' }}
                      onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                      onMouseLeave={onAnnotationMouseLeave}
                      onMouseDown={(e) => e.stopPropagation()}
@@ -562,7 +583,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                <button
                    ref={elRef(annotation.id, 'delete')}
                    className={`absolute -top-3 ${isHovered ? 'flex' : 'hidden'} bg-red-500 rounded-full p-0.5 z-30`}
-                   style={{ right: `${deleteRight}px` }}
+                   style={{ right: `${deleteRight}px`, transformOrigin: 'right center' }}
                    onMouseEnter={() => onAnnotationMouseEnter(annotation.id)}
                    onMouseLeave={onAnnotationMouseLeave}
                    onClick={(e) => {

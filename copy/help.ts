@@ -185,14 +185,14 @@ export const help = {
   zoom: {
     get p1() { return getOverride('help.zoom.p1') ?? "The [spectrogram](spectrogram-canvas@spectrogram) shows a window onto the track, not the whole thing. How wide that window is, and where it sits, is yours to drive."; },
     get h_zoom() { return getOverride('help.zoom.h_zoom') ?? "Zooming"; },
-    get li_wheel() { return getOverride('help.zoom.li_wheel') ?? "**`{mod}` + scroll wheel** over the spectrogram zooms around the cursor."; },
+    get li_wheel() { return getOverride('help.zoom.li_wheel') ?? "**`{mod}` + scroll wheel**, or a **trackpad pinch**, over the spectrogram zooms around the cursor — in towards it, out away from it."; },
     get li_keys() { return getOverride('help.zoom.li_keys') ?? "**`{mod}+=` / `{mod}+-`** zoom in and out from the center of the current view."; },
     get li_fit() { return getOverride('help.zoom.li_fit') ?? "**`{mod}+0`** fits the entire track on screen. Press it again to drop back to exactly where you were — it remembers the window you left."; },
     get h_pan() { return getOverride('help.zoom.h_pan') ?? "Panning"; },
     get li_drag() { return getOverride('help.zoom.li_drag') ?? "**Right-click & drag** the spectrogram, or **scroll** without a modifier, to slide the view along."; },
     get li_arrows() { return getOverride('help.zoom.li_arrows') ?? "**`←` / `→`** move the playhead a pixel at a tap, accelerating while held — fine enough to place it exactly. While a selection is active the same keys walk its edge instead. During playback they scrub by a tenth of the visible window."; },
     get li_jump() { return getOverride('help.zoom.li_jump') ?? "**`{mod}+←` / `{mod}+→`** jump to the start / end of the track; **`Alt+←` / `Alt+→`** step between annotations."; },
-    get note_lock() { return getOverride('help.zoom.note_lock') ?? "With [playhead lock](recenter-playhead@transport#lock) on (`C`), the view follows the playhead during playback and manual scrolling is disabled. Zoom level itself is saved per project."; },
+    get note_lock() { return getOverride('help.zoom.note_lock') ?? "With [playhead lock](recenter-playhead@transport#lock) on (`C`), the view follows the playhead during playback and manual scrolling is disabled. Zooming then centres on the playhead rather than the cursor. Zoom level itself is saved per project."; },
   },
 
   spectrogramSettings: {
