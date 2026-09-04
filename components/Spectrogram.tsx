@@ -1480,6 +1480,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
            containerWidth={containerWidth}
            hideLabels={hideLabels}
            currentTimeStore={currentTimeStore}
@@ -1511,6 +1512,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
            onBeginResize={setResizingSelectionHandle}
          />
 
@@ -1524,6 +1526,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
          />
 
          {/* Band-pass filter cutoff handles */}

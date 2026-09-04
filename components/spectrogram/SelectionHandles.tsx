@@ -12,6 +12,8 @@ interface SelectionHandlesProps {
   scrollLeftRef: React.MutableRefObject<number>;
   scrollSync: ScrollSyncHub;
   pixelsPerSecond: number;
+  // Live pps — see ContentScale in useScrollTransformLayer.
+  pixelsPerSecondRef: React.MutableRefObject<number>;
   onBeginResize: (side: 'start' | 'end') => void;
 }
 
@@ -29,9 +31,13 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
   scrollLeftRef,
   scrollSync,
   pixelsPerSecond,
+  pixelsPerSecondRef,
   onBeginResize,
 }) => {
-  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef);
+  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, undefined, {
+    livePpsRef: pixelsPerSecondRef,
+    layoutPps: pixelsPerSecond,
+  });
   const activeSelection = creatingSelection ? null : selection;
 
   // No wrapper at all when there are no handles to hold. The wrapper carries a

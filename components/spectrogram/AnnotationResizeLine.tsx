@@ -15,6 +15,8 @@ interface AnnotationResizeLineProps {
   scrollLeftRef: React.MutableRefObject<number>;
   scrollSync: ScrollSyncHub;
   pixelsPerSecond: number;
+  // Live pps — see ContentScale in useScrollTransformLayer.
+  pixelsPerSecondRef: React.MutableRefObject<number>;
 }
 
 // A single white line marking the edge of an annotation being dragged by its
@@ -28,8 +30,12 @@ const AnnotationResizeLine: React.FC<AnnotationResizeLineProps> = ({
   scrollLeftRef,
   scrollSync,
   pixelsPerSecond,
+  pixelsPerSecondRef,
 }) => {
-  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef);
+  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, undefined, {
+    livePpsRef: pixelsPerSecondRef,
+    layoutPps: pixelsPerSecond,
+  });
 
   const showing = resizingAnnotation && resizingAnnotation.id !== boundAnnotationId;
   const annotation = showing ? annotations.find(a => a.id === resizingAnnotation!.id) : undefined;

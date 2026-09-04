@@ -28,6 +28,9 @@ interface AnnotationOverlayProps {
   // Spectrogram's rAF loop drives this once per frame with the live scroll.
   scrollSync: ScrollSyncHub;
   pixelsPerSecond: number;
+  // Live pps, ahead of the prop above during a zoom burst. The layer scales
+  // itself by the ratio so the boxes stay with the canvas — see ContentScale.
+  pixelsPerSecondRef: React.MutableRefObject<number>;
   containerWidth: number;
   hideLabels: boolean;
   currentTimeStore: CurrentTimeStore;
@@ -172,6 +175,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   scrollLeftRef,
   scrollSync,
   pixelsPerSecond,
+  pixelsPerSecondRef,
   containerWidth,
   hideLabels,
   currentTimeStore,
@@ -256,16 +260,23 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   // handful of elements whose placement is pinned to a viewport edge (the label's
   // screen-left pin, the hover buttons' screen-right pin), plus the cull anchor.
   // Each gets a style write only when its pinned value actually changed.
-  const syncPins = useCallback((scrollLeft: number) => {
+  const syncPins = useCallback((scrollLeft: number, scale: number) => {
     const cw = containerWidthRef.current;
-    const { selStartX: sx, selEndX: ex } = selRef.current;
+    const { selStartX, selEndX } = selRef.current;
+    // The pins are screen-space, so they work off the geometry as *rendered* —
+    // the layer's scaleX (see ContentScale) is part of that during a zoom burst.
+    // The values written back are box-local, i.e. inside that same scale, so
+    // they divide it out again.
+    const sx = selStartX === null ? null : selStartX * scale;
+    const ex = selEndX === null ? null : selEndX * scale;
     for (const v of visibleRef.current) {
       const rec = elsRef.current.get(v.ann.id);
       if (!rec) continue;
+      const scaled = scale === 1 ? v : { startX: v.startX * scale, endX: v.endX * scale };
       const { label, dropdown, pencil, delete: del } = rec.els;
       const input = inputRefs.current[v.ann.id];
       if (label || dropdown || input) {
-        const left = labelLeftFor(v, scrollLeft, sx, ex);
+        const left = labelLeftFor(scaled, scrollLeft, sx, ex) / scale;
         if (left !== rec.labelLeft) {
           rec.labelLeft = left;
           const px = `${left}px`;
@@ -275,11 +286,11 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         }
       }
       if (pencil) {
-        const right = buttonRightFor(v, scrollLeft, cw, PENCIL_INSET, PENCIL_INSET, 24);
+        const right = buttonRightFor(scaled, scrollLeft, cw, PENCIL_INSET, PENCIL_INSET, 24) / scale;
         if (right !== rec.pencilRight) { rec.pencilRight = right; pencil.style.right = `${right}px`; }
       }
       if (del) {
-        const right = buttonRightFor(v, scrollLeft, cw, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16);
+        const right = buttonRightFor(scaled, scrollLeft, cw, DELETE_NATURAL_INSET, DELETE_PINNED_INSET, 16) / scale;
         if (right !== rec.deleteRight) { rec.deleteRight = right; del.style.right = `${right}px`; }
       }
     }
@@ -290,7 +301,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
     }
   }, [inputRefs]);
 
-  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, syncPins);
+  const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, syncPins, {
+    livePpsRef: pixelsPerSecondRef,
+    layoutPps: pixelsPerSecond,
+  });
 
   // Drop registry entries for annotations that just unmounted. No dep array:
   // the mounted set can change on any render.
