@@ -19,6 +19,7 @@ import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
+import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
@@ -443,6 +444,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
+    resizingAnnotation,
     setResizingAnnotation,
     setResizingSelectionHandle,
     setResizingFilterEdge,
@@ -1489,6 +1491,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
            onBeginResize={setResizingSelectionHandle}
+         />
+
+         {/* Single boundary line for a handle being dragged on an annotation
+             that isn't bound to the selection (that case already gets the
+             full active-selection treatment above). */}
+         <AnnotationResizeLine
+           resizingAnnotation={resizingAnnotation}
+           annotations={annotations}
+           boundAnnotationId={boundAnnotationId}
+           scrollLeftRef={scrollLeftRef}
+           scrollSync={scrollSyncRef.current}
+           pixelsPerSecond={pixelsPerSecond}
          />
 
          {/* Band-pass filter cutoff handles */}

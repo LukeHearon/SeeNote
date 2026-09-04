@@ -2,6 +2,7 @@ import React from 'react';
 import { Selection } from '../../types';
 import type { ScrollSyncHub } from '../../utils/scrollSyncHub';
 import { useScrollTransformLayer } from '../../hooks/useScrollTransformLayer';
+import BoundaryLine from './BoundaryLine';
 
 interface SelectionHandlesProps {
   selection: Selection | null;
@@ -57,7 +58,7 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
             onBeginResize(side);
           }}
         >
-          <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: '4px' }} />
+          <BoundaryLine x={4} />
         </div>
       ))}
     </div>
