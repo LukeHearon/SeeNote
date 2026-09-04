@@ -3,6 +3,8 @@ import { getOverride } from './overrideStore';
 export const launchScreen = {
   get appName() { return getOverride('ui.launchScreen.appName') ?? "SeeNote"; },
   get projectsHeading() { return getOverride('ui.launchScreen.projectsHeading') ?? "Recent"; },
+  get searchPlaceholder() { return getOverride('ui.launchScreen.searchPlaceholder') ?? "Search…"; },
+  get noSearchResults() { return getOverride('ui.launchScreen.noSearchResults') ?? "No matches."; },
   get projectBadge() { return getOverride('ui.launchScreen.projectBadge') ?? "Project"; },
   get fileBadge() { return getOverride('ui.launchScreen.fileBadge') ?? "File"; },
   get unlinkFileTitle() { return getOverride('ui.launchScreen.unlinkFileTitle') ?? "Remove from Recent?"; },
