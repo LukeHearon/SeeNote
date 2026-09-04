@@ -16,7 +16,7 @@ import {
   segmentJoins,
 } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, ZOOM_STEP, WHEEL_NOTCH_DELTA, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { MIN_ZOOM_SEC, ZOOM_STEP, WHEEL_NOTCH_DELTA, ZOOM_PUBLISH_COALESCE_MS, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
@@ -505,6 +505,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // next frame.
   const onViewportChangeRef = useRef(onViewportChange);
   onViewportChangeRef.current = onViewportChange;
+
+  // Zoom publishing (see the rAF loop). The zoom itself lands in the refs on
+  // every wheel event — the canvas has to be right that frame — but telling the
+  // parent, which owns `zoomSec`, is coalesced to once per frame during a
+  // gesture that fires faster than that.
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+  const pendingZoomPublishRef = useRef(false);
+  const lastZoomEventRef = useRef(0);
   const publishedViewportRef = useRef({ scrollLeft: -1, pixelsPerSecond: -1, containerWidth: -1 });
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
@@ -1053,6 +1062,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // the draws above, so they can't lag the spectrogram they annotate. Cheap
       // and self-gating — each layer returns immediately when scroll is unchanged.
       scrollSyncRef.current.run(scrollLeftRef.current);
+      // One zoom publish per frame at most, after this frame's draws and layer
+      // syncs have already used the live refs — see applyWheel. A gesture that
+      // outruns the frame rate collapses to a single parent render per frame.
+      if (pendingZoomPublishRef.current) {
+        pendingZoomPublishRef.current = false;
+        onZoomChangeRef.current(zoomSecRef.current);
+      }
       // Compared here rather than leaning on the store's own dedupe, so a still
       // view doesn't allocate a viewport object every frame just to have it
       // discarded.
@@ -1316,7 +1332,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       pixelsPerSecondRef.current = newPixelsPerSecond;
       zoomSecRef.current = newZoomSec;
       setScroll(newScrollLeft, 'zoom');
-      onZoomChange(newZoomSec);
+      // Publishing to the parent is a render of the whole spectrogram subtree.
+      // A mouse notch stands alone, so it publishes here and React commits
+      // before the frame paints — no lag, no overlay compensation, exactly as
+      // before. A pinch fires 4-5 events per frame, and publishing each one
+      // both re-rendered that many times and let the prop fall a whole pile of
+      // steps behind the refs, which is what drove the overlay's scale
+      // compensation up to a visible stretch. Inside a burst the publish is
+      // deferred to the rAF flush, so the prop is at most one frame and one
+      // step behind.
+      const nowMs = performance.now();
+      const inBurst = nowMs - lastZoomEventRef.current < ZOOM_PUBLISH_COALESCE_MS;
+      lastZoomEventRef.current = nowMs;
+      if (inBurst) {
+        pendingZoomPublishRef.current = true;
+      } else {
+        pendingZoomPublishRef.current = false;
+        onZoomChange(newZoomSec);
+      }
     } else {
       // While locked-to-playhead and playing, the auto-scroll effect below
       // recenters on every playback tick and would immediately undo a manual

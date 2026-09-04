@@ -70,6 +70,11 @@ export const ZOOM_STEP = 1.25;
 // this much per notch (Chromium ~100, WebKit ~10), so any real notch saturates
 // the cap and keeps the historical fixed 1.25× step; pinch deltas fall below it.
 export const WHEEL_NOTCH_DELTA = 10;
+// Gap below which consecutive zoom wheel events count as one continuous
+// gesture, so the parent is told about the new zoom once per frame instead of
+// once per event. A shade over one frame at 60Hz: discrete mouse notches land
+// outside it and still publish immediately.
+export const ZOOM_PUBLISH_COALESCE_MS = 20;
 
 // Canonical default for output rounding (used when project.outputRoundingDecimals is unset).
 export const DEFAULT_OUTPUT_ROUNDING_DECIMALS = 4;
