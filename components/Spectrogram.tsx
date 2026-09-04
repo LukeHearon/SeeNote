@@ -6,7 +6,7 @@ import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { spanBetween } from '../utils/selectionExtend';
-import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft, reconcileZoomProp } from '../utils/viewportTransform';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import {
   MIN_SEGMENT_JOIN_PX,
@@ -408,13 +408,27 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Writing only when the inputs actually change keeps genuine external changes
   // (toolbar zoom, container resize, track switch) flowing through while leaving
   // a synchronous write from this frame's zoom action intact.
+  //
+  // "Actually changed" is not enough on its own, though: the prop can arrive
+  // carrying a zoom WE published several steps ago — a late commit of a value
+  // the refs have long since moved past. See `reconcileZoomProp`, which owns
+  // that rule (and the reasoning) and is unit-tested.
   const prevZoomInputsRef = useRef({ zoomSec: -1, containerWidth: -1 });
+  const lastPublishedZoomRef = useRef<number | null>(null);
   if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
       prevZoomInputsRef.current.containerWidth !== containerWidth) {
-    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
+    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
     prevZoomInputsRef.current = { zoomSec, containerWidth };
-    pixelsPerSecondRef.current = pixelsPerSecond;
-    zoomSecRef.current = zoomSec;
+    // The observer's own last width wins over the (equally late-committable)
+    // state mirror.
+    const next = reconcileZoomProp(
+      zoomSec,
+      lastObservedWidthRef.current || containerWidth,
+      { zoomSec: zoomSecRef.current, pixelsPerSecond: pixelsPerSecondRef.current },
+      lastPublishedZoomRef.current,
+    );
+    zoomSecRef.current = next.zoomSec;
+    pixelsPerSecondRef.current = next.pixelsPerSecond;
   }
   durationRef.current = duration;
 
@@ -512,6 +526,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // gesture that fires faster than that.
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
+  // Single exit for "tell the parent the zoom changed". Records the value so the
+  // render-body guard above can recognise the resulting prop as our own echo
+  // (which may commit arbitrarily late) rather than as an external zoom change.
+  const publishZoom = useCallback((z: number) => {
+    lastPublishedZoomRef.current = z;
+    onZoomChangeRef.current(z);
+  }, []);
   const pendingZoomPublishRef = useRef(false);
   const lastZoomEventRef = useRef(0);
   const publishedViewportRef = useRef({ scrollLeft: -1, pixelsPerSecond: -1, containerWidth: -1 });
@@ -1067,7 +1088,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // outruns the frame rate collapses to a single parent render per frame.
       if (pendingZoomPublishRef.current) {
         pendingZoomPublishRef.current = false;
-        onZoomChangeRef.current(zoomSecRef.current);
+        publishZoom(zoomSecRef.current);
       }
       // Compared here rather than leaning on the store's own dedupe, so a still
       // view doesn't allocate a viewport object every frame just to have it
@@ -1348,7 +1369,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         pendingZoomPublishRef.current = true;
       } else {
         pendingZoomPublishRef.current = false;
-        onZoomChange(newZoomSec);
+        publishZoom(newZoomSec);
       }
     } else {
       // While locked-to-playhead and playing, the auto-scroll effect below
@@ -1364,7 +1385,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
-  }, [zoomSec, duration, pixelsPerSecond, containerWidth, onZoomChange, playheadLocked, isPlaying, currentTimeStore]);
+  }, [zoomSec, duration, pixelsPerSecond, containerWidth, publishZoom, playheadLocked, isPlaying, currentTimeStore]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
@@ -1381,8 +1402,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef.current = newPps;
     zoomSecRef.current = newZoomSec;
     setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
-    onZoomChange(newZoomSec);
-  }, [duration, containerWidth, onZoomChange, setScroll]);
+    publishZoom(newZoomSec);
+  }, [duration, containerWidth, publishZoom, setScroll]);
 
   const zoomIn = useCallback(() => {
     if (!containerRef.current) return;
