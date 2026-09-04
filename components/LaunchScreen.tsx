@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star, Search } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
@@ -77,6 +77,7 @@ export default function LaunchScreen({
   toggleFileStarred,
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
+  const [searchQuery, setSearchQuery] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showOpenProject, setShowOpenProject] = useState(false);
   const [showOpenProjectMenu, setShowOpenProjectMenu] = useState(false);
@@ -480,15 +481,24 @@ export default function LaunchScreen({
     );
   };
 
+  const unifiedEntryName = (item: UnifiedEntry): string =>
+    item.kind === 'file'
+      ? basename(item.entry.path)
+      : (item.entry.registry.name ?? basename(item.entry.registry.projectDir));
+
+  const query = searchQuery.trim().toLowerCase();
+  const matchesQuery = (item: UnifiedEntry): boolean =>
+    query === '' || unifiedEntryName(item).toLowerCase().includes(query);
+
   const starredEntries: UnifiedEntry[] = [
     ...entries.filter(entry => entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
     ...fileEntries.filter(file => file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
-  ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
+  ].filter(matchesQuery).sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
 
   const unified: UnifiedEntry[] = [
     ...entries.filter(entry => !entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
     ...fileEntries.filter(file => !file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
-  ].sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
+  ].filter(matchesQuery).sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
 
   const loading = isLoading || isLoadingFiles;
 
@@ -609,6 +619,19 @@ export default function LaunchScreen({
           </div>
         )}
 
+        {!loading && (entries.length > 0 || fileEntries.length > 0) && (
+          <div className="relative mb-4 shrink-0">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder={launchScreen.searchPlaceholder}
+              className="w-full pl-9 pr-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-gray-500"
+            />
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-500 shrink-0">
             <Loader2 size={24} className="animate-spin mr-2" />
@@ -616,13 +639,19 @@ export default function LaunchScreen({
           </div>
         ) : unified.length === 0 && starredEntries.length === 0 ? (
           <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
-            <p className="text-gray-500 text-sm mb-3">{launchScreen.noProjects}</p>
-            <button
-              onClick={() => setShowCreate(true)}
-              className="text-blue-400 hover:text-blue-300 text-sm transition-colors"
-            >
-              {launchScreen.createFirstProject}
-            </button>
+            {query !== '' ? (
+              <p className="text-gray-500 text-sm">{launchScreen.noSearchResults}</p>
+            ) : (
+              <>
+                <p className="text-gray-500 text-sm mb-3">{launchScreen.noProjects}</p>
+                <button
+                  onClick={() => setShowCreate(true)}
+                  className="text-blue-400 hover:text-blue-300 text-sm transition-colors"
+                >
+                  {launchScreen.createFirstProject}
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <ul className="space-y-2 overflow-y-auto min-h-0 pr-3">

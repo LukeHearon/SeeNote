@@ -148,6 +148,49 @@ export const resolveRenderCps = (
   devicePixelRatio: number,
 ): number => pixelsPerSecond * devicePixelRatio;
 
+// ---------------------------------------------------------------------------
+// Zoom-prop reconciliation.
+//
+// The spectrogram owns the live zoom in refs (a wheel/pinch step has to reach
+// the canvas in the same frame) but the parent owns the `zoomSec` prop, so
+// every local zoom is published and comes back one or more commits later.
+// React is free to commit those late — and does, while spectrogram tiers are
+// decoding and the main thread is busy. A gesture that publishes Z1..Z8 across
+// a few frames can have the commit carrying Z4 land after the refs already hold
+// Z8; writing it into the refs pairs an old pixelsPerSecond with the scroll
+// offset computed at the new one, and the next event's anchor time —
+// (scroll + mouseX) / pps — resolves to a completely different part of the
+// file. In a 40h file that reads as the zoom landing hours away from the
+// pointer.
+//
+// So: a prop value equal to the last zoom WE published is an echo, and the refs
+// (already at or ahead of it) keep what they have — only the width is folded
+// in. Anything else is a genuine external zoom (toolbar, fit-to-track, track
+// switch, project load) and is accepted.
+export interface ZoomRefs {
+  zoomSec: number;
+  pixelsPerSecond: number;
+}
+
+export const reconcileZoomProp = (
+  propZoomSec: number,
+  containerWidth: number,
+  live: ZoomRefs,
+  lastPublishedZoomSec: number | null,
+): ZoomRefs => {
+  if (propZoomSec === lastPublishedZoomSec) {
+    return containerWidth > 0 && live.zoomSec > 0
+      ? { zoomSec: live.zoomSec, pixelsPerSecond: containerWidth / live.zoomSec }
+      : live;
+  }
+  return {
+    zoomSec: propZoomSec,
+    pixelsPerSecond: containerWidth > 0 && propZoomSec > 0
+      ? containerWidth / propZoomSec
+      : live.pixelsPerSecond,
+  };
+};
+
 // Scroll offset (in pixels) that centers `timeSec` in the visible window,
 // clamped so the view never scrolls before the start or past the end overrun.
 // Used by the recenter-playhead action; keeps zoom (pixelsPerSecond) unchanged.

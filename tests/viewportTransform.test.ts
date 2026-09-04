@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { timeToX, xToTime, computeLabelPlacement, computeButtonAnchorX, maxScroll, centerScrollLeft, resolveRenderCps } from '../utils/viewportTransform';
+import { timeToX, xToTime, computeLabelPlacement, computeButtonAnchorX, maxScroll, centerScrollLeft, resolveRenderCps, reconcileZoomProp } from '../utils/viewportTransform';
 
 describe('viewportTransform', () => {
   it('timeToX maps time to pixels relative to the scroll offset', () => {
@@ -212,5 +212,49 @@ describe('resolveRenderCps', () => {
         expect(bbWidth).toBeLessThanOrEqual(canvasWidth * dpr + 4);
       }
     }
+  });
+
+  describe('reconcileZoomProp', () => {
+    const WIDTH = 800;
+
+    it('accepts a zoom the parent originated', () => {
+      const live = { zoomSec: 100, pixelsPerSecond: 8 };
+      // Toolbar/fit-to-track set 50s; nothing was published locally.
+      expect(reconcileZoomProp(50, WIDTH, live, null)).toEqual({ zoomSec: 50, pixelsPerSecond: 16 });
+    });
+
+    it('ignores a late-committing echo of a zoom we already moved past', () => {
+      // A gesture published 100 -> 50 -> 25; the refs are at 25 when the commit
+      // carrying 50 finally lands. Taking it would pair pps@50 with the scroll
+      // offset computed at 25 and throw the next anchor time far off.
+      const live = { zoomSec: 25, pixelsPerSecond: 32 };
+      expect(reconcileZoomProp(50, WIDTH, live, 50)).toEqual(live);
+    });
+
+    it('folds a width change into the live zoom when the prop is an echo', () => {
+      const live = { zoomSec: 25, pixelsPerSecond: 32 };
+      expect(reconcileZoomProp(50, 1600, live, 50)).toEqual({ zoomSec: 25, pixelsPerSecond: 64 });
+    });
+
+    it('keeps the anchor time stable across an echoed commit', () => {
+      // The invariant the bug broke: the time under a given x must not move
+      // just because a stale prop commit landed.
+      const live = { zoomSec: 25, pixelsPerSecond: 32 };
+      const scrollLeft = 40 * 3600 * 32 / 4; // arbitrary deep scroll into a long file
+      const before = xToTime(400, scrollLeft, live.pixelsPerSecond);
+      const after = reconcileZoomProp(50, WIDTH, live, 50);
+      expect(xToTime(400, scrollLeft, after.pixelsPerSecond)).toBe(before);
+    });
+
+    it('still accepts an external change that differs from what we published', () => {
+      // The parent clamps a published zoom to the track duration (fit-to-file).
+      const live = { zoomSec: 25, pixelsPerSecond: 32 };
+      expect(reconcileZoomProp(10, WIDTH, live, 50)).toEqual({ zoomSec: 10, pixelsPerSecond: 80 });
+    });
+
+    it('leaves pps alone before the container has been measured', () => {
+      const live = { zoomSec: 100, pixelsPerSecond: 0 };
+      expect(reconcileZoomProp(50, 0, live, null)).toEqual({ zoomSec: 50, pixelsPerSecond: 0 });
+    });
   });
 });

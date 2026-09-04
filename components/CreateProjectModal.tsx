@@ -30,6 +30,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const [filenameTimeFormat, setFilenameTimeFormat] = useState('');
   const [filenameTimeOffsetSeparator, setFilenameTimeOffsetSeparator] = useState('');
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(null);
+  const [buzzdetectTrimActivationPrefix, setBuzzdetectTrimActivationPrefix] = useState(true);
   const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
   const [syncRemoteUrl, setSyncRemoteUrl] = useState('');
@@ -123,6 +124,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
         annotationDirectory: makeProjectPath(projectDir, resolvedAnnotationDir),
         buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
         buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
+        buzzdetectTrimActivationPrefix,
       filenameTimeFormat: filenameTimeFormat.trim() || undefined,
         filenameTimeOffsetSeparator: filenameTimeOffsetSeparator.trim() || undefined,
         outputFormat: 'txt',
@@ -238,6 +240,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
               onBuzzdetectDirChange={setBuzzdetectDir}
               buzzdetectFrameLength={buzzdetectFrameLength}
               onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
+              buzzdetectTrimActivationPrefix={buzzdetectTrimActivationPrefix}
+              onBuzzdetectTrimActivationPrefixChange={setBuzzdetectTrimActivationPrefix}
               syncRemoteUrl={syncRemoteUrl}
               onSyncRemoteUrlChange={setSyncRemoteUrl}
             />

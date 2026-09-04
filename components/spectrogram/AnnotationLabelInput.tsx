@@ -107,6 +107,8 @@ export default function AnnotationLabelInput({
         className="absolute top-0 bottom-0 bg-transparent text-xs placeholder-white/30 focus:outline-none"
         style={{
           ...labelStyle,
+          // Anchor for the zoom counter-scale (see AnnotationOverlay's syncPins).
+          transformOrigin: 'left center',
           textAlign: 'left',
           color: '#ffffff',
           fontWeight: 'bold',
@@ -131,7 +133,7 @@ export default function AnnotationLabelInput({
         <div
           ref={dropdownRef}
           className="absolute z-50 flex flex-col gap-1 bg-slate-900 border border-slate-600 rounded shadow-lg p-1 min-w-[160px] max-w-[260px]"
-          style={{ left: labelStyle.left, top: `${ANNOTATION_BOX_HEIGHT + 2}px` }}
+          style={{ left: labelStyle.left, top: `${ANNOTATION_BOX_HEIGHT + 2}px`, transformOrigin: 'left center' }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <ToolMatchDropdown

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildPrefixSum,
+  buildValidCountPrefix,
   buildThresholdCountPrefix,
   buildAnyOverThresholdPrefix,
   rangeSum,
@@ -75,5 +76,35 @@ describe('rangeSum / rangeMean', () => {
         expect(rangeMean(p, a, b)).toBeCloseTo(sum / (b - a + 1), 12);
       }
     }
+  });
+});
+
+describe('buildPrefixSum / buildValidCountPrefix with missing (NaN) frames', () => {
+  const withGaps = [1, NaN, 3, NaN, NaN, 6];
+
+  it('a NaN frame contributes 0 to the sum', () => {
+    expect(Array.from(buildPrefixSum(withGaps))).toEqual([0, 1, 1, 4, 4, 4, 10]);
+  });
+
+  it('counts only non-NaN frames', () => {
+    expect(Array.from(buildValidCountPrefix(withGaps))).toEqual([0, 1, 1, 2, 2, 2, 3]);
+  });
+
+  it('rangeMean with a validCountPrefix divides by valid frames, not range width', () => {
+    const sum = buildPrefixSum(withGaps);
+    const count = buildValidCountPrefix(withGaps);
+    // Range [0, 2] is 1, NaN, 3 — mean of the two real values, not /3.
+    expect(rangeMean(sum, 0, 2, count)).toBe(2);
+  });
+
+  it('a range with no valid frames at all is NaN, not 0', () => {
+    const sum = buildPrefixSum(withGaps);
+    const count = buildValidCountPrefix(withGaps);
+    expect(rangeMean(sum, 3, 4, count)).toBeNaN();
+  });
+
+  it('without a validCountPrefix, rangeMean keeps dividing by range width (unchanged default behavior)', () => {
+    const sum = buildPrefixSum(values);
+    expect(rangeMean(sum, 0, values.length - 1)).toBe(3);
   });
 });

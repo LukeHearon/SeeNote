@@ -235,6 +235,13 @@ export type BuzzdetectSeriesMode = 'activation' | 'detectionRate';
  * A frame's source extent is always `[start, start + frameLength)`. Anything
  * asking "which frames sit on this grid" wants `frameHop` instead.
  */
+/**
+ * `values[n][i]` is `NaN` for a frame with no value in the source CSV (an
+ * empty cell, "NA", or one of a few other common missing-value spellings —
+ * see `read_buzzdetect` in src-tauri). The panel skips these when drawing:
+ * a neuron's trace passes over a missing frame rather than dipping to it or
+ * breaking, and bucket averages exclude it rather than counting it as 0.
+ */
 export interface BuzzdetectData {
   frameLength: number;
   frameHop: number;
@@ -311,6 +318,11 @@ export interface ProjectSettings {
   /** Frame length in seconds, used as a fallback bin width when it can't be
    *  inferred from a CSV's `start` column (e.g. fewer than 2 rows). */
   buzzdetectFrameLength?: number;
+  /** Whether a leading `activation_` is stripped from a buzzdetect CSV
+   *  column's name before it's shown as a neuron label. Defaults to `true`;
+   *  turn off for a project whose arbitrary per-frame columns (SPL, loss, ...)
+   *  might genuinely start with that string. */
+  buzzdetectTrimActivationPrefix?: boolean;
   outputFormat: 'txt';
   outputRoundingDecimals?: number;
   nameGradientColors?: [string, string];

@@ -33,6 +33,7 @@ import {
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import {
   buildPrefixSum,
+  buildValidCountPrefix,
   buildThresholdCountPrefix,
   buildAnyOverThresholdPrefix,
   rangeSum,
@@ -296,6 +297,13 @@ export default function BuzzdetectPanel({
     () => (data ? data.values.map(v => buildPrefixSum(v)) : null),
     [data],
   );
+  // Per-neuron count of non-missing frames, shared by both series' rangeMean
+  // calls below so a bucket's average — activation or detection-rate — divides
+  // by the frames that actually had a value rather than the bucket's width.
+  const validCountPrefix = useMemo(
+    () => (data ? data.values.map(v => buildValidCountPrefix(v)) : null),
+    [data],
+  );
   const detectionPrefix = useMemo(
     () => (data ? data.values.map((v, i) => buildThresholdCountPrefix(v, thresholdOf(data.neurons[i]))) : null),
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -399,12 +407,12 @@ export default function BuzzdetectPanel({
     if (seriesMode === 'activation') {
       return single
         ? data.values[i][start]
-        : (activationPrefix ? rangeMean(activationPrefix[i], start, end) : 0);
+        : (activationPrefix ? rangeMean(activationPrefix[i], start, end, validCountPrefix?.[i]) : 0);
     }
     return single
       ? (data.values[i][start] >= detectionThreshold(thresholds[data.neurons[i]], data.neurons[i]) ? 1 : 0)
-      : (detectionPrefix ? rangeMean(detectionPrefix[i], start, end) : 0);
-  }, [data, seriesMode, activationPrefix, detectionPrefix, thresholds]);
+      : (detectionPrefix ? rangeMean(detectionPrefix[i], start, end, validCountPrefix?.[i]) : 0);
+  }, [data, seriesMode, activationPrefix, detectionPrefix, validCountPrefix, thresholds]);
 
   // The plotted neuron the cursor is pointing at, or null when it isn't near
   // enough to any one of them. Nearest wins where lines cross or run together,
@@ -799,11 +807,19 @@ export default function BuzzdetectPanel({
         const color = neuronColors[n];
         ctx.globalAlpha = alphaOf(n);
         const th = thresholdOf(neurons[n]);
-        const perFrameValue = (i: number) => seriesMode === 'activation' ? values[n][i] : (values[n][i] >= th ? 1 : 0);
+        // NaN for a missing frame in EITHER mode — not just when its own raw
+        // value is read directly — so a frame with no value never renders as
+        // a fake "undetected" point in detection-rate mode either.
+        const perFrameValue = (i: number) => {
+          const raw = values[n][i];
+          if (Number.isNaN(raw)) return NaN;
+          return seriesMode === 'activation' ? raw : (raw >= th ? 1 : 0);
+        };
         // Bucket aggregate, hoisted: the grouped polyline and the grouped dots
         // (drawn under a subset, where there is no polyline) both need it.
         const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
-        const unitMean = (u: { start: number; end: number }) => (prefix ? rangeMean(prefix, u.start, u.end) : 0);
+        const unitMean = (u: { start: number; end: number }) =>
+          (prefix ? rangeMean(prefix, u.start, u.end, validCountPrefix?.[n]) : 0);
 
         // Under a subset the x-axis has cuts in it: consecutive points can be
         // minutes apart in the file even though they abut on screen, and a line
@@ -845,26 +861,37 @@ export default function BuzzdetectPanel({
           lastSpan = spanIdx;
         };
         if (!grouped) {
+          // A missing frame is skipped rather than plotted — the line simply
+          // paths over it, connecting its neighbours as if it weren't there.
           for (let i = iLeft; i <= iRight; i++) {
+            const v = perFrameValue(i);
+            if (Number.isNaN(v)) continue;
             const t = starts[i] + frameLength / 2;
-            lineTo(t, xOf(t), yOf(perFrameValue(i)));
+            lineTo(t, xOf(t), yOf(v));
           }
         } else {
           // One point per unit, at its midpoint. Prefix-sum lookup, not a scan: a
           // unit can span hours of frames when the user pins a wide bin width,
           // and units are recomputed on every redraw (they're time-anchored, so
           // they're stable, but the draw path doesn't cache them).
+          // A unit whose frames are all missing has nothing to plot — unitMean
+          // returns NaN for it — so it's skipped the same as a single missing
+          // frame above.
           if (units.length === 1) {
             // Every frame in view falls in one unit (a wide override on a short
             // file): a lone moveTo strokes nothing and grouped mode draws no dots,
             // so the neuron would vanish. Stroke the unit's value flat across
             // its own x-extent instead.
             const cy = yOf(unitMean(units[0]));
-            ctx.moveTo(units[0].xStart, cy);
-            ctx.lineTo(units[0].xEnd, cy);
+            if (!Number.isNaN(cy)) {
+              ctx.moveTo(units[0].xStart, cy);
+              ctx.lineTo(units[0].xEnd, cy);
+            }
           } else {
             for (const u of units) {
-              lineTo(u.tMid, u.xMid, yOf(unitMean(u)));
+              const v = unitMean(u);
+              if (Number.isNaN(v)) continue;
+              lineTo(u.tMid, u.xMid, yOf(v));
             }
           }
         }
@@ -882,6 +909,7 @@ export default function BuzzdetectPanel({
 
         if (drawDots) {
           for (let i = iLeft; i <= iRight; i++) {
+            if (Number.isNaN(values[n][i])) continue;
             const cx = xOf(starts[i] + frameLength / 2);
             if (cx < -4 || cx > width + 4) continue;
             const isPositive = values[n][i] >= th;
@@ -985,7 +1013,7 @@ export default function BuzzdetectPanel({
     if (!strip) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(strip, (st.originScroll - scrollLeft) * dpr, 0);
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeurons, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeurons, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1282,11 +1310,13 @@ export default function BuzzdetectPanel({
             // — the unit, the span, the headers — is unchanged.
             if (hoverNeuron && n !== hoverNeuron) return null;
             const value = unitValueOf(i, unit);
-            const text = seriesMode !== 'detectionRate'
-              ? value.toFixed(2)
-              : isSingle
-                ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
-                : `${(value * 100).toFixed(0)}%`;
+            const text = Number.isNaN(value)
+              ? buzzdetectCopy.noValue
+              : seriesMode !== 'detectionRate'
+                ? value.toFixed(2)
+                : isSingle
+                  ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
+                  : `${(value * 100).toFixed(0)}%`;
             return (
               <span key={n} style={{ color: neuronColors[i] }}>
                 {n} {text}

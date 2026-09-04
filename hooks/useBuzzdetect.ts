@@ -191,11 +191,11 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
     if (!dir || !ident) { setBuzzdetectData(null); return; }
     let cancelled = false;
     setBuzzdetectData(null);
-    readBuzzdetect(dir, ident, project.settings.buzzdetectFrameLength)
+    readBuzzdetect(dir, ident, project.settings.buzzdetectFrameLength, project.settings.buzzdetectTrimActivationPrefix)
       .then(d => { if (!cancelled) setBuzzdetectData(d); })
       .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
     return () => { cancelled = true; };
-  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength, project.settings.buzzdetectTrimActivationPrefix, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
   // null is kept in the map rather than deleted: an absent entry means "never

@@ -6,7 +6,7 @@ import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { spanBetween } from '../utils/selectionExtend';
-import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft } from '../utils/viewportTransform';
+import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft, reconcileZoomProp } from '../utils/viewportTransform';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import {
   MIN_SEGMENT_JOIN_PX,
@@ -16,9 +16,10 @@ import {
   segmentJoins,
 } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { MIN_ZOOM_SEC, ZOOM_STEP, WHEEL_NOTCH_DELTA, ZOOM_PUBLISH_COALESCE_MS, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
+import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
@@ -407,13 +408,27 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Writing only when the inputs actually change keeps genuine external changes
   // (toolbar zoom, container resize, track switch) flowing through while leaving
   // a synchronous write from this frame's zoom action intact.
+  //
+  // "Actually changed" is not enough on its own, though: the prop can arrive
+  // carrying a zoom WE published several steps ago — a late commit of a value
+  // the refs have long since moved past. See `reconcileZoomProp`, which owns
+  // that rule (and the reasoning) and is unit-tested.
   const prevZoomInputsRef = useRef({ zoomSec: -1, containerWidth: -1 });
+  const lastPublishedZoomRef = useRef<number | null>(null);
   if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
       prevZoomInputsRef.current.containerWidth !== containerWidth) {
-    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
+    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
     prevZoomInputsRef.current = { zoomSec, containerWidth };
-    pixelsPerSecondRef.current = pixelsPerSecond;
-    zoomSecRef.current = zoomSec;
+    // The observer's own last width wins over the (equally late-committable)
+    // state mirror.
+    const next = reconcileZoomProp(
+      zoomSec,
+      lastObservedWidthRef.current || containerWidth,
+      { zoomSec: zoomSecRef.current, pixelsPerSecond: pixelsPerSecondRef.current },
+      lastPublishedZoomRef.current,
+    );
+    zoomSecRef.current = next.zoomSec;
+    pixelsPerSecondRef.current = next.pixelsPerSecond;
   }
   durationRef.current = duration;
 
@@ -443,6 +458,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
+    resizingAnnotation,
     setResizingAnnotation,
     setResizingSelectionHandle,
     setResizingFilterEdge,
@@ -503,6 +519,22 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // next frame.
   const onViewportChangeRef = useRef(onViewportChange);
   onViewportChangeRef.current = onViewportChange;
+
+  // Zoom publishing (see the rAF loop). The zoom itself lands in the refs on
+  // every wheel event — the canvas has to be right that frame — but telling the
+  // parent, which owns `zoomSec`, is coalesced to once per frame during a
+  // gesture that fires faster than that.
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+  // Single exit for "tell the parent the zoom changed". Records the value so the
+  // render-body guard above can recognise the resulting prop as our own echo
+  // (which may commit arbitrarily late) rather than as an external zoom change.
+  const publishZoom = useCallback((z: number) => {
+    lastPublishedZoomRef.current = z;
+    onZoomChangeRef.current(z);
+  }, []);
+  const pendingZoomPublishRef = useRef(false);
+  const lastZoomEventRef = useRef(0);
   const publishedViewportRef = useRef({ scrollLeft: -1, pixelsPerSecond: -1, containerWidth: -1 });
 
   // Sync scroll with playback — center the playhead once it reaches the center of the
@@ -1051,6 +1083,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // the draws above, so they can't lag the spectrogram they annotate. Cheap
       // and self-gating — each layer returns immediately when scroll is unchanged.
       scrollSyncRef.current.run(scrollLeftRef.current);
+      // One zoom publish per frame at most, after this frame's draws and layer
+      // syncs have already used the live refs — see applyWheel. A gesture that
+      // outruns the frame rate collapses to a single parent render per frame.
+      if (pendingZoomPublishRef.current) {
+        pendingZoomPublishRef.current = false;
+        publishZoom(zoomSecRef.current);
+      }
       // Compared here rather than leaning on the store's own dedupe, so a still
       // view doesn't allocate a viewport object every frame just to have it
       // discarded.
@@ -1267,24 +1306,45 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
     if (ctrlKey || metaKey) {
       if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const mouseX = clientX - rect.left;
-      // `containerWidth` (the ResizeObserver's fractional content-box width),
-      // NOT clientWidth: this is where pixelsPerSecondRef gets written, and it
-      // has to agree exactly with the pps the resize handler derives, or the
-      // two disagree by the integer rounding for as long as the zoom lasts.
-      const currentPps = containerWidth / zoomSec;
-      const timeAtMouse = (scrollLeftRef.current + mouseX) / currentPps;
-      const zoomFactor = 1.25;
       // Trackpad inertia tails deliver horizontal-only events (deltaY === 0).
       // `deltaY > 0 ? 1 : -1` would treat every one of those as a zoom-in step,
       // making the view zoom by itself while Ctrl is held after a pan gesture.
       if (deltaY === 0) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = clientX - rect.left;
+      // Zoom off the LIVE zoom (ref), not the `zoomSec` prop. A pinch fires a
+      // dense burst of wheel events — dozens before React commits the new prop —
+      // so every event in the burst would read the same stale base zoom while
+      // `scrollLeftRef` is already at the newly written scroll. The anchor time
+      // derived from that mismatched pair is garbage, which is what made pinch
+      // zoom jump around at random. A mouse wheel never showed it: its notches
+      // are far enough apart that the prop has always caught up.
+      const liveZoomSec = zoomSecRef.current || zoomSec;
+      // `containerWidth` (the ResizeObserver's fractional content-box width),
+      // NOT clientWidth: this is where pixelsPerSecondRef gets written, and it
+      // has to agree exactly with the pps the resize handler derives, or the
+      // two disagree by the integer rounding for as long as the zoom lasts.
+      const currentPps = containerWidth / liveZoomSec;
+      // Step size scales with the event magnitude, capped so that any delta at
+      // or above one mouse notch is exactly the old fixed 1.25× step. Pinch
+      // events are small and arrive ~60×/s; a flat 1.25 each meant a factor of
+      // thousands per gesture. Below the cap the step tapers smoothly to 1.
+      const magnitude = Math.min(Math.abs(deltaY), WHEEL_NOTCH_DELTA);
+      const zoomFactor = Math.exp((magnitude / WHEEL_NOTCH_DELTA) * Math.log(ZOOM_STEP));
       const direction = deltaY > 0 ? 1 : -1;
-      let newZoomSec = zoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
+      let newZoomSec = liveZoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
       const newPixelsPerSecond = containerWidth / newZoomSec;
-      let newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
+      // Locked to the playhead: the playhead is the anchor, and it stays
+      // centred — matching where the auto-scroll effect parks it — regardless
+      // of where the pointer is. Otherwise anchor the time under the pointer.
+      let newScrollLeft: number;
+      if (playheadLocked) {
+        newScrollLeft = currentTimeStore.get() * newPixelsPerSecond - containerWidth / 2;
+      } else {
+        const timeAtMouse = (scrollLeftRef.current + mouseX) / currentPps;
+        newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
+      }
       const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
       newScrollLeft = clamp(newScrollLeft, 0, maxScroll);
       // Write zoom and scroll together: the rAF draw reads both live, and a pair
@@ -1293,7 +1353,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       pixelsPerSecondRef.current = newPixelsPerSecond;
       zoomSecRef.current = newZoomSec;
       setScroll(newScrollLeft, 'zoom');
-      onZoomChange(newZoomSec);
+      // Publishing to the parent is a render of the whole spectrogram subtree.
+      // A mouse notch stands alone, so it publishes here and React commits
+      // before the frame paints — no lag, no overlay compensation, exactly as
+      // before. A pinch fires 4-5 events per frame, and publishing each one
+      // both re-rendered that many times and let the prop fall a whole pile of
+      // steps behind the refs, which is what drove the overlay's scale
+      // compensation up to a visible stretch. Inside a burst the publish is
+      // deferred to the rAF flush, so the prop is at most one frame and one
+      // step behind.
+      const nowMs = performance.now();
+      const inBurst = nowMs - lastZoomEventRef.current < ZOOM_PUBLISH_COALESCE_MS;
+      lastZoomEventRef.current = nowMs;
+      if (inBurst) {
+        pendingZoomPublishRef.current = true;
+      } else {
+        pendingZoomPublishRef.current = false;
+        publishZoom(newZoomSec);
+      }
     } else {
       // While locked-to-playhead and playing, the auto-scroll effect below
       // recenters on every playback tick and would immediately undo a manual
@@ -1308,7 +1385,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
     }
-  }, [zoomSec, duration, pixelsPerSecond, containerWidth, onZoomChange, playheadLocked, isPlaying]);
+  }, [zoomSec, duration, pixelsPerSecond, containerWidth, publishZoom, playheadLocked, isPlaying, currentTimeStore]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
@@ -1325,8 +1402,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef.current = newPps;
     zoomSecRef.current = newZoomSec;
     setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
-    onZoomChange(newZoomSec);
-  }, [duration, containerWidth, onZoomChange, setScroll]);
+    publishZoom(newZoomSec);
+  }, [duration, containerWidth, publishZoom, setScroll]);
 
   const zoomIn = useCallback(() => {
     if (!containerRef.current) return;
@@ -1457,6 +1534,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
            containerWidth={containerWidth}
            hideLabels={hideLabels}
            currentTimeStore={currentTimeStore}
@@ -1488,7 +1566,21 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}
            pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
            onBeginResize={setResizingSelectionHandle}
+         />
+
+         {/* Single boundary line for a handle being dragged on an annotation
+             that isn't bound to the selection (that case already gets the
+             full active-selection treatment above). */}
+         <AnnotationResizeLine
+           resizingAnnotation={resizingAnnotation}
+           annotations={annotations}
+           boundAnnotationId={boundAnnotationId}
+           scrollLeftRef={scrollLeftRef}
+           scrollSync={scrollSyncRef.current}
+           pixelsPerSecond={pixelsPerSecond}
+           pixelsPerSecondRef={pixelsPerSecondRef}
          />
 
          {/* Band-pass filter cutoff handles */}

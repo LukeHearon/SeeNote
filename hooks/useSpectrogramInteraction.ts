@@ -69,6 +69,8 @@ export interface SpectrogramInteractionApi {
   pendingAnnotationsRef: React.MutableRefObject<Annotation[]>;
   clickDownRef: React.MutableRefObject<{ x: number; y: number; annotationId: string; pointerTime: number } | null>;
   playheadFollowsAnnotationStartRef: React.MutableRefObject<boolean>;
+  // Annotation handle currently being dragged, if any (drawn by AnnotationResizeLine).
+  resizingAnnotation: { id: string; side: 'start' | 'end'; originalTime: number } | null;
   // State setters exposed to overlays.
   setResizingAnnotation: (v: { id: string; side: 'start' | 'end'; originalTime: number } | null) => void;
   setResizingSelectionHandle: (v: 'start' | 'end' | null) => void;
@@ -877,6 +879,7 @@ export function useSpectrogramInteraction({
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
+    resizingAnnotation,
     setResizingAnnotation,
     setResizingSelectionHandle,
     setResizingFilterEdge,

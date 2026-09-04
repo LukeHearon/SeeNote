@@ -45,6 +45,8 @@ interface Props {
   // overrides detection for every file.
   buzzdetectFrameLength: number | null;
   onBuzzdetectFrameLengthChange: (v: number | null) => void;
+  buzzdetectTrimActivationPrefix: boolean;
+  onBuzzdetectTrimActivationPrefixChange: (v: boolean) => void;
   advancedDefaultOpen?: boolean;
   // Sync (repository URL only — user credentials live in the Preferences tab)
   syncRemoteUrl: string;
@@ -76,6 +78,8 @@ export default function ProjectBaseFields({
   onBuzzdetectDirChange,
   buzzdetectFrameLength,
   onBuzzdetectFrameLengthChange,
+  buzzdetectTrimActivationPrefix,
+  onBuzzdetectTrimActivationPrefixChange,
   advancedDefaultOpen = false,
   syncRemoteUrl,
   onSyncRemoteUrlChange,
@@ -238,6 +242,18 @@ export default function ProjectBaseFields({
               className="w-20 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             />
           </div>
+          <label className="flex items-start gap-2 cursor-pointer select-none mt-3">
+            <input
+              type="checkbox"
+              checked={buzzdetectTrimActivationPrefix}
+              onChange={e => onBuzzdetectTrimActivationPrefixChange(e.target.checked)}
+              className="mt-0.5 accent-blue-500"
+            />
+            <span>
+              <span className="block text-sm text-gray-200">{projectBaseFields.buzzdetectTrimPrefixLabel}</span>
+              <span className="block text-xs text-gray-500 mt-0.5">{projectBaseFields.buzzdetectTrimPrefixHint}</span>
+            </span>
+          </label>
         </div>
 
         <div>
