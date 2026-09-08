@@ -581,26 +581,43 @@ describe('partialLabelMatcher', () => {
 
 describe('buildLabelMatcher', () => {
   it('defaults to exact matching', () => {
-    const m = buildLabelMatcher('bird', { useRegex: false, partial: false });
+    const m = buildLabelMatcher('bird', { useRegex: false, partial: false, caseSensitive: false });
     expect(m).not.toBeNull();
     expect(m!('bird')).toBe(true);
     expect(m!('birdy')).toBe(false);
   });
 
   it('uses partial matching when only partial is set', () => {
-    const m = buildLabelMatcher('mech_', { useRegex: false, partial: true });
+    const m = buildLabelMatcher('mech_', { useRegex: false, partial: true, caseSensitive: false });
     expect(m).not.toBeNull();
     expect(m!('quiet_mech_auto')).toBe(true);
   });
 
   it('uses regex matching when useRegex is set, regardless of partial', () => {
-    const m = buildLabelMatcher('buzz\\d', { useRegex: true, partial: false });
+    const m = buildLabelMatcher('buzz\\d', { useRegex: true, partial: false, caseSensitive: false });
     expect(m).not.toBeNull();
     expect(m!('foo_buzz3_bar')).toBe(true);
   });
 
   it('returns null for an invalid regex', () => {
-    expect(buildLabelMatcher('[unterminated', { useRegex: true, partial: false })).toBeNull();
+    expect(buildLabelMatcher('[unterminated', { useRegex: true, partial: false, caseSensitive: false })).toBeNull();
+  });
+
+  it('folds case by default on every matching path', () => {
+    const exact = buildLabelMatcher('Bird', { useRegex: false, partial: false, caseSensitive: false });
+    expect(exact!('bird')).toBe(true);
+    const partial = buildLabelMatcher('MECH', { useRegex: false, partial: true, caseSensitive: false });
+    expect(partial!('quiet_mech_auto')).toBe(true);
+    const regex = buildLabelMatcher('BUZZ\\d', { useRegex: true, partial: false, caseSensitive: false });
+    expect(regex!('foo_buzz3_bar')).toBe(true);
+  });
+
+  it('honours case when caseSensitive is set', () => {
+    const exact = buildLabelMatcher('Bird', { useRegex: false, partial: false, caseSensitive: true });
+    expect(exact!('bird')).toBe(false);
+    expect(exact!('Bird')).toBe(true);
+    const partial = buildLabelMatcher('MECH', { useRegex: false, partial: true, caseSensitive: true });
+    expect(partial!('quiet_mech_auto')).toBe(false);
   });
 });
 

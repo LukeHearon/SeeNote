@@ -125,6 +125,7 @@ export function ExampleFindLabel() {
   const [open, setOpen] = useState(true);
   const [useRegex, setUseRegex] = useState(false);
   const [partial, setPartial] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<RenameScope>('track');
 
@@ -142,6 +143,8 @@ export function ExampleFindLabel() {
           onUseRegexChange={setUseRegex}
           partial={partial}
           onPartialChange={setPartial}
+          caseSensitive={caseSensitive}
+          onCaseSensitiveChange={setCaseSensitive}
           query={query}
           onQueryChange={setQuery}
           scope={scope}

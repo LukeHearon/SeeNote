@@ -1499,6 +1499,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     updateProjectPreferences(project.id, { ...project.preferences, findLabelPartialMatch: partial });
   }, [project, updateProjectPreferences]);
 
+  const handleFindLabelCaseSensitiveChange = useCallback((caseSensitive: boolean) => {
+    updateProjectPreferences(project.id, { ...project.preferences, findLabelCaseSensitive: caseSensitive });
+  }, [project, updateProjectPreferences]);
+
   const handleEnteredFolderChange = useCallback((path: string | null) => {
     updateProjectPreferences(project.id, {
       ...project.preferences,
@@ -2814,6 +2818,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onUseRegexChange={handleFindLabelUseRegexChange}
           partial={project.preferences.findLabelPartialMatch ?? false}
           onPartialChange={handleFindLabelPartialChange}
+          caseSensitive={project.preferences.findLabelCaseSensitive ?? false}
+          onCaseSensitiveChange={handleFindLabelCaseSensitiveChange}
           query={findLabelQuery}
           onQueryChange={setFindLabelQuery}
           scope={findLabelScope}

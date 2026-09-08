@@ -22,6 +22,8 @@ interface Props {
   onUseRegexChange: (useRegex: boolean) => void;
   partial: boolean;
   onPartialChange: (partial: boolean) => void;
+  caseSensitive: boolean;
+  onCaseSensitiveChange: (caseSensitive: boolean) => void;
   // Query and scope are lifted to the caller (rather than local state) so
   // they, and the results they produce, survive the dialog being closed and
   // reopened within the same session — reopening with {mod}+F picks up
@@ -46,6 +48,7 @@ interface Selected {
 export default function FindLabelModal({
   annotations, allTracks, trackPath, ident, getAnnotationPath, getIdent,
   useRegex, onUseRegexChange, partial, onPartialChange,
+  caseSensitive, onCaseSensitiveChange,
   query, onQueryChange, scope, onScopeChange, onClose, onGo, onRename,
 }: Props) {
   const [scanning, setScanning] = useState(false);
@@ -68,8 +71,8 @@ export default function FindLabelModal({
   const matcher: LabelMatcher | null = useMemo(() => {
     const label = query.trim();
     if (!label) return null;
-    return buildLabelMatcher(label, { useRegex, partial });
-  }, [query, useRegex, partial]);
+    return buildLabelMatcher(label, { useRegex, partial, caseSensitive });
+  }, [query, useRegex, partial, caseSensitive]);
 
   // Whole-project labels, held in memory and filtered locally (below) so
   // editing the query or flipping partial/regex never touches disk. Kept in a
@@ -211,6 +214,15 @@ export default function FindLabelModal({
               <label className="flex items-center gap-1.5 text-gray-400 text-xs cursor-pointer select-none">
                 <input
                   type="checkbox"
+                  checked={caseSensitive}
+                  onChange={e => { onCaseSensitiveChange(e.target.checked); setSelected(null); }}
+                  className="accent-blue-500"
+                />
+                {copy.caseCheckboxLabel}
+              </label>
+              <label className="flex items-center gap-1.5 text-gray-400 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
                   checked={partial}
                   onChange={e => { onPartialChange(e.target.checked); setSelected(null); }}
                   className="accent-blue-500"
@@ -231,6 +243,9 @@ export default function FindLabelModal({
           <input
             type="text"
             autoFocus
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={query}
             onChange={e => { onQueryChange(e.target.value); setSelected(null); setRenameResult(null); }}
             placeholder={copy.labelPlaceholder}
@@ -308,6 +323,9 @@ export default function FindLabelModal({
           <label className="text-gray-400 text-sm block mb-1">{copy.renameHeading}</label>
           <input
             type="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={newLabel}
             onChange={e => { setNewLabel(e.target.value); setRenameResult(null); }}
             placeholder={copy.newLabelPlaceholder}

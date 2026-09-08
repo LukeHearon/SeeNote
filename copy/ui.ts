@@ -301,6 +301,7 @@ export const findLabelModal = {
   get labelField() { return getOverride('ui.findLabelModal.labelField') ?? "Label"; },
   get labelPlaceholder() { return getOverride('ui.findLabelModal.labelPlaceholder') ?? "Search for a label…"; },
   get partialCheckboxLabel() { return getOverride('ui.findLabelModal.partialCheckboxLabel') ?? "Partial"; },
+  get caseCheckboxLabel() { return getOverride('ui.findLabelModal.caseCheckboxLabel') ?? "Case sensitive"; },
   get regexCheckboxLabel() { return getOverride('ui.findLabelModal.regexCheckboxLabel') ?? "Regex"; },
   get invalidRegexError() { return getOverride('ui.findLabelModal.invalidRegexError') ?? "Invalid regular expression."; },
   get scanningLabel() { return getOverride('ui.findLabelModal.scanningLabel') ?? "Searching…"; },

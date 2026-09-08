@@ -362,6 +362,8 @@ export interface ProjectPreferences {
   findLabelUseRegex?: boolean;
   /** Match the Find Label search query anywhere in a label instead of requiring an exact match. No effect when findLabelUseRegex is on (regex matching is already unanchored). */
   findLabelPartialMatch?: boolean;
+  /** Match the Find Label search query case-sensitively. Defaults to off (case-folded matching on every path, including exact). */
+  findLabelCaseSensitive?: boolean;
   /**
    * Style used to render wall-clock datetimes (spectrogram ruler, running
    * time, and the From/To selection fields) when `ProjectUiSettings.timeDisplayUnit`
