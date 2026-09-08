@@ -41,6 +41,7 @@ import {
 } from '../utils/prefixSums';
 import { detectionThreshold } from '../utils/buzzdetectThresholds';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -179,6 +180,14 @@ export default function BuzzdetectPanel({
   onScrollWheel,
 }: BuzzdetectPanelProps) {
   const areaRef = useRef<HTMLDivElement>(null);
+
+  // Wheel forwards to the spectrogram's zoom/pan (the two share a time axis).
+  // Native and non-passive so ctrl+wheel can be prevented — see
+  // hooks/useNonPassiveWheel.
+  useNonPassiveWheel(areaRef, (e) => {
+    if (e.ctrlKey || e.metaKey) e.preventDefault();
+    onScrollWheel?.(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
+  });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
@@ -1351,10 +1360,6 @@ export default function BuzzdetectPanel({
           onMouseDown={handleAreaMouseDown}
           onMouseMove={handleAreaMouseMove}
           onMouseLeave={() => { setHover(null); setHoverNeuron(null); }}
-          onWheel={(e) => {
-            if (e.ctrlKey || e.metaKey) e.preventDefault();
-            onScrollWheel?.(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
-          }}
         >
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
           <canvas ref={overlayCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />

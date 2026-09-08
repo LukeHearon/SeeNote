@@ -17,6 +17,7 @@ import {
   type Viewport,
 } from '../utils/videoZoom';
 import { videoPane as videoP } from '../copy/ui';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 
 // MediaError codes (https://developer.mozilla.org/docs/Web/API/MediaError):
 // 3 = DECODE, 4 = SRC_NOT_SUPPORTED. On Linux, code 4 from the <video>
@@ -212,22 +213,17 @@ export default function VideoPane({
   const viewportRef = useRef(viewport);
   useEffect(() => { viewportRef.current = viewport; }, [viewport]);
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handler = (e: WheelEvent) => {
-      if (!isZoomed(viewportRef.current)) return;
-      e.preventDefault();
-      const dx = e.deltaX / 1500;
-      const dy = e.deltaY / 1500;
-      setViewport(prev => panViewport(prev, dx, dy));
-    };
-    el.addEventListener('wheel', handler, { passive: false });
-    return () => el.removeEventListener('wheel', handler);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Pane size + media dimensions (for fallback positioning / minimap) ──
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useNonPassiveWheel(containerRef, (e) => {
+    if (!isZoomed(viewportRef.current)) return;
+    e.preventDefault();
+    const dx = e.deltaX / 1500;
+    const dy = e.deltaY / 1500;
+    setViewport(prev => panViewport(prev, dx, dy));
+  });
+
   const [boxSize, setBoxSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
     const el = containerRef.current;

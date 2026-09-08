@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { clamp } from '../utils/helpers';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 
 // Nonlinear volume mapping: slider [0,1] → gain [0,8], with gain=1.0 at slider=0.5.
 // Lower half [0,0.5] covers gain 0→1 (finer resolution for quieting);
@@ -55,18 +56,13 @@ export default function VolumeControl({ volume, muted, setVolume, setMuted, onCo
   useEffect(() => { mutedRef.current = muted; }, [muted]);
 
   // Scroll over the control to nudge volume (non-passive so we can preventDefault).
-  useEffect(() => {
-    if (!el) return;
-    const handler = (e: WheelEvent) => {
-      e.preventDefault();
-      const cur = gainToSlider(mutedRef.current ? 0 : volumeRef.current);
-      const delta = -Math.sign(e.deltaY) * 0.03;
-      setVolume(sliderToGain(clamp(cur + delta, 0, 1)));
-      setMuted(false);
-    };
-    el.addEventListener('wheel', handler, { passive: false });
-    return () => el.removeEventListener('wheel', handler);
-  }, [el]); // eslint-disable-line react-hooks/exhaustive-deps
+  useNonPassiveWheel(el, (e) => {
+    e.preventDefault();
+    const cur = gainToSlider(mutedRef.current ? 0 : volumeRef.current);
+    const delta = -Math.sign(e.deltaY) * 0.03;
+    setVolume(sliderToGain(clamp(cur + delta, 0, 1)));
+    setMuted(false);
+  });
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(sliderToGain(parseFloat(e.target.value)));

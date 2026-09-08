@@ -16,7 +16,9 @@ import {
   segmentJoins,
 } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, ZOOM_STEP, WHEEL_NOTCH_DELTA, ZOOM_PUBLISH_COALESCE_MS, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { wheelZoomFactor, isGestureContinuation } from '../utils/zoomGesture';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
@@ -1325,12 +1327,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // has to agree exactly with the pps the resize handler derives, or the
       // two disagree by the integer rounding for as long as the zoom lasts.
       const currentPps = containerWidth / liveZoomSec;
-      // Step size scales with the event magnitude, capped so that any delta at
-      // or above one mouse notch is exactly the old fixed 1.25× step. Pinch
-      // events are small and arrive ~60×/s; a flat 1.25 each meant a factor of
-      // thousands per gesture. Below the cap the step tapers smoothly to 1.
-      const magnitude = Math.min(Math.abs(deltaY), WHEEL_NOTCH_DELTA);
-      const zoomFactor = Math.exp((magnitude / WHEEL_NOTCH_DELTA) * Math.log(ZOOM_STEP));
+      // One timestamp decides both how big this event's step is and whether the
+      // parent hears about it now or on the next frame — an event that follows
+      // its predecessor within the gap is part of a pinch either way. Sizing
+      // lives in utils/zoomGesture.ts (a mid-pinch event and a WebKit mouse
+      // notch are the same magnitude, so continuity is what separates them).
+      const nowMs = performance.now();
+      const inGesture = isGestureContinuation(nowMs, lastZoomEventRef.current);
+      lastZoomEventRef.current = nowMs;
+      const zoomFactor = wheelZoomFactor(deltaY, inGesture);
       const direction = deltaY > 0 ? 1 : -1;
       let newZoomSec = liveZoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
@@ -1362,10 +1367,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // compensation up to a visible stretch. Inside a burst the publish is
       // deferred to the rAF flush, so the prop is at most one frame and one
       // step behind.
-      const nowMs = performance.now();
-      const inBurst = nowMs - lastZoomEventRef.current < ZOOM_PUBLISH_COALESCE_MS;
-      lastZoomEventRef.current = nowMs;
-      if (inBurst) {
+      if (inGesture) {
         pendingZoomPublishRef.current = true;
       } else {
         pendingZoomPublishRef.current = false;
@@ -1387,10 +1389,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   }, [zoomSec, duration, pixelsPerSecond, containerWidth, publishZoom, playheadLocked, isPlaying, currentTimeStore]);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  // Native and non-passive: React's own wheel listener is passive, so an
+  // `onWheel` prop cannot preventDefault the webview's ctrl+wheel page zoom.
+  // See hooks/useNonPassiveWheel.
+  useNonPassiveWheel(containerRef, (e) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
-  };
+  });
 
   const zoomToRange = useCallback((startTime: number, endTime: number) => {
     if (!containerRef.current) return;
@@ -1405,17 +1410,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     publishZoom(newZoomSec);
   }, [duration, containerWidth, publishZoom, setScroll]);
 
-  const zoomIn = useCallback(() => {
+  // Button/hotkey zoom is a discrete notch by definition — clear the gesture
+  // clock so a held-down mod+= (key repeat can be faster than the gesture gap)
+  // isn't mistaken for a pinch and priced at a fraction of a step.
+  const zoomStep = useCallback((deltaY: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, -100, true, false, rect.left + rect.width / 2);
+    lastZoomEventRef.current = 0;
+    applyWheel(0, deltaY, true, false, rect.left + rect.width / 2);
   }, [applyWheel]);
 
-  const zoomOut = useCallback(() => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, 100, true, false, rect.left + rect.width / 2);
-  }, [applyWheel]);
+  const zoomIn = useCallback(() => zoomStep(-100), [zoomStep]);
+  const zoomOut = useCallback(() => zoomStep(100), [zoomStep]);
 
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
@@ -1460,7 +1466,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             // Only end non-drag interactions (e.g. right-click pan) on leave.
             if (!isAnyDragActiveRef.current) handleMouseUp();
           }}
-          onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
       >
       {/* Build-in-progress veil — rendered BEHIND the spectrogram canvas so it
