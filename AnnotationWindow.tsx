@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
+import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown, RefreshCw, X, Github } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
@@ -2174,6 +2174,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                       placeholder={annotationWindow.commitPlaceholder}
                       className="w-full text-xs bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-[#e65161]"
                     />
+                    {githubRepoPageUrl(project.settings.gitSync.remoteUrl) && (
+                      <button
+                        onClick={() => {
+                          setSyncMenuOpen(false);
+                          const url = githubRepoPageUrl(project.settings.gitSync.remoteUrl);
+                          if (url) openGithubUrl(url).catch(err => console.error('Failed to open GitHub repo:', err));
+                        }}
+                        className="flex items-center gap-1.5 mt-2 text-xs text-slate-300 hover:text-white transition-colors"
+                      >
+                        <Github size={13} />
+                        {annotationWindow.viewGithubRepo}
+                      </button>
+                    )}
                     <div className="flex justify-end gap-2 mt-2">
                       <button
                         onClick={() => setSyncMenuOpen(false)}
