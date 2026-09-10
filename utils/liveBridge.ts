@@ -126,10 +126,11 @@ export interface LiveHandlers {
   toggleFileExpandCollapse(): void;
   toggleFileFilter(): void;
   toggleShuffle(): void;
-  // Tool palette. The ones that open a modal do so in the main window.
+  // Tool palette. The ones that open a modal or a dock do so in the main window.
   activateTool(key: string): void;
   activateSelectMode(): void;
   openToolSettings(): void;
+  /** Summons the right-hand Find & Rename dock (or refocuses it if already open). */
   openFindLabel(): void;
   editTool(index: number): void;
   requestDeleteTool(index: number): void;

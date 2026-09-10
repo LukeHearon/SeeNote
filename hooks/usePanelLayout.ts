@@ -6,6 +6,7 @@ export interface PanelLayoutInitial {
   splitRatio: number;
   sidebarSections: SidebarSectionsState;
   leftPanelWidth: number;
+  findPanelWidth: number;
 }
 
 export interface PanelLayoutApi {
@@ -15,6 +16,9 @@ export interface PanelLayoutApi {
   sidebarSections: SidebarSectionsApi;
   leftPanelWidth: number;
   setLeftPanelWidth: React.Dispatch<React.SetStateAction<number>>;
+  /** Width of the right-hand Find & Rename dock. Opening/closing it is the owner's business. */
+  findPanelWidth: number;
+  setFindPanelWidth: React.Dispatch<React.SetStateAction<number>>;
   filePanelCollapsed: boolean;
   setFilePanelCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   videoCollapsed: boolean;
@@ -25,6 +29,7 @@ export interface PanelLayoutApi {
   VIDEO_COLLAPSED_BAR_PX: number;
   handleSplitDrag: (e: React.MouseEvent) => void;
   handleLeftPanelWidthDrag: (e: React.MouseEvent) => void;
+  handleFindPanelWidthDrag: (e: React.MouseEvent) => void;
 }
 
 // Dragging the video/spectrogram divider above this ratio collapses the
@@ -37,11 +42,16 @@ const LEFT_PANEL_COLLAPSE_THRESHOLD = 120;
 const LEFT_PANEL_MAX_WIDTH = 480;
 /** Width of the collapsed file-panel rail (w-10). */
 const LEFT_PANEL_COLLAPSED_PX = 40;
+// The find dock never collapses to a rail — it's closed outright — so these are
+// just the bounds a drag clamps to.
+const FIND_PANEL_MIN_WIDTH = 200;
+const FIND_PANEL_MAX_WIDTH = 560;
 
 /**
  * Panel sizing + drag handling for AnnotationWindow's resizable dividers (the
- * video/spectrogram split, the left panel's width, and — via
- * useSidebarSections — the dividers between the sidebar's stacked sections),
+ * video/spectrogram split, the left panel's width, the right-hand find dock's
+ * width, and — via useSidebarSections — the dividers between the sidebar's
+ * stacked sections),
  * plus the H-held "hide labels" keyboard toggle. Initial sizes are passed in
  * by the owner.
  */
@@ -65,6 +75,21 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     minWidth: LEFT_PANEL_COLLAPSE_THRESHOLD,
     maxWidth: LEFT_PANEL_MAX_WIDTH,
     collapsedWidth: LEFT_PANEL_COLLAPSED_PX,
+  });
+
+  // Same behaviour mirrored onto the right edge for the find dock, minus the
+  // drag-to-collapse: its own close button is the only way to dismiss it.
+  const {
+    width: findPanelWidth,
+    setWidth: setFindPanelWidth,
+    handleWidthDrag: handleFindPanelWidthDrag,
+  } = useCollapsibleSidebar({
+    initialWidth: initial.findPanelWidth,
+    minWidth: FIND_PANEL_MIN_WIDTH,
+    maxWidth: FIND_PANEL_MAX_WIDTH,
+    collapsedWidth: FIND_PANEL_MIN_WIDTH,
+    side: 'right',
+    collapsible: false,
   });
 
   // H held → hide annotation fills/text (border stays). keyup restores them.
@@ -116,6 +141,8 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     sidebarSections,
     leftPanelWidth,
     setLeftPanelWidth,
+    findPanelWidth,
+    setFindPanelWidth,
     filePanelCollapsed,
     setFilePanelCollapsed,
     videoCollapsed,
@@ -125,5 +152,6 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     VIDEO_COLLAPSED_BAR_PX,
     handleSplitDrag,
     handleLeftPanelWidthDrag,
+    handleFindPanelWidthDrag,
   };
 }

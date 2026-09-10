@@ -21,6 +21,19 @@ export interface CollapsibleSidebarOptions {
   maxWidth: number;
   /** Pixel width of the collapsed rail, so dragging back out resumes from it. */
   collapsedWidth: number;
+  /**
+   * Which edge the panel is docked to. The resize strip always sits on the
+   * panel's inward-facing face, so a right-hand dock grows as the pointer moves
+   * left — that sign flip is all this changes. Default 'left'.
+   */
+  side?: 'left' | 'right';
+  /**
+   * Whether dragging past `minWidth` collapses to a rail. Off for panels that
+   * are opened and closed outright (the find dock), where a narrow drag should
+   * just stop at the minimum rather than leave a rail behind with no body.
+   * Default true.
+   */
+  collapsible?: boolean;
 }
 
 export interface CollapsibleSidebar {
@@ -33,9 +46,10 @@ export interface CollapsibleSidebar {
 }
 
 /**
- * A left-hand panel that resizes by dragging its outer edge and collapses to a
- * rail when dragged past its minimum — the file panel's behaviour, factored out
- * so the help guide's section rail behaves the same way.
+ * A docked side panel that resizes by dragging its inward-facing edge and (by
+ * default) collapses to a rail when dragged past its minimum — the file panel's
+ * behaviour, factored out so the help guide's section rail and the right-hand
+ * find dock behave the same way.
  *
  * Collapsing is drag-only by design; restoring is a button on the rail, so a
  * collapsed panel can't be dragged back open by accident.
@@ -45,6 +59,8 @@ export function useCollapsibleSidebar({
   minWidth,
   maxWidth,
   collapsedWidth,
+  side = 'left',
+  collapsible = true,
 }: CollapsibleSidebarOptions): CollapsibleSidebar {
   const [width, setWidth] = useState(initialWidth);
   const [collapsed, setCollapsed] = useState(false);
@@ -54,8 +70,9 @@ export function useCollapsibleSidebar({
     const startX = e.clientX;
     const startWidth = collapsed ? collapsedWidth : width;
     startDragSession(moveEvent => {
-      const newWidth = startWidth + (moveEvent.clientX - startX);
-      if (newWidth < minWidth) {
+      const dx = moveEvent.clientX - startX;
+      const newWidth = startWidth + (side === 'right' ? -dx : dx);
+      if (collapsible && newWidth < minWidth) {
         setCollapsed(true);
       } else {
         setCollapsed(false);

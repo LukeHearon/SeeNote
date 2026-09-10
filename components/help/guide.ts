@@ -434,6 +434,8 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.bulk.p_rename },
           { kind: 'live', control: 'find-label' },
+          { kind: 'h', id: 'matching', text: help.bulk.h_matching },
+          { kind: 'p', text: help.bulk.p_matching },
           { kind: 'h', id: 'find', text: help.bulk.h_find },
           { kind: 'p', text: help.bulk.p_find },
           { kind: 'h', id: 'rename', text: help.bulk.h_rename },

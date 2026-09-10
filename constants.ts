@@ -101,6 +101,7 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
 
 // Panel layout defaults — used when no saved layout exists yet in preferences.json.
 export const DEFAULT_LEFT_PANEL_WIDTH = 224; // px
+export const DEFAULT_FIND_PANEL_WIDTH = 260; // px — the right-hand Find & Rename dock
 export const DEFAULT_SPLIT_RATIO = 0.5;      // vertical video/spectrogram split
 export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // legacy file-tree vs tool-palette split; seeds sidebarSections on load
 
@@ -147,7 +148,8 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectSubsetThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
   'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectSubsetBuffer' | 'buzzdetectPinnedNeurons' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
-  'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
+  'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' |
+  'findPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,

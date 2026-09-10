@@ -12,6 +12,7 @@ Quick reference for agents. One phrase per file.
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
 - `components/HelpHighlightHost.tsx` — draws the ghost highlight over a real control when the guide window asks for it
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
+- `components/FindLabelPanel.tsx` — right-hand Find & Rename dock: label search (exact/partial/regex), matched-label chips, prev/next match navigation, bulk rename
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all

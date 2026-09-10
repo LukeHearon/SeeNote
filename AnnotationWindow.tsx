@@ -7,7 +7,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
@@ -56,7 +56,7 @@ import NeuronPalette from './components/NeuronPalette';
 import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
-import FindLabelModal, { RenameScope } from './components/FindLabelModal';
+import FindLabelPanel, { RenameScope } from './components/FindLabelPanel';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
@@ -113,13 +113,21 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // this holds it and opens the create modal, pre-targeted at the next free
   // hotkey. null = modal closed.
   const [panelCreatingToolText, setPanelCreatingToolText] = useState<string | null>(null);
-  // The "Find Label" toolbar entry point opens the merged find-and-rename
-  // dialog. Query/scope live here (not inside the
-  // dialog) so the last search is still there — and its results reappear —
-  // the next time the dialog is reopened this session.
+  // The "Find Label" entry points ({mod}+F and the magnifying glass in the
+  // Labels palette) open the find-and-rename dock on the right. Query/scope live
+  // here (not inside the panel) so the last search is still there — and its
+  // results reappear — the next time it's opened this session. Open state is
+  // deliberately NOT persisted: the dock is summoned, and closing it is the end
+  // of it. `findLabelFocusNonce` re-focuses the query field when {mod}+F is
+  // pressed while the dock is already open.
   const [showFindLabel, setShowFindLabel] = useState(false);
+  const [findLabelFocusNonce, setFindLabelFocusNonce] = useState(0);
   const [findLabelQuery, setFindLabelQuery] = useState('');
   const [findLabelScope, setFindLabelScope] = useState<RenameScope>('project');
+  const openFindLabel = useCallback(() => {
+    setShowFindLabel(true);
+    setFindLabelFocusNonce(n => n + 1);
+  }, []);
 
   // Pending-save timer for the annotation autosave. Declared here (rather than
   // alongside useSyncManagement below) so handleOpenTrack and the other
@@ -170,6 +178,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Annotation State
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  // Which track `annotations` actually belongs to — a state mirror of
+  // loadedAnnotationsRef's track, written by the effect further down. See there.
+  const [annotationsLoadedTrack, setAnnotationsLoadedTrack] = useState<string | null>(null);
   // Undo/redo history for annotations. The two refs are reset directly by the
   // track-open / annotation-load / project-change paths below. The hook also
   // registers its own mod+z/mod+shift+z/mod+y hotkeys.
@@ -207,12 +218,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     splitRatio, setSplitRatio,
     sidebarSections,
     leftPanelWidth, setLeftPanelWidth,
+    findPanelWidth, setFindPanelWidth,
     filePanelCollapsed, setFilePanelCollapsed,
     videoCollapsed, setVideoCollapsed,
     hideLabels,
     VIDEO_COLLAPSED_BAR_PX,
     handleSplitDrag,
     handleLeftPanelWidthDrag,
+    handleFindPanelWidthDrag,
   } = usePanelLayout({
     splitRatio: project.preferences.uiSettings?.splitRatio ?? DEFAULT_SPLIT_RATIO,
     sidebarSections: sidebarSectionsFromUiSettings(
@@ -222,6 +235,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     leftPanelWidth: project.preferences.uiSettings?.leftPanelWidthRatio != null
       ? project.preferences.uiSettings.leftPanelWidthRatio * window.innerWidth
       : DEFAULT_LEFT_PANEL_WIDTH,
+    findPanelWidth: project.preferences.uiSettings?.findPanelWidthRatio != null
+      ? project.preferences.uiSettings.findPanelWidthRatio * window.innerWidth
+      : DEFAULT_FIND_PANEL_WIDTH,
   });
   // playheadLocked / setPlayheadLocked now come from usePlaybackTransport
   // (below), which also owns the 'c' hotkey that toggles it.
@@ -1011,6 +1027,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (loaded && loaded.trackPath === trackPath) {
       loadedAnnotationsRef.current = { trackPath: loaded.trackPath, annotations: sortedAnnotations };
     }
+    // Same question the line above asks, mirrored into state for the find dock:
+    // is `annotations` this track's real list, or the placeholder [] a track
+    // switch leaves behind until the read lands? The dock must not read the
+    // placeholder as "this recording has no labels" and drop its match list
+    // mid-walk. The ref itself is deliberately not state (it's on the
+    // persistence path), hence the mirror.
+    setAnnotationsLoadedTrack(loadedAnnotationsRef.current?.trackPath ?? null);
   }, [sortedAnnotations, trackPath]);
   // The same list on the display axis, for the prev/next-annotation enablement
   // below: that's a question about what the user can navigate to on screen, and
@@ -1204,6 +1227,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     splitRatio,
     sidebarSections: sidebarSections.states,
     leftPanelWidth,
+    findPanelWidth,
   });
 
   // Git sync — owns sync state, the manual handler, and status effects.
@@ -1332,6 +1356,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setLeftPanelWidth(savedUi?.leftPanelWidthRatio != null
       ? savedUi.leftPanelWidthRatio * window.innerWidth
       : DEFAULT_LEFT_PANEL_WIDTH);
+    setFindPanelWidth(savedUi?.findPanelWidthRatio != null
+      ? savedUi.findPanelWidthRatio * window.innerWidth
+      : DEFAULT_FIND_PANEL_WIDTH);
+    setShowFindLabel(false);
     setBandPassFilter(project.preferences.bandPassFilter ?? null);
     setFilterStrength(project.preferences.bandPassFilter?.strength ?? 0.5);
     setShuffledFiles([]);
@@ -1737,7 +1765,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // those hooks' instantiations above. What's left here is annotation- and
       // file-navigation-specific glue that only this window has.
       { key: 'a', mods: ['mod'], handler: selectAllOrAnnotateFullTrack },
-      { key: 'f', mods: ['mod'], handler: () => setShowFindLabel(true) },
+      { key: 'f', mods: ['mod'], handler: openFindLabel },
       { key: 'ArrowLeft', mods: ['mod'], handler: () => spectrogramRef.current?.goToTrackStart() },
       { key: 'ArrowRight', mods: ['mod'], handler: () => spectrogramRef.current?.goToTrackEnd() },
       { key: 'ArrowLeft', mods: ['alt'], handler: () => spectrogramRef.current?.goToPrevAnnotation() },
@@ -2078,7 +2106,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       activateTool: handleToolActivate,
       activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
       openToolSettings: () => setShowToolSettings(true),
-      openFindLabel: () => setShowFindLabel(true),
+      openFindLabel,
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
       playExample: handleListenExample,
@@ -2471,7 +2499,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onToolActivate={handleToolActivate}
                   onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
                   onOpenSettings={() => setShowToolSettings(true)}
-                  onOpenFindLabel={() => setShowFindLabel(true)}
+                  onOpenFindLabel={openFindLabel}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
                   onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
@@ -2779,6 +2807,49 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
              )}
         </div>
         </div>{/* end right column */}
+
+        {/* Find & Rename dock. Summoned by {mod}+F or the Labels palette's
+            magnifying glass, and gone the moment it's closed — nothing brings it
+            back on its own. It lives in the layout row (rather than floating)
+            because the user navigates between its matches with the spectrogram
+            still in view. */}
+        {showFindLabel && (
+          <div
+            className="flex-none bg-slate-900 border-l border-slate-700 flex flex-col h-full relative"
+            style={{ width: findPanelWidth }}
+          >
+            {/* Left-edge width resize handle — on the outer face of the border */}
+            <div
+              className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+              style={{ left: '-6px', width: '6px' }}
+              onMouseDown={handleFindPanelWidthDrag}
+            />
+            <FindLabelPanel
+              annotations={annotations}
+              annotationTools={annotationTools}
+              allTracks={allTracks}
+              trackPath={trackPath}
+              annotationsLoaded={trackPath !== null && annotationsLoadedTrack === trackPath}
+              getAnnotationPath={getAnnotationPath}
+              getIdent={getIdent}
+              useRegex={project.preferences.findLabelUseRegex ?? false}
+              onUseRegexChange={handleFindLabelUseRegexChange}
+              partial={project.preferences.findLabelPartialMatch ?? false}
+              onPartialChange={handleFindLabelPartialChange}
+              caseSensitive={project.preferences.findLabelCaseSensitive ?? false}
+              onCaseSensitiveChange={handleFindLabelCaseSensitiveChange}
+              query={findLabelQuery}
+              onQueryChange={setFindLabelQuery}
+              scope={findLabelScope}
+              onScopeChange={setFindLabelScope}
+              focusNonce={findLabelFocusNonce}
+              reloadNonce={reloadNonce}
+              onClose={() => setShowFindLabel(false)}
+              onGo={handleGoToLabelMatch}
+              onRename={handleFindLabelRename}
+            />
+          </div>
+        )}
       </div>
 
       {showProjectSettings && (
@@ -2804,29 +2875,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           playingExampleToolId={examplePlayer.playingToolId}
           onPlayExample={examplePlayer.toggle}
           onShowExamples={handleShowExamples}
-        />
-      )}
-      {showFindLabel && (
-        <FindLabelModal
-          annotations={annotations}
-          allTracks={allTracks}
-          trackPath={trackPath}
-          ident={ident}
-          getAnnotationPath={getAnnotationPath}
-          getIdent={getIdent}
-          useRegex={project.preferences.findLabelUseRegex ?? false}
-          onUseRegexChange={handleFindLabelUseRegexChange}
-          partial={project.preferences.findLabelPartialMatch ?? false}
-          onPartialChange={handleFindLabelPartialChange}
-          caseSensitive={project.preferences.findLabelCaseSensitive ?? false}
-          onCaseSensitiveChange={handleFindLabelCaseSensitiveChange}
-          query={findLabelQuery}
-          onQueryChange={setFindLabelQuery}
-          scope={findLabelScope}
-          onScopeChange={setFindLabelScope}
-          onClose={() => setShowFindLabel(false)}
-          onGo={handleGoToLabelMatch}
-          onRename={handleFindLabelRename}
         />
       )}
       {panelEditingToolIndex !== null && (

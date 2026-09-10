@@ -77,7 +77,7 @@ const GROUPS: Group[] = [
     shortcuts: [
       { codes: ['KeyA'], display: '{mod}+A', label: 'Select whole track' },
       { codes: ['KeyE'], display: '{mod}+Shift+E', label: 'Export selected audio' },
-      { codes: ['KeyF'], display: '{mod}+F', label: 'Find & rename label' },
+      { codes: ['KeyF'], display: '{mod}+F', label: 'Find & rename labels (right-hand panel)' },
       { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
       { codes: ['Enter'], display: '↵', label: 'Deselect annotation, clear its selection region' },
       { codes: ['KeyC'], display: '{mod}+C', label: 'Copy selected annotation' },

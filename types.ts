@@ -202,6 +202,7 @@ export interface ProjectUiSettings {
    */
   sidebarSections?: Record<string, { weight: number; collapsed: boolean }>;
   leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
+  findPanelWidthRatio?: number;     // right-hand find panel width, same fraction-of-window scheme
 
   // Running-time readout format in the toolbar (see components/Toolbar.tsx).
   // 'datetime' needs the track's start time (parsed from its filename via
