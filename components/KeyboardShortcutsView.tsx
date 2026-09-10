@@ -49,6 +49,8 @@ const GROUPS: Group[] = [
       { codes: ['ArrowRight'], display: '{mod}+Shift+→', label: 'Select on to end of track' },
       { codes: ['ArrowLeft'], display: 'Alt+←', label: 'Jump to previous annotation' },
       { codes: ['ArrowRight'], display: 'Alt+→', label: 'Jump to next annotation' },
+      { codes: ['ArrowUp'], display: 'Alt+↑', label: 'Previous find match (while the find panel is open)' },
+      { codes: ['ArrowDown'], display: 'Alt+↓', label: 'Next find match (while the find panel is open)' },
       { codes: ['ArrowUp'], display: '{mod}+↑', label: 'Previous track' },
       { codes: ['ArrowDown'], display: '{mod}+↓', label: 'Next track' },
     ],

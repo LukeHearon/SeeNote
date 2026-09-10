@@ -4,6 +4,7 @@ import { findLabelPanel as copy } from '../copy/ui';
 import { Annotation, AnnotationTool } from '../types';
 import { formatTime, buildLabelMatcher, colorForLabel, LabelMatcher } from '../utils/helpers';
 import { loadProjectLabels, LabelMatch } from '../utils/annotationRename';
+import { useHotkeys } from '../hooks/useHotkeys';
 import ToolCell from './ToolCell';
 import CollapsibleSection from './CollapsibleSection';
 
@@ -64,6 +65,8 @@ interface Props {
   // track's annotation file on disk. Resolves with the total renamed count.
   onRename: (matcher: LabelMatcher, newText: string, scope: RenameScope) => Promise<number>;
 }
+
+const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
 const sameMatch = (a: FlatMatch, b: FlatMatch): boolean =>
   a.trackFilePath === b.trackFilePath
@@ -234,6 +237,15 @@ export default function FindLabelPanel({
     go((selectedIndex + delta + results.length) % results.length);
   }, [results, selectedIndex, go]);
 
+  // Option+↑/↓ walks the match list from anywhere in the window while the dock is
+  // open — the keyboard twin of the chevrons, and registered here so the binding
+  // exists exactly as long as the dock does. allowInInput so it works straight
+  // from the search field, without reaching for the mouse to start walking.
+  useHotkeys([
+    { key: 'ArrowUp', mods: ['alt'], allowInInput: true, handler: () => step(-1) },
+    { key: 'ArrowDown', mods: ['alt'], allowInInput: true, handler: () => step(1) },
+  ]);
+
   // Keep the current match visible as the user walks past the edge of the list.
   useEffect(() => {
     selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
@@ -288,14 +300,26 @@ export default function FindLabelPanel({
     }
   };
 
-  // Esc closes the dock from anywhere inside it. Stopping propagation keeps it
-  // from also reaching the window-level Esc handler, which would unwind a
-  // selection or readied tool at the same time.
   const onPanelKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Escape') return;
+    // Esc closes the dock from anywhere inside it. Stopping propagation keeps it
+    // from also reaching the window-level Esc handler, which would unwind a
+    // selection or readied tool at the same time.
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      onClose();
+      return;
+    }
+    // Arrows mean nothing in here. Left to themselves they'd scrub the playhead
+    // or scroll the list out from under the match you just clicked, because
+    // clicking a chip leaves focus on a button rather than in a text field. The
+    // exceptions: Option+arrow is the match walk above, and a caret inside one of
+    // the panel's own text fields keeps its arrow keys.
+    if (!ARROW_KEYS.has(e.key)) return;
+    if (e.altKey) return;
+    if (e.target instanceof HTMLInputElement) return;
+    e.preventDefault();
     e.stopPropagation();
-    e.nativeEvent.stopImmediatePropagation();
-    onClose();
   };
 
   // Ident subheaders are emitted inline as the flat list is walked, so the list
@@ -414,7 +438,7 @@ export default function FindLabelPanel({
           return (
             <React.Fragment key={`${r.trackFilePath}:${r.match.start}:${r.match.end}:${r.match.label}:${i}`}>
               {header !== null && (
-                <div className={`px-0.5 pb-0.5 text-[10px] text-slate-500 break-all leading-tight ${i === 0 ? '' : 'mt-3'}`}>
+                <div className={`px-0.5 pb-0.5 text-[10px] text-slate-500 break-all leading-tight ${i === 0 ? '' : 'mt-4'}`}>
                   {header}
                 </div>
               )}
