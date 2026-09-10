@@ -48,7 +48,7 @@ export default function FrequencyAxisInputs({
 
   const wrapClass =
     'group absolute left-0 right-0 h-4 flex items-center rounded-sm ' +
-    'border border-transparent group-hover:bg-slate-900/70 group-hover:border-slate-600 ' +
+    'border border-slate-500/40 group-hover:bg-slate-900/70 group-hover:border-slate-600 ' +
     'focus-within:bg-slate-900/90 focus-within:border-[#e65161]';
 
   const box = (edge: 'min' | 'max', posClass: string) => (
