@@ -1131,6 +1131,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [activationStack, clearSelectionEnd, selectionToSource, frameSourceRef]);
 
+  const handleEnteredFolderChange = useCallback((path: string | null) => {
+    updateProjectPreferences(project.id, {
+      ...project.preferences,
+      enteredFolderPath: path ?? undefined,
+    });
+  }, [project, updateProjectPreferences]);
+
   // Select + scroll to an annotation matching `match` on the current track.
   // Shared by the same-track and cross-track ("Go") paths so the two don't
   // diverge on how a match is highlighted. Matches on label too (not just
@@ -1164,9 +1171,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
     const targetPath = allTracks.find(t => getIdent(t) === matchIdent);
     if (!targetPath) return;
+    // A match outside the folder the file panel has been entered into is outside
+    // displayQueue too, which would leave {mod}+↑/↓ with no place in the list. So
+    // step the panel back out to the media root — but no further in than that. The
+    // find panel is already saying where the match lives; following it down into
+    // its folder would narrow the file browser to a subtree the user never chose.
+    const entered = project.preferences.enteredFolderPath;
+    if (entered && !isInsideDir(entered, targetPath)) handleEnteredFolderChange(null);
     pendingGoToLabelRef.current = { trackPath: targetPath, ident: matchIdent, ...match };
     handleOpenTrack(targetPath);
-  }, [ident, goToAnnotationMatch, allTracks, getIdent, handleOpenTrack]);
+  }, [ident, goToAnnotationMatch, allTracks, getIdent, handleOpenTrack,
+      project.preferences.enteredFolderPath, handleEnteredFolderChange]);
 
   // Band-pass filter state machine (filter tool / band / strength + engine-push
   // and persistence effects, plus its own F / Shift+F hotkeys). Needs engineRef,
@@ -1531,13 +1546,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   const handleFindLabelCaseSensitiveChange = useCallback((caseSensitive: boolean) => {
     updateProjectPreferences(project.id, { ...project.preferences, findLabelCaseSensitive: caseSensitive });
-  }, [project, updateProjectPreferences]);
-
-  const handleEnteredFolderChange = useCallback((path: string | null) => {
-    updateProjectPreferences(project.id, {
-      ...project.preferences,
-      enteredFolderPath: path ?? undefined,
-    });
   }, [project, updateProjectPreferences]);
 
   const handleRevealInFinder = useCallback((path: string) => {
@@ -2449,7 +2457,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               offsetSeparator: project.settings.filenameTimeOffsetSeparator,
               dateTimeFormat,
             },
-            initialEnteredFolderPath: project?.preferences.enteredFolderPath ?? null,
+            enteredFolderPath: project?.preferences.enteredFolderPath ?? null,
             onEnteredFolderChange: handleEnteredFolderChange,
             onHeaderState: handleFileTreeHeaderState,
           };

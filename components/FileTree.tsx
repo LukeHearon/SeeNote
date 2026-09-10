@@ -61,7 +61,14 @@ interface FileTreeProps {
   onRevealAnnotations: (audioFilePath: string) => void;
   onRevealAnnotationsRoot?: () => void;
   onImportAnnotations: (audioFilePath: string) => void;
-  initialEnteredFolderPath?: string | null;
+  /**
+   * The folder the panel is currently entered into, as persisted. Half-
+   * controlled: the panel drives it through `onEnteredFolderChange` as the user
+   * enters and leaves folders, but a change that arrives from outside is adopted
+   * — navigating to a find match beyond the entered folder steps the panel back
+   * out to the root (see handleGoToLabelMatch).
+   */
+  enteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
   nonMediaFiles?: string[];
   filenameTimeInfo: FilenameTimeInfo;
@@ -451,7 +458,7 @@ function FileTree({
   onRevealAnnotations,
   onRevealAnnotationsRoot,
   onImportAnnotations,
-  initialEnteredFolderPath,
+  enteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
   filenameTimeInfo,
@@ -459,13 +466,30 @@ function FileTree({
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [enteredPath, setEnteredPath] = useState<string | null>(initialEnteredFolderPath ?? null);
+  const [enteredPath, setEnteredPath] = useState<string | null>(enteredFolderPath ?? null);
   const scrollToFolderRef = useRef<string | null>(null);
   const [expandedNonMedia, setExpandedNonMedia] = useState<Set<string>>(new Set());
 
-  // Reset enter state when the media root changes
+  // Mirror of enteredPath, so the effect below can tell a folder change the panel
+  // made itself (which arrives here as an echo) from one imposed from outside.
+  const enteredPathRef = useRef(enteredPath);
+  enteredPathRef.current = enteredPath;
+
+  // Adopt a folder set from outside — navigating to a find match beyond the
+  // entered folder steps the panel back out to the root. The panel's own
+  // enter/leave arrives as an echo and is skipped, so this can't undo goUpOne's
+  // "reveal the folder you just left".
   useEffect(() => {
-    setEnteredPath(initialEnteredFolderPath ?? null);
+    const next = enteredFolderPath ?? null;
+    if (enteredPathRef.current === next) return;
+    setEnteredPath(next);
+    setExpandedDirs(new Set());
+  }, [enteredFolderPath]);
+
+  // A new media root invalidates every path the tree was holding open.
+  useEffect(() => {
+    setEnteredPath(enteredFolderPath ?? null);
+    setExpandedDirs(new Set());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootDirectory]);
 
