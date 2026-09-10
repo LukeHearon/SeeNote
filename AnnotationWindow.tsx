@@ -2898,6 +2898,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onPreviewColor={handlePreviewToolColor}
           onImportExamples={handleImportExamplesToTool}
           onShowExamples={(idx) => { setPanelEditingToolIndex(null); handleShowExamples(idx); }}
+          onDelete={
+            panelEditingToolIndex !== 0 && annotationTools[panelEditingToolIndex]?.key !== '0'
+              ? () => { const idx = panelEditingToolIndex; setPanelEditingToolIndex(null); setPanelDeletingToolIndex(idx); }
+              : undefined
+          }
           onSave={(text, color, description) => {
             handleRenameTool(panelEditingToolIndex, text, color, description);
             setPanelEditingToolIndex(null);

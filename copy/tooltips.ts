@@ -44,6 +44,8 @@ export const tooltips = {
   get playExample() { return getOverride('tooltips.playExample') ?? "Play example clip"; },
   get editTool() { return getOverride('tooltips.editTool') ?? "Edit tool"; },
   get deleteTool() { return getOverride('tooltips.deleteTool') ?? "Delete tool"; },
+  get unassignTool() { return getOverride('tooltips.unassignTool') ?? "Unassign hotkey (middle-click)"; },
+  get assignToolHotkey() { return getOverride('tooltips.assignToolHotkey') ?? "Assign to next free hotkey (middle-click)"; },
   get startColor() { return getOverride('tooltips.startColor') ?? "Drag to change start color · right-click for a custom color"; },
   get endColor() { return getOverride('tooltips.endColor') ?? "Drag to change end color · right-click for a custom color"; },
   get toggleZoom() { return getOverride('tooltips.toggleZoom') ?? "Toggle zoom (Z)"; },

@@ -115,6 +115,7 @@ export const annotationToolEditModal = {
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
   get createButton() { return getOverride('ui.annotationToolEditModal.createButton') ?? "Create tool"; },
+  get deleteButton() { return getOverride('ui.annotationToolEditModal.deleteButton') ?? "Delete tool"; },
 };
 
 export const annotationToolsSettingsModal = {

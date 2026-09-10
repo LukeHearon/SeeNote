@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
+import { Settings, Trash2, Unlink, Play, Square, Search, Images } from 'lucide-react';
 import { AnnotationTool } from '../types';
 import { HOTKEY_SLOTS } from '../constants';
 import NewToolEntry from './NewToolEntry';
@@ -215,11 +215,11 @@ function AnnotationToolsPanel({
                       <Settings size={10} />
                     </button>
                     <button
-                      className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-600/60 transition-colors"
-                      onClick={e => { e.stopPropagation(); onRequestDeleteTool(toolIndex); }}
-                      data-tooltip={tooltips.deleteTool}
+                      className="pointer-events-auto p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                      onClick={e => { e.stopPropagation(); onUnassignTool?.(toolIndex); }}
+                      data-tooltip={tooltips.unassignTool}
                     >
-                      <Trash2 size={10} />
+                      <Unlink size={10} />
                     </button>
                   </div>
                 )}

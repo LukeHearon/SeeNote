@@ -18,6 +18,9 @@ interface Props {
   isCreate?: boolean;
   onClose: () => void;
   onSave: (newText: string, newColor: string, newDescription: string) => void;
+  // Delete this tool. Absent → no delete button (create mode, or the synthetic
+  // Custom tool). The parent handles confirmation and closing this modal.
+  onDelete?: () => void;
   // Live (transient) color preview while the user is changing the color.
   // Omitted in create mode.
   onPreviewColor?: (toolIndex: number, color: string) => void;
@@ -28,7 +31,7 @@ interface Props {
   onShowExamples?: (toolIndex: number) => void;
 }
 
-export default function AnnotationToolEditModal({ tool, toolIndex, annotations, annotationTools, isCreate = false, onClose, onSave, onPreviewColor, onImportExamples, onShowExamples }: Props) {
+export default function AnnotationToolEditModal({ tool, toolIndex, annotations, annotationTools, isCreate = false, onClose, onSave, onDelete, onPreviewColor, onImportExamples, onShowExamples }: Props) {
   const [text, setText] = useState(tool.text);
   const [description, setDescription] = useState(tool.description ?? '');
   const [color, setColor] = useState(tool.color);
@@ -151,7 +154,16 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-2">
+        <div className={`flex items-center gap-2 ${!isCreate && onDelete ? 'justify-between' : 'justify-end'}`}>
+          {!isCreate && onDelete && (
+            <button
+              onClick={() => onDelete()}
+              className="px-3 py-1.5 text-sm text-red-400 hover:text-white bg-red-950/40 hover:bg-red-600 border border-red-900/60 rounded transition-colors"
+            >
+              {annotationToolEditModal.deleteButton}
+            </button>
+          )}
+          <div className="flex items-center gap-2">
           <button
             onClick={handleCancel}
             className="px-3 py-1.5 text-sm text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded transition-colors"
@@ -165,6 +177,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           >
             {isCreate ? annotationToolEditModal.createButton : annotationToolEditModal.saveButton}
           </button>
+          </div>
         </div>
       </div>
     </div>
