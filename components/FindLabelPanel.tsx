@@ -113,10 +113,6 @@ export default function FindLabelPanel({
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<FlatMatch | null>(null);
-  // Narrows the list to one of the matched labels. A partial or regex query can
-  // hit several different labels at once, so the chips above the list say which,
-  // and clicking one isolates it.
-  const [labelFilter, setLabelFilter] = useState<string | null>(null);
 
   const [newLabel, setNewLabel] = useState('');
   const [renaming, setRenaming] = useState(false);
@@ -215,50 +211,28 @@ export default function FindLabelPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matcher, scope, sortedTracks, trackPath, getIdent, labelsFor, labelsVersion]);
 
-  // The distinct labels the query matched, most-hit first. Worth showing as soon
-  // as there's more than one, since that's exactly when the query is looser than
-  // the user may have realised.
-  const labelGroups = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const r of results) counts.set(r.match.label, (counts.get(r.match.label) ?? 0) + 1);
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([label, count]) => ({ label, count }));
-  }, [results]);
-
-  // Drop a label filter the query no longer matches, rather than showing an
-  // empty list under a chip that isn't there any more.
-  useEffect(() => {
-    if (labelFilter !== null && !labelGroups.some(g => g.label === labelFilter)) setLabelFilter(null);
-  }, [labelGroups, labelFilter]);
-
-  const shown = useMemo(
-    () => (labelFilter === null ? results : results.filter(r => r.match.label === labelFilter)),
-    [results, labelFilter],
-  );
-
   const selectedIndex = useMemo(
-    () => (selected ? shown.findIndex(r => sameMatch(r, selected)) : -1),
-    [shown, selected],
+    () => (selected ? results.findIndex(r => sameMatch(r, selected)) : -1),
+    [results, selected],
   );
 
   const go = useCallback((index: number) => {
-    const target = shown[index];
+    const target = results[index];
     if (!target) return;
     setSelected(target);
     onGo(target.ident, target.match);
-  }, [shown, onGo]);
+  }, [results, onGo]);
 
   // Step to the next/previous match, wrapping — the list is a loop you walk, so
   // running off the end comes back round rather than stopping dead.
   const step = useCallback((delta: number) => {
-    if (shown.length === 0) return;
+    if (results.length === 0) return;
     if (selectedIndex === -1) {
-      go(delta > 0 ? 0 : shown.length - 1);
+      go(delta > 0 ? 0 : results.length - 1);
       return;
     }
-    go((selectedIndex + delta + shown.length) % shown.length);
-  }, [shown, selectedIndex, go]);
+    go((selectedIndex + delta + results.length) % results.length);
+  }, [results, selectedIndex, go]);
 
   // Keep the current match visible as the user walks past the edge of the list.
   useEffect(() => {
@@ -326,7 +300,10 @@ export default function FindLabelPanel({
 
   // Ident subheaders are emitted inline as the flat list is walked, so the list
   // says which recording each run of matches belongs to without the rows
-  // becoming something you have to open first.
+  // becoming something you have to open first. Track scope has only the open
+  // recording to show, so there the header says nothing the window doesn't
+  // already say.
+  const showIdents = scope === 'project';
   let lastIdent: string | null = null;
 
   return (
@@ -402,11 +379,11 @@ export default function FindLabelPanel({
           <div className="flex-1" />
           {/* Walk the matches without taking your hand off the panel. */}
           <span className="font-mono text-[10px] text-slate-400 tabular-nums">
-            {shown.length > 0 ? copy.matchPositionLabel(selectedIndex + 1, shown.length) : ''}
+            {results.length > 0 ? copy.matchPositionLabel(selectedIndex + 1, results.length) : ''}
           </span>
           <button
             onClick={() => step(-1)}
-            disabled={shown.length === 0}
+            disabled={results.length === 0}
             data-tooltip={copy.prevMatchTooltip}
             className="p-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
@@ -414,7 +391,7 @@ export default function FindLabelPanel({
           </button>
           <button
             onClick={() => step(1)}
-            disabled={shown.length === 0}
+            disabled={results.length === 0}
             data-tooltip={copy.nextMatchTooltip}
             className="p-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
@@ -423,34 +400,16 @@ export default function FindLabelPanel({
         </div>
       </div>
 
-      {/* Which labels the query hit — only interesting once it hit more than one */}
-      {labelGroups.length > 1 && (
-        <div className="flex-none max-h-24 overflow-y-auto p-1.5 space-y-1 border-b border-slate-800">
-          {labelGroups.map(g => (
-            <ToolCell
-              key={g.label}
-              isActive={labelFilter === g.label}
-              color={colorForLabel(g.label, annotationTools)}
-              dotColor={colorForLabel(g.label, annotationTools)}
-              label={g.label}
-              hotkey={String(g.count)}
-              tooltip={labelFilter === g.label ? copy.labelFilterClearTooltip : copy.labelFilterTooltip}
-              onClick={() => setLabelFilter(f => (f === g.label ? null : g.label))}
-            />
-          ))}
-        </div>
-      )}
-
       {/* The matches themselves */}
       <div className="flex-1 min-h-0 overflow-y-auto p-1.5 space-y-1">
         {!query.trim() && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
-        {query.trim() && shown.length === 0 && (
+        {query.trim() && results.length === 0 && (
           <p className="text-slate-500 text-xs px-0.5">{scanning ? copy.scanningLabel : copy.noMatchesLabel}</p>
         )}
-        {shown.map((r, i) => {
+        {results.map((r, i) => {
           const isSelected = i === selectedIndex;
           const color = colorForLabel(r.match.label, annotationTools);
-          const header = r.ident !== lastIdent ? r.ident : null;
+          const header = showIdents && r.ident !== lastIdent ? r.ident : null;
           lastIdent = r.ident;
           return (
             <React.Fragment key={`${r.trackFilePath}:${r.match.start}:${r.match.end}:${r.match.label}:${i}`}>
@@ -495,7 +454,9 @@ export default function FindLabelPanel({
             />
             <div className="flex items-center gap-2">
               <span className="flex-1 min-w-0 text-slate-500 text-[10px] leading-tight">
-                {query.trim() && !scanning ? copy.matchCountLabel(totalCount, identCount) : ''}
+                {query.trim() && !scanning
+                  ? (scope === 'project' ? copy.matchCountLabel(totalCount, identCount) : copy.matchCountTrackLabel(totalCount))
+                  : ''}
               </span>
               <button
                 onClick={handleRename}

@@ -1149,7 +1149,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const dEnd = timeline.toDisplay(match.end);
     handleSelectionChange({ start: dStart, end: dEnd });
     seek(dStart);
-    spectrogramRef.current?.zoomToRange(dStart, dEnd);
+    // Centre the match at whatever zoom the user is already working at — walking
+    // a find result list must not keep rescaling the time axis under them.
+    spectrogramRef.current?.scrollToTime((dStart + dEnd) / 2);
   }, [annotations, seek, timeline, handleSelectionChange]);
 
   // Find Label "Go" handler: same-track matches select + scroll immediately;

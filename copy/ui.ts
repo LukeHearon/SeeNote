@@ -314,8 +314,6 @@ export const findLabelPanel = {
   get closeTooltip() { return getOverride('ui.findLabelPanel.closeTooltip') ?? "Close the find panel"; },
   get prevMatchTooltip() { return getOverride('ui.findLabelPanel.prevMatchTooltip') ?? "Previous match (Shift+Enter)"; },
   get nextMatchTooltip() { return getOverride('ui.findLabelPanel.nextMatchTooltip') ?? "Next match (Enter)"; },
-  get labelFilterTooltip() { return getOverride('ui.findLabelPanel.labelFilterTooltip') ?? "Show only this label"; },
-  get labelFilterClearTooltip() { return getOverride('ui.findLabelPanel.labelFilterClearTooltip') ?? "Showing only this label — click to show all"; },
   get matchRowTooltip() { return getOverride('ui.findLabelPanel.matchRowTooltip') ?? "Go to this annotation"; },
   get renameHeading() { return getOverride('ui.findLabelPanel.renameHeading') ?? "Rename matches"; },
   get newLabelPlaceholder() { return getOverride('ui.findLabelPanel.newLabelPlaceholder') ?? "New label…"; },
@@ -325,6 +323,8 @@ export const findLabelPanel = {
   get scopeWholeProjectTooltip() { return getOverride('ui.findLabelPanel.scopeWholeProjectTooltip') ?? "Search every track in the project"; },
   matchCountLabel: (count: number, identCount: number) =>
     `${count} match${count === 1 ? '' : 'es'} in ${identCount} recording${identCount === 1 ? '' : 's'}`,
+  // Track scope searches one recording by definition, so counting them says nothing.
+  matchCountTrackLabel: (count: number) => `${count} match${count === 1 ? '' : 'es'}`,
   matchPositionLabel: (position: number, count: number) => `${position} / ${count}`,
   get renameButton() { return getOverride('ui.findLabelPanel.renameButton') ?? "Rename All"; },
   get renamingButton() { return getOverride('ui.findLabelPanel.renamingButton') ?? "Renaming…"; },
