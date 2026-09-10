@@ -5,6 +5,7 @@ import { Annotation, AnnotationTool } from '../types';
 import { formatTime, buildLabelMatcher, colorForLabel, LabelMatcher } from '../utils/helpers';
 import { loadProjectLabels, LabelMatch } from '../utils/annotationRename';
 import { useHotkeys } from '../hooks/useHotkeys';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import ToolCell from './ToolCell';
 import CollapsibleSection from './CollapsibleSection';
 
@@ -42,9 +43,11 @@ interface Props {
   onPartialChange: (partial: boolean) => void;
   caseSensitive: boolean;
   onCaseSensitiveChange: (caseSensitive: boolean) => void;
-  // Query and scope are lifted to the caller (rather than local state) so they,
-  // and the results they produce, survive the panel being closed and reopened
-  // within the same session.
+  // Scope, and the query as last settled, are lifted to the caller (rather than
+  // local state) so they — and the results they produce — survive the panel being
+  // closed and reopened within the same session. `query` seeds the field on mount;
+  // `onQueryChange` is called with the settled value, not per keystroke (see
+  // QUERY_DEBOUNCE_MS).
   query: string;
   onQueryChange: (query: string) => void;
   scope: RenameScope;
@@ -67,6 +70,14 @@ interface Props {
 }
 
 const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
+// How long the query must hold still before anything acts on it. Two costs hang
+// off a keystroke, and the debounce is what keeps both off the typing path:
+// rebuilding the result list (the first characters of a partial or regex query
+// match the most and are the least likely to be what the user meant), and the
+// push up to the orchestrator, which re-renders the spectrogram and every panel
+// alongside it. The field itself is local state and stays live throughout.
+const QUERY_DEBOUNCE_MS = 200;
 
 const sameMatch = (a: FlatMatch, b: FlatMatch): boolean =>
   a.trackFilePath === b.trackFilePath
@@ -132,11 +143,29 @@ export default function FindLabelPanel({
     [allTracks, getIdent],
   );
 
+  // The live field value. Local, so typing costs this component a render and
+  // nothing else; `query` only seeds it.
+  const [draftQuery, setDraftQuery] = useState(query);
+  // Everything downstream of the search — the matcher, the results, the counts,
+  // what the rename applies to — keys off the settled query, never the raw field.
+  const settledQuery = useDebouncedValue(draftQuery, QUERY_DEBOUNCE_MS);
+  const searching = settledQuery.trim() !== '';
+
+  // Hand the settled query up so it survives a close/reopen. The unmount pass
+  // sends the raw draft instead, since closing the dock mid-debounce would
+  // otherwise lose the last characters typed.
+  const onQueryChangeRef = useRef(onQueryChange);
+  onQueryChangeRef.current = onQueryChange;
+  const draftQueryRef = useRef(draftQuery);
+  draftQueryRef.current = draftQuery;
+  useEffect(() => { onQueryChangeRef.current(settledQuery); }, [settledQuery]);
+  useEffect(() => () => { onQueryChangeRef.current(draftQueryRef.current); }, []);
+
   const matcher: LabelMatcher | null = useMemo(() => {
-    const label = query.trim();
+    const label = settledQuery.trim();
     if (!label) return null;
     return buildLabelMatcher(label, { useRegex, partial, caseSensitive });
-  }, [query, useRegex, partial, caseSensitive]);
+  }, [settledQuery, useRegex, partial, caseSensitive]);
 
   // Whole-project labels read from disk, held in memory and filtered locally
   // (below) so editing the query or flipping partial/regex never touches disk.
@@ -257,8 +286,8 @@ export default function FindLabelPanel({
   }, [focusNonce]);
 
   useEffect(() => {
-    setError(query.trim() && !matcher ? copy.invalidRegexError : '');
-  }, [query, matcher]);
+    setError(searching && !matcher ? copy.invalidRegexError : '');
+  }, [searching, matcher]);
 
   const totalCount = results.length;
   const identCount = useMemo(() => new Set(results.map(r => r.ident)).size, [results]);
@@ -275,7 +304,7 @@ export default function FindLabelPanel({
       // the new labels.
       setReloadKey(k => k + 1);
       setRenameResult({ count, identCount });
-      onQueryChange('');
+      setDraftQuery('');
       setNewLabel('');
       setSelected(null);
     } catch (err) {
@@ -288,7 +317,7 @@ export default function FindLabelPanel({
   // A fresh query invalidates the current position in the old result list (as do
   // the matching toggles and the scope switch), but never the panel itself.
   const handleQueryChange = (value: string) => {
-    onQueryChange(value);
+    setDraftQuery(value);
     setSelected(null);
     setRenameResult(null);
   };
@@ -356,7 +385,7 @@ export default function FindLabelPanel({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            value={query}
+            value={draftQuery}
             onChange={e => handleQueryChange(e.target.value)}
             onKeyDown={onQueryKeyDown}
             placeholder={copy.labelPlaceholder}
@@ -426,8 +455,8 @@ export default function FindLabelPanel({
 
       {/* The matches themselves */}
       <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
-        {!query.trim() && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
-        {query.trim() && results.length === 0 && (
+        {!searching && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
+        {searching && results.length === 0 && (
           <p className="text-slate-500 text-xs px-0.5">{scanning ? copy.scanningLabel : copy.noMatchesLabel}</p>
         )}
         {results.map((r, i) => {
@@ -478,7 +507,7 @@ export default function FindLabelPanel({
             />
             <div className="flex items-center gap-2">
               <span className="flex-1 min-w-0 text-slate-500 text-[10px] leading-tight">
-                {query.trim() && !scanning
+                {searching && !scanning
                   ? (scope === 'project' ? copy.matchCountLabel(totalCount, identCount) : copy.matchCountTrackLabel(totalCount))
                   : ''}
               </span>

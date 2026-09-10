@@ -113,7 +113,8 @@ Quick reference for agents. One phrase per file.
 - `hooks/useExamplePlayer.ts` — plays annotation-tool example clips
 - `hooks/useAnnotationHistory.ts` — undo/redo snapshot stack for annotations
 - `hooks/usePanelLayout.ts` — split-ratio / panel-width layout state and drag resizing
-- `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a left panel (the file panel and the guide's section rail)
+- `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a docked side panel (the file panel, the guide's section rail, the find dock)
+- `hooks/useDebouncedValue.ts` — a value as of when it last held still; keeps expensive work off the typing path
 - `hooks/useBandPassFilter.ts` — band-pass filter tool state and draw/apply wiring
 - `hooks/useBuzzdetect.ts` — buzzdetect panel enable/load state for the active track
 - `hooks/useProjectPersistence.ts` — debounced persistence of project settings/preferences
