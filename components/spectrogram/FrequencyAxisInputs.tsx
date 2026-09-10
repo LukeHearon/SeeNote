@@ -38,10 +38,14 @@ export default function FrequencyAxisInputs({
     if (next.minFreq !== minFreq || next.maxFreq !== maxFreq) onChange(next);
   };
 
+  // Styled to sit flush with the canvas-drawn axis labels: same 10px sans-serif,
+  // same right edge (7px inset), transparent until hovered/focused so it reads
+  // as just another axis label that happens to be editable.
   const inputClass =
-    'absolute left-0.5 right-0.5 bg-slate-900/85 text-white text-right ' +
-    'border border-slate-700 rounded px-1 py-px font-mono text-[10px] leading-tight ' +
-    'outline-none focus:border-[#e65161] [appearance:textfield] ' +
+    'absolute left-0 right-0 h-4 bg-transparent text-white/80 text-right ' +
+    'pr-[7px] font-sans text-[10px] leading-none border border-transparent rounded-sm ' +
+    'outline-none hover:bg-slate-900/70 hover:border-slate-600 ' +
+    'focus:bg-slate-900/90 focus:border-[#e65161] focus:text-white [appearance:textfield] ' +
     '[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
 
   const handlers = (edited: 'min' | 'max') => ({
@@ -67,13 +71,13 @@ export default function FrequencyAxisInputs({
       <input
         {...handlers('max')}
         value={draftMax}
-        className={`${inputClass} top-0.5`}
+        className={`${inputClass} top-0`}
         title="Highest frequency to plot (Hz)"
       />
       <input
         {...handlers('min')}
         value={draftMin}
-        className={`${inputClass} bottom-0.5`}
+        className={`${inputClass} bottom-0`}
         title="Lowest frequency to plot (Hz)"
       />
     </>

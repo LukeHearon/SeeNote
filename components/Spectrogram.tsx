@@ -965,13 +965,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     let lastLabelY: number | null = null;
     const MIN_LABEL_SPACING = 13;
+    // The min/max frequency boxes (FrequencyAxisInputs) are docked over the top
+    // and bottom of the gutter and already show the endpoint values, so the
+    // canvas skips any tick that would land under them.
+    const EDGE_RESERVED = 16;
 
     const renderTick = (freq: number) => {
       // Use the shared freq→y mapping so axis labels stay in exact lockstep
       // with the spectrogram renderer (same function, no drift).
       const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
 
-      if (y < 0 || y > height) return;
+      if (y < EDGE_RESERVED || y > height - EDGE_RESERVED) return;
       if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
       lastLabelY = y;
 
