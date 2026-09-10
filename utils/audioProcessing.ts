@@ -134,6 +134,33 @@ export const freqAxisTicks = (
   return ticks;
 };
 
+/** Smallest span (Hz) the display range is allowed to collapse to. */
+export const MIN_FREQ_SPAN = 100;
+
+/**
+ * Clamp a proposed frequency display range to sane bounds: min ≥ 0, max ≤
+ * nyquist, and at least MIN_FREQ_SPAN between them. `edited` says which edge
+ * the user just changed, so the *other* edge is the one pushed to keep the
+ * span. Shared by the axis-docked number boxes and the settings panel.
+ */
+export const clampFreqRange = (
+  minFreq: number,
+  maxFreq: number,
+  nyquist: number,
+  edited: 'min' | 'max',
+): { minFreq: number; maxFreq: number } => {
+  let lo = Number.isFinite(minFreq) ? Math.max(0, Math.round(minFreq)) : 0;
+  let hi = Number.isFinite(maxFreq) ? Math.min(nyquist, Math.round(maxFreq)) : nyquist;
+  if (edited === 'min') {
+    lo = Math.min(lo, nyquist - MIN_FREQ_SPAN);
+    if (hi - lo < MIN_FREQ_SPAN) hi = Math.min(nyquist, lo + MIN_FREQ_SPAN);
+  } else {
+    hi = Math.max(hi, MIN_FREQ_SPAN);
+    if (hi - lo < MIN_FREQ_SPAN) lo = Math.max(0, hi - MIN_FREQ_SPAN);
+  }
+  return { minFreq: lo, maxFreq: hi };
+};
+
 // ── Time-axis column resampling ─────────────────────────────────────────────
 // One offscreen column covers the window [pos, posEnd) of a chunk's column
 // grid, expressed in fractional column coordinates (column centers sit at

@@ -179,7 +179,9 @@ export const help = {
     get h_axes() { return getOverride('help.spectrogram.h_axes') ?? "Axes"; },
     get p_axes() { return getOverride('help.spectrogram.p_axes') ?? "Time runs along the bottom, frequency up the side. Both axes rescale as you zoom, and the [buzzdetect panel](buzzdetect-toggle@buzzdetect) shares the spectrogram's exact time-to-pixel transform, so anything stacked below stays in lockstep with the playhead and your selections."; },
     get p_axisDatetime() { return getOverride('help.spectrogram.p_axisDatetime') ?? "In [Date mode](@time-display) the time axis reads as wall-clock datetimes. Ticks land on round clock boundaries, and each label spells out only what changed since the one before it — `2026-01-01 23:00`, then `01-02 00:00`, then `01:00` — so a fifty-hour file reads without repeating the date at every tick."; },
-    get p_settings() { return getOverride('help.spectrogram.p_settings') ?? "How the image is drawn — FFT size, frequency scale, frequency range, dynamic range — lives behind the [settings gear](spectrogram-settings@spectrogram-settings)."; },
+    get h_freqRange() { return getOverride('help.spectrogram.h_freqRange') ?? "Frequency range"; },
+    get p_freq() { return getOverride('help.spectrogram.p_freq') ?? "The two number boxes on the frequency axis — one at the top, one at the bottom — clip the vertical axis to a band of interest, giving the frequencies you care about the full height of the panel. Type a value and press `Enter` or click away to apply; they clamp to 0 and the file's Nyquist limit. Useful for narrowing onto a species' band, or for cutting off the empty top half of a recording sampled far above its content. This is a re-coloring of what's already computed, so it applies instantly."; },
+    get p_settings() { return getOverride('help.spectrogram.p_settings') ?? "How the image is drawn — FFT size, frequency scale, dynamic range — lives behind the [settings gear](spectrogram-settings@spectrogram-settings)."; },
   },
 
   zoom: {
@@ -199,12 +201,10 @@ export const help = {
     get p1() { return getOverride('help.spectrogramSettings.p1') ?? "The [gear at the right of the toolbar](spectrogram-settings) opens the display settings. They change only how the spectrogram is drawn — never the audio, the annotations, or the file on disk — and they're saved per project."; },
     get h_range() { return getOverride('help.spectrogramSettings.h_range') ?? "Dynamic range"; },
     get p_range() { return getOverride('help.spectrogramSettings.p_range') ?? "**Floor** and **Ceil** (in dBFS) set the window of loudness the color ramp spans. Anything at or below Floor is black; anything at or above Ceil is fully saturated. Drag Floor toward −140 to lift faint detail out of the noise floor, or toward 0 to crush it away and leave only the loud events. This is the control worth reaching for first when a recording looks like an undifferentiated wash. A small reset arrow sits inside each field once it's moved off its default (−100 Floor, 0 Ceil)."; },
-    get h_freq() { return getOverride('help.spectrogramSettings.h_freq') ?? "Frequency range"; },
-    get p_freq() { return getOverride('help.spectrogramSettings.p_freq') ?? "**Min** and **Max** clip the vertical axis to a band of interest, giving the frequencies you care about the full height of the panel. Useful for narrowing onto a species' band, or for cutting off the empty top half of a recording sampled far above its content."; },
     get h_fft() { return getOverride('help.spectrogramSettings.h_fft') ?? "FFT window & scale"; },
     get p_fft() { return getOverride('help.spectrogramSettings.p_fft') ?? "**Window size** (256 to 8192 samples) is the classic time-versus-frequency trade: a small window resolves clicks and onsets sharply but smears tones into broad bands; a large one resolves pitch finely but blurs anything brief. 1024–2048 suits most work; drop it for percussive detail, raise it for tonal detail."; },
     get p_scale() { return getOverride('help.spectrogramSettings.p_scale') ?? "**Scale** sets how frequency is spaced up the axis. **Linear** gives every hertz equal height. **Log** and **Mel** both expand the low end and compress the high end, which matches how hearing works and how most vocalizations are structured — worth trying whenever the interesting content is bunched against the bottom of a linear plot."; },
-    get note_cost() { return getOverride('help.spectrogramSettings.note_cost') ?? "Changing FFT size or scale re-computes the image, so there's a brief redraw on large files. Floor, Ceil, and the frequency range are re-colorings of what's already computed and apply instantly."; },
+    get note_cost() { return getOverride('help.spectrogramSettings.note_cost') ?? "Changing FFT size or scale re-computes the image, so there's a brief redraw on large files. Floor and Ceil are re-colorings of what's already computed and apply instantly."; },
   },
 
   debug: {

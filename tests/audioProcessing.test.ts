@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk } from '../utils/audioProcessing';
+import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk, clampFreqRange, MIN_FREQ_SPAN } from '../utils/audioProcessing';
 
 const H = 500;            // canvas height
 const MIN_F = 20;
@@ -328,5 +328,38 @@ describe('drawSpectrogramChunk pixel coverage', () => {
       const j = (y * W + 3) * 4;
       expect(out[j + 3]).toBe(255);
     }
+  });
+});
+
+describe('clampFreqRange', () => {
+  const NYQ = 24000;
+
+  it('clamps min below 0 up to 0', () => {
+    expect(clampFreqRange(-500, 10000, NYQ, 'min')).toEqual({ minFreq: 0, maxFreq: 10000 });
+  });
+
+  it('clamps max above nyquist down to nyquist', () => {
+    expect(clampFreqRange(0, 99999, NYQ, 'max')).toEqual({ minFreq: 0, maxFreq: NYQ });
+  });
+
+  it('editing min pushes max to keep the minimum span', () => {
+    const r = clampFreqRange(9950, 10000, NYQ, 'min');
+    expect(r.minFreq).toBe(9950);
+    expect(r.maxFreq).toBe(9950 + MIN_FREQ_SPAN);
+  });
+
+  it('editing max pushes min to keep the minimum span', () => {
+    const r = clampFreqRange(9950, 10000, NYQ, 'max');
+    expect(r.maxFreq).toBe(10000);
+    expect(r.minFreq).toBe(10000 - MIN_FREQ_SPAN);
+  });
+
+  it('non-finite input falls back to bounds', () => {
+    expect(clampFreqRange(NaN, 10000, NYQ, 'min')).toEqual({ minFreq: 0, maxFreq: 10000 });
+    expect(clampFreqRange(0, NaN, NYQ, 'max')).toEqual({ minFreq: 0, maxFreq: NYQ });
+  });
+
+  it('rounds fractional Hz', () => {
+    expect(clampFreqRange(100.4, 5000.6, NYQ, 'min')).toEqual({ minFreq: 100, maxFreq: 5001 });
   });
 });

@@ -24,6 +24,7 @@ import SelectionHandles from './spectrogram/SelectionHandles';
 import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
+import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
@@ -53,6 +54,8 @@ interface SpectrogramProps {
   isProcessing: boolean;
   ident: string | null;
   settings: SpectrogramSettings;
+  /** Partial settings update from the axis-docked frequency boxes; merged by the caller. */
+  onSettingsChange: (patch: Partial<SpectrogramSettings>) => void;
   zoomSec: number;
   annotations: Annotation[];
   selectedAnnotationId: string | null;
@@ -179,6 +182,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   isProcessing,
   ident,
   settings,
+  onSettingsChange,
   zoomSec,
   annotations,
   selectedAnnotationId,
@@ -1451,8 +1455,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   return (
     <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
-      {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
-      <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: Y_AXIS_WIDTH }} />
+      {/* Y-axis gutter — separate element to the left of the spectrogram, never layered on top.
+          The min/max frequency boxes are docked on the axis itself, at the ends of the scale they set. */}
+      <div className="relative h-full flex-shrink-0" style={{ width: Y_AXIS_WIDTH }}>
+        <canvas ref={yAxisCanvasRef} className="w-full h-full pointer-events-none" />
+        <FrequencyAxisInputs
+          minFreq={settings.minFreq}
+          maxFreq={settings.maxFreq}
+          sampleRate={sampleRate}
+          onChange={onSettingsChange}
+        />
+      </div>
 
       {/* Spectrogram area — all interactive content lives here */}
       <div

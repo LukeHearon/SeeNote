@@ -315,7 +315,6 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <div className="w-72">
             <SpectrogramSettingsPanel
               settings={s.spectrogramSettings}
-              sampleRate={s.sampleRate}
               onChange={patch => act(
                 () => client.call('setSpectrogramSettings', patch),
                 () => demo.set({ spectrogramSettings: { ...demo.snapshot.spectrogramSettings, ...patch } }),
