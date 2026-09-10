@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk, clampFreqRange, MIN_FREQ_SPAN } from '../utils/audioProcessing';
+import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk, clampFreqRange, MIN_FREQ_SPAN, formatFreqHz, parseFreqHz } from '../utils/audioProcessing';
 
 const H = 500;            // canvas height
 const MIN_F = 20;
@@ -361,5 +361,39 @@ describe('clampFreqRange', () => {
 
   it('rounds fractional Hz', () => {
     expect(clampFreqRange(100.4, 5000.6, NYQ, 'min')).toEqual({ minFreq: 100, maxFreq: 5001 });
+  });
+});
+
+describe('formatFreqHz / parseFreqHz', () => {
+  it('formats like the axis labels', () => {
+    expect(formatFreqHz(6000)).toBe('6k');
+    expect(formatFreqHz(5500)).toBe('5.5k');
+    expect(formatFreqHz(800)).toBe('800');
+    expect(formatFreqHz(0)).toBe('0');
+    expect(formatFreqHz(1000)).toBe('1k');
+  });
+
+  it('parses plain and k-suffixed numbers', () => {
+    expect(parseFreqHz('8000')).toBe(8000);
+    expect(parseFreqHz('8k')).toBe(8000);
+    expect(parseFreqHz('5.5k')).toBe(5500);
+    expect(parseFreqHz('  8 K ')).toBe(8000);
+    expect(parseFreqHz('0.5k')).toBe(500);
+    expect(parseFreqHz('0')).toBe(0);
+  });
+
+  it('rejects junk as NaN', () => {
+    expect(parseFreqHz('')).toBeNaN();
+    expect(parseFreqHz('abc')).toBeNaN();
+    expect(parseFreqHz('8kk')).toBeNaN();
+    expect(parseFreqHz('8 hz')).toBeNaN();
+  });
+
+  it('round-trips values the label can represent exactly', () => {
+    for (const hz of [0, 500, 1000, 1500, 6000, 20000]) {
+      expect(parseFreqHz(formatFreqHz(hz))).toBe(hz);
+    }
+    // 22050 can't survive one-decimal "k" formatting — same lossiness as the axis.
+    expect(formatFreqHz(22050)).toBe('22.1k');
   });
 });

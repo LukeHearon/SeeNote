@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { bandExtentY, freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { bandExtentY, freqToY, freqAxisTicks, formatFreqHz } from '../utils/audioProcessing';
 import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
@@ -985,11 +985,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.stroke();
 
-      let label = freq.toString();
-      if (freq >= 1000) {
-        label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
-      }
-      ctx.fillText(label, width - 7, y);
+      ctx.fillText(formatFreqHz(freq), width - 7, y);
     };
 
     for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {

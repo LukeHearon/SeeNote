@@ -1,10 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { RotateCcw } from 'lucide-react';
 import { SpectrogramSettings } from '../../types';
-import { clampFreqRange } from '../../utils/audioProcessing';
+import { clampFreqRange, formatFreqHz, parseFreqHz } from '../../utils/audioProcessing';
 
 // Two number boxes docked on the frequency axis — max at the top of the scale,
 // min at the bottom — so the value typed is read right where it takes effect.
 // Replaces the min/max fields that used to live in the settings popover.
+//
+// Idle, each box shows the same label the axis ticks use ("6k", "5.5k", "800").
+// Focused, it shows the raw Hz for editing and accepts either form on the way
+// back in: "8000" or "8k". A reset arrow appears on hover once the edge is off
+// its limit (0 Hz for min, nyquist for max).
 export default function FrequencyAxisInputs({
   minFreq,
   maxFreq,
@@ -19,67 +25,70 @@ export default function FrequencyAxisInputs({
 }) {
   const nyquist = Math.floor(sampleRate / 2);
 
-  // Local text state so a half-typed number ("1", "12") doesn't get clamped
-  // mid-keystroke; committed on blur / Enter.
-  const [draftMin, setDraftMin] = useState(String(minFreq));
-  const [draftMax, setDraftMax] = useState(String(maxFreq));
-  useEffect(() => { setDraftMin(String(minFreq)); }, [minFreq]);
-  useEffect(() => { setDraftMax(String(maxFreq)); }, [maxFreq]);
+  // While a box is focused it holds a free-text draft; otherwise it shows the
+  // formatted label derived from props.
+  const [editing, setEditing] = useState<null | 'min' | 'max'>(null);
+  const [draft, setDraft] = useState('');
 
-  const commit = (edited: 'min' | 'max') => {
+  const valueOf = (edge: 'min' | 'max') => (edge === 'min' ? minFreq : maxFreq);
+  const limitOf = (edge: 'min' | 'max') => (edge === 'min' ? 0 : nyquist);
+
+  const display = (edge: 'min' | 'max') =>
+    editing === edge ? draft : formatFreqHz(valueOf(edge));
+
+  const apply = (edge: 'min' | 'max', typed: number) => {
     const next = clampFreqRange(
-      edited === 'min' ? parseFloat(draftMin) : minFreq,
-      edited === 'max' ? parseFloat(draftMax) : maxFreq,
+      edge === 'min' ? typed : minFreq,
+      edge === 'max' ? typed : maxFreq,
       nyquist,
-      edited,
+      edge,
     );
-    setDraftMin(String(next.minFreq));
-    setDraftMax(String(next.maxFreq));
     if (next.minFreq !== minFreq || next.maxFreq !== maxFreq) onChange(next);
   };
 
-  // Styled to sit flush with the canvas-drawn axis labels: same 10px sans-serif,
-  // same right edge (7px inset), transparent until hovered/focused so it reads
-  // as just another axis label that happens to be editable.
   const inputClass =
-    'absolute left-0 right-0 h-4 bg-transparent text-white/80 text-right ' +
-    'pr-[7px] font-sans text-[10px] leading-none border border-transparent rounded-sm ' +
-    'outline-none hover:bg-slate-900/70 hover:border-slate-600 ' +
-    'focus:bg-slate-900/90 focus:border-[#e65161] focus:text-white [appearance:textfield] ' +
-    '[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
+    'w-full h-full bg-transparent text-white/80 text-right pr-[7px] pl-3 ' +
+    'font-sans text-[10px] leading-none border border-transparent rounded-sm ' +
+    'outline-none group-hover:bg-slate-900/70 group-hover:border-slate-600 ' +
+    'focus:bg-slate-900/90 focus:border-[#e65161] focus:text-white';
 
-  const handlers = (edited: 'min' | 'max') => ({
-    type: 'number' as const,
-    min: 0,
-    max: nyquist,
-    step: 100,
-    onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
-      (edited === 'min' ? setDraftMin : setDraftMax)(e.target.value),
-    onBlur: () => commit(edited),
-    onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') e.currentTarget.blur();
-      if (e.key === 'Escape') {
-        (edited === 'min' ? setDraftMin : setDraftMax)(String(edited === 'min' ? minFreq : maxFreq));
-        e.currentTarget.blur();
-      }
-      e.stopPropagation();
-    },
-  });
+  const box = (edge: 'min' | 'max', posClass: string) => (
+    <div className={`group absolute left-0 right-0 h-4 ${posClass}`}>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={display(edge)}
+        onFocus={() => { setEditing(edge); setDraft(String(valueOf(edge))); }}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { apply(edge, parseFreqHz(draft)); setEditing(null); }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') { setEditing(null); e.currentTarget.blur(); }
+          e.stopPropagation();
+        }}
+        className={inputClass}
+        title={edge === 'max'
+          ? 'Highest frequency to plot — accepts 8000 or 8k'
+          : 'Lowest frequency to plot — accepts 500 or 0.5k'}
+      />
+      {valueOf(edge) !== limitOf(edge) && (
+        <button
+          type="button"
+          // onMouseDown so it fires before the input's blur.
+          onMouseDown={e => { e.preventDefault(); apply(edge, limitOf(edge)); }}
+          className="absolute left-0.5 top-1/2 -translate-y-1/2 hidden group-hover:block text-slate-400 hover:text-[#e65161]"
+          title={edge === 'max' ? 'Reset to the Nyquist limit' : 'Reset to 0 Hz'}
+        >
+          <RotateCcw size={9} />
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <>
-      <input
-        {...handlers('max')}
-        value={draftMax}
-        className={`${inputClass} top-0`}
-        title="Highest frequency to plot (Hz)"
-      />
-      <input
-        {...handlers('min')}
-        value={draftMin}
-        className={`${inputClass} bottom-0`}
-        title="Lowest frequency to plot (Hz)"
-      />
+      {box('max', 'top-0')}
+      {box('min', 'bottom-0')}
     </>
   );
 }

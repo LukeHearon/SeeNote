@@ -161,6 +161,24 @@ export const clampFreqRange = (
   return { minFreq: lo, maxFreq: hi };
 };
 
+/**
+ * Frequency (Hz) → axis label: 6000 → "6k", 5500 → "5.5k", 800 → "800".
+ * Shared by the Y-axis tick renderer and the axis-docked frequency boxes so
+ * both read the same way.
+ */
+export const formatFreqHz = (hz: number): string =>
+  hz >= 1000 ? `${(hz / 1000).toFixed(hz % 1000 === 0 ? 0 : 1)}k` : String(Math.round(hz));
+
+/**
+ * Parse a frequency the way it's written on the axis: a plain number ("8000")
+ * or a k-suffixed one ("8k", "5.5k", "8 K"). Returns NaN for anything else.
+ */
+export const parseFreqHz = (text: string): number => {
+  const m = text.trim().toLowerCase().match(/^(\d*\.?\d+)\s*(k)?$/);
+  if (!m) return NaN;
+  return parseFloat(m[1]) * (m[2] ? 1000 : 1);
+};
+
 // ── Time-axis column resampling ─────────────────────────────────────────────
 // One offscreen column covers the window [pos, posEnd) of a chunk's column
 // grid, expressed in fractional column coordinates (column centers sit at
