@@ -7,6 +7,36 @@ import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import type { Timeline } from '../utils/subsetTimeline';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 
+// Lowest cutoff the band-pass filter graph will honour (see BandPassFilterGraph).
+const FILTER_FLOOR_HZ = 20;
+
+/**
+ * Map a pointer Y (client coords) to a new cutoff for one edge of the band-pass
+ * filter. Dragging past the top of the spectrogram snaps the high cutoff to the
+ * file's Nyquist; dragging past the bottom snaps the low cutoff to the filter
+ * floor — so the filterable range isn't trapped inside the visible frequency
+ * window. Shared by both filter-resize handlers (window-level + in-container).
+ */
+function resizeFilterEdge(
+  edge: 'low' | 'high',
+  clientY: number,
+  rectTop: number,
+  canvasHeight: number,
+  filter: BandPassFilter,
+  settings: SpectrogramSettings,
+  nyquist: number,
+): BandPassFilter {
+  const rawY = clientY - rectTop;
+  const localY = clamp(rawY, 0, canvasHeight);
+  let freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+  if (rawY <= 0) freq = nyquist;
+  else if (rawY >= canvasHeight) freq = FILTER_FLOOR_HZ;
+  if (edge === 'low') {
+    return { ...filter, low: clamp(Math.min(freq, filter.high - 1), FILTER_FLOOR_HZ, nyquist) };
+  }
+  return { ...filter, high: clamp(Math.max(freq, filter.low + 1), FILTER_FLOOR_HZ, nyquist) };
+}
+
 export interface SpectrogramInteractionParams {
   // Shared geometry refs/values owned by Spectrogram (scroll/zoom/render).
   containerRef: React.RefObject<HTMLDivElement>;
@@ -29,6 +59,8 @@ export interface SpectrogramInteractionParams {
   activeAnnotationTool: AnnotationTool | null;
   isPlaying: boolean;
   settings: SpectrogramSettings;
+  /** File sample rate — sampleRate/2 is the highest cutoff the filter can reach. */
+  sampleRate: number;
   filterToolActive: boolean;
   bandPassFilter: BandPassFilter | null;
   currentTimeStore: CurrentTimeStore;
@@ -113,6 +145,7 @@ export function useSpectrogramInteraction({
   activeAnnotationTool,
   isPlaying,
   settings,
+  sampleRate,
   filterToolActive,
   bandPassFilter,
   currentTimeStore,
@@ -387,24 +420,18 @@ export function useSpectrogramInteraction({
       if (!container) return;
       const rect = container.getBoundingClientRect();
       const canvasHeight = container.clientHeight;
-      const localY = clamp(e.clientY - rect.top, 0, canvasHeight);
 
       if (resizingFilterEdge !== null && bandPassFilter) {
-        const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-        if (resizingFilterEdge === 'low') {
-          const newLow = Math.min(freq, bandPassFilter.high - 1);
-          onBandPassFilterChange({ ...bandPassFilter, low: Math.max(settings.minFreq, newLow) });
-        } else {
-          const newHigh = Math.max(freq, bandPassFilter.low + 1);
-          onBandPassFilterChange({ ...bandPassFilter, high: Math.min(settings.maxFreq, newHigh) });
-        }
+        onBandPassFilterChange(
+          resizeFilterEdge(resizingFilterEdge, e.clientY, rect.top, canvasHeight, bandPassFilter, settings, sampleRate / 2),
+        );
       } else if (creatingFilter !== null) {
-        setCreatingFilter({ ...creatingFilter, y1: localY });
+        setCreatingFilter({ ...creatingFilter, y1: clamp(e.clientY - rect.top, 0, canvasHeight) });
       }
     };
     window.addEventListener('mousemove', onMove);
     return () => window.removeEventListener('mousemove', onMove);
-  }, [isFilterDragActive, creatingFilter, resizingFilterEdge, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale, onBandPassFilterChange]);
+  }, [isFilterDragActive, creatingFilter, resizingFilterEdge, bandPassFilter, settings, sampleRate, onBandPassFilterChange]);
 
   // Re-sync pendingAnnotationsRef when the annotations prop changes externally (e.g. undo/redo).
   // If a drag is in flight, discard any pending edit — the undo intentionally rewinds state.
@@ -619,15 +646,9 @@ export function useSpectrogramInteraction({
     if (resizingFilterEdge !== null && bandPassFilter) {
       const canvasHeight = containerRef.current?.clientHeight ?? 0;
       const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
-      const localY = clamp(e.clientY - rectY, 0, canvasHeight);
-      const freq = yToFreq(localY, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-      if (resizingFilterEdge === 'low') {
-        const newLow = Math.min(freq, bandPassFilter.high - 1);
-        onBandPassFilterChange({ ...bandPassFilter, low: Math.max(settings.minFreq, newLow) });
-      } else {
-        const newHigh = Math.max(freq, bandPassFilter.low + 1);
-        onBandPassFilterChange({ ...bandPassFilter, high: Math.min(settings.maxFreq, newHigh) });
-      }
+      onBandPassFilterChange(
+        resizeFilterEdge(resizingFilterEdge, e.clientY, rectY, canvasHeight, bandPassFilter, settings, sampleRate / 2),
+      );
       return;
     }
 
@@ -796,8 +817,14 @@ export function useSpectrogramInteraction({
       const yTop = Math.min(creatingFilter.y0, creatingFilter.y1);
       const yBottom = Math.max(creatingFilter.y0, creatingFilter.y1);
       if (yBottom - yTop > 5 && canvasHeight > 0) {
-        const high = yToFreq(yTop, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-        const low = yToFreq(yBottom, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+        // Dragging to the very top/bottom of the view snaps to the file's full
+        // range rather than the visible window's edge (matches edge-resize).
+        const high = yTop <= 0
+          ? sampleRate / 2
+          : yToFreq(yTop, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+        const low = yBottom >= canvasHeight
+          ? FILTER_FLOOR_HZ
+          : yToFreq(yBottom, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
         // Fresh drag → auto-engage filtering and push the `filterBand` stack
         // entry. Pure edit-in-place geometry (cutoff resize) still uses
         // onBandPassFilterChange and does NOT touch the stack.

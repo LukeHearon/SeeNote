@@ -484,6 +484,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     activeAnnotationTool,
     isPlaying,
     settings,
+    sampleRate,
     filterToolActive,
     bandPassFilter,
     currentTimeStore,
