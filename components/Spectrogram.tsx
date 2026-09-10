@@ -968,7 +968,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // The min/max frequency boxes (FrequencyAxisInputs) are docked over the top
     // and bottom of the gutter and already show the endpoint values, so the
     // canvas skips any tick that would land under them.
-    const EDGE_RESERVED = 16;
+    const EDGE_RESERVED = 24;
 
     const renderTick = (freq: number) => {
       // Use the shared freq→y mapping so axis labels stay in exact lockstep

@@ -46,14 +46,24 @@ export default function FrequencyAxisInputs({
     if (next.minFreq !== minFreq || next.maxFreq !== maxFreq) onChange(next);
   };
 
-  const inputClass =
-    'w-full h-full bg-transparent text-white/80 text-right pr-[7px] pl-3 ' +
-    'font-sans text-[10px] leading-none border border-transparent rounded-sm ' +
-    'outline-none group-hover:bg-slate-900/70 group-hover:border-slate-600 ' +
-    'focus:bg-slate-900/90 focus:border-[#e65161] focus:text-white';
+  const wrapClass =
+    'group absolute left-0 right-0 h-4 flex items-center rounded-sm ' +
+    'border border-transparent group-hover:bg-slate-900/70 group-hover:border-slate-600 ' +
+    'focus-within:bg-slate-900/90 focus-within:border-[#e65161]';
 
   const box = (edge: 'min' | 'max', posClass: string) => (
-    <div className={`group absolute left-0 right-0 h-4 ${posClass}`}>
+    <div className={`${wrapClass} ${posClass}`}>
+      <button
+        type="button"
+        // onMouseDown so it fires before the input's blur.
+        onMouseDown={e => { e.preventDefault(); apply(edge, limitOf(edge)); }}
+        className={`shrink-0 pl-0.5 text-slate-400 hover:text-[#e65161] ${
+          valueOf(edge) !== limitOf(edge) ? 'hidden group-hover:flex' : 'hidden'
+        }`}
+        title={edge === 'max' ? 'Reset to the Nyquist limit' : 'Reset to 0 Hz'}
+      >
+        <RotateCcw size={9} />
+      </button>
       <input
         type="text"
         inputMode="decimal"
@@ -66,22 +76,11 @@ export default function FrequencyAxisInputs({
           if (e.key === 'Escape') { setEditing(null); e.currentTarget.blur(); }
           e.stopPropagation();
         }}
-        className={inputClass}
+        className="flex-1 min-w-0 bg-transparent text-white/80 text-right pr-[7px] font-sans text-[10px] leading-none border-0 outline-none focus:text-white"
         title={edge === 'max'
           ? 'Highest frequency to plot — accepts 8000 or 8k'
           : 'Lowest frequency to plot — accepts 500 or 0.5k'}
       />
-      {valueOf(edge) !== limitOf(edge) && (
-        <button
-          type="button"
-          // onMouseDown so it fires before the input's blur.
-          onMouseDown={e => { e.preventDefault(); apply(edge, limitOf(edge)); }}
-          className="absolute left-0.5 top-1/2 -translate-y-1/2 hidden group-hover:block text-slate-400 hover:text-[#e65161]"
-          title={edge === 'max' ? 'Reset to the Nyquist limit' : 'Reset to 0 Hz'}
-        >
-          <RotateCcw size={9} />
-        </button>
-      )}
     </div>
   );
 
