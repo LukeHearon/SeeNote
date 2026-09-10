@@ -401,7 +401,7 @@ export default function FindLabelPanel({
       </div>
 
       {/* The matches themselves */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-1.5 space-y-1">
+      <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
         {!query.trim() && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
         {query.trim() && results.length === 0 && (
           <p className="text-slate-500 text-xs px-0.5">{scanning ? copy.scanningLabel : copy.noMatchesLabel}</p>
@@ -414,11 +414,11 @@ export default function FindLabelPanel({
           return (
             <React.Fragment key={`${r.trackFilePath}:${r.match.start}:${r.match.end}:${r.match.label}:${i}`}>
               {header !== null && (
-                <div className="pt-1 first:pt-0 px-0.5 text-[10px] text-slate-500 break-all leading-tight">
+                <div className={`px-0.5 pb-0.5 text-[10px] text-slate-500 break-all leading-tight ${i === 0 ? '' : 'mt-3'}`}>
                   {header}
                 </div>
               )}
-              <div ref={isSelected ? selectedRowRef : undefined}>
+              <div ref={isSelected ? selectedRowRef : undefined} className={header === null ? 'mt-1' : ''}>
                 <ToolCell
                   isActive={isSelected}
                   color={color}
