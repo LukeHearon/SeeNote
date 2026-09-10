@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { X, GripVertical, Settings, Plus, Unlink, FolderDown, Play, Square } from 'lucide-react';
+import { X, GripVertical, Settings, Plus, FolderDown, Play, Square } from 'lucide-react';
+import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor, HOTKEY_SLOTS, nextAvailableHotkey } from '../constants';
 import { isMac } from '../utils/platform';
@@ -124,7 +125,7 @@ function ToolItem({ tool, toolIndex, assigned, onDragStart, onDragEnd, onGearCli
           className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 flex-none transition-colors"
           data-tooltip={tooltips.unassignTool}
         >
-          <Unlink size={12} />
+          <UnassignHotkeyIcon size={12} />
         </button>
       ) : (
         <div className="w-[28px] flex-none" />

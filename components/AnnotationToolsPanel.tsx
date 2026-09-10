@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Settings, Trash2, Unlink, Play, Square, Search, Images } from 'lucide-react';
+import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
+import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool } from '../types';
 import { HOTKEY_SLOTS } from '../constants';
 import NewToolEntry from './NewToolEntry';
@@ -219,7 +220,7 @@ function AnnotationToolsPanel({
                       onClick={e => { e.stopPropagation(); onUnassignTool?.(toolIndex); }}
                       data-tooltip={tooltips.unassignTool}
                     >
-                      <Unlink size={10} />
+                      <UnassignHotkeyIcon size={10} />
                     </button>
                   </div>
                 )}
