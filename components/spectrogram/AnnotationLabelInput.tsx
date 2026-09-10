@@ -12,7 +12,7 @@ import ToolMatchDropdown from '../ToolMatchDropdown';
 export default function AnnotationLabelInput({
   annotation, annotations, annotationTools, isSelected, labelStyle, inputRefs, dropdownRef,
   pendingAnnotationsRef, onAnnotationsChange, onAnnotationsCommit, onSelectAnnotation,
-  onDeselect, setEditingInputId, deleteAnnotation, placeholder,
+  setEditingInputId, deleteAnnotation, placeholder,
 }: {
   annotation: Annotation;
   annotations: Annotation[];
@@ -30,9 +30,6 @@ export default function AnnotationLabelInput({
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
-  // Full deselect (also drops the bound annotation + its selection region).
-  // Falls back to onSelectAnnotation(null) when not supplied.
-  onDeselect?: () => void;
   setEditingInputId: (id: string | null) => void;
   deleteAnnotation: () => void;
   placeholder: string;
@@ -62,7 +59,10 @@ export default function AnnotationLabelInput({
     const next = applyText(annotationTools[toolIndex].text);
     onAnnotationsCommit(next);
     setEditingInputId(null);
-    onSelectAnnotation(null);
+    // Keep the annotation selected after committing: the label brightens and
+    // Mod+B can bind the freshly typed label straight away, without a round trip
+    // through clicking the label to reselect it.
+    onSelectAnnotation(annotation.id);
     inputRefs.current[annotation.id]?.blur();
   };
 
@@ -82,7 +82,7 @@ export default function AnnotationLabelInput({
               pickMatch(matches[activeIndex].toolIndex);
               return;
             }
-            if (onDeselect) onDeselect(); else onSelectAnnotation(null);
+            onSelectAnnotation(annotation.id);
             (e.target as HTMLInputElement).blur();
           }
           if (e.key === 'Escape') {
