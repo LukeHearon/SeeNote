@@ -293,10 +293,31 @@ export default function FindLabelPanel({
     { key: 'ArrowDown', mods: ['alt'], allowInInput: true, handler: () => step(1) },
   ]);
 
-  // Keep the current match visible as the user walks past the edge of the list.
+  // Keep the current match visible as the user walks past the edge of the list —
+  // and clear of its group's pinned ident header, whose height varies with how
+  // many lines the ident wraps to.
   useEffect(() => {
-    selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
+    const row = selectedRowRef.current;
+    if (!row) return;
+    const header = row.closest('[data-ident-group]')?.querySelector('[data-ident-header]') as HTMLElement | null;
+    row.style.scrollMarginTop = `${header?.offsetHeight ?? 0}px`;
+    row.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex]);
+
+  // Which ident group has its header pinned over the list — the one whose top has
+  // scrolled above the list's top edge. Only that header casts a shadow, so the
+  // rest read as ordinary subheaders.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [pinnedGroup, setPinnedGroup] = useState<string | null>(null);
+  const syncPinnedGroup = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const group = (document.elementFromPoint(rect.left + rect.width / 2, rect.top + 1) as HTMLElement | null)
+      ?.closest('[data-ident-group]') as HTMLElement | null;
+    const key = group && group.getBoundingClientRect().top < rect.top ? group.dataset.identGroup ?? null : null;
+    setPinnedGroup(prev => (prev === key ? prev : key));
+  }, []);
 
   useEffect(() => {
     queryRef.current?.focus();
@@ -369,13 +390,27 @@ export default function FindLabelPanel({
     e.stopPropagation();
   };
 
-  // Ident subheaders are emitted inline as the flat list is walked, so the list
-  // says which recording each run of matches belongs to without the rows
-  // becoming something you have to open first. Track scope has only the open
-  // recording to show, so there the header says nothing the window doesn't
-  // already say.
+  // Ident subheaders sit over each run of matches, so the list says which
+  // recording each run belongs to without the rows becoming something you have
+  // to open first. Track scope has only the open recording to show, so there the
+  // header says nothing the window doesn't already say.
   const showIdents = effectiveScope !== 'track';
-  let lastIdent: string | null = null;
+
+  // The flat list cut into runs of one ident, each keeping its matches' indices
+  // into `results`. Each run is its own element so its header pins only while
+  // that run is on screen.
+  const groups = useMemo(() => {
+    const out: { ident: string; items: { r: FlatMatch; i: number }[] }[] = [];
+    results.forEach((r, i) => {
+      const last = out[out.length - 1];
+      if (last && (!showIdents || last.ident === r.ident)) last.items.push({ r, i });
+      else out.push({ ident: r.ident, items: [{ r, i }] });
+    });
+    return out;
+  }, [results, showIdents]);
+
+  // A pinned header left over from a list that has since changed under it.
+  useEffect(syncPinnedGroup, [groups, syncPinnedGroup]);
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden" onKeyDown={onPanelKeyDown}>
@@ -483,41 +518,53 @@ export default function FindLabelPanel({
       </div>
 
       {/* The matches themselves */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
-        {!searching && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
-        {searching && results.length === 0 && (
-          <p className="text-slate-500 text-xs px-0.5">{scanning ? copy.scanningLabel : copy.noMatchesLabel}</p>
-        )}
-        {results.map((r, i) => {
-          const isSelected = i === selectedIndex;
-          const color = colorForLabel(r.match.label, annotationTools);
-          const header = showIdents && r.ident !== lastIdent ? r.ident : null;
-          lastIdent = r.ident;
-          return (
-            <React.Fragment key={`${r.trackFilePath}:${r.match.start}:${r.match.end}:${r.match.label}:${i}`}>
-              {header !== null && (
-                <div className={`px-0.5 pb-0.5 text-[10px] text-slate-500 break-all leading-tight ${i === 0 ? '' : 'mt-4'}`}>
-                  {header}
+      {/* Padding lives on the inner wrapper: on the scroller itself it would
+          leave a gap above a pinned header for rows to show through. */}
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto" onScroll={syncPinnedGroup}>
+        <div className="p-1.5">
+          {!searching && <p className="text-slate-500 text-xs px-0.5">{copy.emptyQueryHint}</p>}
+          {searching && results.length === 0 && (
+            <p className="text-slate-500 text-xs px-0.5">{scanning ? copy.scanningLabel : copy.noMatchesLabel}</p>
+          )}
+          {groups.map((g, gi) => (
+            <div key={g.ident} data-ident-group={g.ident} className={showIdents && gi > 0 ? 'mt-4' : ''}>
+              {showIdents && (
+                <div
+                  data-ident-header=""
+                  className="sticky top-0 z-10 -mx-1.5 px-2 pt-0.5 pb-0.5 bg-slate-900 text-[10px] text-slate-500 break-all leading-tight"
+                  style={pinnedGroup === g.ident ? { boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' } : undefined}
+                >
+                  {g.ident}
                 </div>
               )}
-              <div ref={isSelected ? selectedRowRef : undefined} className={header === null ? 'mt-1' : ''}>
-                <ToolCell
-                  isActive={isSelected}
-                  color={color}
-                  dotColor={color}
-                  label={r.match.label}
-                  tooltip={`${formatTime(r.match.start)} – ${formatTime(r.match.end)}\n${copy.matchRowTooltip}`}
-                  trailing={(
-                    <span className="font-mono text-slate-400 text-[10px] flex-none tabular-nums">
-                      {formatTime(r.match.start)}
-                    </span>
-                  )}
-                  onClick={() => go(i)}
-                />
-              </div>
-            </React.Fragment>
-          );
-        })}
+              {g.items.map(({ r, i }, j) => {
+                const isSelected = i === selectedIndex;
+                const color = colorForLabel(r.match.label, annotationTools);
+                return (
+                  <div
+                    key={`${r.trackFilePath}:${r.match.start}:${r.match.end}:${r.match.label}:${i}`}
+                    ref={isSelected ? selectedRowRef : undefined}
+                    className={showIdents && j === 0 ? '' : 'mt-1'}
+                  >
+                    <ToolCell
+                      isActive={isSelected}
+                      color={color}
+                      dotColor={color}
+                      label={r.match.label}
+                      tooltip={`${formatTime(r.match.start)} – ${formatTime(r.match.end)}\n${copy.matchRowTooltip}`}
+                      trailing={(
+                        <span className="font-mono text-slate-400 text-[10px] flex-none tabular-nums">
+                          {formatTime(r.match.start)}
+                        </span>
+                      )}
+                      onClick={() => go(i)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Rename, tucked away — finding is the common case, renaming the rare one */}
