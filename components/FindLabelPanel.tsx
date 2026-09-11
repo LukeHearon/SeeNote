@@ -266,6 +266,10 @@ export default function FindLabelPanel({
     [results, selected],
   );
 
+  // The ident of the track currently open in the main window, so its group
+  // header can be picked out from the rest.
+  const activeIdent = useMemo(() => (trackPath ? getIdent(trackPath) : null), [trackPath, getIdent]);
+
   const go = useCallback((index: number) => {
     const target = results[index];
     if (!target) return;
@@ -531,7 +535,9 @@ export default function FindLabelPanel({
               {showIdents && (
                 <div
                   data-ident-header=""
-                  className="sticky top-0 z-10 -mx-1.5 px-2 pt-0.5 pb-0.5 bg-slate-900 text-[10px] text-slate-500 break-all leading-tight"
+                  className={`sticky top-0 z-10 -mx-1.5 px-2 pt-0.5 pb-0.5 bg-slate-900 text-[10px] break-all leading-tight ${
+                    g.ident === activeIdent ? 'text-blue-400' : 'text-slate-500'
+                  }`}
                   style={pinnedGroup === g.ident ? { boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' } : undefined}
                 >
                   {g.ident}
