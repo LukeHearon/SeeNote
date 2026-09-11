@@ -1,5 +1,5 @@
 import { readTextFile, writeTextFile } from './tauriCommands';
-import { matchingLinesInContent, renameLabelInContent, LabelMatcher, LabelLineMatch } from './helpers';
+import { matchingLinesInContent, renameLabelInContent, renameOneLabelInContent, LabelMatcher, LabelLineMatch } from './helpers';
 
 export type LabelMatch = LabelLineMatch;
 
@@ -171,4 +171,29 @@ export async function renameLabelAcrossTracks(
     }
   }));
   return total;
+}
+
+// Rewrite one track's on-disk annotation file, renaming the single line whose
+// start/end/label match `target` to `newText`. Returns whether the file
+// actually had that line — false means nothing was written. The single-match
+// twin of `renameLabelAcrossTracks`, for "Rename selected" against a track
+// other than the one currently open (which is renamed in memory instead).
+export async function renameOneLabelInTrack(
+  trackFilePath: string,
+  getAnnotationPath: (trackFilePath: string) => string | null,
+  target: LabelMatch,
+  newText: string,
+): Promise<boolean> {
+  const annotPath = getAnnotationPath(trackFilePath);
+  if (!annotPath) return false;
+  invalidateProjectLabelIndex();
+  try {
+    const content = await readTextFile(annotPath);
+    if (!content) return false;
+    const { updated, changed } = renameOneLabelInContent(content, target, newText);
+    if (changed) await writeTextFile(annotPath, updated);
+    return changed;
+  } catch {
+    return false;
+  }
 }

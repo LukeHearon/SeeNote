@@ -8,7 +8,6 @@ import { basename, isInsideDir } from '../utils/projectPaths';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import ToolCell from './ToolCell';
-import CollapsibleSection from './CollapsibleSection';
 
 export type RenameScope = 'track' | 'folder' | 'project';
 
@@ -75,6 +74,10 @@ interface Props {
   // every other in-scope track's annotation file on disk. Resolves with the
   // total renamed count.
   onRename: (matcher: LabelMatcher, newText: string, scope: RenameScope) => Promise<number>;
+  // Renames just the currently selected match — identified by its track,
+  // start, end, and current label rather than by re-running the search
+  // matcher — to `newText`. Resolves true if a match was actually renamed.
+  onRenameSelected: (trackFilePath: string, match: LabelMatch, newText: string) => Promise<boolean>;
 }
 
 const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -130,7 +133,7 @@ export default function FindLabelPanel({
   useRegex, onUseRegexChange, partial, onPartialChange,
   caseSensitive, onCaseSensitiveChange,
   query, onQueryChange, scope, onScopeChange,
-  focusNonce, reloadNonce, onClose, onGo, onRename,
+  focusNonce, reloadNonce, onClose, onGo, onRename, onRenameSelected,
 }: Props) {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
@@ -138,7 +141,9 @@ export default function FindLabelPanel({
 
   const [newLabel, setNewLabel] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const [renamingSelected, setRenamingSelected] = useState(false);
   const [renameResult, setRenameResult] = useState<{ count: number; identCount: number } | null>(null);
+  const [renamedSelected, setRenamedSelected] = useState(false);
 
   const queryRef = useRef<HTMLInputElement>(null);
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
@@ -334,7 +339,29 @@ export default function FindLabelPanel({
 
   const totalCount = results.length;
   const identCount = useMemo(() => new Set(results.map(r => r.ident)).size, [results]);
-  const canRename = !!matcher && totalCount > 0 && newLabel.trim().length > 0 && !renaming && !scanning;
+  const canRename = !!matcher && totalCount > 0 && newLabel.trim().length > 0 && !renaming && !renamingSelected && !scanning;
+  const canRenameSelected = !!selected && newLabel.trim().length > 0 && !renamingSelected && !renaming;
+
+  const handleRenameSelected = async () => {
+    if (!selected) return;
+    setRenamingSelected(true);
+    setError('');
+    try {
+      const newText = newLabel.trim();
+      const renamed = await onRenameSelected(selected.trackFilePath, selected.match, newText);
+      if (renamed) {
+        setReloadKey(k => k + 1);
+        setRenameResult(null);
+        setRenamedSelected(true);
+        setNewLabel('');
+        setSelected(null);
+      }
+    } catch (err) {
+      setError(`Rename failed: ${String(err)}`);
+    } finally {
+      setRenamingSelected(false);
+    }
+  };
 
   const handleRename = async () => {
     if (!matcher) return;
@@ -347,6 +374,7 @@ export default function FindLabelPanel({
       // the new labels.
       setReloadKey(k => k + 1);
       setRenameResult({ count, identCount });
+      setRenamedSelected(false);
       setDraftQuery('');
       setNewLabel('');
       setSelected(null);
@@ -363,6 +391,7 @@ export default function FindLabelPanel({
     setDraftQuery(value);
     setSelected(null);
     setRenameResult(null);
+    setRenamedSelected(false);
   };
 
   const onQueryKeyDown = (e: React.KeyboardEvent) => {
@@ -484,7 +513,7 @@ export default function FindLabelPanel({
                 aria-disabled={!enabled}
                 onClick={() => {
                   if (!enabled) return;
-                  onScopeChange(s); setSelected(null); setRenameResult(null);
+                  onScopeChange(s); setSelected(null); setRenameResult(null); setRenamedSelected(false);
                 }}
                 data-tooltip={tooltip}
                 className={`px-2 py-0.5 text-[10px] transition-colors ${
@@ -573,42 +602,45 @@ export default function FindLabelPanel({
         </div>
       </div>
 
-      {/* Rename, tucked away — finding is the common case, renaming the rare one */}
-      <div className="flex-none px-2 pb-2 bg-slate-900">
-        <CollapsibleSection title={copy.renameHeading}>
-          <div className="space-y-2">
-            <input
-              type="text"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              value={newLabel}
-              onChange={e => { setNewLabel(e.target.value); setRenameResult(null); }}
-              placeholder={copy.newLabelPlaceholder}
-              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500"
-            />
-            <div className="flex items-center gap-2">
-              <span className="flex-1 min-w-0 text-slate-500 text-[10px] leading-tight">
-                {searching && !scanning
-                  ? (effectiveScope !== 'track' ? copy.matchCountLabel(totalCount, identCount) : copy.matchCountTrackLabel(totalCount))
-                  : ''}
-              </span>
-              <button
-                onClick={handleRename}
-                disabled={!canRename}
-                className="flex-none px-2 py-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded text-xs transition-colors"
-              >
-                {renaming ? copy.renamingButton : copy.renameButton}
-              </button>
-            </div>
-            {renameResult && (
-              <p className="text-green-400 text-[10px]">
-                {copy.renameConfirmation(renameResult.count, renameResult.identCount)}
-              </p>
-            )}
-          </div>
-        </CollapsibleSection>
-        {error && <p className="text-red-400 text-[10px] mt-2">{error}</p>}
+      {/* Rename matches — persistent, not tucked behind a disclosure, since
+          it's the other half of what this panel is for. */}
+      <div className="flex-none p-1.5 pt-1 space-y-1.5 bg-slate-900 border-t border-slate-800">
+        <span className="block text-[10px] text-slate-400 uppercase tracking-wider font-medium">
+          {copy.renameHeading}
+        </span>
+        <input
+          type="text"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          value={newLabel}
+          onChange={e => { setNewLabel(e.target.value); setRenameResult(null); setRenamedSelected(false); }}
+          placeholder={copy.newLabelPlaceholder}
+          className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500"
+        />
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={handleRenameSelected}
+            disabled={!canRenameSelected}
+            className="flex-1 px-2 py-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded text-xs transition-colors"
+          >
+            {renamingSelected ? copy.renamingButton : copy.renameSelectedButton}
+          </button>
+          <button
+            onClick={handleRename}
+            disabled={!canRename}
+            className="flex-1 px-2 py-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded text-xs transition-colors"
+          >
+            {renaming ? copy.renamingButton : copy.renameButton}
+          </button>
+        </div>
+        {renamedSelected && <p className="text-green-400 text-[10px]">{copy.renameSelectedConfirmation}</p>}
+        {renameResult && (
+          <p className="text-green-400 text-[10px]">
+            {copy.renameConfirmation(renameResult.count, renameResult.identCount)}
+          </p>
+        )}
+        {error && <p className="text-red-400 text-[10px]">{error}</p>}
       </div>
     </div>
   );

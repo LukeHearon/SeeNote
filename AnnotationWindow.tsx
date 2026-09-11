@@ -10,7 +10,7 @@ import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Pro
 import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
-import { renameLabelAcrossTracks, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
+import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
 import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
@@ -572,6 +572,31 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     return currentCount + diskCount;
   }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath,
       project.preferences.enteredFolderPath]);
+
+  // Find & Rename: "Rename selected" — renames just the one match currently
+  // selected in the panel, identified by its track, start, end, and current
+  // label rather than by matching text. The open track's copy is renamed in
+  // memory (autosave picks it up); any other track is rewritten on disk via
+  // the single-match twin of renameLabelAcrossTracks. Returns whether a match
+  // was actually renamed.
+  const handleFindLabelRenameSelected = useCallback(async (
+    targetTrackFilePath: string, match: LabelMatch, newText: string,
+  ): Promise<boolean> => {
+    if (targetTrackFilePath === trackPath) {
+      let renamed = false;
+      const newColor = colorForLabel(newText, annotationTools);
+      setAnnotations(prev => {
+        const i = prev.findIndex(a => a.text === match.label && a.start === match.start && a.end === match.end);
+        if (i === -1) return prev;
+        renamed = true;
+        const next = [...prev];
+        next[i] = { ...next[i], text: newText, color: newColor };
+        return next;
+      });
+      return renamed;
+    }
+    return renameOneLabelInTrack(targetTrackFilePath, getAnnotationPath, match, newText);
+  }, [trackPath, annotationTools, getAnnotationPath]);
 
   // Toggle the example-clip preview for a tool by id — shared by the `E`
   // hotkey path, the tools-panel chips (via liveBridge), and the annotation
@@ -2868,6 +2893,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               onClose={() => setShowFindLabel(false)}
               onGo={handleGoToLabelMatch}
               onRename={handleFindLabelRename}
+              onRenameSelected={handleFindLabelRenameSelected}
             />
           </div>
         )}

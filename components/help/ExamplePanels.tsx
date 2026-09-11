@@ -144,6 +144,15 @@ export function ExampleFindLabel() {
             setAnnotations(list => list.map(a => (matcher(a.text) ? { ...a, text: newText } : a)));
             return hits.length;
           }}
+          onRenameSelected={async (_trackFilePath, match, newText) => {
+            let renamed = false;
+            setAnnotations(list => list.map(a => {
+              if (renamed || a.text !== match.label || a.start !== match.start || a.end !== match.end) return a;
+              renamed = true;
+              return { ...a, text: newText };
+            }));
+            return renamed;
+          }}
         />
       ) : (
         <ReopenButton label={help.live.reopen} onClick={() => setOpen(true)} />

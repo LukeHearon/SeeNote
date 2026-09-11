@@ -15,6 +15,7 @@ import {
   partialLabelMatcher,
   buildLabelMatcher,
   renameLabelInContent,
+  renameOneLabelInContent,
   mergeAnnotations,
   stripExt,
   basename,
@@ -642,6 +643,28 @@ describe('renameLabelInContent', () => {
     const content = '0\t1\ta\tb\n1\t2\tbird\n';
     const result = renameLabelInContent(content, exactLabelMatcher('bird'), 'sparrow');
     expect(result.updated).toBe('0\t1\ta\tb\n1\t2\tsparrow\n');
+  });
+});
+
+describe('renameOneLabelInContent', () => {
+  it('renames only the line matching start, end, and label', () => {
+    const content = '0\t1\tbird\n1\t2\tbird\n2\t3\tnoise\n';
+    const result = renameOneLabelInContent(content, { start: 1, end: 2, label: 'bird' }, 'sparrow');
+    expect(result.changed).toBe(true);
+    expect(result.updated).toBe('0\t1\tbird\n1\t2\tsparrow\n2\t3\tnoise\n');
+  });
+
+  it('touches only the first line when duplicates share start, end, and label', () => {
+    const content = '0\t1\tbird\n0\t1\tbird\n';
+    const result = renameOneLabelInContent(content, { start: 0, end: 1, label: 'bird' }, 'sparrow');
+    expect(result.updated).toBe('0\t1\tsparrow\n0\t1\tbird\n');
+  });
+
+  it('leaves content untouched and reports changed: false when nothing matches', () => {
+    const content = '0\t1\tbird\n';
+    const result = renameOneLabelInContent(content, { start: 5, end: 6, label: 'bird' }, 'sparrow');
+    expect(result.changed).toBe(false);
+    expect(result.updated).toBe(content);
   });
 });
 

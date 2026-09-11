@@ -430,6 +430,34 @@ export const renameLabelInContent = (
     return { updated: lines.join('\n'), changed: count > 0, count };
 };
 
+// Rewrite exactly one Audacity TXT line — the one whose start/end/label match
+// `target` — to `newText`. Renames the first such line only, so a project
+// holding an exact duplicate (same start, end, and label) touches just one of
+// them; which one is unspecified but harmless, since they read identically
+// either way. Pure — the single-match twin of `renameLabelInContent`, used by
+// "Rename selected" in the find/rename panel.
+export const renameOneLabelInContent = (
+    content: string,
+    target: LabelLineMatch,
+    newText: string,
+): { updated: string; changed: boolean } => {
+    let changed = false;
+    const lines = content.split('\n').map(line => {
+        if (changed) return line;
+        const parts = line.split('\t');
+        if (parts.length < 3) return line;
+        const label = parts.slice(2).join('\t');
+        const start = parseFloat(parts[0]);
+        const end = parseFloat(parts[1]);
+        if (label === target.label && start === target.start && end === target.end) {
+            changed = true;
+            return `${parts[0]}\t${parts[1]}\t${newText}`;
+        }
+        return line;
+    });
+    return { updated: lines.join('\n'), changed };
+};
+
 // Merge imported annotations onto existing ones by appending. Incoming
 // annotations are given fresh ids so they never collide with existing ids.
 // The result is sorted by start time for stable display. Pure — inputs are

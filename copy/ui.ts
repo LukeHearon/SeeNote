@@ -318,6 +318,8 @@ export const findLabelPanel = {
   get matchRowTooltip() { return getOverride('ui.findLabelPanel.matchRowTooltip') ?? "Go to this annotation"; },
   get renameHeading() { return getOverride('ui.findLabelPanel.renameHeading') ?? "Rename matches"; },
   get newLabelPlaceholder() { return getOverride('ui.findLabelPanel.newLabelPlaceholder') ?? "New label…"; },
+  get renameSelectedButton() { return getOverride('ui.findLabelPanel.renameSelectedButton') ?? "Rename Selected"; },
+  get renameSelectedConfirmation() { return getOverride('ui.findLabelPanel.renameSelectedConfirmation') ?? "Renamed."; },
   get scopeCurrentTrackLabel() { return getOverride('ui.findLabelPanel.scopeCurrentTrackLabel') ?? "Track"; },
   get scopeWholeProjectLabel() { return getOverride('ui.findLabelPanel.scopeWholeProjectLabel') ?? "Project"; },
   get scopeCurrentTrackTooltip() { return getOverride('ui.findLabelPanel.scopeCurrentTrackTooltip') ?? "Search only the open track"; },
@@ -325,10 +327,6 @@ export const findLabelPanel = {
   scopeFolderTooltip: (folderName: string) => `Search every track under ${folderName}`,
   get scopeFolderDisabledTooltip() { return getOverride('ui.findLabelPanel.scopeFolderDisabledTooltip') ?? "Enter a folder in the file panel to narrow the search to it"; },
   get scopeWholeProjectTooltip() { return getOverride('ui.findLabelPanel.scopeWholeProjectTooltip') ?? "Search every track in the project"; },
-  matchCountLabel: (count: number, identCount: number) =>
-    `${count} match${count === 1 ? '' : 'es'} in ${identCount} recording${identCount === 1 ? '' : 's'}`,
-  // Track scope searches one recording by definition, so counting them says nothing.
-  matchCountTrackLabel: (count: number) => `${count} match${count === 1 ? '' : 'es'}`,
   matchPositionLabel: (position: number, count: number) => `${position} / ${count}`,
   get renameButton() { return getOverride('ui.findLabelPanel.renameButton') ?? "Rename All"; },
   get renamingButton() { return getOverride('ui.findLabelPanel.renamingButton') ?? "Renaming…"; },
