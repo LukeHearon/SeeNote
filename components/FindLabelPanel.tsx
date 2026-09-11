@@ -142,8 +142,6 @@ export default function FindLabelPanel({
   const [newLabel, setNewLabel] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [renamingSelected, setRenamingSelected] = useState(false);
-  const [renameResult, setRenameResult] = useState<{ count: number; identCount: number } | null>(null);
-  const [renamedSelected, setRenamedSelected] = useState(false);
 
   const queryRef = useRef<HTMLInputElement>(null);
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
@@ -338,7 +336,6 @@ export default function FindLabelPanel({
   }, [searching, matcher]);
 
   const totalCount = results.length;
-  const identCount = useMemo(() => new Set(results.map(r => r.ident)).size, [results]);
   const canRename = !!matcher && totalCount > 0 && newLabel.trim().length > 0 && !renaming && !renamingSelected && !scanning;
   const canRenameSelected = !!selected && newLabel.trim().length > 0 && !renamingSelected && !renaming;
 
@@ -351,8 +348,6 @@ export default function FindLabelPanel({
       const renamed = await onRenameSelected(selected.trackFilePath, selected.match, newText);
       if (renamed) {
         setReloadKey(k => k + 1);
-        setRenameResult(null);
-        setRenamedSelected(true);
         setNewLabel('');
         setSelected(null);
       }
@@ -368,13 +363,11 @@ export default function FindLabelPanel({
     setRenaming(true);
     setError('');
     try {
-      const count = await onRename(matcher, newLabel.trim(), effectiveScope);
+      await onRename(matcher, newLabel.trim(), effectiveScope);
       // renameLabelAcrossTracks has already dropped the label index (it just
       // rewrote the files it described); re-read so the results below reflect
       // the new labels.
       setReloadKey(k => k + 1);
-      setRenameResult({ count, identCount });
-      setRenamedSelected(false);
       setDraftQuery('');
       setNewLabel('');
       setSelected(null);
@@ -390,8 +383,6 @@ export default function FindLabelPanel({
   const handleQueryChange = (value: string) => {
     setDraftQuery(value);
     setSelected(null);
-    setRenameResult(null);
-    setRenamedSelected(false);
   };
 
   const onQueryKeyDown = (e: React.KeyboardEvent) => {
@@ -513,7 +504,7 @@ export default function FindLabelPanel({
                 aria-disabled={!enabled}
                 onClick={() => {
                   if (!enabled) return;
-                  onScopeChange(s); setSelected(null); setRenameResult(null); setRenamedSelected(false);
+                  onScopeChange(s); setSelected(null);
                 }}
                 data-tooltip={tooltip}
                 className={`px-2 py-0.5 text-[10px] transition-colors ${
@@ -614,7 +605,7 @@ export default function FindLabelPanel({
           autoCapitalize="off"
           spellCheck={false}
           value={newLabel}
-          onChange={e => { setNewLabel(e.target.value); setRenameResult(null); setRenamedSelected(false); }}
+          onChange={e => setNewLabel(e.target.value)}
           placeholder={copy.newLabelPlaceholder}
           className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500"
         />
@@ -634,12 +625,6 @@ export default function FindLabelPanel({
             {renaming ? copy.renamingButton : copy.renameButton}
           </button>
         </div>
-        {renamedSelected && <p className="text-green-400 text-[10px]">{copy.renameSelectedConfirmation}</p>}
-        {renameResult && (
-          <p className="text-green-400 text-[10px]">
-            {copy.renameConfirmation(renameResult.count, renameResult.identCount)}
-          </p>
-        )}
         {error && <p className="text-red-400 text-[10px]">{error}</p>}
       </div>
     </div>

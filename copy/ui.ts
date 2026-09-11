@@ -319,7 +319,6 @@ export const findLabelPanel = {
   get renameHeading() { return getOverride('ui.findLabelPanel.renameHeading') ?? "Rename matches"; },
   get newLabelPlaceholder() { return getOverride('ui.findLabelPanel.newLabelPlaceholder') ?? "New label…"; },
   get renameSelectedButton() { return getOverride('ui.findLabelPanel.renameSelectedButton') ?? "Rename Selected"; },
-  get renameSelectedConfirmation() { return getOverride('ui.findLabelPanel.renameSelectedConfirmation') ?? "Renamed."; },
   get scopeCurrentTrackLabel() { return getOverride('ui.findLabelPanel.scopeCurrentTrackLabel') ?? "Track"; },
   get scopeWholeProjectLabel() { return getOverride('ui.findLabelPanel.scopeWholeProjectLabel') ?? "Project"; },
   get scopeCurrentTrackTooltip() { return getOverride('ui.findLabelPanel.scopeCurrentTrackTooltip') ?? "Search only the open track"; },
@@ -330,8 +329,6 @@ export const findLabelPanel = {
   matchPositionLabel: (position: number, count: number) => `${position} / ${count}`,
   get renameButton() { return getOverride('ui.findLabelPanel.renameButton') ?? "Rename All"; },
   get renamingButton() { return getOverride('ui.findLabelPanel.renamingButton') ?? "Renaming…"; },
-  renameConfirmation: (count: number, identCount: number) =>
-    `Renamed ${count} annotation${count === 1 ? '' : 's'} across ${identCount} recording${identCount === 1 ? '' : 's'}.`,
 };
 
 export const annotationToolLibrary = {
