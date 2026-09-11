@@ -549,10 +549,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Find & Rename: renames every annotation whose text satisfies `matcher`
   // (exact, partial, or regex) to `newText`, independent of any tool
   // identity. Current track updates in memory (autosave picks it up); when
-  // scope is 'project', every other track's annotation file is also
-  // rewritten on disk via the shared util also used by handleRenameTool.
+  // scope is 'folder' or 'project', every other in-scope track's annotation
+  // file is also rewritten on disk via the shared util also used by
+  // handleRenameTool. Folder scope skips the open track if it lies outside the
+  // entered folder, just as the panel leaves it out of the results.
   const handleFindLabelRename = useCallback(async (matcher: LabelMatcher, newText: string, scope: RenameScope): Promise<number> => {
-    const currentCount = annotations.filter(a => matcher(a.text)).length;
+    const folder = project.preferences.enteredFolderPath;
+    const inScope = (t: string) => scope !== 'folder' || !folder || isInsideDir(folder, t);
+    const renameCurrent = scope !== 'folder' || (trackPath !== null && inScope(trackPath));
+    const currentCount = renameCurrent ? annotations.filter(a => matcher(a.text)).length : 0;
     if (currentCount > 0) {
       // newText may not belong to any tool (a one-off rename), so re-resolve
       // its color rather than keeping the old cached one — otherwise a label
@@ -562,10 +567,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setAnnotations(prev => prev.map(a => matcher(a.text) ? { ...a, text: newText, color: newColor } : a));
     }
     if (scope === 'track') return currentCount;
-    const otherTracks = allTracks.filter(t => t !== trackPath);
+    const otherTracks = allTracks.filter(t => t !== trackPath && inScope(t));
     const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, matcher, newText);
     return currentCount + diskCount;
-  }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath]);
+  }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath,
+      project.preferences.enteredFolderPath]);
 
   // Toggle the example-clip preview for a tool by id — shared by the `E`
   // hotkey path, the tools-panel chips (via liveBridge), and the annotation
@@ -2840,6 +2846,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               annotationTools={annotationTools}
               allTracks={allTracks}
               trackPath={trackPath}
+              folderPath={project.preferences.enteredFolderPath ?? null}
               annotationsLoaded={trackPath !== null && annotationsLoadedTrack === trackPath}
               getAnnotationPath={getAnnotationPath}
               getIdent={getIdent}

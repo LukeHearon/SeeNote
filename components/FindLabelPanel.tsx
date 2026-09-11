@@ -4,12 +4,13 @@ import { findLabelPanel as copy } from '../copy/ui';
 import { Annotation, AnnotationTool } from '../types';
 import { formatTime, buildLabelMatcher, colorForLabel, LabelMatcher } from '../utils/helpers';
 import { loadProjectLabels, LabelMatch } from '../utils/annotationRename';
+import { basename, isInsideDir } from '../utils/projectPaths';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import ToolCell from './ToolCell';
 import CollapsibleSection from './CollapsibleSection';
 
-export type RenameScope = 'track' | 'project';
+export type RenameScope = 'track' | 'folder' | 'project';
 
 /** One match, with the track it belongs to — the unit the panel navigates over. */
 interface FlatMatch {
@@ -24,6 +25,12 @@ interface Props {
   annotationTools: AnnotationTool[];
   allTracks: string[];
   trackPath: string | null;
+  /**
+   * The folder the file panel has been entered into, or null at the media root.
+   * Folder scope searches every track beneath it; at the root it would be the
+   * same as Project, so the option is disabled there.
+   */
+  folderPath: string | null;
   /**
    * Whether `annotations` is the open track's real list rather than the empty
    * placeholder a track switch leaves behind. False means "don't believe it" —
@@ -64,8 +71,9 @@ interface Props {
   /** Opens the match's track if needed, then scrolls to and selects it. */
   onGo: (ident: string, match: LabelMatch) => void;
   // Renames every annotation currently matching the search query: current-
-  // track annotations in memory, and — when scope is 'project' — every other
-  // track's annotation file on disk. Resolves with the total renamed count.
+  // track annotations in memory, and — when scope is 'folder' or 'project' —
+  // every other in-scope track's annotation file on disk. Resolves with the
+  // total renamed count.
   onRename: (matcher: LabelMatcher, newText: string, scope: RenameScope) => Promise<number>;
 }
 
@@ -117,7 +125,7 @@ function ModeToggle({ active, caption, tooltip, onClick }: {
  * recording after another and edits what they find. Nothing here closes itself.
  */
 export default function FindLabelPanel({
-  annotations, annotationTools, allTracks, trackPath, annotationsLoaded,
+  annotations, annotationTools, allTracks, trackPath, folderPath, annotationsLoaded,
   getAnnotationPath, getIdent,
   useRegex, onUseRegexChange, partial, onPartialChange,
   caseSensitive, onCaseSensitiveChange,
@@ -142,6 +150,14 @@ export default function FindLabelPanel({
     () => [...allTracks].sort((a, b) => (getIdent(a) ?? a).localeCompare(getIdent(b) ?? b)),
     [allTracks, getIdent],
   );
+
+  // Folder scope with no folder entered (the user stepped back out to the root)
+  // searches the project, which is what the folder has become.
+  const effectiveScope: RenameScope = scope === 'folder' && !folderPath ? 'project' : scope;
+  // Both wider scopes read the whole-project index, and Folder filters it
+  // afterwards: the index is cached per track list, so reading only the folder's
+  // tracks would throw away the project index on every switch between the two.
+  const needsIndex = effectiveScope !== 'track';
 
   // The live field value. Local, so typing costs this component a render and
   // nothing else; `query` only seeds it.
@@ -183,7 +199,7 @@ export default function FindLabelPanel({
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (scope !== 'project') return;
+    if (!needsIndex) return;
     let cancelled = false;
     projectLabelsRef.current = new Map();
     setLabelsVersion(v => v + 1);
@@ -202,7 +218,7 @@ export default function FindLabelPanel({
       .catch(err => { if (!cancelled) setError(`Search failed: ${String(err)}`); })
       .finally(() => { if (!cancelled) setScanning(false); });
     return () => { cancelled = true; };
-  }, [scope, sortedTracks, getAnnotationPath, getIdent, reloadKey, reloadNonce]);
+  }, [needsIndex, sortedTracks, getAnnotationPath, getIdent, reloadKey, reloadNonce]);
 
   // Disk changed out from under us (a rename we just made, or a git pull), so
   // what we remember of other tracks is no longer trustworthy either.
@@ -229,7 +245,9 @@ export default function FindLabelPanel({
   // order the prev/next buttons walk.
   const results: FlatMatch[] = useMemo(() => {
     if (!matcher) return [];
-    const tracks = scope === 'track' ? (trackPath ? [trackPath] : []) : sortedTracks;
+    const tracks = effectiveScope === 'track' ? (trackPath ? [trackPath] : [])
+      : effectiveScope === 'folder' ? sortedTracks.filter(t => isInsideDir(folderPath!, t))
+      : sortedTracks;
     const out: FlatMatch[] = [];
     for (const t of tracks) {
       const trackIdent = getIdent(t);
@@ -241,7 +259,7 @@ export default function FindLabelPanel({
     return out;
     // labelsVersion is the dep that tracks the two label maps' contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matcher, scope, sortedTracks, trackPath, getIdent, labelsFor, labelsVersion]);
+  }, [matcher, effectiveScope, folderPath, sortedTracks, trackPath, getIdent, labelsFor, labelsVersion]);
 
   const selectedIndex = useMemo(
     () => (selected ? results.findIndex(r => sameMatch(r, selected)) : -1),
@@ -298,7 +316,7 @@ export default function FindLabelPanel({
     setRenaming(true);
     setError('');
     try {
-      const count = await onRename(matcher, newLabel.trim(), scope);
+      const count = await onRename(matcher, newLabel.trim(), effectiveScope);
       // renameLabelAcrossTracks has already dropped the label index (it just
       // rewrote the files it described); re-read so the results below reflect
       // the new labels.
@@ -356,7 +374,7 @@ export default function FindLabelPanel({
   // becoming something you have to open first. Track scope has only the open
   // recording to show, so there the header says nothing the window doesn't
   // already say.
-  const showIdents = scope === 'project';
+  const showIdents = effectiveScope !== 'track';
   let lastIdent: string | null = null;
 
   return (
@@ -414,15 +432,26 @@ export default function FindLabelPanel({
         <div className="flex items-center gap-1">
           <div className="flex rounded border border-slate-700 overflow-hidden flex-none">
             {([
-              ['project', copy.scopeWholeProjectLabel, copy.scopeWholeProjectTooltip],
-              ['track', copy.scopeCurrentTrackLabel, copy.scopeCurrentTrackTooltip],
-            ] as [RenameScope, string, string][]).map(([s, label, tooltip]) => (
+              ['project', copy.scopeWholeProjectLabel, copy.scopeWholeProjectTooltip, true],
+              ['folder', copy.scopeFolderLabel,
+                folderPath ? copy.scopeFolderTooltip(basename(folderPath)) : copy.scopeFolderDisabledTooltip,
+                !!folderPath],
+              ['track', copy.scopeCurrentTrackLabel, copy.scopeCurrentTrackTooltip, true],
+            ] as [RenameScope, string, string, boolean][]).map(([s, label, tooltip, enabled]) => (
+              // aria-disabled rather than disabled, so the tooltip explaining why
+              // still shows on hover.
               <button
                 key={s}
-                onClick={() => { onScopeChange(s); setSelected(null); setRenameResult(null); }}
+                aria-disabled={!enabled}
+                onClick={() => {
+                  if (!enabled) return;
+                  onScopeChange(s); setSelected(null); setRenameResult(null);
+                }}
                 data-tooltip={tooltip}
                 className={`px-2 py-0.5 text-[10px] transition-colors ${
-                  scope === s ? 'bg-slate-700 text-slate-100' : 'bg-slate-900 text-slate-500 hover:text-slate-300'
+                  !enabled ? 'bg-slate-900 text-slate-600 cursor-default'
+                  : effectiveScope === s ? 'bg-slate-700 text-slate-100'
+                  : 'bg-slate-900 text-slate-500 hover:text-slate-300'
                 }`}
               >
                 {label}
@@ -508,7 +537,7 @@ export default function FindLabelPanel({
             <div className="flex items-center gap-2">
               <span className="flex-1 min-w-0 text-slate-500 text-[10px] leading-tight">
                 {searching && !scanning
-                  ? (scope === 'project' ? copy.matchCountLabel(totalCount, identCount) : copy.matchCountTrackLabel(totalCount))
+                  ? (effectiveScope !== 'track' ? copy.matchCountLabel(totalCount, identCount) : copy.matchCountTrackLabel(totalCount))
                   : ''}
               </span>
               <button

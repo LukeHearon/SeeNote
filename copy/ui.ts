@@ -321,6 +321,9 @@ export const findLabelPanel = {
   get scopeCurrentTrackLabel() { return getOverride('ui.findLabelPanel.scopeCurrentTrackLabel') ?? "Track"; },
   get scopeWholeProjectLabel() { return getOverride('ui.findLabelPanel.scopeWholeProjectLabel') ?? "Project"; },
   get scopeCurrentTrackTooltip() { return getOverride('ui.findLabelPanel.scopeCurrentTrackTooltip') ?? "Search only the open track"; },
+  get scopeFolderLabel() { return getOverride('ui.findLabelPanel.scopeFolderLabel') ?? "Folder"; },
+  scopeFolderTooltip: (folderName: string) => `Search every track under ${folderName}`,
+  get scopeFolderDisabledTooltip() { return getOverride('ui.findLabelPanel.scopeFolderDisabledTooltip') ?? "Enter a folder in the file panel to narrow the search to it"; },
   get scopeWholeProjectTooltip() { return getOverride('ui.findLabelPanel.scopeWholeProjectTooltip') ?? "Search every track in the project"; },
   matchCountLabel: (count: number, identCount: number) =>
     `${count} match${count === 1 ? '' : 'es'} in ${identCount} recording${identCount === 1 ? '' : 's'}`,

@@ -121,6 +121,7 @@ export function ExampleFindLabel() {
           annotationTools={demoAnnotationTools}
           allTracks={[DEMO_TRACK]}
           trackPath={DEMO_TRACK}
+          folderPath={null}
           annotationsLoaded
           getAnnotationPath={() => null}
           getIdent={() => DEMO_IDENT}
