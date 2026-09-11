@@ -1792,6 +1792,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       { key: 'c', mods: ['mod'], handler: copyActiveAnnotation },
       { key: 'v', mods: ['mod'], handler: pasteAnnotationAtPlayhead },
       { key: 'b', mods: ['mod'], handler: bindSelectedAnnotationToHotkey },
+      { key: 'b', mods: ['mod', 'shift'], handler: () => {
+          handleReorderTools(annotationTools.map((t, i) => (i !== 0 && t.key !== null ? { ...t, key: null } : t)));
+      }},
 
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
