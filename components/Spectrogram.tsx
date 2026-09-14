@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { bandExtentY, freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { bandExtentY, freqToY, freqAxisTicks, formatFreqHz } from '../utils/audioProcessing';
 import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
@@ -16,12 +16,15 @@ import {
   segmentJoins,
 } from '../utils/subsetTimeline';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, ZOOM_STEP, WHEEL_NOTCH_DELTA, ZOOM_PUBLISH_COALESCE_MS, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { wheelZoomFactor, isGestureContinuation } from '../utils/zoomGesture';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
+import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
@@ -51,6 +54,8 @@ interface SpectrogramProps {
   isProcessing: boolean;
   ident: string | null;
   settings: SpectrogramSettings;
+  /** Partial settings update from the axis-docked frequency boxes; merged by the caller. */
+  onSettingsChange: (patch: Partial<SpectrogramSettings>) => void;
   zoomSec: number;
   annotations: Annotation[];
   selectedAnnotationId: string | null;
@@ -177,6 +182,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   isProcessing,
   ident,
   settings,
+  onSettingsChange,
   zoomSec,
   annotations,
   selectedAnnotationId,
@@ -482,6 +488,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     activeAnnotationTool,
     isPlaying,
     settings,
+    sampleRate,
     filterToolActive,
     bandPassFilter,
     currentTimeStore,
@@ -958,13 +965,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
     let lastLabelY: number | null = null;
     const MIN_LABEL_SPACING = 13;
+    // The min/max frequency boxes (FrequencyAxisInputs) are docked over the top
+    // and bottom of the gutter and already show the endpoint values, so the
+    // canvas skips any tick that would land under them.
+    const EDGE_RESERVED = 24;
 
     const renderTick = (freq: number) => {
       // Use the shared freq→y mapping so axis labels stay in exact lockstep
       // with the spectrogram renderer (same function, no drift).
       const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
 
-      if (y < 0 || y > height) return;
+      if (y < EDGE_RESERVED || y > height - EDGE_RESERVED) return;
       if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
       lastLabelY = y;
 
@@ -974,11 +985,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.stroke();
 
-      let label = freq.toString();
-      if (freq >= 1000) {
-        label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
-      }
-      ctx.fillText(label, width - 7, y);
+      ctx.fillText(formatFreqHz(freq), width - 7, y);
     };
 
     for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {
@@ -1325,12 +1332,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // has to agree exactly with the pps the resize handler derives, or the
       // two disagree by the integer rounding for as long as the zoom lasts.
       const currentPps = containerWidth / liveZoomSec;
-      // Step size scales with the event magnitude, capped so that any delta at
-      // or above one mouse notch is exactly the old fixed 1.25× step. Pinch
-      // events are small and arrive ~60×/s; a flat 1.25 each meant a factor of
-      // thousands per gesture. Below the cap the step tapers smoothly to 1.
-      const magnitude = Math.min(Math.abs(deltaY), WHEEL_NOTCH_DELTA);
-      const zoomFactor = Math.exp((magnitude / WHEEL_NOTCH_DELTA) * Math.log(ZOOM_STEP));
+      // One timestamp decides both how big this event's step is and whether the
+      // parent hears about it now or on the next frame — an event that follows
+      // its predecessor within the gap is part of a pinch either way. Sizing
+      // lives in utils/zoomGesture.ts (a mid-pinch event and a WebKit mouse
+      // notch are the same magnitude, so continuity is what separates them).
+      const nowMs = performance.now();
+      const inGesture = isGestureContinuation(nowMs, lastZoomEventRef.current);
+      lastZoomEventRef.current = nowMs;
+      const zoomFactor = wheelZoomFactor(deltaY, inGesture);
       const direction = deltaY > 0 ? 1 : -1;
       let newZoomSec = liveZoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
       newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
@@ -1362,10 +1372,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       // compensation up to a visible stretch. Inside a burst the publish is
       // deferred to the rAF flush, so the prop is at most one frame and one
       // step behind.
-      const nowMs = performance.now();
-      const inBurst = nowMs - lastZoomEventRef.current < ZOOM_PUBLISH_COALESCE_MS;
-      lastZoomEventRef.current = nowMs;
-      if (inBurst) {
+      if (inGesture) {
         pendingZoomPublishRef.current = true;
       } else {
         pendingZoomPublishRef.current = false;
@@ -1387,10 +1394,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     }
   }, [zoomSec, duration, pixelsPerSecond, containerWidth, publishZoom, playheadLocked, isPlaying, currentTimeStore]);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  // Native and non-passive: React's own wheel listener is passive, so an
+  // `onWheel` prop cannot preventDefault the webview's ctrl+wheel page zoom.
+  // See hooks/useNonPassiveWheel.
+  useNonPassiveWheel(containerRef, (e) => {
     if (e.ctrlKey || e.metaKey) e.preventDefault();
     applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
-  };
+  });
 
   const zoomToRange = useCallback((startTime: number, endTime: number) => {
     if (!containerRef.current) return;
@@ -1405,17 +1415,18 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     publishZoom(newZoomSec);
   }, [duration, containerWidth, publishZoom, setScroll]);
 
-  const zoomIn = useCallback(() => {
+  // Button/hotkey zoom is a discrete notch by definition — clear the gesture
+  // clock so a held-down mod+= (key repeat can be faster than the gesture gap)
+  // isn't mistaken for a pinch and priced at a fraction of a step.
+  const zoomStep = useCallback((deltaY: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, -100, true, false, rect.left + rect.width / 2);
+    lastZoomEventRef.current = 0;
+    applyWheel(0, deltaY, true, false, rect.left + rect.width / 2);
   }, [applyWheel]);
 
-  const zoomOut = useCallback(() => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    applyWheel(0, 100, true, false, rect.left + rect.width / 2);
-  }, [applyWheel]);
+  const zoomIn = useCallback(() => zoomStep(-100), [zoomStep]);
+  const zoomOut = useCallback(() => zoomStep(100), [zoomStep]);
 
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
@@ -1444,8 +1455,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   return (
     <div className="flex w-full h-full bg-slate-900 overflow-hidden select-none">
-      {/* Y-axis canvas — separate element to the left of the spectrogram, never layered on top */}
-      <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: Y_AXIS_WIDTH }} />
+      {/* Y-axis gutter — separate element to the left of the spectrogram, never layered on top.
+          The min/max frequency boxes are docked on the axis itself, at the ends of the scale they set. */}
+      <div className="relative h-full flex-shrink-0" style={{ width: Y_AXIS_WIDTH }}>
+        <canvas ref={yAxisCanvasRef} className="w-full h-full pointer-events-none" />
+        <FrequencyAxisInputs
+          minFreq={settings.minFreq}
+          maxFreq={settings.maxFreq}
+          sampleRate={sampleRate}
+          onChange={onSettingsChange}
+        />
+      </div>
 
       {/* Spectrogram area — all interactive content lives here */}
       <div
@@ -1460,7 +1480,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
             // Only end non-drag interactions (e.g. right-click pan) on leave.
             if (!isAnyDragActiveRef.current) handleMouseUp();
           }}
-          onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
       >
       {/* Build-in-progress veil — rendered BEHIND the spectrogram canvas so it

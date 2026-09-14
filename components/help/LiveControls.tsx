@@ -140,7 +140,7 @@ function Frame({ mode, wide, children }: { mode: Mode; wide?: boolean; children:
 const EXAMPLE_ONLY: ReadonlySet<LiveControlId> = new Set(['file-panel', 'buzzdetect-panel', 'find-label']);
 
 /** Controls that want the content column's full width rather than hugging. */
-const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel', 'find-label', 'debug']);
+const WIDE: ReadonlySet<LiveControlId> = new Set(['buzzdetect-panel', 'debug']);
 
 /**
  * Whether this control has something to drive in the main window. Most follow
@@ -315,7 +315,6 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <div className="w-72">
             <SpectrogramSettingsPanel
               settings={s.spectrogramSettings}
-              sampleRate={s.sampleRate}
               onChange={patch => act(
                 () => client.call('setSpectrogramSettings', patch),
                 () => demo.set({ spectrogramSettings: { ...demo.snapshot.spectrogramSettings, ...patch } }),

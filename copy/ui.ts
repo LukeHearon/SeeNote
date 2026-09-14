@@ -36,11 +36,19 @@ export const launchScreen = {
   get updateButton() { return getOverride('ui.launchScreen.updateButton') ?? "Update"; },
   get updatingButton() { return getOverride('ui.launchScreen.updatingButton') ?? "Updating…"; },
   get viewButton() { return getOverride('ui.launchScreen.viewButton') ?? "View"; },
+  get viewChangesButton() { return getOverride('ui.launchScreen.viewChangesButton') ?? "View changes"; },
   get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
   currentVersion: (version: string) => `v${version}`,
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
   updateAvailable: (bumpType: 'major' | 'minor' | 'patch', version: string) => `New ${bumpType} version available: v${version}`,
+};
+
+export const releaseNotesModal = {
+  get loading() { return getOverride('ui.releaseNotesModal.loading') ?? "Loading release notes…"; },
+  get loadError() { return getOverride('ui.releaseNotesModal.loadError') ?? "Couldn't load release notes from GitHub."; },
+  get empty() { return getOverride('ui.releaseNotesModal.empty') ?? "No release notes for this version."; },
+  title: (version: string) => `What's new in v${version}`,
 };
 
 export const createProjectModal = {
@@ -115,6 +123,7 @@ export const annotationToolEditModal = {
   get cancelButton() { return getOverride('ui.annotationToolEditModal.cancelButton') ?? "Cancel"; },
   get saveButton() { return getOverride('ui.annotationToolEditModal.saveButton') ?? "Save"; },
   get createButton() { return getOverride('ui.annotationToolEditModal.createButton') ?? "Create tool"; },
+  get deleteButton() { return getOverride('ui.annotationToolEditModal.deleteButton') ?? "Delete tool"; },
 };
 
 export const annotationToolsSettingsModal = {
@@ -296,28 +305,38 @@ export const neuronPalette = {
   get settingsSubsetOn() { return getOverride('ui.neuronPalette.settingsSubsetOn') ?? "on"; },
 };
 
-export const findLabelModal = {
-  get title() { return getOverride('ui.findLabelModal.title') ?? "Find & Rename Label"; },
-  get labelField() { return getOverride('ui.findLabelModal.labelField') ?? "Label"; },
-  get labelPlaceholder() { return getOverride('ui.findLabelModal.labelPlaceholder') ?? "Search for a label…"; },
-  get partialCheckboxLabel() { return getOverride('ui.findLabelModal.partialCheckboxLabel') ?? "Partial"; },
-  get regexCheckboxLabel() { return getOverride('ui.findLabelModal.regexCheckboxLabel') ?? "Regex"; },
-  get invalidRegexError() { return getOverride('ui.findLabelModal.invalidRegexError') ?? "Invalid regular expression."; },
-  get scanningLabel() { return getOverride('ui.findLabelModal.scanningLabel') ?? "Searching…"; },
-  get noMatchesLabel() { return getOverride('ui.findLabelModal.noMatchesLabel') ?? "No matching annotations found."; },
-  get cancelButton() { return getOverride('ui.findLabelModal.cancelButton') ?? "Cancel"; },
-  get goButton() { return getOverride('ui.findLabelModal.goButton') ?? "Go"; },
-  get renameHeading() { return getOverride('ui.findLabelModal.renameHeading') ?? "Rename matches"; },
-  get newLabelField() { return getOverride('ui.findLabelModal.newLabelField') ?? "Replace with"; },
-  get newLabelPlaceholder() { return getOverride('ui.findLabelModal.newLabelPlaceholder') ?? "New label…"; },
-  get scopeCurrentTrackLabel() { return getOverride('ui.findLabelModal.scopeCurrentTrackLabel') ?? "Current track"; },
-  get scopeWholeProjectLabel() { return getOverride('ui.findLabelModal.scopeWholeProjectLabel') ?? "Whole project"; },
-  matchCountLabel: (count: number, identCount: number) =>
-    `${count} match${count === 1 ? '' : 'es'} across ${identCount} recording${identCount === 1 ? '' : 's'}`,
-  get renameButton() { return getOverride('ui.findLabelModal.renameButton') ?? "Rename All"; },
-  get renamingButton() { return getOverride('ui.findLabelModal.renamingButton') ?? "Renaming…"; },
-  renameConfirmation: (count: number, identCount: number) =>
-    `Renamed ${count} annotation${count === 1 ? '' : 's'} across ${identCount} recording${identCount === 1 ? '' : 's'}.`,
+export const findLabelPanel = {
+  get title() { return getOverride('ui.findLabelPanel.title') ?? "Find & Rename"; },
+  get labelPlaceholder() { return getOverride('ui.findLabelPanel.labelPlaceholder') ?? "Search labels…"; },
+  // Short pill captions for the three matching toggles; the spelled-out names
+  // below are their tooltips.
+  get caseToggleCaption() { return getOverride('ui.findLabelPanel.caseToggleCaption') ?? "Aa"; },
+  get partialToggleCaption() { return getOverride('ui.findLabelPanel.partialToggleCaption') ?? "*a*"; },
+  get regexToggleCaption() { return getOverride('ui.findLabelPanel.regexToggleCaption') ?? ".*"; },
+  get partialCheckboxLabel() { return getOverride('ui.findLabelPanel.partialCheckboxLabel') ?? "Partial match"; },
+  get caseCheckboxLabel() { return getOverride('ui.findLabelPanel.caseCheckboxLabel') ?? "Case sensitive"; },
+  get regexCheckboxLabel() { return getOverride('ui.findLabelPanel.regexCheckboxLabel') ?? "Regular expression"; },
+  get invalidRegexError() { return getOverride('ui.findLabelPanel.invalidRegexError') ?? "Invalid regular expression."; },
+  get scanningLabel() { return getOverride('ui.findLabelPanel.scanningLabel') ?? "Searching…"; },
+  get noMatchesLabel() { return getOverride('ui.findLabelPanel.noMatchesLabel') ?? "No matching annotations found."; },
+  get emptyQueryHint() { return getOverride('ui.findLabelPanel.emptyQueryHint') ?? "Type a label to search."; },
+  get closeTooltip() { return getOverride('ui.findLabelPanel.closeTooltip') ?? "Close the find panel"; },
+  get prevMatchTooltip() { return getOverride('ui.findLabelPanel.prevMatchTooltip') ?? "Previous match (Shift+Enter)"; },
+  get nextMatchTooltip() { return getOverride('ui.findLabelPanel.nextMatchTooltip') ?? "Next match (Enter)"; },
+  get matchRowTooltip() { return getOverride('ui.findLabelPanel.matchRowTooltip') ?? "Go to this annotation"; },
+  get renameHeading() { return getOverride('ui.findLabelPanel.renameHeading') ?? "Rename matches"; },
+  get newLabelPlaceholder() { return getOverride('ui.findLabelPanel.newLabelPlaceholder') ?? "New label…"; },
+  get renameSelectedButton() { return getOverride('ui.findLabelPanel.renameSelectedButton') ?? "Rename Selected"; },
+  get scopeCurrentTrackLabel() { return getOverride('ui.findLabelPanel.scopeCurrentTrackLabel') ?? "Track"; },
+  get scopeWholeProjectLabel() { return getOverride('ui.findLabelPanel.scopeWholeProjectLabel') ?? "Project"; },
+  get scopeCurrentTrackTooltip() { return getOverride('ui.findLabelPanel.scopeCurrentTrackTooltip') ?? "Search only the open track"; },
+  get scopeFolderLabel() { return getOverride('ui.findLabelPanel.scopeFolderLabel') ?? "Folder"; },
+  scopeFolderTooltip: (folderName: string) => `Search every track under ${folderName}`,
+  get scopeFolderDisabledTooltip() { return getOverride('ui.findLabelPanel.scopeFolderDisabledTooltip') ?? "Enter a folder in the file panel to narrow the search to it"; },
+  get scopeWholeProjectTooltip() { return getOverride('ui.findLabelPanel.scopeWholeProjectTooltip') ?? "Search every track in the project"; },
+  matchPositionLabel: (position: number, count: number) => `${position} / ${count}`,
+  get renameButton() { return getOverride('ui.findLabelPanel.renameButton') ?? "Rename All"; },
+  get renamingButton() { return getOverride('ui.findLabelPanel.renamingButton') ?? "Renaming…"; },
 };
 
 export const annotationToolLibrary = {

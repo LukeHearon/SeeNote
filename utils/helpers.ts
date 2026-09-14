@@ -347,10 +347,10 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 // throwing) if `pattern` isn't a valid regex, so callers can show an inline
 // error instead of crashing the search. Unanchored — like `useRegex`/`partial`
 // combined, a match anywhere in the label counts (`buzz\d` matches
-// "foo_buzz3_bar").
-const buildRegexMatcher = (pattern: string): LabelMatcher | null => {
+// "foo_buzz3_bar"). Pass `flags` (e.g. 'i') straight through to RegExp.
+const buildRegexMatcher = (pattern: string, flags = ''): LabelMatcher | null => {
     try {
-        const re = new RegExp(pattern);
+        const re = new RegExp(pattern, flags);
         return (label) => re.test(label);
     } catch {
         return null;
@@ -364,14 +364,21 @@ export const regexLabelMatcher = (pattern: string): LabelMatcher | null => build
 // matching path as regexLabelMatcher instead of a separate `.includes()`.
 export const partialLabelMatcher = (text: string): LabelMatcher | null => buildRegexMatcher(escapeRegExp(text));
 
-// Builds the matcher for the Find Label search from its two independent
-// toggles. `regex` wins when both are on (partial's escaped-literal wrapping
-// is redundant once the query is already unanchored regex). Returns null for
-// an invalid regex pattern.
-export const buildLabelMatcher = (query: string, opts: { useRegex: boolean; partial: boolean }): LabelMatcher | null => {
-    if (opts.useRegex) return buildRegexMatcher(query);
-    if (opts.partial) return partialLabelMatcher(query);
-    return exactLabelMatcher(query);
+// Builds the matcher for the Find Label search from its independent toggles.
+// `regex` wins over `partial` when both are on (partial's escaped-literal
+// wrapping is redundant once the query is already unanchored regex).
+// `caseSensitive` off (the default) folds case on every matching path — an
+// exact search included. Returns null for an invalid regex pattern.
+export const buildLabelMatcher = (
+    query: string,
+    opts: { useRegex: boolean; partial: boolean; caseSensitive: boolean },
+): LabelMatcher | null => {
+    const flags = opts.caseSensitive ? '' : 'i';
+    if (opts.useRegex) return buildRegexMatcher(query, flags);
+    if (opts.partial) return buildRegexMatcher(escapeRegExp(query), flags);
+    if (opts.caseSensitive) return exactLabelMatcher(query);
+    const folded = query.toLowerCase();
+    return (label) => label.toLowerCase() === folded;
 };
 
 export interface LabelLineMatch {
@@ -421,6 +428,34 @@ export const renameLabelInContent = (
         return line;
     });
     return { updated: lines.join('\n'), changed: count > 0, count };
+};
+
+// Rewrite exactly one Audacity TXT line — the one whose start/end/label match
+// `target` — to `newText`. Renames the first such line only, so a project
+// holding an exact duplicate (same start, end, and label) touches just one of
+// them; which one is unspecified but harmless, since they read identically
+// either way. Pure — the single-match twin of `renameLabelInContent`, used by
+// "Rename selected" in the find/rename panel.
+export const renameOneLabelInContent = (
+    content: string,
+    target: LabelLineMatch,
+    newText: string,
+): { updated: string; changed: boolean } => {
+    let changed = false;
+    const lines = content.split('\n').map(line => {
+        if (changed) return line;
+        const parts = line.split('\t');
+        if (parts.length < 3) return line;
+        const label = parts.slice(2).join('\t');
+        const start = parseFloat(parts[0]);
+        const end = parseFloat(parts[1]);
+        if (label === target.label && start === target.start && end === target.end) {
+            changed = true;
+            return `${parts[0]}\t${parts[1]}\t${newText}`;
+        }
+        return line;
+    });
+    return { updated: lines.join('\n'), changed };
 };
 
 // Merge imported annotations onto existing ones by appending. Incoming

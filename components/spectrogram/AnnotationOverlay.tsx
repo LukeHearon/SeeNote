@@ -514,7 +514,6 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            onAnnotationsChange={onAnnotationsChange}
                            onAnnotationsCommit={onAnnotationsCommit}
                            onSelectAnnotation={onSelectAnnotation}
-                           onDeselect={onDeselectAnnotation}
                            setEditingInputId={setEditingInputId}
                            deleteAnnotation={deleteAnnotation}
                            placeholder={copy.namePlaceholder}

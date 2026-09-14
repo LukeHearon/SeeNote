@@ -90,7 +90,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const {
     splitRatio, videoCollapsed, setVideoCollapsed,
     hideLabels, VIDEO_COLLAPSED_BAR_PX, handleSplitDrag,
-  } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, sidebarSections: {}, leftPanelWidth: 0 });
+  } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, sidebarSections: {}, leftPanelWidth: 0, findPanelWidth: 0 });
 
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
@@ -492,7 +492,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
           {showSettings && (
             <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-              <SpectrogramSettingsPanel settings={settings} sampleRate={sampleRate} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
+              <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
             </div>
           )}
 
@@ -553,6 +553,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               isProcessing={isProcessing}
               ident={null}
               settings={settings}
+              onSettingsChange={patch => setSettings(s => ({ ...s, ...patch }))}
               zoomSec={zoomSec}
               annotations={[]}
               selectedAnnotationId={null}

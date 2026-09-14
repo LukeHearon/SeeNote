@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { X, GripVertical, Settings, Plus, Trash2, FolderDown, Play, Square } from 'lucide-react';
+import { X, GripVertical, Settings, Plus, FolderDown, Play, Square } from 'lucide-react';
+import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool, Annotation } from '../types';
-import { pickNextToolColor, HOTKEY_SLOTS } from '../constants';
+import { pickNextToolColor, HOTKEY_SLOTS, nextAvailableHotkey } from '../constants';
 import { isMac } from '../utils/platform';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
 import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
@@ -71,18 +72,23 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
-function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDeleteClick, dim, isPlaying, onPlayExample }: {
+function ToolItem({ tool, toolIndex, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, dim, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
   toolIndex: number;
+  // In a hotkey slot (true) vs. the Unassigned bin (false). Drives the
+  // middle-click action and whether the unassign button is shown.
+  assigned: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
   onGearClick: () => void;
-  onDeleteClick: () => void;
+  // Free this tool's hotkey (assigned slots only).
+  onUnassign: () => void;
+  // Assign this tool to the next free hotkey (Unassigned bin only).
+  onAssign: () => void;
   dim?: boolean;
   isPlaying?: boolean;
   onPlayExample?: () => void;
 }) {
-  const canDelete = toolIndex !== 0 && tool.key !== '0';
   const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
   return (
     <div className="flex items-center gap-1 flex-1 min-w-0" style={{ opacity: dim ? 0.35 : 1 }}>
@@ -90,6 +96,7 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
+        onMouseDown={e => { if (e.button === 1) { e.preventDefault(); assigned ? onUnassign() : onAssign(); } }}
         className="flex items-center gap-2 bg-slate-800 rounded px-2 flex-1 min-w-0 select-none h-8"
         style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab' }}
       >
@@ -112,13 +119,13 @@ function ToolItem({ tool, toolIndex, onDragStart, onDragEnd, onGearClick, onDele
       >
         <Settings size={12} />
       </button>
-      {canDelete ? (
+      {assigned ? (
         <button
-          onClick={e => { e.stopPropagation(); onDeleteClick(); }}
-          className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-slate-700 flex-none transition-colors"
-          data-tooltip={tooltips.deleteTool}
+          onClick={e => { e.stopPropagation(); onUnassign(); }}
+          className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700 flex-none transition-colors"
+          data-tooltip={tooltips.unassignTool}
         >
-          <Trash2 size={12} />
+          <UnassignHotkeyIcon size={12} />
         </button>
       ) : (
         <div className="w-[28px] flex-none" />
@@ -145,8 +152,8 @@ export default function AnnotationToolsSettingsModal({
 }: Props) {
   const [isImporting, setIsImporting] = useState(false);
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
-  // Tool whose trash icon was clicked and that has linked annotations: drives
-  // the delete-confirmation overlay. null = no dialog open.
+  // Tool whose edit modal's "Delete tool" button was clicked: drives the
+  // delete-confirmation overlay (Delete vs Unlink). null = no dialog open.
   const [deletingToolIndex, setDeletingToolIndex] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
   // Which bin has an open create dialog: the Unassigned bin or a specific
@@ -205,12 +212,6 @@ export default function AnnotationToolsSettingsModal({
     onRestoreRef.current(next.tools, next.annotations);
   };
 
-  // Trash-icon click: if the tool has linked annotations, open the confirmation
-  // dialog (which offers Delete vs Unlink); otherwise delete it outright.
-  const requestDeleteTool = (toolIndex: number) => {
-    setDeletingToolIndex(toolIndex);
-  };
-
   const beginDrag = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
   const cancelDrag = () => setDrag(null);
 
@@ -246,6 +247,14 @@ export default function AnnotationToolsSettingsModal({
   const assignExistingTool = (toolIndex: number, target: DragTarget) => {
     const newTools = applySwap(annotationTools, toolIndex, target);
     withSnapshot(() => onReorderTools(newTools));
+  };
+
+  // Middle-click an Unassigned-bin tool: give it the lowest free hotkey. No-op
+  // when all nine slots are taken.
+  const assignToNextHotkey = (toolIndex: number) => {
+    const key = nextAvailableHotkey(annotationTools);
+    if (!key) return;
+    assignExistingTool(toolIndex, { type: 'slot', key: key as Slot });
   };
 
   // A NewToolEntry's typed text didn't match any existing tool: open the
@@ -341,10 +350,12 @@ export default function AnnotationToolsSettingsModal({
                       <ToolItem
                         tool={tool}
                         toolIndex={toolIndex}
+                        assigned
                         onDragStart={() => beginDrag(toolIndex)}
                         onDragEnd={cancelDrag}
                         onGearClick={() => setEditingToolIndex(toolIndex)}
-                        onDeleteClick={() => requestDeleteTool(toolIndex)}
+                        onUnassign={() => assignExistingTool(toolIndex, { type: 'unassigned' })}
+                        onAssign={() => {}}
                         dim={drag?.sourceIndex === toolIndex}
                         isPlaying={playingExampleToolId === tool.id}
                         onPlayExample={() => onPlayExample(tool)}
@@ -393,10 +404,12 @@ export default function AnnotationToolsSettingsModal({
                     <ToolItem
                       tool={tool}
                       toolIndex={toolIndex}
+                      assigned={false}
                       onDragStart={() => beginDrag(toolIndex)}
                       onDragEnd={cancelDrag}
                       onGearClick={() => setEditingToolIndex(toolIndex)}
-                      onDeleteClick={() => requestDeleteTool(toolIndex)}
+                      onUnassign={() => {}}
+                      onAssign={() => assignToNextHotkey(toolIndex)}
                       dim={drag?.sourceIndex === toolIndex}
                       isPlaying={playingExampleToolId === tool.id}
                       onPlayExample={() => onPlayExample(tool)}
@@ -425,6 +438,11 @@ export default function AnnotationToolsSettingsModal({
           onPreviewColor={onPreviewColor}
           onImportExamples={onImportExamplesToTool}
           onShowExamples={(idx) => { setEditingToolIndex(null); onShowExamples(idx); }}
+          onDelete={
+            editingToolIndex !== 0 && annotationTools[editingToolIndex]?.key !== '0'
+              ? () => { const idx = editingToolIndex; setEditingToolIndex(null); setDeletingToolIndex(idx); }
+              : undefined
+          }
           // Push the pre-edit snapshot (captured on open, before any live color
           // preview) so undo restores the original text AND color, then apply
           // the final values.

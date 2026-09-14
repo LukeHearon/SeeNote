@@ -202,6 +202,7 @@ export interface ProjectUiSettings {
    */
   sidebarSections?: Record<string, { weight: number; collapsed: boolean }>;
   leftPanelWidthRatio?: number;     // left panel width as fraction of window.innerWidth (DPI-independent)
+  findPanelWidthRatio?: number;     // right-hand find panel width, same fraction-of-window scheme
 
   // Running-time readout format in the toolbar (see components/Toolbar.tsx).
   // 'datetime' needs the track's start time (parsed from its filename via
@@ -362,6 +363,8 @@ export interface ProjectPreferences {
   findLabelUseRegex?: boolean;
   /** Match the Find Label search query anywhere in a label instead of requiring an exact match. No effect when findLabelUseRegex is on (regex matching is already unanchored). */
   findLabelPartialMatch?: boolean;
+  /** Match the Find Label search query case-sensitively. Defaults to off (case-folded matching on every path, including exact). */
+  findLabelCaseSensitive?: boolean;
   /**
    * Style used to render wall-clock datetimes (spectrogram ruler, running
    * time, and the From/To selection fields) when `ProjectUiSettings.timeDisplayUnit`

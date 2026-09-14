@@ -61,7 +61,14 @@ interface FileTreeProps {
   onRevealAnnotations: (audioFilePath: string) => void;
   onRevealAnnotationsRoot?: () => void;
   onImportAnnotations: (audioFilePath: string) => void;
-  initialEnteredFolderPath?: string | null;
+  /**
+   * The folder the panel is currently entered into, as persisted. Half-
+   * controlled: the panel drives it through `onEnteredFolderChange` as the user
+   * enters and leaves folders, but a change that arrives from outside is adopted
+   * — navigating to a find match beyond the entered folder steps the panel back
+   * out to the root (see handleGoToLabelMatch).
+   */
+  enteredFolderPath?: string | null;
   onEnteredFolderChange?: (path: string | null) => void;
   nonMediaFiles?: string[];
   filenameTimeInfo: FilenameTimeInfo;
@@ -223,6 +230,22 @@ const MIN_VISIBLE_TRACKS = 3;
 /** Is the panel tall enough to give up a row to the breadcrumb? */
 function fitsBreadcrumb(clientHeight: number, rowH: number): boolean {
   return rowH > 0 && clientHeight >= (MIN_VISIBLE_TRACKS + 1) * rowH;
+}
+
+/** Height of one tree row, measured off the first folder row. */
+function measureRowHeight(scroller: HTMLElement): number {
+  const firstFolder = scroller.querySelector('[data-folder-path]') as HTMLElement | null;
+  return firstFolder?.offsetHeight || DEFAULT_ROW_H;
+}
+
+/**
+ * How much of the top edge the breadcrumb would cover at `scrollTop`. It only
+ * shows once scrolled, so a row scrolled to the top must land this far down to
+ * stay visible.
+ */
+function breadcrumbInset(scroller: HTMLElement, scrollTop: number): number {
+  const rowH = measureRowHeight(scroller);
+  return scrollTop > 0 && fitsBreadcrumb(scroller.clientHeight, rowH) ? rowH : 0;
 }
 
 function getAllDirPaths(nodes: TreeNode[]): string[] {
@@ -451,7 +474,7 @@ function FileTree({
   onRevealAnnotations,
   onRevealAnnotationsRoot,
   onImportAnnotations,
-  initialEnteredFolderPath,
+  enteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
   filenameTimeInfo,
@@ -459,13 +482,30 @@ function FileTree({
 }: FileTreeProps) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [enteredPath, setEnteredPath] = useState<string | null>(initialEnteredFolderPath ?? null);
+  const [enteredPath, setEnteredPath] = useState<string | null>(enteredFolderPath ?? null);
   const scrollToFolderRef = useRef<string | null>(null);
   const [expandedNonMedia, setExpandedNonMedia] = useState<Set<string>>(new Set());
 
-  // Reset enter state when the media root changes
+  // Mirror of enteredPath, so the effect below can tell a folder change the panel
+  // made itself (which arrives here as an echo) from one imposed from outside.
+  const enteredPathRef = useRef(enteredPath);
+  enteredPathRef.current = enteredPath;
+
+  // Adopt a folder set from outside — navigating to a find match beyond the
+  // entered folder steps the panel back out to the root. The panel's own
+  // enter/leave arrives as an echo and is skipped, so this can't undo goUpOne's
+  // "reveal the folder you just left".
   useEffect(() => {
-    setEnteredPath(initialEnteredFolderPath ?? null);
+    const next = enteredFolderPath ?? null;
+    if (enteredPathRef.current === next) return;
+    setEnteredPath(next);
+    setExpandedDirs(new Set());
+  }, [enteredFolderPath]);
+
+  // A new media root invalidates every path the tree was holding open.
+  useEffect(() => {
+    setEnteredPath(enteredFolderPath ?? null);
+    setExpandedDirs(new Set());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootDirectory]);
 
@@ -657,22 +697,26 @@ function FileTree({
     // one hit-test, rather than a rect read per folder in the tree. Each row
     // reports that context itself (see `data-crumb`), so the crumb deepens a
     // level each time a folder header scrolls under it.
-    const firstFolder = el.querySelector('[data-folder-path]') as HTMLElement | null;
-    const rowH = firstFolder?.offsetHeight || DEFAULT_ROW_H;
+    const rowH = measureRowHeight(el);
     setRowHeight(prev => (prev === rowH ? prev : rowH));
 
     let path: string | null = null;
     const rect = el.getBoundingClientRect();
     if (el.scrollTop > 0 && fitsBreadcrumb(rect.height, rowH)) {
-      const hit = (document.elementFromPoint(rect.left + 12, rect.top + 1) as HTMLElement | null)
-        ?.closest('[data-crumb]') as HTMLElement | null;
-      if (hit) path = hit.dataset.crumb ?? null;
+      // The whole stack at that point, so the breadcrumb's own clickable
+      // folder names can't shadow the row beneath them.
+      for (const node of document.elementsFromPoint(rect.left + 12, rect.top + 1)) {
+        if (!el.contains(node)) continue;
+        const hit = node.closest('[data-crumb]') as HTMLElement | null;
+        if (hit) { path = hit.dataset.crumb ?? null; break; }
+      }
     }
     setCrumbPath(prev => (prev === path ? prev : path));
   }, []);
 
   // When the active track changes, nudge the scroll so the item is visible:
-  // - if it's above the viewport, make it the first visible row
+  // - if it's above the viewport (or under the breadcrumb), make it the first
+  //   visible row below the breadcrumb
   // - if it's below the viewport, make it the last visible row
   //
   // The row may not be in the DOM on the render where `currentTrack` changes —
@@ -701,8 +745,9 @@ function FileTree({
     const elRect = activeEl.getBoundingClientRect();
     const topRelative = elRect.top - containerRect.top;
     const bottomRelative = elRect.bottom - containerRect.top;
-    if (topRelative < 0) {
-      el.scrollTop += topRelative;
+    if (topRelative < breadcrumbInset(el, el.scrollTop)) {
+      const target = el.scrollTop + topRelative;
+      el.scrollTop = target - breadcrumbInset(el, target);
     } else if (bottomRelative > el.clientHeight) {
       el.scrollTop += bottomRelative - el.clientHeight;
     }
@@ -811,10 +856,12 @@ function FileTree({
 
   const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : 'No folder');
 
-  // Folder names between the panel root and the row under the breadcrumb.
+  // Folders between the panel root and the row under the breadcrumb, each with
+  // the path buildTree gave its node, so clicking one enters it.
   const crumbs = useMemo(() => {
     if (!crumbPath || !effectiveRoot || !crumbPath.startsWith(effectiveRoot)) return [];
-    return crumbPath.substring(effectiveRoot.length + 1).split(/[\\/]/).filter(Boolean);
+    const names = crumbPath.substring(effectiveRoot.length + 1).split(/[\\/]/).filter(Boolean);
+    return names.map((name, i) => ({ name, path: effectiveRoot + '/' + names.slice(0, i + 1).join('/') }));
   }, [crumbPath, effectiveRoot]);
 
   const menuItems = (m: ContextMenuState): ContextMenuItem[] => {
@@ -906,23 +953,27 @@ function FileTree({
     >
       {/* File list — inner flex row keeps the scrollbar track a true sibling, not an overlay */}
       <div className="relative flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
-        {/* Pinned breadcrumb — the folders the row beneath it lives in. Must stay
-            pointer-transparent: the hit-test that drives it probes through here. */}
+        {/* Pinned breadcrumb — the folders the row beneath it lives in. Only the
+            folder names take the pointer; everything else passes through, and the
+            hit-test that drives it reads past them (see syncScrollbar). */}
         {crumbs.length > 0 && (
           <div
             className="absolute left-0 right-2 top-0 z-30 flex items-center gap-1 px-2 bg-slate-900 border-b border-slate-700 pointer-events-none overflow-hidden"
             style={{ height: `${rowHeight}px`, boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' }}
           >
             <FolderOpen size={13} className="flex-none text-slate-500" />
-            {crumbs.map((name, i) => (
-              <React.Fragment key={i}>
+            {crumbs.map(({ name, path }, i) => (
+              <React.Fragment key={path}>
                 {i > 0 && <span className="text-[10px] text-slate-600 flex-none">/</span>}
-                <span
+                <button
+                  onClick={() => enterFolder(path)}
                   // Parents shrink first so the folder you're actually in stays legible
-                  className={`text-xs truncate ${i === crumbs.length - 1 ? 'text-slate-300 flex-none max-w-full' : 'text-slate-500 min-w-0'}`}
+                  className={`text-xs truncate pointer-events-auto hover:text-white hover:underline ${i === crumbs.length - 1 ? 'text-slate-300 flex-none max-w-full' : 'text-slate-500 min-w-0'}`}
+                  data-tooltip={`Enter ${name}`}
+                  tabIndex={-1}
                 >
                   {name}
-                </span>
+                </button>
               </React.Fragment>
             ))}
           </div>

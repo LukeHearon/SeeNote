@@ -39,6 +39,7 @@ interface UseProjectPersistenceArgs {
   splitRatio: number;
   sidebarSections: Record<string, { weight: number; collapsed: boolean }>;
   leftPanelWidth: number;
+  findPanelWidth: number;
 }
 
 // Owns the two debounced "persist UI/settings to the project file" effects that
@@ -80,6 +81,7 @@ export function useProjectPersistence({
   splitRatio,
   sidebarSections,
   leftPanelWidth,
+  findPanelWidth,
 }: UseProjectPersistenceArgs) {
   const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -139,11 +141,12 @@ export function useProjectPersistence({
         splitRatio,
         sidebarSections,
         leftPanelWidthRatio: window.innerWidth > 0 ? leftPanelWidth / window.innerWidth : undefined,
+        findPanelWidthRatio: window.innerWidth > 0 ? findPanelWidth / window.innerWidth : undefined,
       };
       updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, uiSettings });
     }, 600);
     return () => {
       if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
     };
-  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectMinDetectionRate, buzzdetectSubsetBuffer, buzzdetectPinnedNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, sidebarSections, leftPanelWidth]);
+  }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectMinDetectionRate, buzzdetectSubsetBuffer, buzzdetectPinnedNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, sidebarSections, leftPanelWidth, findPanelWidth]);
 }

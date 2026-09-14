@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BuzzdetectSeriesMode, Selection } from '../../types';
 import { DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, Y_AXIS_WIDTH } from '../../constants';
 import { createCurrentTimeStore } from '../../utils/currentTimeStore';
@@ -10,6 +10,7 @@ import {
   DEMO_TRACK,
   demoAnnotatedTracks,
   demoAnnotations,
+  demoAnnotationTools,
   demoFiles,
   demoNonMediaFiles,
   makeDemoBuzzdetectData,
@@ -21,7 +22,7 @@ import { subsetBuzzdetectData, subsetCriteriaFrom, subsetTimelineFor } from '../
 import { help } from '../../copy/help';
 import BuzzdetectPanel from '../BuzzdetectPanel';
 import FileTree from '../FileTree';
-import FindLabelModal, { RenameScope } from '../FindLabelModal';
+import FindLabelPanel, { RenameScope } from '../FindLabelPanel';
 
 // Panels the guide renders against the example project (utils/demoProject.ts)
 // rather than the open one. They are the real components — only their data is
@@ -83,24 +84,7 @@ export function ExampleFilePanel() {
   );
 }
 
-/**
- * A modal, shown in place.
- *
- * Every modal in the app owns its own `fixed inset-0` backdrop, which would
- * cover the whole guide window. A `transform` on an ancestor makes it the
- * containing block for fixed-position descendants, so the modal lays itself out
- * inside this box instead — no modal has to grow an "inline" variant, and what
- * the reader sees is exactly what the app shows.
- */
-function ModalStage({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative w-full h-[26rem] transform-gpu overflow-hidden rounded border border-slate-700 bg-slate-900/40">
-      {children}
-    </div>
-  );
-}
-
-/** Re-opens a dismissed example modal — nothing else would bring it back. */
+/** Re-opens a dismissed example panel — nothing else would bring it back. */
 function ReopenButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
@@ -115,8 +99,8 @@ function ReopenButton({ label, onClick }: { label: string; onClick: () => void }
 }
 
 /**
- * Find & Rename Label over the example project's annotations. The real modal
- * searches every track on disk and merges in the current track's in-memory
+ * The Find & Rename dock over the example project's annotations. The real dock
+ * searches every track on disk and overlays the open track's in-memory
  * annotations; the example project has one track and no annotation files to
  * read, so the search only ever finds the in-memory ones.
  */
@@ -125,27 +109,34 @@ export function ExampleFindLabel() {
   const [open, setOpen] = useState(true);
   const [useRegex, setUseRegex] = useState(false);
   const [partial, setPartial] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<RenameScope>('track');
 
   return (
-    <ModalStage>
+    <div className="relative w-60 h-[26rem] rounded border border-slate-700 bg-slate-900 overflow-hidden">
       {open ? (
-        <FindLabelModal
+        <FindLabelPanel
           annotations={annotations}
+          annotationTools={demoAnnotationTools}
           allTracks={[DEMO_TRACK]}
           trackPath={DEMO_TRACK}
-          ident={DEMO_IDENT}
+          folderPath={null}
+          annotationsLoaded
           getAnnotationPath={() => null}
           getIdent={() => DEMO_IDENT}
           useRegex={useRegex}
           onUseRegexChange={setUseRegex}
           partial={partial}
           onPartialChange={setPartial}
+          caseSensitive={caseSensitive}
+          onCaseSensitiveChange={setCaseSensitive}
           query={query}
           onQueryChange={setQuery}
           scope={scope}
           onScopeChange={setScope}
+          focusNonce={0}
+          reloadNonce={0}
           onClose={() => setOpen(false)}
           onGo={() => {}}
           onRename={async (matcher, newText) => {
@@ -153,11 +144,20 @@ export function ExampleFindLabel() {
             setAnnotations(list => list.map(a => (matcher(a.text) ? { ...a, text: newText } : a)));
             return hits.length;
           }}
+          onRenameSelected={async (_trackFilePath, match, newText) => {
+            let renamed = false;
+            setAnnotations(list => list.map(a => {
+              if (renamed || a.text !== match.label || a.start !== match.start || a.end !== match.end) return a;
+              renamed = true;
+              return { ...a, text: newText };
+            }));
+            return renamed;
+          }}
         />
       ) : (
         <ReopenButton label={help.live.reopen} onClick={() => setOpen(true)} />
       )}
-    </ModalStage>
+    </div>
   );
 }
 

@@ -12,8 +12,10 @@ Quick reference for agents. One phrase per file.
 - `components/FileTree.tsx` — left-side file browser with context menus and shuffle/filter
 - `components/HelpHighlightHost.tsx` — draws the ghost highlight over a real control when the guide window asks for it
 - `components/AnnotationToolsPanel.tsx` — annotation tool palette (add/edit/reorder tools)
+- `components/FindLabelPanel.tsx` — right-hand Find & Rename dock: label search (exact/partial/regex), matched-label chips, prev/next match navigation, bulk rename
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
+- `components/ReleaseNotesModal.tsx` — launch-screen "View changes" modal; fetches the live GitHub release body and renders it via `utils/releaseNotes.ts`
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
@@ -61,6 +63,7 @@ Quick reference for agents. One phrase per file.
 - `components/spectrogram/SelectionHandles.tsx` — selection rectangle and its drag handles overlay (a scroll-transform layer)
 - `components/spectrogram/FilterHandles.tsx` — band-pass filter band and its drag handles overlay
 - `components/spectrogram/AnnotationOverlay.tsx` — annotation boxes, labels, and text-input editing overlay; laid out in content pixels and scrolled by transform, not by React
+- `components/spectrogram/FrequencyAxisInputs.tsx` — the min/max frequency number boxes docked on the Y-axis gutter (clamp logic in `utils/audioProcessing.ts` `clampFreqRange`)
 - `src-tauri/src/audio/decoder.rs` — PCM decoder with seek-margin logic (canonical sample-accuracy contract); dispatches to `ffmpeg_stream` for formats symphonia can't decode
 - `src-tauri/src/audio/ffmpeg_stream.rs` — fallback decode backend for `.wma` (no Rust decoder exists), shells out to a system ffmpeg/ffprobe binary rather than linking libavcodec
 - `src-tauri/src/audio/fft.rs` — FFT / spectrogram chunk computation
@@ -111,7 +114,8 @@ Quick reference for agents. One phrase per file.
 - `hooks/useExamplePlayer.ts` — plays annotation-tool example clips
 - `hooks/useAnnotationHistory.ts` — undo/redo snapshot stack for annotations
 - `hooks/usePanelLayout.ts` — split-ratio / panel-width layout state and drag resizing
-- `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a left panel (the file panel and the guide's section rail)
+- `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a docked side panel (the file panel, the guide's section rail, the find dock)
+- `hooks/useDebouncedValue.ts` — a value as of when it last held still; keeps expensive work off the typing path
 - `hooks/useBandPassFilter.ts` — band-pass filter tool state and draw/apply wiring
 - `hooks/useBuzzdetect.ts` — buzzdetect panel enable/load state for the active track
 - `hooks/useProjectPersistence.ts` — debounced persistence of project settings/preferences

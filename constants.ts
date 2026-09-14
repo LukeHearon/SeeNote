@@ -66,15 +66,23 @@ export const DEFAULT_ZOOM_SEC = 10;
 // deltas instead of discrete notches, so the step is scaled by the event's
 // magnitude against WHEEL_NOTCH_DELTA rather than applied flat.
 export const ZOOM_STEP = 1.25;
-// |deltaY| that counts as one full notch. macOS mouse wheels report at least
-// this much per notch (Chromium ~100, WebKit ~10), so any real notch saturates
-// the cap and keeps the historical fixed 1.25× step; pinch deltas fall below it.
+// |deltaY| that counts as one full notch of a DISCRETE wheel event. Mouse
+// wheels report at least this much per notch (Chromium ~100, WebKit ~10), so
+// any real notch saturates the cap and gets the historical fixed 1.25× step.
 export const WHEEL_NOTCH_DELTA = 10;
+// |deltaY| that accumulates to one full step DURING a continuous pinch. A
+// pinch's deltas are proportional to finger travel, so pricing them off a
+// larger scale makes the gesture's total zoom a function of how far the fingers
+// moved rather than of how many events the trackpad happened to emit. Tuned so
+// a full-width pinch (~a few hundred delta) covers roughly an order of
+// magnitude of zoom. See utils/zoomGesture.ts.
+export const PINCH_DELTA_PER_STEP = 60;
 // Gap below which consecutive zoom wheel events count as one continuous
-// gesture, so the parent is told about the new zoom once per frame instead of
-// once per event. A shade over one frame at 60Hz: discrete mouse notches land
-// outside it and still publish immediately.
-export const ZOOM_PUBLISH_COALESCE_MS = 20;
+// gesture. Two consumers: the pinch-vs-notch decision above, and coalescing the
+// parent's zoom publish to once per frame instead of once per event. Comfortably
+// over one frame at 60Hz, and under the gap between hand-spun mouse notches, so
+// a notch is judged discrete and still publishes immediately.
+export const ZOOM_GESTURE_GAP_MS = 30;
 
 // Canonical default for output rounding (used when project.outputRoundingDecimals is unset).
 export const DEFAULT_OUTPUT_ROUNDING_DECIMALS = 4;
@@ -93,6 +101,7 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
 
 // Panel layout defaults — used when no saved layout exists yet in preferences.json.
 export const DEFAULT_LEFT_PANEL_WIDTH = 224; // px
+export const DEFAULT_FIND_PANEL_WIDTH = 260; // px — the right-hand Find & Rename dock
 export const DEFAULT_SPLIT_RATIO = 0.5;      // vertical video/spectrogram split
 export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // legacy file-tree vs tool-palette split; seeds sidebarSections on load
 
@@ -139,7 +148,8 @@ export const DEFAULT_UI_SETTINGS: Required<Omit<ProjectUiSettings,
   'buzzdetectEnabled' | 'buzzdetectThresholds' | 'buzzdetectSubsetThresholds' | 'buzzdetectHiddenNeurons' | 'buzzdetectNeuronColors' | 'buzzdetectSeriesMode' | 'buzzdetectBinWidthOverride' |
   'buzzdetectSubsetEnabled' | 'buzzdetectSubsetNeurons' | 'buzzdetectMinDetectionRate' | 'buzzdetectSubsetBuffer' | 'buzzdetectPinnedNeurons' |
   'playheadLocked' | 'filePanelCollapsed' | 'videoCollapsed' |
-  'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
+  'splitRatio' | 'leftPanelRatio' | 'sidebarSections' | 'leftPanelWidthRatio' |
+  'findPanelWidthRatio' | 'timeDisplayUnit' | 'fallbackTimeDisplayUnit'>> = {
   volume: 1,
   playbackSpeed: 1,
   lastDefinedSpeed: 1.5,

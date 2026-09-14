@@ -23,35 +23,35 @@ const FilterHandles: React.FC<FilterHandlesProps> = ({
   const canvasHeight = containerHeight;
   if (canvasHeight === 0) return null;
 
-  const yHigh = freqToY(bandPassFilter.high, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-  const yLow = freqToY(bandPassFilter.low, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+  const rawYHigh = freqToY(bandPassFilter.high, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+  const rawYLow = freqToY(bandPassFilter.low, canvasHeight, settings.minFreq, settings.maxFreq, settings.frequencyScale);
+  // A cutoff can sit outside the visible frequency window (e.g. view 200 Hz–4 kHz
+  // while the filter passes 800 Hz–22 kHz). Pin the off-screen handle to the
+  // nearest edge so it stays grabbable to drag back into range.
+  const clampY = (y: number) => Math.max(0, Math.min(canvasHeight, y));
+  const yHigh = clampY(rawYHigh);
+  const yLow = clampY(rawYLow);
+
+  const handle = (y: number, edge: 'low' | 'high', offScreen: boolean) => (
+    <div
+      className="absolute left-0 right-0 cursor-ns-resize"
+      style={{ top: `${y - 4}px`, height: '9px', zIndex: 15 }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onBeginResize(edge);
+      }}
+    >
+      <div
+        className="absolute left-0 right-0"
+        style={{ top: '4px', height: '1px', background: '#60a5fa', opacity: offScreen ? 0.5 : 1 }}
+      />
+    </div>
+  );
 
   return (
     <>
-      {yHigh >= 0 && yHigh <= canvasHeight && (
-        <div
-          className="absolute left-0 right-0 cursor-ns-resize"
-          style={{ top: `${yHigh - 4}px`, height: '9px', zIndex: 15 }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            onBeginResize('high');
-          }}
-        >
-          <div className="absolute left-0 right-0" style={{ top: '4px', height: '1px', background: '#60a5fa' }} />
-        </div>
-      )}
-      {yLow >= 0 && yLow <= canvasHeight && (
-        <div
-          className="absolute left-0 right-0 cursor-ns-resize"
-          style={{ top: `${yLow - 4}px`, height: '9px', zIndex: 15 }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            onBeginResize('low');
-          }}
-        >
-          <div className="absolute left-0 right-0" style={{ top: '4px', height: '1px', background: '#60a5fa' }} />
-        </div>
-      )}
+      {handle(yHigh, 'high', rawYHigh < 0 || rawYHigh > canvasHeight)}
+      {handle(yLow, 'low', rawYLow < 0 || rawYLow > canvasHeight)}
     </>
   );
 };
