@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star, Search } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star, Search, ScrollText } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
@@ -15,6 +15,7 @@ import CreateProjectModal from './CreateProjectModal';
 import OpenProjectModal from './OpenProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
+import ReleaseNotesModal from './ReleaseNotesModal';
 
 interface Props {
   entries: ProjectListEntry[];
@@ -77,6 +78,7 @@ export default function LaunchScreen({
   toggleFileStarred,
 }: Props) {
   const { update, supported, state: updateState, error: updateError, applyUpdate, viewRelease } = useAppUpdate();
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showOpenProject, setShowOpenProject] = useState(false);
@@ -529,6 +531,13 @@ export default function LaunchScreen({
               </button>
             )}
             <button
+              onClick={() => setShowReleaseNotes(true)}
+              className="flex items-center gap-1 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-full transition-colors"
+            >
+              <ScrollText size={11} />
+              {launchScreen.viewChangesButton}
+            </button>
+            <button
               onClick={viewRelease}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-full transition-colors"
             >
@@ -536,6 +545,9 @@ export default function LaunchScreen({
               {launchScreen.viewButton}
             </button>
           </div>
+        )}
+        {update && showReleaseNotes && (
+          <ReleaseNotesModal version={update.version} fallbackNotes={update.notes} onClose={() => setShowReleaseNotes(false)} />
         )}
       </div>
 

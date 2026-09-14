@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { checkForUpdate, installUpdate, isUpdateSupported, openGithubUrl, UpdateInfo } from '../utils/tauriCommands';
-
-const RELEASES_URL = 'https://github.com/LukeHearon/SeeNote/releases/latest';
+import { RELEASES_URL } from '../utils/releaseNotes';
 
 type UpdateState = 'idle' | 'installing' | 'error';
 

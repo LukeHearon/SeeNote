@@ -36,11 +36,19 @@ export const launchScreen = {
   get updateButton() { return getOverride('ui.launchScreen.updateButton') ?? "Update"; },
   get updatingButton() { return getOverride('ui.launchScreen.updatingButton') ?? "Updating…"; },
   get viewButton() { return getOverride('ui.launchScreen.viewButton') ?? "View"; },
+  get viewChangesButton() { return getOverride('ui.launchScreen.viewChangesButton') ?? "View changes"; },
   get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
   currentVersion: (version: string) => `v${version}`,
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
   updateAvailable: (bumpType: 'major' | 'minor' | 'patch', version: string) => `New ${bumpType} version available: v${version}`,
+};
+
+export const releaseNotesModal = {
+  get loading() { return getOverride('ui.releaseNotesModal.loading') ?? "Loading release notes…"; },
+  get loadError() { return getOverride('ui.releaseNotesModal.loadError') ?? "Couldn't load release notes from GitHub."; },
+  get empty() { return getOverride('ui.releaseNotesModal.empty') ?? "No release notes for this version."; },
+  title: (version: string) => `What's new in v${version}`,
 };
 
 export const createProjectModal = {

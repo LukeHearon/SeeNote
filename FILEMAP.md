@@ -15,6 +15,7 @@ Quick reference for agents. One phrase per file.
 - `components/FindLabelPanel.tsx` — right-hand Find & Rename dock: label search (exact/partial/regex), matched-label chips, prev/next match navigation, bulk rename
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
+- `components/ReleaseNotesModal.tsx` — launch-screen "View changes" modal; fetches the live GitHub release body and renders it via `utils/releaseNotes.ts`
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)

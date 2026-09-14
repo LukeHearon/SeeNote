@@ -111,7 +111,7 @@ export const help = {
   },
 
   updates: {
-    get p1() { return getOverride('help.updates.p1') ?? "SeeNote checks for a new release once, when the launch screen appears. If one is available, a banner offers **Update** — it downloads and installs in place, then restarts the app."; },
+    get p1() { return getOverride('help.updates.p1') ?? "SeeNote checks for a new release once, when the launch screen appears. If one is available, a banner offers **Update** — it downloads and installs in place, then restarts the app. **View changes** shows that release's notes without leaving the app."; },
     get note_linux() { return getOverride('help.updates.note_linux') ?? "On a Linux `.deb` install the in-place updater can't be used, so the banner offers **View** instead, which opens the releases page for you to download from. AppImage installs update in place normally."; },
     get p_manual() { return getOverride('help.updates.p_manual') ?? "If an update fails, the error is shown on the banner and nothing has changed — the running version is untouched, and you can retry or download the release manually."; },
   },
