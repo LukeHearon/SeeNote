@@ -132,7 +132,7 @@ function Toolbar({
   trackStartDate = null,
   dateTimeFormat = DEFAULT_DATE_TIME_FORMAT,
 }: ToolbarProps) {
-  const [volumeCtxMenu, setVolumeCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [audioCtxMenu, setAudioCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Priority-ordered collapse as the toolbar narrows: the least-used controls
   // give up their slider/entry box first, retreating to an icon with the same
@@ -170,8 +170,9 @@ function Toolbar({
   // Each collapsing control is built once here and placed by the JSX below in
   // whichever of its two forms the current level calls for — the collapsed and
   // expanded rows must not drift apart.
-  const volumeContextMenu = onRestartAudio
-    ? (e: React.MouseEvent) => { e.preventDefault(); setVolumeCtxMenu({ x: e.clientX, y: e.clientY }); }
+  // Restart Audio menu, opened by right-clicking the play button or the volume slider.
+  const audioContextMenu = onRestartAudio
+    ? (e: React.MouseEvent) => { e.preventDefault(); setAudioCtxMenu({ x: e.clientX, y: e.clientY }); }
     : undefined;
   const volumeSlider = (hideIcon: boolean, helpTarget?: string) => (
     <VolumeControl
@@ -181,7 +182,7 @@ function Toolbar({
       setMuted={setMuted}
       hideIcon={hideIcon}
       helpTarget={helpTarget}
-      onContextMenu={volumeContextMenu}
+      onContextMenu={audioContextMenu}
     />
   );
 
@@ -235,6 +236,7 @@ function Toolbar({
         onNextAnnotation={() => spectrogramRef.current?.goToNextAnnotation()}
         onPlay={onPlay}
         onTogglePlayheadLock={() => onTogglePlayheadLock?.()}
+        onPlayContextMenu={audioContextMenu}
       />
 
       {/* Volume — the full pill while there's room; the slider is the widest of
@@ -251,16 +253,16 @@ function Toolbar({
         ) : volumeSlider(false, 'volume-control')}
       </div>
 
-      {volumeCtxMenu && onRestartAudio && (
+      {audioCtxMenu && onRestartAudio && (
         <>
-          <div className="fixed inset-0 z-50" onClick={() => setVolumeCtxMenu(null)} />
+          <div className="fixed inset-0 z-50" onClick={() => setAudioCtxMenu(null)} />
           <div
             className="fixed z-50 bg-slate-800 border border-slate-600 rounded shadow-lg py-1 min-w-[140px]"
-            style={{ left: volumeCtxMenu.x, top: volumeCtxMenu.y }}
+            style={{ left: audioCtxMenu.x, top: audioCtxMenu.y }}
           >
             <button
               className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
-              onClick={() => { setVolumeCtxMenu(null); onRestartAudio(); }}
+              onClick={() => { setAudioCtxMenu(null); onRestartAudio(); }}
             >
               {tooltips.restartAudio}
             </button>

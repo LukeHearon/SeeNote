@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Loader2, LocateFixed } from 'lucide-react';
 import { tooltips } from '../../copy/tooltips';
 import { useAltHeld } from '../../hooks/useAltHeld';
@@ -16,6 +17,8 @@ export interface TransportButtonsProps {
   onNextAnnotation: () => void;
   onPlay: () => void;
   onTogglePlayheadLock: () => void;
+  /** Right-click on the play button. Unset in the guide's live copy. */
+  onPlayContextMenu?: (e: MouseEvent) => void;
 }
 
 /**
@@ -37,6 +40,7 @@ export function TransportButtons({
   onNextAnnotation,
   onPlay,
   onTogglePlayheadLock,
+  onPlayContextMenu,
 }: TransportButtonsProps) {
   // Alt suspends playhead lock — pale the lock icon to show it's momentarily inert
   // while leaving it in its active (locked) state.
@@ -58,6 +62,7 @@ export function TransportButtons({
       </button>
       <button
         onClick={onPlay}
+        onContextMenu={onPlayContextMenu}
         disabled={!enabled}
         className="p-1.5 rounded-full bg-[#e65161] hover:bg-[#f06575] disabled:opacity-50 text-white transition-all shadow-lg flex-none mx-0.5"
       >
