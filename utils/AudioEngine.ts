@@ -166,6 +166,20 @@ const LATENCY_PROBE_DELAY_SEC = 0.2;
  *  measurement noise; above it, the audio device or its buffer size changed
  *  under us, which moves the delay before sound. */
 const LATENCY_CHANGE_LOG_SEC = 0.005;
+/** How long after playback stops the context is suspended.
+ *
+ * A running context renders silence for as long as it's left alone, and on
+ * macOS/WKWebView an app left idle comes back with its audio delayed — ~1s
+ * after 5 minutes, growing with the idle time, and only a relaunch clears it
+ * (App Nap ruled out: it happens with NSAppSleepDisabled set). Suspending
+ * stops the rendering, so there is nothing to pile up. Long enough not to
+ * cycle the context between two plays a few seconds apart. */
+const IDLE_SUSPEND_MS = 5000;
+
+/** Whether getOutputTimestamp() has ever given a real reading in this process,
+ *  and whether the loss of it has been logged — see the latency probe. */
+let outputTimestampEverReal = false;
+let outputTimestampLostLogged = false;
 /** How often the playback clock monitor samples (see _startClockDriftMonitor).
  *  Short enough that a one-second selection still produces a line. */
 const CLOCK_DRIFT_SAMPLE_MS = 500;
@@ -263,6 +277,8 @@ export class AudioEngine implements PlaybackTransport {
   private lastLoggedLatencySec = -1;
   /** One-shot timer armed alongside the render check (see _armLatencyProbe). */
   private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One-shot timer that suspends the context once idle (see _armIdleSuspend). */
+  private idleSuspendTimer: ReturnType<typeof setTimeout> | null = null;
   /** Repeating timer comparing the context clock to the wall clock during a
    *  play (see _startClockDriftMonitor), with the origins it measures from. */
   private driftTimer: ReturnType<typeof setInterval> | null = null;
@@ -453,8 +469,10 @@ export class AudioEngine implements PlaybackTransport {
         this._log(`ctx.state -> ${this.ctx?.state ?? 'closed'}`);
       });
     } else if (this.ctx.state === 'suspended') {
-      // Context exists but was suspended (shouldn't happen if we create in
-      // play(), but handle it defensively).
+      // Either the idle suspend fired (the usual case — see _armIdleSuspend) or
+      // the context was suspended under us. Scheduling proceeds regardless:
+      // ctx.currentTime is frozen until it resumes, so everything anchored to it
+      // stays consistent, exactly as on the first play of a new context.
       this.ctx.resume().catch(() => {});
     }
 
@@ -829,6 +847,20 @@ export class AudioEngine implements PlaybackTransport {
         + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
         + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
       );
+      // The reading going from real to the placeholder has so far marked every
+      // session where the audio ended up late, and it never came back within a
+      // process — only a relaunch restored it. Process-wide (module scope), not
+      // per engine or per context, because that is the scope it recovers at.
+      if (measured !== null && measured > 0) {
+        outputTimestampEverReal = true;
+      } else if (measured === 0 && outputTimestampEverReal && !outputTimestampLostLogged) {
+        outputTimestampLostLogged = true;
+        this._log(
+          'output timestamp went from a real reading to the placeholder — audio may now '
+          + 'play late by a growing amount; relaunching SeeNote is the only known fix',
+          'error',
+        );
+      }
     }, Math.max(0, dueInSec * 1000));
   }
 
@@ -1013,6 +1045,27 @@ export class AudioEngine implements PlaybackTransport {
     this.filterGraph.apply(this.bandPassFilter, this.fileSampleRate);
   }
 
+  /**
+   * Suspend the context once playback has been stopped for IDLE_SUSPEND_MS.
+   *
+   * Armed from _cancelPlayback, which has already bumped playId, so the next
+   * play() — which bumps it again — leaves this timer inert rather than
+   * suspending underneath a play that has just started. Nothing has to cancel
+   * it when the context goes away: it no-ops on a disposed engine or a null
+   * context, and re-arming clears the previous one.
+   */
+  private _armIdleSuspend(): void {
+    if (this.idleSuspendTimer !== null) clearTimeout(this.idleSuspendTimer);
+    const myPlayId = this.playId;
+    this.idleSuspendTimer = setTimeout(() => {
+      this.idleSuspendTimer = null;
+      if (this.playId !== myPlayId || this.disposed) return;
+      const ctx = this.ctx;
+      if (!ctx || ctx.state !== 'running') return;
+      ctx.suspend().catch(() => {});
+    }, IDLE_SUSPEND_MS);
+  }
+
   private _teardownFilterGraph(): void {
     this.filterGraph.teardown();
     this._filterInput = null;
@@ -1047,6 +1100,7 @@ export class AudioEngine implements PlaybackTransport {
       this.latencyProbeTimer = null;
     }
     this._stopClockDriftMonitor();
+    this._armIdleSuspend();
 
     this._raf.stop();
 
