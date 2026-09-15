@@ -175,6 +175,9 @@ const LATENCY_CHANGE_LOG_SEC = 0.005;
  * stops the rendering, so there is nothing to pile up. Long enough not to
  * cycle the context between two plays a few seconds apart. */
 const IDLE_SUSPEND_MS = 5000;
+/** Shortest stop worth an idle-gap line (see _logIdleGap). Below this the two
+ *  clocks can't have parted by anything that matters. */
+const IDLE_GAP_LOG_MIN_SEC = 1;
 /** How often the playback clock monitor samples (see _startClockDriftMonitor).
  *  Short enough that a one-second selection still produces a line. */
 const CLOCK_DRIFT_SAMPLE_MS = 500;
@@ -274,6 +277,11 @@ export class AudioEngine implements PlaybackTransport {
   private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
   /** One-shot timer that suspends the context once idle (see _armIdleSuspend). */
   private idleSuspendTimer: ReturnType<typeof setTimeout> | null = null;
+  /** ctx.currentTime and wall time as of the last stop, so the next play can
+   *  measure what the two clocks did while nothing was playing. Null when
+   *  there is no gap to measure (fresh context, or already reported). */
+  private idleCtxStamp: number | null = null;
+  private idleWallStampMs = 0;
   /** Repeating timer comparing the context clock to the wall clock during a
    *  play (see _startClockDriftMonitor), with the origins it measures from. */
   private driftTimer: ReturnType<typeof setInterval> | null = null;
@@ -445,6 +453,7 @@ export class AudioEngine implements PlaybackTransport {
         );
       }
       this._recordDeviceSampleRate(forceFileRate ? 0 : this.ctx.sampleRate);
+      this.idleCtxStamp = null;  // new clock — nothing to compare against
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
       this.limiterNode = this.ctx.createDynamicsCompressor();
@@ -496,6 +505,7 @@ export class AudioEngine implements PlaybackTransport {
     );
 
     this._logOutputLatency();
+    this._logIdleGap();
 
     // ── PCM cache fast path ───────────────────────────────────────────────────
     // For bounded plays, skip Rust IPC entirely if we have cached decoded PCM
@@ -1027,6 +1037,36 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
+   * Report what the two clocks did while nothing was playing.
+   *
+   * Everything is scheduled against `ctx.currentTime` — `playStartCtx =
+   * ctx.currentTime + START_MARGIN_SEC`, and the same anchor in the prefetch
+   * loop. That clock advances as WebKit's render thread produces quanta, not as
+   * the device plays them. If it gains on wall time while idle, the gain is a
+   * queue of already-rendered audio ahead of the speakers, and the next play
+   * anchors that far behind what you hear — a fixed delay, the size of the gain,
+   * for as long as the context lives. Within a play both clocks then advance
+   * together, which is why the drift monitor sees nothing wrong.
+   *
+   * A negative figure is the idle suspend doing its job: a suspended context's
+   * clock is frozen, so it falls behind wall time by the length of the gap.
+   */
+  private _logIdleGap(): void {
+    const ctxStamp = this.idleCtxStamp;
+    this.idleCtxStamp = null;
+    if (ctxStamp === null || !this.ctx) return;
+    const wallElapsed = (performance.now() - this.idleWallStampMs) / 1000;
+    if (wallElapsed < IDLE_GAP_LOG_MIN_SEC) return;
+    const ctxElapsed = this.ctx.currentTime - ctxStamp;
+    const excess = ctxElapsed - wallElapsed;
+    this._log(
+      `idle gap: stopped for ${wallElapsed.toFixed(1)}s — ctx +${ctxElapsed.toFixed(3)}s `
+      + `(${excess >= 0 ? 'gained' : 'frozen for'} ${Math.abs(excess * 1000).toFixed(0)}ms) `
+      + `— ctx.state=${this.ctx.state}`,
+    );
+  }
+
+  /**
    * Suspend the context once playback has been stopped for IDLE_SUSPEND_MS.
    *
    * Armed from _cancelPlayback, which has already bumped playId, so the next
@@ -1037,6 +1077,10 @@ export class AudioEngine implements PlaybackTransport {
    */
   private _armIdleSuspend(): void {
     if (this.idleSuspendTimer !== null) clearTimeout(this.idleSuspendTimer);
+    // Set localStorage['seenote.audioIdleSuspend'] = 'off' to leave the context
+    // running while idle — the only way to watch the delay form, and so to read
+    // a real number out of the idle-gap line.
+    try { if (localStorage.getItem('seenote.audioIdleSuspend') === 'off') return; } catch { /* no storage */ }
     const myPlayId = this.playId;
     this.idleSuspendTimer = setTimeout(() => {
       this.idleSuspendTimer = null;
@@ -1082,6 +1126,16 @@ export class AudioEngine implements PlaybackTransport {
     }
     this._stopClockDriftMonitor();
     this._armIdleSuspend();
+    // Stamp both clocks at the stop. The next play compares them: the drift
+    // monitor re-origins per play, so a context clock that gains on wall time
+    // *between* plays — the shape that would put a fixed, idle-length-sized
+    // delay into every subsequent play — is invisible to it.
+    if (this.ctx && this.ctx.state === 'running') {
+      this.idleCtxStamp = this.ctx.currentTime;
+      this.idleWallStampMs = performance.now();
+    } else {
+      this.idleCtxStamp = null;
+    }
 
     this._raf.stop();
 
