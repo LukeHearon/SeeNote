@@ -261,6 +261,12 @@ export class AudioEngine implements PlaybackTransport {
   /** Last output latency reported to the log, so a change is only logged once.
    *  Negative until the first sample. */
   private lastLoggedLatencySec = -1;
+  /** Output latency the current context first reported once running; negative
+   *  until then. Unlike `lastLoggedLatencySec` this belongs to one context. */
+  private ctxLatencyBaselineSec = -1;
+  /** Set when the current context's output latency moved off its baseline — see
+   *  _rebuildContextIfReconfigured. */
+  private outputReconfigured = false;
   /** One-shot timer armed alongside the render check (see _armLatencyProbe). */
   private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Repeating timer comparing the context clock to the wall clock during a
@@ -319,13 +325,7 @@ export class AudioEngine implements PlaybackTransport {
     this._cancelPlayback();
 
     // Close any existing context (switching files)
-    if (this.ctx) {
-      await this.ctx.close().catch(() => {});
-      this.ctx = null;
-      this.gainNode = null;
-      this.limiterNode = null;
-      this._teardownFilterGraph();
-    }
+    await this._closeContext();
 
     this.pcmCache.clear();  // also cancels any ongoing preload from the previous file
 
@@ -533,6 +533,7 @@ export class AudioEngine implements PlaybackTransport {
     // play() still awaiting its first chunk (no ctx-dependent state yet) still
     // has its playId bumped and its stream/await chain torn down.
     this._cancelPlayback();
+    this._rebuildContextIfReconfigured();
     this.callbacks.onPaused();
   }
 
@@ -674,13 +675,7 @@ export class AudioEngine implements PlaybackTransport {
   async restart(): Promise<void> {
     if (this.disposed) return;
     this._cancelPlayback();
-    if (this.ctx) {
-      await this.ctx.close().catch(() => {});
-      this.ctx = null;
-      this.gainNode = null;
-      this.limiterNode = null;
-      this._teardownFilterGraph();
-    }
+    await this._closeContext();
   }
 
   /** Fully tear down the engine. Call on component unmount. Irreversible —
@@ -689,13 +684,7 @@ export class AudioEngine implements PlaybackTransport {
     this.disposed = true;
     this._cancelPlayback();
     this.pcmCache.cancelPreload();
-    if (this.ctx) {
-      this.ctx.close().catch(() => {});
-      this.ctx = null;
-    }
-    this.gainNode = null;
-    this.limiterNode = null;
-    this._teardownFilterGraph();
+    void this._closeContext();
     this.timeStretch.dispose();
     this.filePath = null;
   }
@@ -904,6 +893,16 @@ export class AudioEngine implements PlaybackTransport {
     const ctx = this.ctx;
     if (!ctx) return;
     const latencySec = this._outputLatencySec();
+    // Baseline taken only once running: a suspended context may report a
+    // placeholder, and flagging that would rebuild every fresh context.
+    if (ctx.state === 'running') {
+      if (this.ctxLatencyBaselineSec < 0) {
+        this.ctxLatencyBaselineSec = latencySec;
+      } else if (!this.outputReconfigured
+        && Math.abs(latencySec - this.ctxLatencyBaselineSec) >= LATENCY_CHANGE_LOG_SEC) {
+        this.outputReconfigured = true;
+      }
+    }
     const prev = this.lastLoggedLatencySec;
     if (Math.abs(latencySec - prev) < LATENCY_CHANGE_LOG_SEC) return;
     const first = prev < 0;
@@ -1016,6 +1015,36 @@ export class AudioEngine implements PlaybackTransport {
   private _teardownFilterGraph(): void {
     this.filterGraph.teardown();
     this._filterInput = null;
+  }
+
+  /** Drop the current AudioContext and its graph so the next play() builds a
+   *  fresh one. References are cleared before the close is awaited, so a play()
+   *  arriving mid-close never picks up the dying context. */
+  private async _closeContext(): Promise<void> {
+    const ctx = this.ctx;
+    this.ctx = null;
+    this.gainNode = null;
+    this.limiterNode = null;
+    this._teardownFilterGraph();
+    this.ctxLatencyBaselineSec = -1;
+    this.outputReconfigured = false;
+    if (ctx) await ctx.close().catch(() => {});
+  }
+
+  /**
+   * Replace the context if the output device reconfigured under it.
+   *
+   * On macOS/WKWebView, a context whose output latency changes while it's
+   * running (seen as 3→21→2ms in the first second of a play) can stay ~0.4s
+   * late for the rest of its life, even though every clock the page can see is
+   * in sync; a fresh context is back on time. Called only once playback has
+   * stopped, so nothing audible is cut, and the close gets the gap before the
+   * next keypress rather than racing a new context's CoreAudio setup.
+   */
+  private _rebuildContextIfReconfigured(): void {
+    if (!this.outputReconfigured || !this.ctx) return;
+    this._log('output reconfigured during this context — rebuilding it for the next play');
+    void this._closeContext();
   }
 
   /** Stop all sources and async loops. Does NOT call onPaused/onEnded. */
@@ -1449,6 +1478,7 @@ export class AudioEngine implements PlaybackTransport {
     await sleep(waitMs);
     if (this.playId !== myPlayId || this.endBoundEpoch !== myEndBoundEpoch) return;
     this._cancelPlayback();
+    this._rebuildContextIfReconfigured();
     this.callbacks.onEnded();
   }
 
@@ -1531,6 +1561,7 @@ export class AudioEngine implements PlaybackTransport {
       // continuation loop that is scheduling past it (see clearEndSec).
       if (this.playId !== myPlayId || this.endBoundEpoch !== myEndBoundEpoch) return;
       this._cancelPlayback();
+      this._rebuildContextIfReconfigured();
       this.callbacks.onEnded();
     }, waitMs);
   }
