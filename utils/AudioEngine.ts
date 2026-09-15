@@ -175,11 +175,6 @@ const LATENCY_CHANGE_LOG_SEC = 0.005;
  * stops the rendering, so there is nothing to pile up. Long enough not to
  * cycle the context between two plays a few seconds apart. */
 const IDLE_SUSPEND_MS = 5000;
-
-/** Whether getOutputTimestamp() has ever given a real reading in this process,
- *  and whether the loss of it has been logged — see the latency probe. */
-let outputTimestampEverReal = false;
-let outputTimestampLostLogged = false;
 /** How often the playback clock monitor samples (see _startClockDriftMonitor).
  *  Short enough that a one-second selection still produces a line. */
 const CLOCK_DRIFT_SAMPLE_MS = 500;
@@ -847,20 +842,6 @@ export class AudioEngine implements PlaybackTransport {
         + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
         + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
       );
-      // The reading going from real to the placeholder has so far marked every
-      // session where the audio ended up late, and it never came back within a
-      // process — only a relaunch restored it. Process-wide (module scope), not
-      // per engine or per context, because that is the scope it recovers at.
-      if (measured !== null && measured > 0) {
-        outputTimestampEverReal = true;
-      } else if (measured === 0 && outputTimestampEverReal && !outputTimestampLostLogged) {
-        outputTimestampLostLogged = true;
-        this._log(
-          'output timestamp went from a real reading to the placeholder — audio may now '
-          + 'play late by a growing amount; relaunching SeeNote is the only known fix',
-          'error',
-        );
-      }
     }, Math.max(0, dueInSec * 1000));
   }
 
