@@ -166,14 +166,24 @@ const LATENCY_PROBE_DELAY_SEC = 0.2;
  *  measurement noise; above it, the audio device or its buffer size changed
  *  under us, which moves the delay before sound. */
 const LATENCY_CHANGE_LOG_SEC = 0.005;
-/** How long after playback stops the context is suspended.
+/** How long after playback stops the idle context is closed.
  *
- * A running context renders silence for as long as it's left alone, and on
- * macOS/WKWebView an app left idle comes back with its audio delayed — ~1s
- * after 5 minutes, growing with the idle time, and only a relaunch clears it
- * (App Nap ruled out: it happens with NSAppSleepDisabled set). Suspending
- * stops the rendering, so there is nothing to pile up. Long enough not to
- * cycle the context between two plays a few seconds apart. */
+ * On macOS/WKWebView an app left idle in the background comes back with its
+ * audio late — ~1s after a couple of minutes, growing with the idle time, and
+ * silent outright after long enough. Measured across a 135.7s background idle,
+ * a *running* context's clock came back 9.0s short of wall time: while nothing
+ * is playing the render thread and the output device come apart, and every
+ * position scheduled against ctx.currentTime afterwards inherits the gap, for
+ * the life of the context. Closing it and letting the next play build a fresh
+ * one is the known cure — it is what the Restart Audio menu does by hand.
+ *
+ * Long enough not to cycle the context between two plays half a minute apart.
+ * (App Nap ruled out: it happens with NSAppSleepDisabled set.) */
+const IDLE_REBUILD_MS = 30000;
+/** The same, for the 'suspend' mode: shorter, because suspending is cheap and
+ *  reversible where a rebuild costs a context. Suspending stops the rendering
+ *  but leaves the same audio unit in place, so it prevents the drift without
+ *  repairing a context that has already drifted. */
 const IDLE_SUSPEND_MS = 5000;
 /** Shortest stop worth an idle-gap line (see _logIdleGap). Below this the two
  *  clocks can't have parted by anything that matters. */
@@ -275,8 +285,9 @@ export class AudioEngine implements PlaybackTransport {
   private lastLoggedLatencySec = -1;
   /** One-shot timer armed alongside the render check (see _armLatencyProbe). */
   private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
-  /** One-shot timer that suspends the context once idle (see _armIdleSuspend). */
-  private idleSuspendTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One-shot timer that rebuilds or suspends the context once idle
+   *  (see _armIdleAction). */
+  private idleActionTimer: ReturnType<typeof setTimeout> | null = null;
   /** ctx.currentTime and wall time as of the last stop, so the next play can
    *  measure what the two clocks did while nothing was playing. Null when
    *  there is no gap to measure (fresh context, or already reported). */
@@ -473,7 +484,7 @@ export class AudioEngine implements PlaybackTransport {
         this._log(`ctx.state -> ${this.ctx?.state ?? 'closed'}`);
       });
     } else if (this.ctx.state === 'suspended') {
-      // Either the idle suspend fired (the usual case — see _armIdleSuspend) or
+      // Either the idle suspend fired (see _armIdleAction, 'suspend' mode) or
       // the context was suspended under us. Scheduling proceeds regardless:
       // ctx.currentTime is frozen until it resumes, so everything anchored to it
       // stays consistent, exactly as on the first play of a new context.
@@ -1042,14 +1053,18 @@ export class AudioEngine implements PlaybackTransport {
    * Everything is scheduled against `ctx.currentTime` — `playStartCtx =
    * ctx.currentTime + START_MARGIN_SEC`, and the same anchor in the prefetch
    * loop. That clock advances as WebKit's render thread produces quanta, not as
-   * the device plays them. If it gains on wall time while idle, the gain is a
-   * queue of already-rendered audio ahead of the speakers, and the next play
-   * anchors that far behind what you hear — a fixed delay, the size of the gain,
-   * for as long as the context lives. Within a play both clocks then advance
-   * together, which is why the drift monitor sees nothing wrong.
+   * the device plays them.
    *
-   * A negative figure is the idle suspend doing its job: a suspended context's
-   * clock is frozen, so it falls behind wall time by the length of the gap.
+   * Measured across a 135.7s idle with the app in the background, a context
+   * left running came back 9.0s SHORT of wall time, and the plays that followed
+   * were about a second late and stayed late until the context was rebuilt. So
+   * the renderer falls behind the device while idle rather than running ahead
+   * of it. The same measurement in the foreground (9.0s stopped) is clean to
+   * 1ms. Within a play both clocks advance together, which is why the drift
+   * monitor — it re-origins at every play — never sees any of this.
+   *
+   * A negative figure on a context that was suspended while idle is expected
+   * and harmless: a suspended clock is frozen for the length of the gap.
    */
   private _logIdleGap(): void {
     const ctxStamp = this.idleCtxStamp;
@@ -1067,28 +1082,62 @@ export class AudioEngine implements PlaybackTransport {
   }
 
   /**
-   * Suspend the context once playback has been stopped for IDLE_SUSPEND_MS.
+   * What to do with a context nothing is playing through: 'rebuild' (the
+   * default), 'suspend', or 'off'. Set localStorage['seenote.audioIdleMode'] to
+   * pick one — 'off' leaves the context running while idle, which is the only
+   * way to watch the drift form and so to read a real number out of the
+   * idle-gap line.
+   *
+   * localStorage['seenote.audioIdleSuspend'] = 'off' is the previous build's
+   * spelling of 'off' and still works, so a debug session set up under it keeps
+   * behaving the same way.
+   */
+  private _idleMode(): 'rebuild' | 'suspend' | 'off' {
+    try {
+      if (localStorage.getItem('seenote.audioIdleSuspend') === 'off') return 'off';
+      const mode = localStorage.getItem('seenote.audioIdleMode');
+      if (mode === 'rebuild' || mode === 'suspend' || mode === 'off') return mode;
+    } catch { /* no storage */ }
+    return 'rebuild';
+  }
+
+  /**
+   * Rebuild or suspend the context once playback has been stopped long enough.
    *
    * Armed from _cancelPlayback, which has already bumped playId, so the next
-   * play() — which bumps it again — leaves this timer inert rather than
-   * suspending underneath a play that has just started. Nothing has to cancel
-   * it when the context goes away: it no-ops on a disposed engine or a null
-   * context, and re-arming clears the previous one.
+   * play() — which bumps it again — leaves this timer inert rather than firing
+   * underneath a play that has just started. Nothing has to cancel it when the
+   * context goes away: it no-ops on a disposed engine or a null context, and
+   * re-arming clears the previous one.
    */
-  private _armIdleSuspend(): void {
-    if (this.idleSuspendTimer !== null) clearTimeout(this.idleSuspendTimer);
-    // Set localStorage['seenote.audioIdleSuspend'] = 'off' to leave the context
-    // running while idle — the only way to watch the delay form, and so to read
-    // a real number out of the idle-gap line.
-    try { if (localStorage.getItem('seenote.audioIdleSuspend') === 'off') return; } catch { /* no storage */ }
+  private _armIdleAction(): void {
+    if (this.idleActionTimer !== null) clearTimeout(this.idleActionTimer);
+    const mode = this._idleMode();
+    if (mode === 'off') return;
     const myPlayId = this.playId;
-    this.idleSuspendTimer = setTimeout(() => {
-      this.idleSuspendTimer = null;
+    this.idleActionTimer = setTimeout(() => {
+      this.idleActionTimer = null;
       if (this.playId !== myPlayId || this.disposed) return;
       const ctx = this.ctx;
       if (!ctx || ctx.state !== 'running') return;
-      ctx.suspend().catch(() => {});
-    }, IDLE_SUSPEND_MS);
+      if (mode === 'suspend') {
+        ctx.suspend().catch(() => {});
+        return;
+      }
+      // Drop the context so the next play() builds a fresh one inside its own
+      // user gesture — the same teardown restart() performs, which is what
+      // clears the fault by hand. close() is async and deliberately not
+      // awaited: nothing holds a node once the graph is torn down. The idle
+      // stamp goes with it, because a figure spanning two contexts' clocks
+      // would compare origins that have nothing to do with each other.
+      this.ctx = null;
+      this.gainNode = null;
+      this.limiterNode = null;
+      this._teardownFilterGraph();
+      this.idleCtxStamp = null;
+      this._log(`idle rebuild: context closed after ${(IDLE_REBUILD_MS / 1000).toFixed(0)}s idle`);
+      ctx.close().catch(() => {});
+    }, mode === 'suspend' ? IDLE_SUSPEND_MS : IDLE_REBUILD_MS);
   }
 
   private _teardownFilterGraph(): void {
@@ -1125,7 +1174,7 @@ export class AudioEngine implements PlaybackTransport {
       this.latencyProbeTimer = null;
     }
     this._stopClockDriftMonitor();
-    this._armIdleSuspend();
+    this._armIdleAction();
     // Stamp both clocks at the stop. The next play compares them: the drift
     // monitor re-origins per play, so a context clock that gains on wall time
     // *between* plays — the shape that would put a fixed, idle-length-sized
