@@ -1130,7 +1130,17 @@ export class AudioEngine implements PlaybackTransport {
     // monitor re-origins per play, so a context clock that gains on wall time
     // *between* plays — the shape that would put a fixed, idle-length-sized
     // delay into every subsequent play — is invisible to it.
-    if (this.ctx && this.ctx.state === 'running') {
+    // Only a cancel that actually stopped something starts an idle gap. play()
+    // calls this before every play, and a stamp taken there would overwrite the
+    // one from the stop we want to measure across — wall elapsed would read ~0
+    // and the line would never print. `isPlayingState` is cleared further down,
+    // and `queue` further down still, so both still describe the play being
+    // cancelled here; a play cancelled while still buffering has the queue but
+    // not the flag.
+    const stoppedSomething = this.isPlayingState || this.queue.length > 0;
+    if (!stoppedSomething) {
+      // Nothing was in flight: leave the existing stamp alone.
+    } else if (this.ctx && this.ctx.state === 'running') {
       this.idleCtxStamp = this.ctx.currentTime;
       this.idleWallStampMs = performance.now();
     } else {
