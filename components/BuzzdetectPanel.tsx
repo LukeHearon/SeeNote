@@ -63,6 +63,9 @@ const EMPTY_ISOLATION: readonly string[] = [];
 // Alpha the other neurons drop to while one is isolated. Far enough back that
 // the isolated line reads alone at a glance, still visible as context.
 const ISOLATED_ALPHA = 0.15;
+// Alpha for non-isolated neurons in the readout text — dimmer than full
+// strength but still legible, unlike the graph line's ISOLATED_ALPHA.
+const READOUT_ISOLATED_ALPHA = 0.55;
 // How close (px, vertically) the cursor has to be to a neuron's point for the
 // readout to narrow to that neuron. A little wider than the dot itself, so it
 // can be aimed at without precision, but well short of half a panel — past this
@@ -1343,7 +1346,7 @@ export default function BuzzdetectPanel({
                   key={n}
                   style={{
                     color: neuronColors[i],
-                    opacity: isolatedNeurons.length > 0 && !isolated ? ISOLATED_ALPHA : 1,
+                    opacity: isolatedNeurons.length > 0 && !isolated ? READOUT_ISOLATED_ALPHA : 1,
                   }}
                 >
                   {n} {text}
