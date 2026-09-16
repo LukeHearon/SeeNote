@@ -1311,27 +1311,45 @@ export default function BuzzdetectPanel({
           {isSingle ? buzzdetectCopy.rawActivationsHeader : buzzdetectCopy.avgActivationsHeader}
         </div>
         <div className="flex flex-wrap gap-x-2">
-          {data.neurons.map((n, i) => {
-            if (hidden.has(n)) return null;
-            // Pointing at one neuron's point is asking about that neuron, so
-            // the readout drops to it alone rather than making the user find
-            // its line in a list of a dozen. Everything else about the readout
-            // — the unit, the span, the headers — is unchanged.
-            if (hoverNeuron && n !== hoverNeuron) return null;
-            const value = unitValueOf(i, unit);
-            const text = Number.isNaN(value)
-              ? buzzdetectCopy.noValue
-              : seriesMode !== 'detectionRate'
-                ? value.toFixed(2)
-                : isSingle
-                  ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
-                  : `${(value * 100).toFixed(0)}%`;
-            return (
-              <span key={n} style={{ color: neuronColors[i] }}>
-                {n} {text}
-              </span>
-            );
-          })}
+          {/* Isolated neurons read first and at full strength; everything
+              plotted-but-not-isolated sorts to the back and dims, matching
+              how the graph itself treats them. */}
+          {data.neurons
+            .map((n, i) => ({ n, i }))
+            .sort((a, b) => {
+              if (isolatedNeurons.length === 0) return 0;
+              const aIsolated = isolatedNeurons.includes(a.n);
+              const bIsolated = isolatedNeurons.includes(b.n);
+              return aIsolated === bIsolated ? 0 : aIsolated ? -1 : 1;
+            })
+            .map(({ n, i }) => {
+              if (hidden.has(n)) return null;
+              // Pointing at one neuron's point is asking about that neuron, so
+              // the readout drops to it alone rather than making the user find
+              // its line in a list of a dozen. Everything else about the readout
+              // — the unit, the span, the headers — is unchanged.
+              if (hoverNeuron && n !== hoverNeuron) return null;
+              const value = unitValueOf(i, unit);
+              const text = Number.isNaN(value)
+                ? buzzdetectCopy.noValue
+                : seriesMode !== 'detectionRate'
+                  ? value.toFixed(2)
+                  : isSingle
+                    ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
+                    : `${(value * 100).toFixed(0)}%`;
+              const isolated = isolatedNeurons.length > 0 && isolatedNeurons.includes(n);
+              return (
+                <span
+                  key={n}
+                  style={{
+                    color: neuronColors[i],
+                    opacity: isolatedNeurons.length > 0 && !isolated ? ISOLATED_ALPHA : 1,
+                  }}
+                >
+                  {n} {text}
+                </span>
+              );
+            })}
         </div>
       </div>
     );
