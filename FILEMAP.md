@@ -83,6 +83,7 @@ Quick reference for agents. One phrase per file.
 - `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
 - `utils/buzzdetectSubset.ts` — derives the subset timeline from buzzdetect activations, and re-expresses the activations on it
 - `utils/buzzdetectStats.ts` — what a subset came to (kept seconds, regions, frames), for the palette's readout
+- `utils/buzzdetectManifest.ts` — reads suggested thresholds from a results folder's `buzzdetect_manifest.json` and prefills unset Detection at values
 - `utils/binIndex.ts` — index lookups over buzzdetect frame starts; frame extent (`frameLength`) and frame spacing (`frameHop`) are separate and never interchangeable
 - `utils/annotationProjection.ts` — projects annotations onto the display axis and reconciles edits back to source time
 - `MultiTierSpectrogramCache.ts` — in-memory multi-tier cache of decoded spectrogram chunks, with LRU eviction and a bounded fetch queue

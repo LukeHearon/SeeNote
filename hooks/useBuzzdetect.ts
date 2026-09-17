@@ -6,7 +6,9 @@ import {
   DEFAULT_BUZZDETECT_SUBSET_BUFFER,
   defaultBuzzdetectThreshold,
 } from '../constants';
-import { readBuzzdetect } from '../utils/tauriCommands';
+import { readBuzzdetect, readTextFile } from '../utils/tauriCommands';
+import { joinPath } from '../utils/projectPaths';
+import { BUZZDETECT_MANIFEST, manifestThresholds, prefillThresholds } from '../utils/buzzdetectManifest';
 
 /**
  * Subset picks used to be a list of neuron labels beside an optional per-neuron
@@ -196,6 +198,32 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
       .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
     return () => { cancelled = true; };
   }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength, project.settings.buzzdetectTrimActivationPrefix, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const thresholdsRef = useRef(buzzdetectThresholds);
+  thresholdsRef.current = buzzdetectThresholds;
+  // Prefill Detection at from the results folder's buzzdetect_manifest.json,
+  // which records the model's suggested thresholds. Only neurons with no entry
+  // yet are filled, so anything the user set or cleared stays theirs; the fill
+  // lands in the thresholds map and is saved with the project like a typed value.
+  useEffect(() => {
+    const dir = project.buzzdetectDirectoryAbs;
+    if (!dir) return;
+    let cancelled = false;
+    const trim = project.settings.buzzdetectTrimActivationPrefix ?? true;
+    readTextFile(joinPath(dir, BUZZDETECT_MANIFEST))
+      .then(text => {
+        if (cancelled || text === null) return;
+        const suggested = manifestThresholds(text, trim);
+        // Named from the latest committed map rather than inside the updater,
+        // which React may run twice.
+        const { filled } = prefillThresholds(thresholdsRef.current, suggested);
+        if (filled.length === 0) return;
+        setBuzzdetectThresholds(prev => prefillThresholds(prev, suggested).thresholds);
+        addLog(`buzzdetect: detection thresholds from ${BUZZDETECT_MANIFEST}: ${filled.map(n => `${n} ${suggested[n]}`).join(', ')}`);
+      })
+      .catch(err => { if (!cancelled) addLog(`buzzdetect manifest read error: ${err}`, 'error'); });
+    return () => { cancelled = true; };
+  }, [project.buzzdetectDirectoryAbs, project.settings.buzzdetectTrimActivationPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
   // null is kept in the map rather than deleted: an absent entry means "never
