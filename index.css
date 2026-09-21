@@ -38,3 +38,12 @@ body {
   border-radius: 4px;
   box-shadow: inset 0 0 0 2px #38bdf8, 0 0 0 3px rgba(56, 189, 248, 0.35);
 }
+
+/* Indeterminate progress bar (file tree, while the media directory scans). */
+@keyframes scan-bounce {
+  from { left: 0; }
+  to { left: 66.667%; }
+}
+.scan-bounce {
+  animation: scan-bounce 1.1s ease-in-out infinite alternate;
+}

@@ -56,6 +56,7 @@ export function ExampleFilePanel() {
     <div className="w-72 h-80 rounded border border-slate-700 overflow-hidden">
       <FileTree
         rootDirectory={DEMO_ROOT}
+        isScanning={false}
         allFiles={files}
         allFilesUnfiltered={demoFiles}
         currentTrack={currentTrack}

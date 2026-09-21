@@ -38,6 +38,8 @@ interface TreeNode {
 
 interface FileTreeProps {
   rootDirectory: string | null;
+  /** The media directory is still being scanned — files may be missing or stale. */
+  isScanning: boolean;
   allFiles: string[];
   allFilesUnfiltered: string[];
   currentTrack: string | null;
@@ -453,6 +455,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
 
 function FileTree({
   rootDirectory,
+  isScanning,
   allFiles,
   allFilesUnfiltered,
   currentTrack,
@@ -993,7 +996,7 @@ function FileTree({
         {rootDirectory && effectiveTotalFiles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <Music size={28} className="mb-2 opacity-50" />
-            <p className="text-sm">{copy.noMediaFiles}</p>
+            <p className="text-sm">{isScanning ? copy.scanning : copy.noMediaFiles}</p>
           </div>
         )}
 
@@ -1170,6 +1173,12 @@ function FileTree({
           )}
         </div>
       </div>
+
+      {isScanning && rootDirectory && (
+        <div className="relative h-0.5 flex-none overflow-hidden bg-slate-800" role="progressbar" aria-label={copy.scanning}>
+          <div className="scan-bounce absolute inset-y-0 w-1/3 bg-[#e65161]" />
+        </div>
+      )}
 
       {fileFilter !== 'all' && rootDirectory && effectiveFiles.length < effectiveTotalFiles.length && (
         <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-800 flex-none bg-slate-900">

@@ -126,8 +126,30 @@ export const openDirectoryDialogAt = (startPath: string): Promise<string | null>
   invoke('open_directory_dialog_at', { startPath });
 
 
-export const listMediaFilesRecursive = (path: string): Promise<string[]> =>
-  invoke('list_media_files_recursive', { path });
+/** Media (audio/video) and other files found under a media directory. */
+export interface MediaScan {
+  media: string[];
+  nonMedia: string[];
+}
+
+/** File lists from the last completed scan of `path`, or null. May be stale. */
+export const readMediaScanCache = (path: string): Promise<MediaScan | null> =>
+  invoke('read_media_scan_cache', { path });
+
+/**
+ * Walk `path` once (breadth-first), calling `onBatch` with newly-found files as
+ * they arrive. Resolves with the complete sorted lists, and refreshes the
+ * on-disk cache. Rejects with "superseded" if a newer scan started first.
+ */
+export const scanMediaTree = (path: string, onBatch: (batch: MediaScan) => void): Promise<MediaScan> => {
+  const channel = new Channel<MediaScan>();
+  channel.onmessage = onBatch;
+  return invoke('scan_media_tree', { path, onBatch: channel });
+};
+
+/** Have the running scan visit directories under `folder` first (null clears). */
+export const setScanPriorityFolder = (folder: string | null): Promise<void> =>
+  invoke('set_scan_priority_folder', { folder });
 
 /** Recursively list annotation files with the given extension (e.g. '.txt', '.csv', '.json'). Returns absolute paths. */
 export const listAnnotationFilesRecursive = (dir: string, ext: string): Promise<string[]> =>
@@ -156,10 +178,6 @@ export const guessProjectFolderName = (archivePath: string): Promise<string> =>
  * the final extracted directory path. */
 export const extractArchive = (archivePath: string, destDir: string, folderName: string): Promise<string> =>
   invoke('extract_archive', { archivePath, destDir, folderName });
-
-/** Recursively list all non-audio/video files under path. */
-export const listNonMediaFilesRecursive = (path: string): Promise<string[]> =>
-  invoke('list_non_media_files_recursive', { path });
 
 /**
  * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to

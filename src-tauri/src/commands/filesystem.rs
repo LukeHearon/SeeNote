@@ -1,4 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tauri::ipc::Channel;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use super::shared::{atomic_write, AUDIO_EXTS, VIDEO_EXTS};
@@ -217,87 +223,237 @@ pub async fn open_files_dialog(
     }))
 }
 
-#[tauri::command]
-pub async fn list_media_files_recursive(path: String) -> Result<Vec<String>, String> {
-    let root = std::path::Path::new(&path);
-    let mut files = Vec::new();
-    collect_media_files(root, &mut files).map_err(|e| e.to_string())?;
-    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    Ok(files)
+/// Media and non-media files under a directory. Also the payload of each
+/// streamed batch while a scan is running (`camelCase` for the frontend).
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaScan {
+    pub media: Vec<String>,
+    pub non_media: Vec<String>,
 }
 
-fn collect_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
-    let read_dir_iter = match std::fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(e) => {
-            eprintln!("[SeeNote] collect_media_files: cannot read dir '{}': {}", dir.display(), e);
-            return Ok(());
+impl MediaScan {
+    fn len(&self) -> usize {
+        self.media.len() + self.non_media.len()
+    }
+}
+
+/// Generation counter: starting a scan bumps it, and any walk holding an older
+/// value bails out. Keeps a refresh (or a media-dir change) from leaving a
+/// stale walk hammering the drive alongside the new one.
+static CURRENT_SCAN: AtomicU64 = AtomicU64::new(0);
+
+const SCAN_BATCH_MAX_FILES: usize = 5000;
+const SCAN_BATCH_MAX_AGE: Duration = Duration::from_millis(300);
+
+struct ScanState<'a> {
+    id: u64,
+    all: MediaScan,
+    pending: MediaScan,
+    last_flush: Instant,
+    on_batch: &'a Channel<MediaScan>,
+}
+
+impl ScanState<'_> {
+    fn superseded(&self) -> bool {
+        CURRENT_SCAN.load(Ordering::Relaxed) != self.id
+    }
+
+    fn flush(&mut self) {
+        let batch = std::mem::take(&mut self.pending);
+        // Keep the authoritative copy here; the channel gets its own.
+        self.all.media.extend(batch.media.iter().cloned());
+        self.all.non_media.extend(batch.non_media.iter().cloned());
+        let _ = self.on_batch.send(batch);
+        self.last_flush = Instant::now();
+    }
+}
+
+/// Folder the user is currently looking at, plus a version bumped on every
+/// change so the walker knows when to re-order its queue.
+static SCAN_PRIORITY: Mutex<(u64, Option<PathBuf>)> = Mutex::new((0, None));
+
+/// Ask the running (or next) scan to visit directories under `folder` first.
+/// `None` clears the preference.
+#[tauri::command]
+pub fn set_scan_priority_folder(folder: Option<String>) {
+    let mut g = SCAN_PRIORITY.lock().unwrap();
+    g.0 += 1;
+    g.1 = folder.map(PathBuf::from);
+}
+
+/// One breadth-first pass over `root`, classifying every file as media or
+/// non-media. Breadth-first so the top levels of every folder arrive before
+/// any single folder is dug into; directories under the priority folder jump
+/// the queue. An error on `root` itself is returned; errors on nested
+/// directories are logged and skipped so one unreadable folder doesn't sink
+/// the scan. Returns `Ok(false)` if the scan was superseded.
+fn walk_media_tree(root: &std::path::Path, st: &mut ScanState) -> std::io::Result<bool> {
+    let mut priority: VecDeque<PathBuf> = VecDeque::new();
+    let mut normal: VecDeque<PathBuf> = VecDeque::new();
+    normal.push_back(root.to_path_buf());
+    let mut seen_version = u64::MAX;
+    let mut prefix: Option<PathBuf> = None;
+    let mut is_root = true;
+
+    loop {
+        if st.superseded() {
+            return Ok(false);
         }
-    };
-    for entry_result in read_dir_iter {
-        let entry = match entry_result {
-            Ok(e) => e,
+        {
+            let g = SCAN_PRIORITY.lock().unwrap();
+            if g.0 != seen_version {
+                seen_version = g.0;
+                prefix = g.1.clone();
+                // Re-sort everything queued so far into the right lane.
+                let queued: Vec<PathBuf> = priority.drain(..).chain(normal.drain(..)).collect();
+                for d in queued {
+                    if prefix.as_ref().is_some_and(|p| d.starts_with(p)) {
+                        priority.push_back(d);
+                    } else {
+                        normal.push_back(d);
+                    }
+                }
+            }
+        }
+        let Some(dir) = priority.pop_front().or_else(|| normal.pop_front()) else { break };
+        let read_dir_iter = match std::fs::read_dir(&dir) {
+            Ok(it) => it,
+            Err(e) if is_root => return Err(e),
             Err(e) => {
-                eprintln!("[SeeNote] collect_media_files: error reading entry in '{}': {}", dir.display(), e);
+                eprintln!("[SeeNote] scan: cannot read dir '{}': {}", dir.display(), e);
                 continue;
             }
         };
-        let path = entry.path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with('.') {
-            continue;
+        is_root = false;
+        for entry_result in read_dir_iter {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("[SeeNote] scan: error reading entry in '{}': {}", dir.display(), e);
+                    continue;
+                }
+            };
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            // file_type() comes from the directory read itself (no extra stat
+            // per entry, which is the dominant cost on external drives).
+            // Symlinks need the followed metadata to know what they point at.
+            let is_dir = match entry.file_type() {
+                Ok(t) if t.is_symlink() => path.is_dir(),
+                Ok(t) => t.is_dir(),
+                Err(_) => path.is_dir(),
+            };
+            if is_dir {
+                if prefix.as_ref().is_some_and(|p| path.starts_with(p)) {
+                    priority.push_back(path);
+                } else {
+                    normal.push_back(path);
+                }
+            } else {
+                let (is_audio, is_video) = classify_ext(&path);
+                let s = path.into_os_string().to_string_lossy().into_owned();
+                if is_audio || is_video {
+                    st.pending.media.push(s);
+                } else {
+                    st.pending.non_media.push(s);
+                }
+            }
         }
-        if path.is_dir() {
-            if let Err(e) = collect_media_files(&path, files) {
-                eprintln!("[SeeNote] collect_media_files: error descending into '{}': {}", path.display(), e);
-            }
-        } else {
-            let (is_audio, is_video) = classify_ext(&path);
-            if is_audio || is_video {
-                files.push(path.to_string_lossy().to_string());
-            }
+        // Flush between directories. A folder is read whole before the next,
+        // so a huge flat folder yields one big batch — still one IPC message.
+        if st.pending.len() >= SCAN_BATCH_MAX_FILES
+            || (st.pending.len() > 0 && st.last_flush.elapsed() >= SCAN_BATCH_MAX_AGE)
+        {
+            st.flush();
         }
     }
-    Ok(())
+    Ok(true)
 }
 
-fn collect_non_media_files(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
-    let read_dir_iter = match std::fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(e) => {
-            eprintln!("[SeeNote] collect_non_media_files: cannot read dir '{}': {}", dir.display(), e);
-            return Ok(());
-        }
-    };
-    for entry_result in read_dir_iter {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with('.') {
-            continue;
-        }
-        if path.is_dir() {
-            let _ = collect_non_media_files(&path, files);
-        } else {
-            let (is_audio, is_video) = classify_ext(&path);
-            if !is_audio && !is_video {
-                files.push(path.to_string_lossy().to_string());
-            }
-        }
-    }
-    Ok(())
+fn scan_cache_path(app: &tauri::AppHandle, root: &str) -> Result<std::path::PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    use tauri::Manager;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    root.hash(&mut h);
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("media-scan");
+    Ok(dir.join(format!("{:016x}.json", h.finish())))
 }
 
+#[derive(Serialize, Deserialize)]
+struct ScanCacheFile {
+    root: String,
+    #[serde(flatten)]
+    scan: MediaScan,
+}
+
+/// The file list from the last completed scan of `path`, or None. May be
+/// stale (files added/removed since); the caller is expected to rescan.
 #[tauri::command]
-pub async fn list_non_media_files_recursive(path: String) -> Result<Vec<String>, String> {
-    let root = std::path::Path::new(&path);
-    let mut files = Vec::new();
-    collect_non_media_files(root, &mut files).map_err(|e| e.to_string())?;
-    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    Ok(files)
+pub async fn read_media_scan_cache(app: tauri::AppHandle, path: String) -> Result<Option<MediaScan>, String> {
+    let cache_path = scan_cache_path(&app, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(raw) = std::fs::read(&cache_path) else { return Ok(None) };
+        // A corrupt or old-format cache is just a miss.
+        let Ok(cached) = serde_json::from_slice::<ScanCacheFile>(&raw) else { return Ok(None) };
+        Ok(if cached.root == path { Some(cached.scan) } else { None })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Walk `path` once, streaming batches of files over `on_batch` as they are
+/// found, then return the complete sorted lists and refresh the on-disk cache.
+/// Errs with "superseded" if a newer scan started first.
+#[tauri::command]
+pub async fn scan_media_tree(
+    app: tauri::AppHandle,
+    path: String,
+    on_batch: Channel<MediaScan>,
+) -> Result<MediaScan, String> {
+    let id = CURRENT_SCAN.fetch_add(1, Ordering::Relaxed) + 1;
+    let cache_path = scan_cache_path(&app, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut st = ScanState {
+            id,
+            all: MediaScan::default(),
+            pending: MediaScan::default(),
+            last_flush: Instant::now(),
+            on_batch: &on_batch,
+        };
+        let root = std::path::Path::new(&path);
+        match walk_media_tree(root, &mut st) {
+            Ok(true) => {}
+            Ok(false) => return Err("superseded".to_string()),
+            Err(e) => return Err(format!("cannot read '{}': {}", path, e)),
+        }
+        // Last partial batch: fold into `all` without another IPC send (the
+        // final return value carries everything).
+        let tail = std::mem::take(&mut st.pending);
+        st.all.media.extend(tail.media);
+        st.all.non_media.extend(tail.non_media);
+        let mut result = st.all;
+        // Cached keys: lowercasing once per path instead of once per comparison.
+        result.media.sort_by_cached_key(|s| s.to_lowercase());
+        result.non_media.sort_by_cached_key(|s| s.to_lowercase());
+
+        let cached = ScanCacheFile { root: path, scan: MediaScan { media: result.media, non_media: result.non_media } };
+        let write = (|| -> Result<(), String> {
+            if let Some(dir) = cache_path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            let json = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
+            atomic_write(&cache_path, &json)
+        })();
+        if let Err(e) = write {
+            eprintln!("[SeeNote] scan: could not write cache: {}", e);
+        }
+        Ok(cached.scan)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

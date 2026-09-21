@@ -13,7 +13,9 @@ import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from 
 import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
-import { getFileInfo, listMediaFilesRecursive, listNonMediaFilesRecursive, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import { getFileInfo, readMediaScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import type { MediaScan } from './utils/tauriCommands';
+import { scanMediaDirectory } from './utils/mediaScan';
 import { githubRepoPageUrl } from './utils/gitSync';
 import { isInsideDir } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
@@ -1362,6 +1364,53 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     addLog,
   });
 
+  // Load the file lists for a media directory. With `useCache`, the last scan's
+  // list shows immediately (and `onCached` fires) while the real scan runs;
+  // otherwise partial results stream into the tree as they're found, unless
+  // `streamPartials` is false (a refresh, where the list is already populated).
+  // Resolves with the final lists, or null if a newer scan superseded this one.
+  const [isScanning, setIsScanning] = useState(false);
+  const scanTokenRef = useRef(0);
+  const runMediaScan = useCallback(async (
+    root: string,
+    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: MediaScan) => void } = {},
+  ): Promise<MediaScan | null> => {
+    const token = ++scanTokenRef.current;
+    const isCurrent = () => scanTokenRef.current === token;
+    const apply = (scan: MediaScan) => {
+      setAllMediaFiles(scan.media);
+      setAllNonMediaFiles(scan.nonMedia);
+    };
+    let showedCache = false;
+    let finished = false;
+    setIsScanning(true);
+    try {
+      const scanPromise = scanMediaDirectory(root, partial => {
+        if (isCurrent() && !showedCache && (opts.streamPartials ?? true)) apply(partial);
+      });
+      if (opts.useCache) {
+        const cached = await readMediaScanCache(root).catch(() => null);
+        if (cached && !finished && isCurrent()) {
+          showedCache = true;
+          apply(cached);
+          opts.onCached?.(cached);
+        }
+      }
+      const final = await scanPromise;
+      finished = true;
+      if (!final || !isCurrent()) return null;
+      apply(final);
+      return final;
+    } finally {
+      if (isCurrent()) setIsScanning(false);
+    }
+  }, [setAllMediaFiles]);
+
+  // Point the running scan at the folder the file tree is showing.
+  useEffect(() => {
+    setScanPriorityFolder(project.preferences.enteredFolderPath ?? null).catch(() => {});
+  }, [project.preferences.enteredFolderPath]);
+
   // Initialize state from project prop on mount
   useEffect(() => {
     loadAnnotationTools(project);
@@ -1421,30 +1470,48 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     annotationsHistoryRef.current = [[]];
     historyIndexRef.current = 0;
 
-    Promise.all([
-      listMediaFilesRecursive(project.mediaDirectoryAbs),
-      listNonMediaFilesRecursive(project.mediaDirectoryAbs),
-    ])
-      .then(([files, nonMedia]) => {
-        setAllMediaFiles(files);
-        setAllNonMediaFiles(nonMedia);
-        let firstFile = files[0];
-        if (project.preferences.shuffleMode && files.length > 0) {
-          const shuffled = shuffleArray(files);
-          setShuffledFiles(shuffled);
-          firstFile = shuffled[0];
+    const openInitialTrack = (files: string[]) => {
+      let firstFile = files[0];
+      if (project.preferences.shuffleMode && files.length > 0) {
+        const shuffled = shuffleArray(files);
+        setShuffledFiles(shuffled);
+        firstFile = shuffled[0];
+      }
+      // Prefer the project's saved active track (resolved relative to the
+      // current audio root, so it survives the project root being renamed
+      // or moved). Falls through to the first file if the saved track no
+      // longer exists.
+      const savedRel = project.preferences.uiSettings?.activeTrackPath;
+      if (savedRel) {
+        const savedAbs = `${project.mediaDirectoryAbs}/${savedRel}`;
+        if (files.includes(savedAbs)) firstFile = savedAbs;
+      }
+      if (firstFile) handleOpenTrack(firstFile);
+    };
+    let openedFromCache = false;
+    runMediaScan(project.mediaDirectoryAbs, {
+      useCache: true,
+      onCached: cached => {
+        openedFromCache = true;
+        openInitialTrack(cached.media);
+        refreshAnnotatedSet(cached.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
+      },
+    })
+      .then(final => {
+        if (!final) return;
+        if (!openedFromCache) {
+          openInitialTrack(final.media);
+        } else if (project.preferences.shuffleMode) {
+          // The queue was shuffled from the cached list; keep its order and
+          // fold in whatever the real scan added or dropped.
+          setShuffledFiles(prev => {
+            const present = new Set(final.media);
+            const kept = prev.filter(f => present.has(f));
+            const known = new Set(kept);
+            return [...kept, ...shuffleArray(final.media.filter(f => !known.has(f)))];
+          });
         }
-        // Prefer the project's saved active track (resolved relative to the
-        // current audio root, so it survives the project root being renamed
-        // or moved). Falls through to the first file if the saved track no
-        // longer exists.
-        const savedRel = project.preferences.uiSettings?.activeTrackPath;
-        if (savedRel) {
-          const savedAbs = `${project.mediaDirectoryAbs}/${savedRel}`;
-          if (files.includes(savedAbs)) firstFile = savedAbs;
-        }
-        if (firstFile) handleOpenTrack(firstFile);
-        refreshAnnotatedSet(files, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
+        refreshAnnotatedSet(final.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
       })
       .catch(err => {
         setAllMediaFiles([]);
@@ -1481,17 +1548,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   const handleRefreshFiles = useCallback(async () => {
     try {
-      const [files, nonMedia] = await Promise.all([
-        listMediaFilesRecursive(project.mediaDirectoryAbs),
-        listNonMediaFilesRecursive(project.mediaDirectoryAbs),
-      ]);
-      setAllMediaFiles(files);
-      setAllNonMediaFiles(nonMedia);
-      refreshAnnotatedSet(files, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
+      const final = await runMediaScan(project.mediaDirectoryAbs, { streamPartials: false });
+      if (final) refreshAnnotatedSet(final.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
     }
-  }, [project, refreshAnnotatedSet]);
+  }, [project, refreshAnnotatedSet, runMediaScan]);
 
   // After a git sync pulls new data (or the header's manual refresh bumps the
   // same nonce), refresh the file tree so freshly-arrived annotation files
@@ -1536,14 +1598,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setTrackPath(null);
       setVideoSrc(null);
       setAnnotations([]);
+      // Drop the old directory's list so a scan of the new one starts from empty.
+      setAllMediaFiles([]);
+      setAllNonMediaFiles([]);
+      let openedFirst = false;
+      const openFirst = (files: string[]) => {
+        if (files.length > 0) { openedFirst = true; handleOpenTrack(files[0]); }
+      };
       try {
-        const [files, nonMedia] = await Promise.all([
-          listMediaFilesRecursive(updated.mediaDirectoryAbs),
-          listNonMediaFilesRecursive(updated.mediaDirectoryAbs),
-        ]);
-        setAllMediaFiles(files);
-        setAllNonMediaFiles(nonMedia);
-        if (files.length > 0) handleOpenTrack(files[0]);
+        const final = await runMediaScan(updated.mediaDirectoryAbs, {
+          useCache: true,
+          onCached: cached => openFirst(cached.media),
+        });
+        if (final && !openedFirst) openFirst(final.media);
       } catch (err) {
         setAllMediaFiles([]);
         setAllNonMediaFiles([]);
@@ -1551,7 +1618,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }
     }
     setShowProjectSettings(false);
-  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools]);
+  }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools, runMediaScan]);
 
   const handleToggleFileFilter = useCallback(() => {
     const current = project.preferences.fileFilter ?? 'all';
@@ -2463,6 +2530,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         {currentDirectory && (() => {
           const fileTreeProps = {
             rootDirectory: currentDirectory,
+            isScanning,
             allFiles: displayQueue,
             allFilesUnfiltered: shuffleMode ? shuffledFiles : allTracks,
             currentTrack: trackPath,
