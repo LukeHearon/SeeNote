@@ -466,10 +466,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
       className={`flex items-center gap-2 w-full py-1 text-left transition-colors ${
         isActive
-          ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
-          : hasAnnotation
-            ? 'hover:bg-slate-800 text-sky-600 hover:text-sky-500'
-            : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
+          ? 'bg-[#e65161]/20 text-[#e65161]'
+          : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
       }`}
       style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
       data-tooltip={tooltipWithDate(node.name, node.name, filenameTimeInfo)}
@@ -1134,10 +1132,8 @@ function FileTree({
                     onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
                     className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
                       isActive
-                        ? `bg-[#e65161]/20 ${hasAnnotation ? 'text-white' : 'text-[#e65161]'}`
-                        : hasAnnotation
-                          ? 'hover:bg-slate-800 text-sky-600 hover:text-sky-500'
-                          : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
+                        ? 'bg-[#e65161]/20 text-[#e65161]'
+                        : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
                     }`}
                     style={{ opacity }}
                     data-tooltip={tooltipWithDate(filePath, basename(filePath), filenameTimeInfo)}
