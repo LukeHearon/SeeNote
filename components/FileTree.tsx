@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useR
 import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
 import type { FileFilter } from '../utils/fileFilter';
 import { dirCountsFromFiles, totalCounts, DirCounts } from '../utils/fileTreeCounts';
+import { columnLayout, ColumnLayout } from '../utils/fileTreeColumns';
 import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
@@ -72,10 +73,10 @@ interface FileTreeProps {
   onToggleFileFilter: () => void;
   buzzdetectFilter: FileFilter;
   onToggleBuzzdetectFilter: () => void;
-  /** Rescan the media directory from scratch. */
   /** Set a filter straight back to unfiltered (the empty state's "turn off" links). */
   onClearFileFilter: () => void;
   onClearBuzzdetectFilter: () => void;
+  /** Rescan the media directory from scratch. */
   onRefreshFileTree: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
@@ -255,52 +256,48 @@ function getAncestorPaths(currentTrack: string | null, rootDirectory: string | n
 // annotations / buzzdetect results, and for each track a pip saying whether it
 // does. They're the least important thing on a row, so they only appear when
 // the panel is wide enough to leave the name room.
-const MIN_NAME_PX = 150;
-const COLUMN_CHAR_PX = 7;
-
-interface ColumnLayout {
-  annotation: boolean;
-  buzzdetect: boolean;
-  /** Width of each column, in `ch`. */
-  widthCh: number;
-}
-
-/** Which columns fit in a list `listWidth` px wide, given the biggest number one will hold. */
-function columnLayout(listWidth: number, maxCount: number, hasBuzzdetect: boolean): ColumnLayout {
-  const widthCh = String(maxCount).length + 1;
-  const columnPx = widthCh * COLUMN_CHAR_PX;
-  return {
-    widthCh,
-    annotation: listWidth >= MIN_NAME_PX + columnPx,
-    buzzdetect: hasBuzzdetect && listWidth >= MIN_NAME_PX + 2 * columnPx,
-  };
-}
-
-/** The columns' cells for one row: a count on a folder, a pip on a track. */
+/**
+ * The columns' cells for one row: a count on a folder, a pip on a track. Every
+ * cell is a fixed-width slot with a faint divider on its left; the divider runs
+ * unbroken down the list because rows touch, and the header's filter buttons
+ * sit in slots of the same width (FilePanelHeaderButtons).
+ */
 const ResultCells: React.FC<{
   columns: ColumnLayout;
   annotation: number | boolean;
   buzzdetect: number | boolean;
   total?: number;
 }> = ({ columns, annotation, buzzdetect, total }) => {
+  const slot = 'flex-none self-stretch flex items-center justify-center text-[10px] tabular-nums border-l border-slate-800';
   const cell = (value: number | boolean, color: string, noun: string) => (
     <span
-      className="flex-none flex items-center justify-end text-[10px] tabular-nums"
-      style={{ width: `${columns.widthCh}ch` }}
+      className={slot}
+      style={{ width: `${columns.widthPx}px` }}
       data-tooltip={typeof value === 'number'
         ? `${value} of ${total ?? '?'} tracks ${noun}`
         : value ? `Track ${noun}` : undefined}
     >
       {typeof value === 'number'
-        ? <span className={value > 0 ? color : 'text-slate-700'}>{value}</span>
+        ? <span className={value > 0 ? color : 'text-slate-800'}>{value}</span>
         : value && <span className={`w-1.5 h-1.5 rounded-full bg-current ${color}`} />}
     </span>
   );
   return (
-    <>
-      {columns.annotation && cell(annotation, 'text-sky-500', 'have annotations')}
-      {columns.buzzdetect && cell(buzzdetect, 'text-amber-500', 'have buzzdetect results')}
-    </>
+    // One container, so a row's own gap doesn't open up between the columns.
+    <span className="flex-none self-stretch flex">
+      {columns.annotation && cell(annotation, 'text-sky-800', 'have annotations')}
+      {columns.buzzdetect && cell(buzzdetect, 'text-amber-800', 'have buzzdetect results')}
+      {/* On a track this is an empty slot, so the dividers run on unbroken. */}
+      {columns.total && (
+        <span
+          className={`${slot} text-slate-600`}
+          style={{ width: `${columns.widthPx}px` }}
+          data-tooltip={total !== undefined ? `${total} tracks` : undefined}
+        >
+          {total}
+        </span>
+      )}
+    </span>
   );
 };
 
@@ -371,10 +368,9 @@ const TreeItem: React.FC<TreeItemProps> = ({
               : <ChevronRight size={12} className="flex-none opacity-60" />
             }
             <FolderOpen size={13} className={`flex-none ${isClosedAncestor ? 'text-[#e65161]/70' : 'text-slate-500 group-hover:text-slate-300'}`} />
-            <span className="text-xs truncate">{node.name}</span>
+            <span className="text-xs truncate"><span data-name-text>{node.name}</span></span>
           </button>
           <ResultCells columns={columns} annotation={node.annotatedCount} buzzdetect={node.buzzdetectCount} total={node.fileCount} />
-          <span className="flex-none w-2" />
           <button
             onClick={(e) => { e.stopPropagation(); onEnterFolder(node.path); }}
             className="absolute inset-y-0 right-1 flex items-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -472,7 +468,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
           ? 'bg-[#e65161]/20 text-[#e65161]'
           : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
       }`}
-      style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
+      style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: columns.annotation ? 0 : '8px' }}
       data-tooltip={tooltipWithDate(node.name, node.name, filenameTimeInfo)}
       data-active-file={isActive ? '' : undefined}
       data-crumb={parentPath}
@@ -481,7 +477,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
         ? <Music size={12} className="flex-none opacity-70" />
         : <Film size={12} className="flex-none opacity-70" />
       }
-      <span className="text-xs truncate flex-1">{node.name}</span>
+      <span className="text-xs truncate flex-1"><span data-name-text>{node.name}</span></span>
       <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(node.path)} />
     </button>
   );
@@ -513,6 +509,8 @@ function FileTree({
   onToggleFileFilter,
   buzzdetectFilter,
   onToggleBuzzdetectFilter,
+  onClearFileFilter,
+  onClearBuzzdetectFilter,
   onRefreshFileTree,
   onRevealInFinder,
   onRevealAnnotations,
@@ -827,6 +825,8 @@ function FileTree({
     const ro = new ResizeObserver(() => setListWidth(el.clientWidth));
     ro.observe(el);
     setListWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, [collapsed, sectionCollapsed]);
   // How far right the longest rendered name reaches, measured off the names'
   // own (unclipped) text. Columns only appear beside names that fit, so this
   // is what they have to leave room for. Independent of the columns themselves
@@ -842,11 +842,9 @@ function FileTree({
     });
     setNameNeededPx(Math.ceil(max));
   }, [tree, expandedDirs, shuffleMode, allFiles, collapsed, sectionCollapsed]);
-    return () => ro.disconnect();
-  }, [collapsed, sectionCollapsed]);
   const columns = useMemo(
-    () => columnLayout(listWidth, Math.max(rootCounts.total, 1), showBuzzdetect),
-    [listWidth, rootCounts.total, showBuzzdetect],
+    () => columnLayout(listWidth, Math.max(rootCounts.total, 1), showBuzzdetect, nameNeededPx),
+    [listWidth, rootCounts.total, showBuzzdetect, nameNeededPx],
   );
 
   const { scrollTop, scrollHeight, clientHeight } = scrollState;
@@ -1032,6 +1030,7 @@ function FileTree({
           onToggleExpandCollapse={toggleExpandCollapse}
           onToggleFileFilter={onToggleFileFilter}
           onToggleBuzzdetectFilter={onToggleBuzzdetectFilter}
+          columns={columns}
         />
       )}
     >
@@ -1085,6 +1084,25 @@ function FileTree({
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <EyeOff size={28} className="mb-2 opacity-50" />
             <p className="text-sm">{copy.noFilesMatchFilter}</p>
+            <ul className="mt-1 text-xs space-y-0.5">
+              {[
+                fileFilter !== 'all' && {
+                  key: 'annotations',
+                  label: fileFilter === 'annotated' ? copy.annotatedFilterLabel : copy.unannotatedFilterLabel,
+                  clear: onClearFileFilter,
+                },
+                showBuzzdetect && buzzdetectFilter !== 'all' && {
+                  key: 'buzzdetect',
+                  label: buzzdetectFilter === 'annotated' ? copy.buzzdetectHasFilterLabel : copy.buzzdetectNoneFilterLabel,
+                  clear: onClearBuzzdetectFilter,
+                },
+              ].filter((f): f is { key: string; label: string; clear: () => void } => !!f).map(f => (
+                <li key={f.key}>
+                  {f.label}{' '}
+                  <button onClick={f.clear} className="underline decoration-dotted hover:text-slate-400">{copy.filterTurnOff}</button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -1161,7 +1179,7 @@ function FileTree({
                       ? <Music size={12} className="flex-none opacity-70" />
                       : <Film size={12} className="flex-none opacity-70" />
                     }
-                    <span className="text-xs truncate flex-1">{relNoExt}</span>
+                    <span className="text-xs truncate flex-1"><span data-name-text>{relNoExt}</span></span>
                     <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(filePath)} />
                   </button>
                 );
