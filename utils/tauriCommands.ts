@@ -126,34 +126,38 @@ export const openDirectoryDialogAt = (startPath: string): Promise<string | null>
   invoke('open_directory_dialog_at', { startPath });
 
 
-/** Media (audio/video) and other files found under a media directory. */
-export interface MediaScan {
-  media: string[];
-  nonMedia: string[];
+/** Files a directory scan matched, plus (media scans only) the other files it passed. */
+export interface DirScan {
+  files: string[];
+  others: string[];
 }
 
-/** File lists from the last completed scan of `path`, or null. May be stale. */
-export const readMediaScanCache = (path: string): Promise<MediaScan | null> =>
-  invoke('read_media_scan_cache', { path });
+/** What a scan looks for: media files, or files whose name ends in a suffix. */
+export type ScanSpec = { kind: 'media' } | { kind: 'suffixes'; suffixes: string[] };
 
-/** Delete the cached file list for `path`. */
-export const clearMediaScanCache = (path: string): Promise<void> =>
-  invoke('clear_media_scan_cache', { path });
+/** Lists from the last completed scan of `path` with this spec, or null. May be stale. */
+export const readScanCache = (path: string, spec: ScanSpec): Promise<DirScan | null> =>
+  invoke('read_scan_cache', { path, spec });
+
+/** Delete the cached lists for `path` with this spec. */
+export const clearScanCache = (path: string, spec: ScanSpec): Promise<void> =>
+  invoke('clear_scan_cache', { path, spec });
 
 /**
  * Walk `path` once (breadth-first), calling `onBatch` with newly-found files as
  * they arrive. Resolves with the complete sorted lists, and refreshes the
- * on-disk cache. Rejects with "superseded" if a newer scan started first.
+ * on-disk cache. Rejects with "superseded" if a newer scan of the same root and
+ * spec started first.
  */
-export const scanMediaTree = (path: string, onBatch: (batch: MediaScan) => void): Promise<MediaScan> => {
-  const channel = new Channel<MediaScan>();
+export const scanTree = (path: string, spec: ScanSpec, onBatch: (batch: DirScan) => void): Promise<DirScan> => {
+  const channel = new Channel<DirScan>();
   channel.onmessage = onBatch;
-  return invoke('scan_media_tree', { path, onBatch: channel });
+  return invoke('scan_tree', { path, spec, onBatch: channel });
 };
 
-/** Have the running scan visit directories under `folder` first (null clears). */
-export const setScanPriorityFolder = (folder: string | null): Promise<void> =>
-  invoke('set_scan_priority_folder', { folder });
+/** Have scans of `scanRoot` visit directories under `folder` first (null clears). */
+export const setScanPriorityFolder = (scanRoot: string, folder: string | null): Promise<void> =>
+  invoke('set_scan_priority_folder', { scanRoot, folder });
 
 /** Recursively list annotation files with the given extension (e.g. '.txt', '.csv', '.json'). Returns absolute paths. */
 export const listAnnotationFilesRecursive = (dir: string, ext: string): Promise<string[]> =>

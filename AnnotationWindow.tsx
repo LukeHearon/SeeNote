@@ -7,17 +7,18 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, ANNOTATION_FILE_EXT, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
 import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
-import { getFileInfo, readMediaScanCache, clearMediaScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
-import type { MediaScan } from './utils/tauriCommands';
-import { scanMediaDirectory } from './utils/mediaScan';
+import { getFileInfo, readScanCache, clearScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import type { DirScan, ScanSpec } from './utils/tauriCommands';
+import { scanDirectory, MEDIA_SCAN, ANNOTATION_SCAN, BUZZDETECT_SCAN, BUZZDETECT_SUFFIXES } from './utils/dirScan';
+import { tracksWithResults } from './utils/resultPresence';
 import { githubRepoPageUrl } from './utils/gitSync';
-import { isInsideDir } from './utils/projectPaths';
+import { isInsideDir, joinPath } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -48,7 +49,7 @@ import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
-import { revealInFileManager, listAnnotationFiles } from './utils/projectCommands';
+import { revealInFileManager } from './utils/projectCommands';
 import { AudioEngine } from './utils/AudioEngine';
 import { VideoElementEngine } from './utils/VideoElementEngine';
 import TooltipLayer from './components/TooltipLayer';
@@ -294,6 +295,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Set of audio file paths that have an annotation file
   const [annotatedTracks, setAnnotatedFiles] = useState<Set<string>>(new Set());
+  // Tracks with a buzzdetect result file. Always empty when the project has no
+  // buzzdetect directory.
+  const [buzzdetectTracks, setBuzzdetectTracks] = useState<Set<string>>(new Set());
+  // Bumped by "Refresh annotations" to make the open track re-read its labels.
+  const [annotationReloadNonce, setAnnotationReloadNonce] = useState(0);
   const [allNonMediaFiles, setAllNonMediaFiles] = useState<string[]>([]);
 
   // Memoized so children whose effects depend on it (e.g. CanvasVideoPlayer's
@@ -1360,36 +1366,45 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     loadedAnnotationsRef,
     syncingRef,
     preSyncSnapshotRef,
-    reloadNonce,
+    reloadNonce: reloadNonce + annotationReloadNonce,
     addLog,
   });
 
-  // Load the file lists for a media directory. With `useCache`, the last scan's
-  // list shows immediately (and `onCached` fires) while the real scan runs;
-  // otherwise partial results stream into the tree as they're found, unless
-  // `streamPartials` is false (a refresh, where the list is already populated).
-  // Resolves with the final lists, or null if a newer scan superseded this one.
-  const [isScanning, setIsScanning] = useState(false);
-  const scanTokenRef = useRef(0);
-  const runMediaScan = useCallback(async (
+  // ── Directory scans ───────────────────────────────────────────────────────
+  // The media tree, the annotation files, and the buzzdetect results are all
+  // "list the files under this root" jobs, run by one scanner (utils/dirScan.ts,
+  // src-tauri/src/commands/scan.rs). runScan is the shared front end: with
+  // `useCache` the last scan's list shows immediately (and `onCached` fires)
+  // while the real scan runs; otherwise partial results stream in as they're
+  // found, unless `streamPartials` is false (a refresh, where the list is
+  // already populated). Resolves with the final lists, or null if a newer scan
+  // of the same kind superseded this one.
+  type ScanKind = 'media' | 'annotations' | 'buzzdetect';
+  const [scanning, setScanning] = useState<ReadonlySet<ScanKind>>(() => new Set());
+  const scanTokens = useRef<Record<ScanKind, number>>({ media: 0, annotations: 0, buzzdetect: 0 });
+  const runScan = useCallback(async (
+    kind: ScanKind,
     root: string,
-    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: MediaScan) => void } = {},
-  ): Promise<MediaScan | null> => {
-    const token = ++scanTokenRef.current;
-    const isCurrent = () => scanTokenRef.current === token;
-    const apply = (scan: MediaScan) => {
-      setAllMediaFiles(scan.media);
-      setAllNonMediaFiles(scan.nonMedia);
-    };
+    spec: ScanSpec,
+    apply: (scan: DirScan) => void,
+    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: DirScan) => void } = {},
+  ): Promise<DirScan | null> => {
+    const token = ++scanTokens.current[kind];
+    const isCurrent = () => scanTokens.current[kind] === token;
+    const mark = (on: boolean) => setScanning(prev => {
+      const next = new Set(prev);
+      if (on) next.add(kind); else next.delete(kind);
+      return next;
+    });
     let showedCache = false;
     let finished = false;
-    setIsScanning(true);
+    mark(true);
     try {
-      const scanPromise = scanMediaDirectory(root, partial => {
+      const scanPromise = scanDirectory(root, spec, partial => {
         if (isCurrent() && !showedCache && (opts.streamPartials ?? true)) apply(partial);
       });
       if (opts.useCache) {
-        const cached = await readMediaScanCache(root).catch(() => null);
+        const cached = await readScanCache(root, spec).catch(() => null);
         if (cached && !finished && isCurrent()) {
           showedCache = true;
           apply(cached);
@@ -1402,14 +1417,68 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       apply(final);
       return final;
     } finally {
-      if (isCurrent()) setIsScanning(false);
+      if (isCurrent()) mark(false);
     }
-  }, [setAllMediaFiles]);
+  }, []);
 
-  // Point the running scan at the folder the file tree is showing.
+  const runMediaScan = useCallback((
+    root: string,
+    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: DirScan) => void } = {},
+  ) => runScan('media', root, MEDIA_SCAN, scan => {
+    setAllMediaFiles(scan.files);
+    setAllNonMediaFiles(scan.others);
+  }, opts), [runScan, setAllMediaFiles]);
+
+  // Raw result-file lists from the last annotation / buzzdetect scans, and the
+  // mapping from those onto tracks. Kept raw so a change to the track list (a
+  // media rescan) re-derives presence without listing the result directories
+  // again.
+  const annotationFilesRef = useRef<string[]>([]);
+  const buzzdetectFilesRef = useRef<string[]>([]);
+  const applyPresence = useCallback((tracks: string[]) => {
+    const mediaRoot = project.mediaDirectoryAbs;
+    setAnnotatedFiles(tracksWithResults(
+      tracks, mediaRoot, project.annotationDirectoryAbs, annotationFilesRef.current, [`.${ANNOTATION_FILE_EXT}`]));
+    setBuzzdetectTracks(project.buzzdetectDirectoryAbs
+      ? tracksWithResults(tracks, mediaRoot, project.buzzdetectDirectoryAbs, buzzdetectFilesRef.current, BUZZDETECT_SUFFIXES)
+      : new Set());
+  }, [project.mediaDirectoryAbs, project.annotationDirectoryAbs, project.buzzdetectDirectoryAbs, setAnnotatedFiles]);
+  const allTracksRef = useRef<string[]>([]);
   useEffect(() => {
-    setScanPriorityFolder(project.preferences.enteredFolderPath ?? null).catch(() => {});
-  }, [project.preferences.enteredFolderPath]);
+    allTracksRef.current = allTracks;
+    applyPresence(allTracks);
+  }, [allTracks, applyPresence]);
+
+  const runAnnotationScan = useCallback((opts: { useCache?: boolean } = {}) =>
+    runScan('annotations', project.annotationDirectoryAbs, ANNOTATION_SCAN, scan => {
+      annotationFilesRef.current = scan.files;
+      applyPresence(allTracksRef.current);
+    }, opts), [runScan, applyPresence, project.annotationDirectoryAbs]);
+
+  const runBuzzdetectScan = useCallback(async (opts: { useCache?: boolean } = {}) => {
+    const dir = project.buzzdetectDirectoryAbs;
+    if (!dir) return null;
+    return runScan('buzzdetect', dir, BUZZDETECT_SCAN, scan => {
+      buzzdetectFilesRef.current = scan.files;
+      applyPresence(allTracksRef.current);
+    }, opts);
+  }, [runScan, applyPresence, project.buzzdetectDirectoryAbs]);
+
+  // Point each running scan at the folder the file tree is showing, mapped
+  // onto that scan's root (the annotation and buzzdetect trees mirror the media
+  // tree's layout).
+  useEffect(() => {
+    const mediaRoot = project.mediaDirectoryAbs;
+    const entered = project.preferences.enteredFolderPath ?? null;
+    const rel = entered && isInsideDir(mediaRoot, entered) ? entered.substring(mediaRoot.length + 1) : null;
+    const mirrored = (root: string) => (rel ? joinPath(root, rel) : null);
+    setScanPriorityFolder(mediaRoot, entered).catch(() => {});
+    setScanPriorityFolder(project.annotationDirectoryAbs, mirrored(project.annotationDirectoryAbs)).catch(() => {});
+    if (project.buzzdetectDirectoryAbs) {
+      setScanPriorityFolder(project.buzzdetectDirectoryAbs, mirrored(project.buzzdetectDirectoryAbs)).catch(() => {});
+    }
+  }, [project.mediaDirectoryAbs, project.annotationDirectoryAbs, project.buzzdetectDirectoryAbs,
+      project.preferences.enteredFolderPath]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -1489,29 +1558,31 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (firstFile) handleOpenTrack(firstFile);
     };
     let openedFromCache = false;
+    runAnnotationScan().catch(err => addLog(`Error scanning annotations: ${err}`, 'error'));
     runMediaScan(project.mediaDirectoryAbs, {
       useCache: true,
       onCached: cached => {
         openedFromCache = true;
-        openInitialTrack(cached.media);
-        refreshAnnotatedSet(cached.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
+        openInitialTrack(cached.files);
       },
     })
       .then(final => {
         if (!final) return;
+        // Buzzdetect results usually live on the same (slow) drive as the
+        // media, so list them once the media scan is out of the way.
+        runBuzzdetectScan({ useCache: true }).catch(err => addLog(`Error scanning buzzdetect directory: ${err}`, 'error'));
         if (!openedFromCache) {
-          openInitialTrack(final.media);
+          openInitialTrack(final.files);
         } else if (project.preferences.shuffleMode) {
           // The queue was shuffled from the cached list; keep its order and
           // fold in whatever the real scan added or dropped.
           setShuffledFiles(prev => {
-            const present = new Set(final.media);
+            const present = new Set(final.files);
             const kept = prev.filter(f => present.has(f));
             const known = new Set(kept);
-            return [...kept, ...shuffleArray(final.media.filter(f => !known.has(f)))];
+            return [...kept, ...shuffleArray(final.files.filter(f => !known.has(f)))];
           });
         }
-        refreshAnnotatedSet(final.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
       })
       .catch(err => {
         setAllMediaFiles([]);
@@ -1521,75 +1592,75 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Shared helper: from a freshly-scanned media file list, compute which
-  // entries already have annotation files on disk. Used by both the initial
-  // mount scan and the manual-refresh path so the rel-path mapping logic
-  // doesn't live in two places.
-  const refreshAnnotatedSet = useCallback(async (
-    files: string[],
-    audioRoot: string,
-    annotationDir: string,
-  ) => {
-    try {
-      const relPaths = await listAnnotationFiles(annotationDir, 'txt');
-      const relToFull = new Map<string, string>();
-      for (const f of files) {
-        const rel = stripExt(f.substring(audioRoot.length + 1)).replace(/\\/g, '/');
-        relToFull.set(rel, f);
-      }
-      const annotated = new Set<string>();
-      for (const rp of relPaths) {
-        const full = relToFull.get(rp);
-        if (full) annotated.add(full);
-      }
-      setAnnotatedFiles(annotated);
-    } catch { /* ignore */ }
-  }, []);
-
-  // Set by the manual refresh button (not by git pulls, which share the nonce):
-  // drop the cached list and rebuild the tree from an empty, streaming scan.
-  const hardRefreshRef = useRef(false);
-
+  // Soft refresh of the file list: keep what's on screen and swap in the result
+  // when the scan finishes. This is the path git pulls take.
   const handleRefreshFiles = useCallback(async () => {
-    const hard = hardRefreshRef.current;
-    hardRefreshRef.current = false;
     try {
-      if (hard) {
-        await clearMediaScanCache(project.mediaDirectoryAbs).catch(() => {});
-        setAllMediaFiles([]);
-        setAllNonMediaFiles([]);
-      }
-      const final = await runMediaScan(project.mediaDirectoryAbs, { streamPartials: hard });
-      if (final) refreshAnnotatedSet(final.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
+      await runMediaScan(project.mediaDirectoryAbs, { streamPartials: false });
+      await runAnnotationScan();
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
     }
-  }, [project, refreshAnnotatedSet, runMediaScan, setAllMediaFiles]);
+  }, [project, runMediaScan, runAnnotationScan]);
 
-  // After a git sync pulls new data (or the header's manual refresh bumps the
-  // same nonce), refresh the file tree so freshly-arrived annotation files
-  // show as annotated (and any new media files appear), and reload annotation
-  // tools in case the project's tool set changed on disk too. reloadNonce only
-  // bumps on a successful pull or a manual refresh; skip the initial 0.
+  // Hard refreshes, one per kind of on-disk data, so a change to one doesn't
+  // cost a rescan of the rest. Each drops its scan cache (a stale list must not
+  // reappear if the app quits mid-scan) and rebuilds from scratch.
+  const refreshFileTree = useCallback(async () => {
+    try {
+      await clearScanCache(project.mediaDirectoryAbs, MEDIA_SCAN).catch(() => {});
+      setAllMediaFiles([]);
+      setAllNonMediaFiles([]);
+      await runMediaScan(project.mediaDirectoryAbs);
+    } catch (err) {
+      addLog(`Error refreshing files: ${err}`, 'error');
+    }
+  }, [project.mediaDirectoryAbs, runMediaScan, setAllMediaFiles]);
+
+  // Annotations: the tool set, the find index, the open track's labels, and
+  // which tracks have annotation files.
+  const refreshAnnotations = useCallback(async () => {
+    invalidateProjectLabelIndex();
+    loadAnnotationTools(project);
+    setAnnotationReloadNonce(n => n + 1);
+    try {
+      await clearScanCache(project.annotationDirectoryAbs, ANNOTATION_SCAN).catch(() => {});
+      await runAnnotationScan();
+    } catch (err) {
+      addLog(`Error refreshing annotations: ${err}`, 'error');
+    }
+  }, [project, loadAnnotationTools, runAnnotationScan]);
+
+  const refreshBuzzdetect = useCallback(async () => {
+    setBuzzdetectReloadNonce(n => n + 1);
+    const dir = project.buzzdetectDirectoryAbs;
+    if (!dir) return;
+    try {
+      await clearScanCache(dir, BUZZDETECT_SCAN).catch(() => {});
+      await runBuzzdetectScan();
+    } catch (err) {
+      addLog(`Error refreshing buzzdetect results: ${err}`, 'error');
+    }
+  }, [project.buzzdetectDirectoryAbs, runBuzzdetectScan]);
+
+  // After a git sync pulls new data, refresh the file tree so freshly-arrived
+  // annotation files show as annotated (and any new media files appear), and
+  // reload annotation tools in case the project's tool set changed on disk too.
+  // reloadNonce only bumps on a successful pull; skip the initial 0.
   useEffect(() => {
     if (reloadNonce === 0) return;
-    // A pull (or manual refresh) rewrites files behind the app's back, so
-    // anything the Find & Rename index holds for other tracks is now stale.
+    // A pull rewrites files behind the app's back, so anything the Find &
+    // Rename index holds for other tracks is now stale.
     invalidateProjectLabelIndex();
     handleRefreshFiles();
     loadAnnotationTools(project);
   }, [reloadNonce, handleRefreshFiles, loadAnnotationTools]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // General-purpose refresh: re-scans the file tree, reloads annotation
-  // tools, re-reads the current track's labels from disk, and re-reads its
-  // buzzdetect activations. Reuses reloadNonce/bumpReloadNonce (normally bumped
-  // after a git pull) rather than a parallel mechanism, since a manual refresh
-  // is the same "something may have changed on disk" event a pull represents.
+  // The header's refresh button: everything at once.
   const handleRefreshAll = useCallback(() => {
-    hardRefreshRef.current = true;
-    bumpReloadNonce();
-    setBuzzdetectReloadNonce(n => n + 1);
-  }, [bumpReloadNonce]);
+    refreshFileTree().then(() => refreshBuzzdetect());
+    refreshAnnotations();
+  }, [refreshFileTree, refreshAnnotations, refreshBuzzdetect]);
 
   const handleProjectSettingsSaved = useCallback(async (updatedSettings: ProjectSettings, updatedPreferences: ProjectPreferences) => {
     const prev = project.settings.mediaDirectory;
@@ -1620,9 +1691,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       try {
         const final = await runMediaScan(updated.mediaDirectoryAbs, {
           useCache: true,
-          onCached: cached => openFirst(cached.media),
+          onCached: cached => openFirst(cached.files),
         });
-        if (final && !openedFirst) openFirst(final.media);
+        if (final && !openedFirst) openFirst(final.files);
       } catch (err) {
         setAllMediaFiles([]);
         setAllNonMediaFiles([]);
@@ -2542,7 +2613,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         {currentDirectory && (() => {
           const fileTreeProps = {
             rootDirectory: currentDirectory,
-            isScanning,
+            isScanning: scanning.size > 0,
+            isScanningMedia: scanning.has('media'),
             allFiles: displayQueue,
             allFilesUnfiltered: shuffleMode ? shuffledFiles : allTracks,
             currentTrack: trackPath,
