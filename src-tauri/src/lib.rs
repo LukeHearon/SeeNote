@@ -120,6 +120,7 @@ pub fn run() {
             commands::filesystem::list_directory,
             commands::filesystem::read_media_scan_cache,
             commands::filesystem::scan_media_tree,
+            commands::filesystem::clear_media_scan_cache,
             commands::filesystem::set_scan_priority_folder,
             commands::filesystem::write_text_file,
             commands::filesystem::read_text_file,

@@ -136,6 +136,10 @@ export interface MediaScan {
 export const readMediaScanCache = (path: string): Promise<MediaScan | null> =>
   invoke('read_media_scan_cache', { path });
 
+/** Delete the cached file list for `path`. */
+export const clearMediaScanCache = (path: string): Promise<void> =>
+  invoke('clear_media_scan_cache', { path });
+
 /**
  * Walk `path` once (breadth-first), calling `onBatch` with newly-found files as
  * they arrive. Resolves with the complete sorted lists, and refreshes the

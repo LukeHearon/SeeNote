@@ -13,7 +13,7 @@ import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from 
 import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
-import { getFileInfo, readMediaScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import { getFileInfo, readMediaScanCache, clearMediaScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import type { MediaScan } from './utils/tauriCommands';
 import { scanMediaDirectory } from './utils/mediaScan';
 import { githubRepoPageUrl } from './utils/gitSync';
@@ -1546,14 +1546,25 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     } catch { /* ignore */ }
   }, []);
 
+  // Set by the manual refresh button (not by git pulls, which share the nonce):
+  // drop the cached list and rebuild the tree from an empty, streaming scan.
+  const hardRefreshRef = useRef(false);
+
   const handleRefreshFiles = useCallback(async () => {
+    const hard = hardRefreshRef.current;
+    hardRefreshRef.current = false;
     try {
-      const final = await runMediaScan(project.mediaDirectoryAbs, { streamPartials: false });
+      if (hard) {
+        await clearMediaScanCache(project.mediaDirectoryAbs).catch(() => {});
+        setAllMediaFiles([]);
+        setAllNonMediaFiles([]);
+      }
+      const final = await runMediaScan(project.mediaDirectoryAbs, { streamPartials: hard });
       if (final) refreshAnnotatedSet(final.media, project.mediaDirectoryAbs, project.annotationDirectoryAbs);
     } catch (err) {
       addLog(`Error refreshing files: ${err}`, 'error');
     }
-  }, [project, refreshAnnotatedSet, runMediaScan]);
+  }, [project, refreshAnnotatedSet, runMediaScan, setAllMediaFiles]);
 
   // After a git sync pulls new data (or the header's manual refresh bumps the
   // same nonce), refresh the file tree so freshly-arrived annotation files
@@ -1575,6 +1586,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // after a git pull) rather than a parallel mechanism, since a manual refresh
   // is the same "something may have changed on disk" event a pull represents.
   const handleRefreshAll = useCallback(() => {
+    hardRefreshRef.current = true;
     bumpReloadNonce();
     setBuzzdetectReloadNonce(n => n + 1);
   }, [bumpReloadNonce]);

@@ -404,6 +404,18 @@ pub async fn read_media_scan_cache(app: tauri::AppHandle, path: String) -> Resul
     .map_err(|e| e.to_string())?
 }
 
+/// Delete the cached file list for `path` (a hard refresh: don't trust it, and
+/// don't leave it behind if the app quits before the rescan finishes).
+#[tauri::command]
+pub async fn clear_media_scan_cache(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let cache_path = scan_cache_path(&app, &path)?;
+    match std::fs::remove_file(&cache_path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Walk `path` once, streaming batches of files over `on_batch` as they are
 /// found, then return the complete sorted lists and refresh the on-disk cache.
 /// Errs with "superseded" if a newer scan started first.
