@@ -24,12 +24,17 @@ export function PresenceFilterButton({ icon: Icon, state, tooltips, onClick }: P
       className={`relative p-1 rounded hover:bg-slate-700 ${color}`}
       data-tooltip={tooltip}
     >
-      <Icon size={13} />
-      {state === 'unannotated' && (
-        <svg viewBox="0 0 24 24" className="absolute inset-1 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
-          <line x1="3" y1="3" x2="21" y2="21" />
-        </svg>
-      )}
+      {/* The slash is laid over a box exactly the icon's size: positioned
+          against the button it drifts, since an inline icon leaves a baseline
+          gap under itself and the button ends up taller than the icon. */}
+      <span className="relative block w-[13px] h-[13px]">
+        <Icon size={13} className="block" />
+        {state === 'unannotated' && (
+          <svg viewBox="0 0 24 24" className="absolute inset-0 w-full h-full pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+            <line x1="2" y1="2" x2="22" y2="22" />
+          </svg>
+        )}
+      </span>
     </button>
   );
 }
