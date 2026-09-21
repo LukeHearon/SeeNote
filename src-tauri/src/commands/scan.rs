@@ -109,6 +109,42 @@ pub fn set_scan_priority_folder(scan_root: String, folder: Option<String>) {
     entry.1 = folder.map(PathBuf::from);
 }
 
+// ── Subtree results ──────────────────────────────────────────────────────────
+
+/// A completed scan of one folder of a larger root, held until that root's full
+/// scan runs. The full scan then skips the folder (it was just read) and folds
+/// these results in, instead of walking it again.
+struct SubtreeResult {
+    tag: String,
+    folder: PathBuf,
+    scan: DirScan,
+}
+
+fn subtrees() -> &'static Mutex<Vec<SubtreeResult>> {
+    static S: OnceLock<Mutex<Vec<SubtreeResult>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Remove and return the held subtree results for `tag` that lie under `root`.
+/// Where one folder contains another, only the outer one is kept: its scan
+/// already covered the inner.
+fn take_subtrees(tag: &str, root: &Path) -> Vec<SubtreeResult> {
+    let mut held = subtrees().lock().unwrap();
+    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *held)
+        .into_iter()
+        .partition(|r| r.tag == tag && r.folder.starts_with(root) && r.folder != root);
+    *held = rest;
+    let mut kept: Vec<SubtreeResult> = Vec::new();
+    let mut mine = mine;
+    mine.sort_by_key(|r| r.folder.components().count());
+    for r in mine {
+        if !kept.iter().any(|k| r.folder.starts_with(&k.folder)) {
+            kept.push(r);
+        }
+    }
+    kept
+}
+
 // ── Walk ─────────────────────────────────────────────────────────────────────
 
 const BATCH_MAX_FILES: usize = 5000;
@@ -118,6 +154,8 @@ struct ScanState<'a> {
     generation: &'a AtomicU64,
     id: u64,
     spec: &'a ScanSpec,
+    /// Folders already scanned as subtrees; the walk doesn't descend into them.
+    skip: Vec<PathBuf>,
     all: DirScan,
     pending: DirScan,
     last_flush: Instant,
@@ -206,6 +244,9 @@ fn walk(root: &Path, root_key: &str, st: &mut ScanState) -> std::io::Result<bool
                 Err(_) => path.is_dir(),
             };
             if is_dir {
+                if st.skip.iter().any(|s| *s == path) {
+                    continue;
+                }
                 if prefix.as_ref().is_some_and(|p| path.starts_with(p)) {
                     priority.push_back(path);
                 } else {
@@ -270,6 +311,8 @@ pub async fn read_scan_cache(app: tauri::AppHandle, path: String, spec: ScanSpec
 /// don't leave them behind if the app quits before the rescan finishes).
 #[tauri::command]
 pub async fn clear_scan_cache(app: tauri::AppHandle, path: String, spec: ScanSpec) -> Result<(), String> {
+    // A hard refresh must not resurface subtree results read before it.
+    take_subtrees(&spec.tag(), Path::new(&path));
     let cache_path = cache_path(&app, &spec, &path)?;
     match std::fs::remove_file(&cache_path) {
         Ok(()) => Ok(()),
@@ -279,23 +322,36 @@ pub async fn clear_scan_cache(app: tauri::AppHandle, path: String, spec: ScanSpe
 }
 
 /// Walk `path` once, streaming batches over `on_batch` as files are found, then
-/// return the complete sorted lists and refresh the on-disk cache. Errs with
-/// "superseded" if a newer scan of the same root and spec started first.
+/// return the complete sorted lists and refresh the on-disk cache.
+///
+/// `subtree` marks a scan of one folder of a larger root, run ahead of that
+/// root's full scan so the folder's results show early. It isn't cached (a
+/// partial list would read as the whole root's on the next open); it's held in
+/// memory instead, and the root's next full scan skips the folder and folds
+/// these results in rather than reading it twice.
+///
+/// Errs with "superseded" if a newer scan of the same root and spec started
+/// first.
 #[tauri::command]
 pub async fn scan_tree(
     app: tauri::AppHandle,
     path: String,
     spec: ScanSpec,
+    subtree: Option<bool>,
     on_batch: Channel<DirScan>,
 ) -> Result<DirScan, String> {
+    let subtree = subtree.unwrap_or(false);
     let cache_path = cache_path(&app, &spec, &path)?;
     let generation = generation_for(&format!("{}\0{}", spec.tag(), path));
     let id = generation.fetch_add(1, Ordering::Relaxed) + 1;
     tauri::async_runtime::spawn_blocking(move || {
+        // A full scan takes over any subtrees scanned ahead of it.
+        let held = if subtree { Vec::new() } else { take_subtrees(&spec.tag(), Path::new(&path)) };
         let mut st = ScanState {
             generation: &generation,
             id,
             spec: &spec,
+            skip: held.iter().map(|r| r.folder.clone()).collect(),
             all: DirScan::default(),
             pending: DirScan::default(),
             last_flush: Instant::now(),
@@ -311,11 +367,23 @@ pub async fn scan_tree(
         let tail = std::mem::take(&mut st.pending);
         st.all.files.extend(tail.files);
         st.all.others.extend(tail.others);
+        for r in held {
+            st.all.files.extend(r.scan.files);
+            st.all.others.extend(r.scan.others);
+        }
         let mut result = st.all;
         // Cached keys: lowercasing once per path instead of once per comparison.
         result.files.sort_by_cached_key(|s| s.to_lowercase());
         result.others.sort_by_cached_key(|s| s.to_lowercase());
 
+        if subtree {
+            subtrees().lock().unwrap().push(SubtreeResult {
+                tag: spec.tag(),
+                folder: PathBuf::from(&path),
+                scan: DirScan { files: result.files.clone(), others: result.others.clone() },
+            });
+            return Ok(result);
+        }
         let cached = CacheFile { root: path, tag: spec.tag(), scan: result };
         let write = (|| -> Result<(), String> {
             if let Some(dir) = cache_path.parent() {

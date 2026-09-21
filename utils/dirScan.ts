@@ -25,6 +25,7 @@ export async function scanDirectory(
   root: string,
   spec: ScanSpec,
   onPartial: (partial: DirScan) => void,
+  subtree = false,
 ): Promise<DirScan | null> {
   const acc: DirScan = { files: [], others: [] };
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -45,7 +46,7 @@ export async function scanDirectory(
         const wait = lastEmit + partialUpdateDelayMs(acc.files.length) - Date.now();
         timer = setTimeout(emit, Math.max(0, wait));
       }
-    });
+    }, subtree);
   } catch (err) {
     if (String(err) === 'superseded') return null;
     throw err;

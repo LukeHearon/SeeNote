@@ -1403,7 +1403,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     root: string,
     spec: ScanSpec,
     apply: (scan: DirScan) => void,
-    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: DirScan) => void } = {},
+    opts: { useCache?: boolean; streamPartials?: boolean; onCached?: (scan: DirScan) => void; after?: Promise<unknown> } = {},
   ): Promise<DirScan | null> => {
     const token = ++scanTokens.current[kind];
     const isCurrent = () => scanTokens.current[kind] === token;
@@ -1416,9 +1416,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     let finished = false;
     mark(true);
     try {
-      const scanPromise = scanDirectory(root, spec, partial => {
+      // `after` holds the walk back (the cache read below still starts now), for
+      // scans that would only fight another scan for the same drive.
+      const scanPromise = (opts.after ?? Promise.resolve()).then(() => scanDirectory(root, spec, partial => {
         if (isCurrent() && !showedCache && (opts.streamPartials ?? true)) apply(partial);
-      });
+      }));
       if (opts.useCache) {
         const cached = await readScanCache(root, spec).catch(() => null);
         if (cached && !finished && isCurrent()) {
@@ -1471,14 +1473,48 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       applyPresence(allTracksRef.current);
     }, opts), [runScan, applyPresence, project.annotationDirectoryAbs]);
 
-  const runBuzzdetectScan = useCallback(async (opts: { useCache?: boolean } = {}) => {
+  // Buzzdetect results usually sit on the same slow drive as the media, so the
+  // full walk is held back until the media scan is done (`after`). Until it
+  // starts, entering a folder scans just that folder's slice of the results
+  // (scanBuzzdetectFolder), so its pips don't wait on the whole tree.
+  const buzzWalkStartedRef = useRef(false);
+  const buzzExtraRef = useRef<string[]>([]);
+  const buzzFoldersScannedRef = useRef<Set<string>>(new Set());
+  const buzzFoldersDoneRef = useRef<Set<string>>(new Set());
+  const mergeUnique = (a: string[], b: string[]) => (b.length === 0 ? a : [...new Set([...a, ...b])]);
+
+  const runBuzzdetectScan = useCallback(async (opts: { useCache?: boolean; after?: Promise<unknown> } = {}) => {
     const dir = project.buzzdetectDirectoryAbs;
     if (!dir) return null;
-    return runScan('buzzdetect', dir, BUZZDETECT_SCAN, scan => {
-      buzzdetectFilesRef.current = scan.files;
+    buzzWalkStartedRef.current = !opts.after;
+    buzzFoldersScannedRef.current = new Set();
+    buzzFoldersDoneRef.current = new Set();
+    const after = opts.after?.then(() => { buzzWalkStartedRef.current = true; });
+    const final = await runScan('buzzdetect', dir, BUZZDETECT_SCAN, scan => {
+      // Keep what folder scans found until the full list is in.
+      buzzdetectFilesRef.current = mergeUnique(scan.files, buzzExtraRef.current);
       applyPresence(allTracksRef.current);
-    }, opts);
+    }, { useCache: opts.useCache, after });
+    if (final) {
+      buzzExtraRef.current = [];
+      buzzdetectFilesRef.current = final.files;
+    }
+    return final;
   }, [runScan, applyPresence, project.buzzdetectDirectoryAbs]);
+
+  const scanBuzzdetectFolder = useCallback(async (rel: string) => {
+    const dir = project.buzzdetectDirectoryAbs;
+    if (!dir) return;
+    // A subtree scan: the full walk later skips this folder and reuses the result.
+    const found = await scanDirectory(joinPath(dir, rel), BUZZDETECT_SCAN, () => {}, true).catch(() => null);
+    buzzFoldersDoneRef.current.add(rel);
+    // If the full walk started meanwhile it covers this folder as well (Rust
+    // holds the result only for a walk that starts later).
+    if (!found || buzzWalkStartedRef.current) return;
+    buzzExtraRef.current = mergeUnique(buzzExtraRef.current, found.files);
+    buzzdetectFilesRef.current = mergeUnique(buzzdetectFilesRef.current, found.files);
+    applyPresence(allTracksRef.current);
+  }, [applyPresence, project.buzzdetectDirectoryAbs]);
 
   // Point each running scan at the folder the file tree is showing, mapped
   // onto that scan's root (the annotation and buzzdetect trees mirror the media
@@ -1492,9 +1528,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setScanPriorityFolder(project.annotationDirectoryAbs, mirrored(project.annotationDirectoryAbs)).catch(() => {});
     if (project.buzzdetectDirectoryAbs) {
       setScanPriorityFolder(project.buzzdetectDirectoryAbs, mirrored(project.buzzdetectDirectoryAbs)).catch(() => {});
+      // Skip a folder already covered: scanned itself, or inside one that was.
+      // Drilling down one level at a time lands here for every level after the
+      // first. If the covering scan is still running, point it at the folder
+      // you're in now so you aren't waiting on the rest of its subtree.
+      const covering = rel === null ? undefined : [...buzzFoldersScannedRef.current].find(
+        r => rel === r || rel.startsWith(r + '/') || rel.startsWith(r + '\\'));
+      if (rel && covering !== undefined && !buzzWalkStartedRef.current && !buzzFoldersDoneRef.current.has(covering)) {
+        setScanPriorityFolder(joinPath(project.buzzdetectDirectoryAbs, covering), mirrored(project.buzzdetectDirectoryAbs)).catch(() => {});
+      }
+      if (rel && !buzzWalkStartedRef.current && covering === undefined) {
+        buzzFoldersScannedRef.current.add(rel);
+        scanBuzzdetectFolder(rel);
+      }
     }
   }, [project.mediaDirectoryAbs, project.annotationDirectoryAbs, project.buzzdetectDirectoryAbs,
-      project.preferences.enteredFolderPath]);
+      project.preferences.enteredFolderPath, scanBuzzdetectFolder]);
 
   // Initialize state from project prop on mount
   useEffect(() => {
@@ -1577,18 +1626,19 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     };
     let openedFromCache = false;
     runAnnotationScan().catch(err => addLog(`Error scanning annotations: ${err}`, 'error'));
-    runMediaScan(project.mediaDirectoryAbs, {
+    const mediaScan = runMediaScan(project.mediaDirectoryAbs, {
       useCache: true,
       onCached: cached => {
         openedFromCache = true;
         openInitialTrack(cached.files);
       },
-    })
+    });
+    // The cached buzzdetect list shows right away; the walk waits for the media scan.
+    runBuzzdetectScan({ useCache: true, after: mediaScan.catch(() => null) })
+      .catch(err => addLog(`Error scanning buzzdetect directory: ${err}`, 'error'));
+    mediaScan
       .then(final => {
         if (!final) return;
-        // Buzzdetect results usually live on the same (slow) drive as the
-        // media, so list them once the media scan is out of the way.
-        runBuzzdetectScan({ useCache: true }).catch(err => addLog(`Error scanning buzzdetect directory: ${err}`, 'error'));
         if (!openedFromCache) {
           openInitialTrack(final.files);
         } else if (project.preferences.shuffleMode) {

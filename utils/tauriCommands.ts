@@ -146,13 +146,21 @@ export const clearScanCache = (path: string, spec: ScanSpec): Promise<void> =>
 /**
  * Walk `path` once (breadth-first), calling `onBatch` with newly-found files as
  * they arrive. Resolves with the complete sorted lists, and refreshes the
- * on-disk cache. Rejects with "superseded" if a newer scan of the same root and
+ * on-disk cache. `subtree` marks a scan of one folder of a larger root, run
+ * ahead of that root's full scan: it isn't cached, and the root's next full scan
+ * reuses it instead of reading the folder again.
+ * Rejects with "superseded" if a newer scan of the same root and
  * spec started first.
  */
-export const scanTree = (path: string, spec: ScanSpec, onBatch: (batch: DirScan) => void): Promise<DirScan> => {
+export const scanTree = (
+  path: string,
+  spec: ScanSpec,
+  onBatch: (batch: DirScan) => void,
+  subtree = false,
+): Promise<DirScan> => {
   const channel = new Channel<DirScan>();
   channel.onmessage = onBatch;
-  return invoke('scan_tree', { path, spec, onBatch: channel });
+  return invoke('scan_tree', { path, spec, subtree, onBatch: channel });
 };
 
 /** Have scans of `scanRoot` visit directories under `folder` first (null clears). */
