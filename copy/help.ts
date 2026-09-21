@@ -69,7 +69,7 @@ export const help = {
   },
 
   overview: {
-    get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order. Stepping stays within the tracks currently shown in the panel — it respects the active filters and the folder you've drilled into. On a large project the list fills in as the media directory is scanned (top-level folders first, and the folder you're in ahead of the rest), with a bar along the bottom of the panel while that's running; the last complete list is remembered, so reopening the project shows it immediately."; },
+    get p1() { return getOverride('help.overview.p1') ?? "SeeNote is a tool for listening to and looking at recordings, and marking what you find in them — building labelled datasets from audio and video."; },
     get p2() { return getOverride('help.overview.p2') ?? "The loop is short: open a project, pick a track from the [file panel](file-panel@file-panel), scrub around the [spectrogram](spectrogram-canvas@spectrogram) while you listen, and drag a box over anything worth labelling. Every change is written to disk immediately — there is no save button."; },
     get h_pieces() { return getOverride('help.overview.h_pieces') ?? "The pieces"; },
     get li_project() { return getOverride('help.overview.li_project') ?? "A **project** points at a folder of recordings and a folder to write annotations into. Everything else — your labels, your display settings, your filter — is remembered per project."; },
@@ -127,7 +127,7 @@ export const help = {
   },
 
   filePanel: {
-    get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Tracks with existing annotations are highlighted in the list. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order. Stepping stays within the tracks currently shown in the panel — it respects the active filter and the folder you've drilled into."; },
+    get p1() { return getOverride('help.filePanel.p1') ?? "Lists every track in the project directory. Click any track to open it, or use `{mod}+↑` / `{mod}+↓` to step through tracks in order. Stepping stays within the tracks currently shown in the panel — it respects the active filters and the folder you've drilled into. On a large project the list fills in as the media directory is scanned (top-level folders first, and the folder you're in ahead of the rest), with a bar along the bottom of the panel while that's running; the last complete list is remembered, so reopening the project shows it immediately."; },
     get h_header() { return getOverride('help.filePanel.h_header') ?? "Header buttons"; },
     get li_filter() { return getOverride('help.filePanel.li_filter') ?? "**Annotation filter** (note icon): click through three states. Gray shows every track; blue shows only tracks that have annotations; red with a slash shows only tracks that don't — the quickest way to find what's left to do. `{mod}+↑` / `{mod}+↓` then step only through the tracks the filter leaves visible."; },
     get li_buzzdetect_filter() { return getOverride('help.filePanel.li_buzzdetect_filter') ?? "**Buzzdetect filter** (activity icon): the same three states, for tracks that have buzzdetect results. It only appears when the project has a buzzdetect directory. The two filters combine — blue on both shows tracks with annotations and buzzdetect results, blue on one and red on the other shows tracks with one but not the other."; },
