@@ -73,6 +73,9 @@ interface FileTreeProps {
   buzzdetectFilter: FileFilter;
   onToggleBuzzdetectFilter: () => void;
   /** Rescan the media directory from scratch. */
+  /** Set a filter straight back to unfiltered (the empty state's "turn off" links). */
+  onClearFileFilter: () => void;
+  onClearBuzzdetectFilter: () => void;
   onRefreshFileTree: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
@@ -824,6 +827,21 @@ function FileTree({
     const ro = new ResizeObserver(() => setListWidth(el.clientWidth));
     ro.observe(el);
     setListWidth(el.clientWidth);
+  // How far right the longest rendered name reaches, measured off the names'
+  // own (unclipped) text. Columns only appear beside names that fit, so this
+  // is what they have to leave room for. Independent of the columns themselves
+  // (they sit to the right of the names), so showing one can't change it.
+  const [nameNeededPx, setNameNeededPx] = useState(0);
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const left = el.getBoundingClientRect().left;
+    let max = 0;
+    el.querySelectorAll('[data-name-text]').forEach(n => {
+      max = Math.max(max, n.getBoundingClientRect().right - left);
+    });
+    setNameNeededPx(Math.ceil(max));
+  }, [tree, expandedDirs, shuffleMode, allFiles, collapsed, sectionCollapsed]);
     return () => ro.disconnect();
   }, [collapsed, sectionCollapsed]);
   const columns = useMemo(
@@ -1135,7 +1153,7 @@ function FileTree({
                         ? 'bg-[#e65161]/20 text-[#e65161]'
                         : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
                     }`}
-                    style={{ opacity }}
+                    style={{ opacity, paddingRight: columns.annotation ? 0 : undefined }}
                     data-tooltip={tooltipWithDate(filePath, basename(filePath), filenameTimeInfo)}
                     data-active-file={isActive ? '' : undefined}
                   >

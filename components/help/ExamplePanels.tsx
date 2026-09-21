@@ -82,6 +82,8 @@ export function ExampleFilePanel() {
         onToggleFileFilter={() => setFileFilter(nextFileFilter)}
         buzzdetectFilter={buzzdetectFilter}
         onToggleBuzzdetectFilter={() => setBuzzdetectFilter(nextFileFilter)}
+        onClearFileFilter={() => setFileFilter('all')}
+        onClearBuzzdetectFilter={() => setBuzzdetectFilter('all')}
         onRefreshFileTree={() => {}}
         onRevealInFinder={() => {}}
         onRevealAnnotations={() => {}}

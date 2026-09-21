@@ -2715,6 +2715,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onToggleFileFilter: handleToggleFileFilter,
             buzzdetectFilter: project?.preferences.buzzdetectFileFilter ?? 'all',
             onToggleBuzzdetectFilter: handleToggleBuzzdetectFilter,
+            onClearFileFilter: () => updateProjectPreferences(project.id, { ...project.preferences, fileFilter: 'all' }),
+            onClearBuzzdetectFilter: () => updateProjectPreferences(project.id, { ...project.preferences, buzzdetectFileFilter: 'all' }),
             onRefreshFileTree: refreshFileTree,
             onRevealInFinder: handleRevealInFinder,
             onRevealAnnotations: handleRevealAnnotations,
