@@ -13,6 +13,7 @@ import { FilterToolButton, FilterStrengthSlider } from '../controls/FilterContro
 import { BuzzdetectToggle, IsolateToggle, SubsetToggle, SpectrogramSettingsButton } from '../controls/ToolbarToggles';
 import { SpectrogramSettingsPanel } from '../controls/SpectrogramSettingsPanel';
 import { FilePanelHeaderButtons } from '../controls/FilePanelHeaderButtons';
+import { nextFileFilter } from '../../utils/fileFilter';
 import AnnotationToolsPanel from '../AnnotationToolsPanel';
 import { DebugConsolePanel } from '../DebugConsole';
 import { ExampleBuzzdetectPanel, ExampleFilePanel, ExampleFindLabel } from './ExamplePanels';
@@ -46,7 +47,7 @@ export type LiveControlId =
 // reader can work out what a control does by driving it, project or no project.
 // ---------------------------------------------------------------------------
 
-const DEMO_FILE_PANEL = { fileFilter: 'all' as const, shuffleMode: false, anyExpanded: false };
+const DEMO_FILE_PANEL = { fileFilter: 'all' as const, buzzdetectFilter: 'all' as const, hasBuzzdetect: true, shuffleMode: false, anyExpanded: false };
 
 // Stand-in log lines so the console shows its shape with no project open. The
 // real ones come from playback and video-decode diagnostics.
@@ -330,11 +331,11 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
             shuffleMode={fp.shuffleMode}
             anyExpanded={fp.anyExpanded}
             fileFilter={fp.fileFilter}
+            showBuzzdetect={fp.hasBuzzdetect}
+            buzzdetectFilter={fp.buzzdetectFilter}
             onToggleExpandCollapse={() => act(() => client.call('toggleFileExpandCollapse'), () => setFp({ anyExpanded: !fp.anyExpanded }))}
-            onToggleFileFilter={() => act(() => client.call('toggleFileFilter'), () => setFp({
-              fileFilter: fp.fileFilter === 'all' ? 'unannotated' : fp.fileFilter === 'unannotated' ? 'annotated' : 'all',
-            }))}
-            onToggleShuffle={() => act(() => client.call('toggleShuffle'), () => setFp({ shuffleMode: !fp.shuffleMode }))}
+            onToggleFileFilter={() => act(() => client.call('toggleFileFilter'), () => setFp({ fileFilter: nextFileFilter(fp.fileFilter) }))}
+            onToggleBuzzdetectFilter={() => act(() => client.call('toggleBuzzdetectFilter'), () => setFp({ buzzdetectFilter: nextFileFilter(fp.buzzdetectFilter) }))}
           />
         );
       }

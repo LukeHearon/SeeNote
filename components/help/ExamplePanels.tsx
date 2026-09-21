@@ -9,6 +9,7 @@ import {
   DEMO_ROOT,
   DEMO_TRACK,
   demoAnnotatedTracks,
+  demoBuzzdetectTracks,
   demoAnnotations,
   demoAnnotationTools,
   demoFiles,
@@ -20,6 +21,7 @@ import {
 } from '../../utils/demoProject';
 import { subsetBuzzdetectData, subsetCriteriaFrom, subsetTimelineFor } from '../../utils/buzzdetectSubset';
 import { help } from '../../copy/help';
+import { nextFileFilter, passesFileFilter, type FileFilter } from '../../utils/fileFilter';
 import BuzzdetectPanel from '../BuzzdetectPanel';
 import FileTree from '../FileTree';
 import FindLabelPanel, { RenameScope } from '../FindLabelPanel';
@@ -36,15 +38,15 @@ import FindLabelPanel, { RenameScope } from '../FindLabelPanel';
 export function ExampleFilePanel() {
   const [currentTrack, setCurrentTrack] = useState<string | null>(DEMO_TRACK);
   const [shuffleMode, setShuffleMode] = useState(false);
-  const [fileFilter, setFileFilter] = useState<'all' | 'annotated' | 'unannotated'>('all');
+  const [fileFilter, setFileFilter] = useState<FileFilter>('all');
+  const [buzzdetectFilter, setBuzzdetectFilter] = useState<FileFilter>('all');
 
   // The real file panel is handed a pre-filtered list by AnnotationWindow, so
   // the example applies the same filter here for the button to visibly do
   // something.
   const files = demoFiles.filter(f =>
-    fileFilter === 'all' ? true
-      : fileFilter === 'annotated' ? demoAnnotatedTracks.has(f)
-      : !demoAnnotatedTracks.has(f));
+    passesFileFilter(demoAnnotatedTracks.has(f), fileFilter)
+    && passesFileFilter(demoBuzzdetectTracks.has(f), buzzdetectFilter));
 
   const index = currentTrack ? files.indexOf(currentTrack) : -1;
   const step = (delta: number) => {
@@ -57,6 +59,7 @@ export function ExampleFilePanel() {
       <FileTree
         rootDirectory={DEMO_ROOT}
         isScanning={false}
+        isScanningMedia={false}
         allFiles={files}
         allFilesUnfiltered={demoFiles}
         currentTrack={currentTrack}
@@ -70,11 +73,16 @@ export function ExampleFilePanel() {
         canNavigatePrev={index > 0}
         canNavigateNext={index >= 0 && index < files.length - 1}
         shuffleMode={shuffleMode}
-        onToggleShuffle={() => setShuffleMode(v => !v)}
+        onStartShuffle={() => setShuffleMode(true)}
+        onStopShuffle={() => setShuffleMode(false)}
         annotatedTracks={demoAnnotatedTracks}
+        buzzdetectTracks={demoBuzzdetectTracks}
+        showBuzzdetect
         fileFilter={fileFilter}
-        onToggleFileFilter={() => setFileFilter(f =>
-          f === 'all' ? 'unannotated' : f === 'unannotated' ? 'annotated' : 'all')}
+        onToggleFileFilter={() => setFileFilter(nextFileFilter)}
+        buzzdetectFilter={buzzdetectFilter}
+        onToggleBuzzdetectFilter={() => setBuzzdetectFilter(nextFileFilter)}
+        onRefreshFileTree={() => {}}
         onRevealInFinder={() => {}}
         onRevealAnnotations={() => {}}
         onImportAnnotations={() => {}}

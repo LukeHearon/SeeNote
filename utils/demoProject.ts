@@ -77,6 +77,13 @@ export const demoAnnotatedTracks = new Set<string>([
   `${DEMO_ROOT}/2024-06-15/morning-08h.wav`,
 ]);
 
+/** The tracks with buzzdetect results, so the demo's second column and filter have something to show. */
+export const demoBuzzdetectTracks = new Set<string>([
+  `${DEMO_ROOT}/2024-06-14/morning-08h.wav`,
+  `${DEMO_ROOT}/2024-06-14/morning-09h.wav`,
+  `${DEMO_ROOT}/2024-06-15/midday-12h.wav`,
+]);
+
 export const demoNonMediaFiles: string[] = [`${DEMO_ROOT}/2024-06-14/field-notes.txt`];
 
 export const DEMO_BIN_WIDTH = 0.96;

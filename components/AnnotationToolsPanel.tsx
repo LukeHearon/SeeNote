@@ -6,6 +6,7 @@ import { HOTKEY_SLOTS } from '../constants';
 import NewToolEntry from './NewToolEntry';
 import ToolCell from './ToolCell';
 import SidebarSection from './SidebarSection';
+import { refreshMenuItem, useRefreshMenu } from '../hooks/useRefreshMenu';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import { tooltips } from '../copy/tooltips';
 import { annotationToolsPanel as copy } from '../copy/ui';
@@ -38,6 +39,8 @@ interface AnnotationToolsPanelProps {
   playingExampleToolId: string | null;
   onPlayExample: (tool: AnnotationTool) => void;
   onShowExamples: (toolIndex: number) => void;
+  /** Re-read annotations, the tool set and the find index from disk. Absent in the guide's live copy. */
+  onRefreshAnnotations?: () => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }
@@ -57,9 +60,11 @@ function AnnotationToolsPanel({
   playingExampleToolId,
   onPlayExample,
   onShowExamples,
+  onRefreshAnnotations,
   collapsed,
   onToggleCollapsed,
 }: AnnotationToolsPanelProps) {
+  const refreshMenu = useRefreshMenu(copy.refresh, onRefreshAnnotations);
   const custom = annotationTools[0];
   // Defined (non-custom, keyed) tools sorted by key — memoized so this doesn't
   // re-run on every render.
@@ -91,12 +96,14 @@ function AnnotationToolsPanel({
         onSelect: () => onRequestDeleteTool(state.toolIndex),
       });
     }
+    if (onRefreshAnnotations) items.push(refreshMenuItem(copy.refresh, onRefreshAnnotations, true));
     return items;
   };
 
   return (
     <SidebarSection
       helpTarget="tool-palette"
+      onHeaderContextMenu={refreshMenu.onContextMenu}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
       keepActionsWhenCollapsed
@@ -244,6 +251,7 @@ function AnnotationToolsPanel({
         </div>
       )}
 
+      {refreshMenu.menu}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

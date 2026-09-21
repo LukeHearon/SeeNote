@@ -9,6 +9,7 @@ import ToolCell from './ToolCell';
 import { BuzzdetectToggle, IsolateToggle, SubsetToggle } from './controls/ToolbarToggles';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
+import { refreshMenuItem, useRefreshMenu } from '../hooks/useRefreshMenu';
 import DraftNumberInput from './DraftNumberInput';
 import ColorSwatchPicker from './ColorSwatchPicker';
 import { tooltips } from '../copy/tooltips';
@@ -18,6 +19,8 @@ const FIELD_CLASS = 'w-full bg-slate-900 border border-slate-700 rounded px-1 py
 
 interface NeuronPaletteProps {
   data: BuzzdetectData | null;
+  /** Re-read this track's buzzdetect results and re-list which tracks have them. Absent in the guide's live copy. */
+  onRefreshBuzzdetect?: () => void;
   /** Per-neuron detection thresholds; null = this neuron never detects. */
   thresholds: Record<string, number | null>;
   /** Per-neuron "Subset at" values. An entry here is what picks a neuron for the subset. */
@@ -105,6 +108,7 @@ interface NeuronPaletteProps {
  */
 function NeuronPalette({
   data,
+  onRefreshBuzzdetect,
   thresholds,
   subsetThresholds,
   hiddenNeurons,
@@ -210,6 +214,8 @@ function NeuronPalette({
   // names what a click is about to do.
   const allShown = neurons.length > 0 && unplotted.length === 0;
 
+  const refreshMenu = useRefreshMenu(copy.refresh, onRefreshBuzzdetect);
+
   const menuItems = (n: string): ContextMenuItem[] => {
     const isPinned = pinnedNeurons.includes(n);
     return [
@@ -234,6 +240,7 @@ function NeuronPalette({
         icon: hidden.has(n) ? <Eye size={12} /> : <EyeOff size={12} />,
         onSelect: () => onToggleNeuron(n, !hidden.has(n)),
       },
+      ...(onRefreshBuzzdetect ? [refreshMenuItem(copy.refresh, onRefreshBuzzdetect, true)] : []),
     ];
   };
 
@@ -502,6 +509,7 @@ function NeuronPalette({
       onToggleCollapsed={onToggleCollapsed}
       keepActionsWhenCollapsed
       helpTarget="neuron-palette"
+      onHeaderContextMenu={refreshMenu.onContextMenu}
       actions={(
         <div className="flex items-center gap-1 flex-none">
           {/* All / None is the one header control that acts on the rows
@@ -565,6 +573,7 @@ function NeuronPalette({
         )}
       </div>
 
+      {refreshMenu.menu}
       {contextNeuron && (
         <ContextMenu
           x={contextNeuron.x}

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
+import type { FileFilter } from '../utils/fileFilter';
+import { dirCountsFromFiles, totalCounts, DirCounts } from '../utils/fileTreeCounts';
 import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
@@ -33,13 +35,16 @@ interface TreeNode {
   children: TreeNode[];
   fileCount: number; // precomputed — no recursive counting at render time
   annotatedCount: number; // precomputed, alongside fileCount
+  buzzdetectCount: number; // precomputed: files here with buzzdetect results
   nonMediaFiles?: string[]; // non-audio/video files directly in this dir
 }
 
 interface FileTreeProps {
   rootDirectory: string | null;
-  /** The media directory is still being scanned — files may be missing or stale. */
+  /** Any directory scan (media, annotations, buzzdetect) is running — drives the progress bar. */
   isScanning: boolean;
+  /** The media directory itself is still being scanned, so an empty list means "not yet". */
+  isScanningMedia: boolean;
   allFiles: string[];
   allFilesUnfiltered: string[];
   currentTrack: string | null;
@@ -55,10 +60,20 @@ interface FileTreeProps {
   canNavigatePrev: boolean;
   canNavigateNext: boolean;
   shuffleMode: boolean;
-  onToggleShuffle: () => void;
+  /** Shuffle the tracks inside `folder` (entering it first if it isn't the current folder). */
+  onStartShuffle: (folder: string) => void;
+  onStopShuffle: () => void;
   annotatedTracks: Set<string>;
-  fileFilter: 'all' | 'annotated' | 'unannotated';
+  /** Tracks with buzzdetect results. Empty unless the project has a buzzdetect directory. */
+  buzzdetectTracks: Set<string>;
+  /** Whether the project names a buzzdetect directory — gates the buzzdetect column and filter. */
+  showBuzzdetect: boolean;
+  fileFilter: FileFilter;
   onToggleFileFilter: () => void;
+  buzzdetectFilter: FileFilter;
+  onToggleBuzzdetectFilter: () => void;
+  /** Rescan the media directory from scratch. */
+  onRefreshFileTree: () => void;
   onRevealInFinder: (path: string) => void;
   onRevealAnnotations: (audioFilePath: string) => void;
   onRevealAnnotationsRoot?: () => void;
@@ -97,66 +112,30 @@ import { stripExt, basename } from '../utils/helpers';
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
 const finderLabel = isWindows ? 'File Explorer' : 'Finder';
 
-function computeFileCount(node: TreeNode, annotatedTracks: Set<string>): [number, number] {
-  if (!node.isDir) {
-    node.annotatedCount = annotatedTracks.has(node.path) ? 1 : 0;
-    return [1, node.annotatedCount];
-  }
-  let count = 0;
-  let annotated = 0;
-  for (const c of node.children) {
-    const [cCount, cAnnotated] = computeFileCount(c, annotatedTracks);
-    count += cCount;
-    annotated += cAnnotated;
-  }
-  node.fileCount = count;
-  node.annotatedCount = annotated;
-  return [count, annotated];
-}
-
-// Directory (annotated, total) counts derived from a flat file list, keyed by
-// the same `/`-joined dir paths buildTree assigns to its nodes.
-function dirCountsFromFiles(
-  rootDir: string,
-  files: string[],
-  annotatedTracks: Set<string>,
-): Map<string, [number, number]> {
-  const counts = new Map<string, [number, number]>();
-  for (const file of files) {
-    if (!file.startsWith(rootDir + '/') && !file.startsWith(rootDir + '\\')) continue;
-    const rel = file.substring(rootDir.length + 1);
-    const parts = rel.split(/[\\/]/);
-    const isAnnotated = annotatedTracks.has(file) ? 1 : 0;
-    let path = rootDir;
-    for (let i = 0; i < parts.length - 1; i++) {
-      path += '/' + parts[i];
-      const cur = counts.get(path) ?? [0, 0];
-      cur[0] += 1;
-      cur[1] += isAnnotated;
-      counts.set(path, cur);
-    }
-  }
-  return counts;
-}
-
 // Overwrite every dir node's counts with the unfiltered totals so the file-tree
-// counts stay fixed regardless of the annotated/unannotated filter.
-function applyDirCounts(node: TreeNode, counts: Map<string, [number, number]>): void {
+// counts stay fixed regardless of the annotation / buzzdetect filters.
+function applyDirCounts(node: TreeNode, counts: Map<string, DirCounts>): void {
   if (!node.isDir) return;
-  const [total, annotated] = counts.get(node.path) ?? [0, 0];
-  node.fileCount = total;
-  node.annotatedCount = annotated;
-  for (const c of node.children) applyDirCounts(c, counts);
+  const c = counts.get(node.path);
+  node.fileCount = c?.total ?? 0;
+  node.annotatedCount = c?.annotated ?? 0;
+  node.buzzdetectCount = c?.buzzdetect ?? 0;
+  for (const child of node.children) applyDirCounts(child, counts);
 }
 
+/**
+ * `files` is what the tree shows (after filtering); `countFiles` is the whole
+ * unfiltered list the per-folder counts are taken from.
+ */
 function buildTree(
   rootDir: string,
   files: string[],
-  nonMediaFiles: string[] = [],
-  annotatedTracks: Set<string> = new Set(),
-  countFiles?: string[],
+  nonMediaFiles: string[],
+  annotatedTracks: Set<string>,
+  buzzdetectTracks: Set<string>,
+  countFiles: string[],
 ): TreeNode[] {
-  const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0, annotatedCount: 0 };
+  const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0, annotatedCount: 0, buzzdetectCount: 0 };
 
   for (const file of files) {
     const rel = file.substring(rootDir.length + 1);
@@ -168,7 +147,7 @@ function buildTree(
       const isLast = i === parts.length - 1;
 
       if (isLast) {
-        node.children.push({ name: part, path: file, isDir: false, children: [], fileCount: 1, annotatedCount: 0 });
+        node.children.push({ name: part, path: file, isDir: false, children: [], fileCount: 1, annotatedCount: 0, buzzdetectCount: 0 });
       } else {
         // Use a Map stored on the node for O(1) child lookups during tree building
         if (!(node as any)._dirMap) (node as any)._dirMap = new Map<string, TreeNode>();
@@ -176,7 +155,7 @@ function buildTree(
         let child = dirMap.get(part);
         if (!child) {
           const dirPath = rootDir + '/' + parts.slice(0, i + 1).join('/');
-          child = { name: part, path: dirPath, isDir: true, children: [], fileCount: 0, annotatedCount: 0 };
+          child = { name: part, path: dirPath, isDir: true, children: [], fileCount: 0, annotatedCount: 0, buzzdetectCount: 0 };
           dirMap.set(part, child);
           node.children.push(child);
         }
@@ -185,16 +164,10 @@ function buildTree(
     }
   }
 
-  // Precompute file + annotated counts bottom-up
-  for (const child of root.children) computeFileCount(child, annotatedTracks);
-
-  // When a filter is active, `files` is the filtered subset but the displayed
-  // counts should still reflect the whole project — recompute dir counts from
-  // the unfiltered list.
-  if (countFiles) {
-    const counts = dirCountsFromFiles(rootDir, countFiles, annotatedTracks);
-    for (const child of root.children) applyDirCounts(child, counts);
-  }
+  // Counts come from the unfiltered list, so they don't move when a filter is
+  // toggled.
+  const counts = dirCountsFromFiles(rootDir, countFiles, annotatedTracks, buzzdetectTracks);
+  for (const child of root.children) applyDirCounts(child, counts);
 
   // Attach non-media files to their containing directory nodes
   if (nonMediaFiles.length > 0) {
@@ -274,6 +247,60 @@ function getAncestorPaths(currentTrack: string | null, rootDirectory: string | n
   return paths;
 }
 
+// ── Result columns ──────────────────────────────────────────────────────────
+// Two right-aligned columns show, for each folder, how many of its tracks have
+// annotations / buzzdetect results, and for each track a pip saying whether it
+// does. They're the least important thing on a row, so they only appear when
+// the panel is wide enough to leave the name room.
+const MIN_NAME_PX = 150;
+const COLUMN_CHAR_PX = 7;
+
+interface ColumnLayout {
+  annotation: boolean;
+  buzzdetect: boolean;
+  /** Width of each column, in `ch`. */
+  widthCh: number;
+}
+
+/** Which columns fit in a list `listWidth` px wide, given the biggest number one will hold. */
+function columnLayout(listWidth: number, maxCount: number, hasBuzzdetect: boolean): ColumnLayout {
+  const widthCh = String(maxCount).length + 1;
+  const columnPx = widthCh * COLUMN_CHAR_PX;
+  return {
+    widthCh,
+    annotation: listWidth >= MIN_NAME_PX + columnPx,
+    buzzdetect: hasBuzzdetect && listWidth >= MIN_NAME_PX + 2 * columnPx,
+  };
+}
+
+/** The columns' cells for one row: a count on a folder, a pip on a track. */
+const ResultCells: React.FC<{
+  columns: ColumnLayout;
+  annotation: number | boolean;
+  buzzdetect: number | boolean;
+  total?: number;
+}> = ({ columns, annotation, buzzdetect, total }) => {
+  const cell = (value: number | boolean, color: string, noun: string) => (
+    <span
+      className="flex-none flex items-center justify-end text-[10px] tabular-nums"
+      style={{ width: `${columns.widthCh}ch` }}
+      data-tooltip={typeof value === 'number'
+        ? `${value} of ${total ?? '?'} tracks ${noun}`
+        : value ? `Track ${noun}` : undefined}
+    >
+      {typeof value === 'number'
+        ? <span className={value > 0 ? color : 'text-slate-700'}>{value}</span>
+        : value && <span className={`w-1.5 h-1.5 rounded-full bg-current ${color}`} />}
+    </span>
+  );
+  return (
+    <>
+      {columns.annotation && cell(annotation, 'text-sky-500', 'have annotations')}
+      {columns.buzzdetect && cell(buzzdetect, 'text-amber-500', 'have buzzdetect results')}
+    </>
+  );
+};
+
 interface TreeItemProps {
   node: TreeNode;
   currentTrack: string | null;
@@ -282,6 +309,8 @@ interface TreeItemProps {
   expandedDirs: Set<string>;
   toggleDir: (node: TreeNode) => void;
   annotatedTracks: Set<string>;
+  buzzdetectTracks: Set<string>;
+  columns: ColumnLayout;
   ancestorPaths: Set<string>;
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
   onEnterFolder: (path: string) => void;
@@ -300,6 +329,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
   expandedDirs,
   toggleDir,
   annotatedTracks,
+  buzzdetectTracks,
+  columns,
   ancestorPaths,
   onContextMenu,
   onEnterFolder,
@@ -338,10 +369,9 @@ const TreeItem: React.FC<TreeItemProps> = ({
             }
             <FolderOpen size={13} className={`flex-none ${isClosedAncestor ? 'text-[#e65161]/70' : 'text-slate-500 group-hover:text-slate-300'}`} />
             <span className="text-xs truncate">{node.name}</span>
-            <span className={`text-[10px] ml-auto flex-none pr-1 ${isClosedAncestor ? 'text-[#e65161]/50' : 'text-slate-600'}`}>
-              {node.annotatedCount}/{node.fileCount}
-            </span>
           </button>
+          <ResultCells columns={columns} annotation={node.annotatedCount} buzzdetect={node.buzzdetectCount} total={node.fileCount} />
+          <span className="flex-none w-2" />
           <button
             onClick={(e) => { e.stopPropagation(); onEnterFolder(node.path); }}
             className="absolute inset-y-0 right-1 flex items-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -363,6 +393,8 @@ const TreeItem: React.FC<TreeItemProps> = ({
             expandedDirs={expandedDirs}
             toggleDir={toggleDir}
             annotatedTracks={annotatedTracks}
+            buzzdetectTracks={buzzdetectTracks}
+            columns={columns}
             ancestorPaths={ancestorPaths}
             onContextMenu={onContextMenu}
             onEnterFolder={onEnterFolder}
@@ -449,6 +481,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
         : <Film size={12} className="flex-none opacity-70" />
       }
       <span className="text-xs truncate flex-1">{node.name}</span>
+      <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(node.path)} />
     </button>
   );
 };
@@ -456,6 +489,7 @@ const TreeItem: React.FC<TreeItemProps> = ({
 function FileTree({
   rootDirectory,
   isScanning,
+  isScanningMedia,
   allFiles,
   allFilesUnfiltered,
   currentTrack,
@@ -469,10 +503,16 @@ function FileTree({
   canNavigatePrev,
   canNavigateNext,
   shuffleMode,
-  onToggleShuffle,
+  onStartShuffle,
+  onStopShuffle,
   annotatedTracks,
+  buzzdetectTracks,
+  showBuzzdetect,
   fileFilter,
   onToggleFileFilter,
+  buzzdetectFilter,
+  onToggleBuzzdetectFilter,
+  onRefreshFileTree,
   onRevealInFinder,
   onRevealAnnotations,
   onRevealAnnotationsRoot,
@@ -584,16 +624,15 @@ function FileTree({
   const tree = useMemo(() => {
     if (!effectiveRoot) return [];
     if (effectiveFiles.length === 0 && effectiveNonMediaFiles.length === 0) return [];
-    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, effectiveTotalFiles);
-  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, effectiveTotalFiles]);
+    return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, buzzdetectTracks, effectiveTotalFiles);
+  }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, buzzdetectTracks, effectiveTotalFiles]);
 
   // Header count for the entered dir — the whole (unfiltered) project total, so
-  // it doesn't move when the annotated/unannotated filter is toggled.
-  const rootCounts = useMemo(() => {
-    let annotatedCount = 0;
-    for (const f of effectiveTotalFiles) if (annotatedTracks.has(f)) annotatedCount += 1;
-    return { fileCount: effectiveTotalFiles.length, annotatedCount };
-  }, [effectiveTotalFiles, annotatedTracks]);
+  // it doesn't move when a filter is toggled.
+  const rootCounts = useMemo(
+    () => totalCounts(effectiveTotalFiles, annotatedTracks, buzzdetectTracks),
+    [effectiveTotalFiles, annotatedTracks, buzzdetectTracks],
+  );
 
   // Preserve scroll position across tree rebuilds (refresh, file-list changes,
   // opening a folder's contents) as long as we're still viewing the same folder.
@@ -779,6 +818,21 @@ function FileTree({
     return () => ro.disconnect();
   }, [syncScrollbar]);
 
+  // Width available to rows, which decides whether the result columns fit.
+  const [listWidth, setListWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setListWidth(el.clientWidth));
+    ro.observe(el);
+    setListWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, [collapsed, sectionCollapsed]);
+  const columns = useMemo(
+    () => columnLayout(listWidth, Math.max(rootCounts.total, 1), showBuzzdetect),
+    [listWidth, rootCounts.total, showBuzzdetect],
+  );
+
   const { scrollTop, scrollHeight, clientHeight } = scrollState;
   const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
   const showScrollbar = scrollHeight > clientHeight + 2;
@@ -886,12 +940,21 @@ function FileTree({
     if (!m.isDir && isSupportedMediaFile(m.path)) {
       items.push({ label: copy.importAnnotations, onSelect: () => onImportAnnotations(m.path) });
     }
+    // Shuffle. A folder (or the panel header, which stands for the current
+    // folder) shuffles the tracks inside it; while shuffling, any menu can stop it.
+    if (m.isDir && rootDirectory) {
+      items.push({ label: shuffleMode ? copy.reshuffle : copy.shuffleFolder, onSelect: () => onStartShuffle(m.path) });
+    }
+    if (shuffleMode) {
+      items.push({ label: copy.stopShuffle, onSelect: onStopShuffle });
+    }
     const showsAnnotations = (!m.isDir && annotatedTracks.has(m.path)) || (m.isDir && !m.isAudioRoot);
     if (showsAnnotations) {
       items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: () => onRevealAnnotations(m.path) });
     } else if (m.isAudioRoot && onRevealAnnotationsRoot) {
       items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: onRevealAnnotationsRoot });
     }
+    items.push({ label: copy.refreshFileTree, onSelect: onRefreshFileTree });
     return items;
   };
 
@@ -939,7 +1002,7 @@ function FileTree({
             {dirName}
           </span>
           <span className="text-[10px] text-slate-600 flex-none">
-            ({rootCounts.annotatedCount}/{rootCounts.fileCount})
+            ({rootCounts.annotated}/{rootCounts.total})
           </span>
         </>
       )}
@@ -948,9 +1011,11 @@ function FileTree({
           shuffleMode={shuffleMode}
           anyExpanded={isAnyExpanded}
           fileFilter={fileFilter}
+          showBuzzdetect={showBuzzdetect}
+          buzzdetectFilter={buzzdetectFilter}
           onToggleExpandCollapse={toggleExpandCollapse}
           onToggleFileFilter={onToggleFileFilter}
-          onToggleShuffle={onToggleShuffle}
+          onToggleBuzzdetectFilter={onToggleBuzzdetectFilter}
         />
       )}
     >
@@ -996,14 +1061,14 @@ function FileTree({
         {rootDirectory && effectiveTotalFiles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <Music size={28} className="mb-2 opacity-50" />
-            <p className="text-sm">{isScanning ? copy.scanning : copy.noMediaFiles}</p>
+            <p className="text-sm">{isScanningMedia ? copy.scanning : copy.noMediaFiles}</p>
           </div>
         )}
 
         {rootDirectory && effectiveTotalFiles.length > 0 && effectiveFiles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
             <EyeOff size={28} className="mb-2 opacity-50" />
-            <p className="text-sm">{copy.noFilesMatchFilter(fileFilter as 'annotated' | 'unannotated')}</p>
+            <p className="text-sm">{copy.noFilesMatchFilter}</p>
           </div>
         )}
 
@@ -1083,6 +1148,7 @@ function FileTree({
                       : <Film size={12} className="flex-none opacity-70" />
                     }
                     <span className="text-xs truncate flex-1">{relNoExt}</span>
+                    <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(filePath)} />
                   </button>
                 );
               })}
@@ -1110,6 +1176,8 @@ function FileTree({
                   expandedDirs={expandedDirs}
                   toggleDir={toggleDir}
                   annotatedTracks={annotatedTracks}
+                  buzzdetectTracks={buzzdetectTracks}
+                  columns={columns}
                   ancestorPaths={ancestorPaths}
                   onContextMenu={handleContextMenu}
                   onEnterFolder={enterFolder}
@@ -1180,7 +1248,7 @@ function FileTree({
         </div>
       )}
 
-      {fileFilter !== 'all' && rootDirectory && effectiveFiles.length < effectiveTotalFiles.length && (
+      {rootDirectory && effectiveFiles.length < effectiveTotalFiles.length && (
         <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-800 flex-none bg-slate-900">
           {copy.showingCount(effectiveFiles.length, effectiveTotalFiles.length)}
         </div>

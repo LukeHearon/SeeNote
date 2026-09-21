@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnnotationTool, BandPassFilter, Selection, SpectrogramSettings } from '../types';
-import type { FileFilter } from '../components/controls/FilePanelHeaderButtons';
+import type { FileFilter } from './fileFilter';
 import type { DebugLog } from '../components/DebugConsole';
 import { CurrentTimeStore, createCurrentTimeStore } from './currentTimeStore';
 import { TimeDisplayUnit } from './helpers';
@@ -80,7 +80,14 @@ export interface LiveSnapshot {
    * File panel state, or null in single-file mode — there is no file panel to
    * drive there, so the guide's copy of those buttons falls back to its demo.
    */
-  filePanel: { fileFilter: FileFilter; shuffleMode: boolean; anyExpanded: boolean } | null;
+  filePanel: {
+    fileFilter: FileFilter;
+    buzzdetectFilter: FileFilter;
+    /** Whether the project has a buzzdetect directory, which is what gives the panel a buzzdetect filter. */
+    hasBuzzdetect: boolean;
+    shuffleMode: boolean;
+    anyExpanded: boolean;
+  } | null;
   /** Annotation tools, or null in single-file mode (no tool palette). */
   toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null } | null;
   /**
@@ -125,7 +132,7 @@ export interface LiveHandlers {
   // and so never gets a live copy of these buttons in the first place.
   toggleFileExpandCollapse(): void;
   toggleFileFilter(): void;
-  toggleShuffle(): void;
+  toggleBuzzdetectFilter(): void;
   // Tool palette. The ones that open a modal or a dock do so in the main window.
   activateTool(key: string): void;
   activateSelectMode(): void;

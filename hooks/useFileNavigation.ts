@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, ProjectPreferences } from '../types';
 import { shuffleArray } from '../utils/helpers';
+import { isInsideDir } from '../utils/projectPaths';
 
 interface UseFileNavigationArgs {
   projectRef: React.MutableRefObject<Project>;
@@ -11,7 +12,7 @@ interface UseFileNavigationArgs {
 // sample rate, duration, the full media list, shuffle state, and the processing
 // flag — plus the mirror refs that defeat stale closures in async callbacks and
 // the once-mounted engine closures (trackPathRef, videoSrcRef, isAudioTrackRef,
-// durationRef). Exposes the shuffle toggle. The track-open orchestration
+// durationRef). Exposes start/stop shuffle. The track-open orchestration
 // (handleOpenTrack) and queue-aware navigation (navigateFile / displayQueue)
 // stay in AnnotationWindow: they are the coordination seam that touches the
 // frame source, transport, cache, and annotation reset all at once.
@@ -48,26 +49,37 @@ export function useFileNavigation({
   const trackPathRef = useRef<string | null>(null);
   useEffect(() => { trackPathRef.current = trackPath; }, [trackPath]);
 
-  // Toggle shuffle: randomise current allTracks order
-  const toggleShuffle = useCallback(() => {
-    setShuffleMode(prev => {
-      const next = !prev;
-      if (next) {
-        const shuffled = shuffleArray(allTracks);
-        // Pin the currently open file at the front of the queue
-        const cur = trackPathRef.current;
-        if (cur) {
-          const idx = shuffled.indexOf(cur);
-          if (idx > 0) { shuffled.splice(idx, 1); shuffled.unshift(cur); }
-        }
-        setShuffledFiles(shuffled);
-      }
-      if (projectRef.current) {
-        updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, shuffleMode: next });
-      }
-      return next;
-    });
+  // Shuffle the tracks inside `folder` (null = the whole project). The queue is
+  // scoped to that folder, and the panel is entered into it — leaving the
+  // folder ends the shuffle (handleEnteredFolderChange).
+  const startShuffle = useCallback((folder: string | null) => {
+    const scope = folder ? allTracks.filter(f => isInsideDir(folder, f)) : allTracks;
+    const shuffled = shuffleArray(scope);
+    // Pin the currently open file at the front of the queue
+    const cur = trackPathRef.current;
+    if (cur) {
+      const idx = shuffled.indexOf(cur);
+      if (idx > 0) { shuffled.splice(idx, 1); shuffled.unshift(cur); }
+    }
+    setShuffledFiles(shuffled);
+    setShuffleMode(true);
+    const project = projectRef.current;
+    if (project) {
+      updateProjectPreferences(project.id, {
+        ...project.preferences,
+        shuffleMode: true,
+        enteredFolderPath: folder ?? undefined,
+      });
+    }
   }, [allTracks, updateProjectPreferences, projectRef]);
+
+  const stopShuffle = useCallback(() => {
+    setShuffleMode(false);
+    const project = projectRef.current;
+    if (project?.preferences.shuffleMode) {
+      updateProjectPreferences(project.id, { ...project.preferences, shuffleMode: false });
+    }
+  }, [updateProjectPreferences, projectRef]);
 
   return {
     // state + setters
@@ -88,6 +100,7 @@ export function useFileNavigation({
     isAudioTrackRef,
     trackPathRef,
     // handlers
-    toggleShuffle,
+    startShuffle,
+    stopShuffle,
   };
 }

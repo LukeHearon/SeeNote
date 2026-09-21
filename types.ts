@@ -345,6 +345,8 @@ export interface ProjectPreferences {
    */
   toolHotkeys?: Record<string, string>;
   fileFilter?: 'all' | 'annotated' | 'unannotated';
+  /** Same three states as fileFilter, applied to which tracks have buzzdetect results. */
+  buzzdetectFileFilter?: 'all' | 'annotated' | 'unannotated';
   shuffleMode?: boolean;
   enteredFolderPath?: string;
   uiSettings?: ProjectUiSettings;

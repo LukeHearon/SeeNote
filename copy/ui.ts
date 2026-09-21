@@ -250,6 +250,7 @@ export const repairProjectModal = {
 };
 
 export const annotationToolsPanel = {
+  get refresh() { return getOverride('ui.annotationToolsPanel.refresh') ?? "Refresh annotations"; },
   get header() { return getOverride('ui.annotationToolsPanel.header') ?? "Labels"; },
   get selectLabel() { return getOverride('ui.annotationToolsPanel.selectLabel') ?? "Select"; },
   get customLabel() { return getOverride('ui.annotationToolsPanel.customLabel') ?? "Custom"; },
@@ -264,6 +265,7 @@ export const sidebarSection = {
 };
 
 export const neuronPalette = {
+  get refresh() { return getOverride('ui.neuronPalette.refresh') ?? "Refresh buzzdetect results"; },
   get header() { return getOverride('ui.neuronPalette.header') ?? "buzzdetect"; },
   get selectAll() { return getOverride('ui.neuronPalette.selectAll') ?? "All"; },
   get selectNone() { return getOverride('ui.neuronPalette.selectNone') ?? "None"; },
@@ -401,10 +403,11 @@ export const fileTree = {
   get scanning() { return getOverride('ui.fileTree.scanning') ?? "Scanning media directory…"; },
   get noMediaFiles() { return getOverride('ui.fileTree.noMediaFiles') ?? "No compatible files found in your media directory"; },
   showingCount(shown: number, total: number) { return getOverride('ui.fileTree.showingCount') ?? `Showing ${shown} of ${total} files`; },
-  noFilesMatchFilter(filter: 'annotated' | 'unannotated') {
-    const label = filter === 'annotated' ? 'annotated only' : 'unannotated only';
-    return getOverride('ui.fileTree.noFilesMatchFilter') ?? `No files match your active filter: ${label}`;
-  },
+  get noFilesMatchFilter() { return getOverride('ui.fileTree.noFilesMatchFilter') ?? "No files match your active filters"; },
+  get shuffleFolder() { return getOverride('ui.fileTree.shuffleFolder') ?? "Shuffle this folder"; },
+  get reshuffle() { return getOverride('ui.fileTree.reshuffle') ?? "Reshuffle this folder"; },
+  get stopShuffle() { return getOverride('ui.fileTree.stopShuffle') ?? "Stop shuffling"; },
+  get refreshFileTree() { return getOverride('ui.fileTree.refreshFileTree') ?? "Refresh file list"; },
 };
 
 export const keyboardShortcutsView = {

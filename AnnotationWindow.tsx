@@ -17,6 +17,7 @@ import { getFileInfo, readScanCache, clearScanCache, setScanPriorityFolder, open
 import type { DirScan, ScanSpec } from './utils/tauriCommands';
 import { scanDirectory, MEDIA_SCAN, ANNOTATION_SCAN, BUZZDETECT_SCAN, BUZZDETECT_SUFFIXES } from './utils/dirScan';
 import { tracksWithResults } from './utils/resultPresence';
+import { nextFileFilter, passesFileFilter } from './utils/fileFilter';
 import { githubRepoPageUrl } from './utils/gitSync';
 import { isInsideDir, joinPath } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
@@ -106,7 +107,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoSrcRef,
     isAudioTrackRef,
     trackPathRef,
-    toggleShuffle,
+    startShuffle,
+    stopShuffle,
   } = useFileNavigation({ projectRef, updateProjectPreferences });
 
   // Project settings modal
@@ -554,6 +556,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     getAnnotationPath,
   });
 
+  // Tracks Find & Rename has anything to read from: those with an annotation
+  // file on disk, plus the open track (whose annotations may be unsaved). The
+  // panel used to try every track and swallow the "no such file" errors, which
+  // on a large project is one failed read per unannotated track.
+  const annotatedSearchTracks = useMemo(
+    () => allTracks.filter(t => annotatedTracks.has(t) || t === trackPath),
+    [allTracks, annotatedTracks, trackPath],
+  );
+
   // Find & Rename: renames every annotation whose text satisfies `matcher`
   // (exact, partial, or regex) to `newText`, independent of any tool
   // identity. Current track updates in memory (autosave picks it up); when
@@ -575,10 +586,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setAnnotations(prev => prev.map(a => matcher(a.text) ? { ...a, text: newText, color: newColor } : a));
     }
     if (scope === 'track') return currentCount;
-    const otherTracks = allTracks.filter(t => t !== trackPath && inScope(t));
+    const otherTracks = annotatedSearchTracks.filter(t => t !== trackPath && inScope(t));
     const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, matcher, newText);
     return currentCount + diskCount;
-  }, [annotations, annotationTools, allTracks, trackPath, getAnnotationPath,
+  }, [annotations, annotationTools, annotatedSearchTracks, trackPath, getAnnotationPath,
       project.preferences.enteredFolderPath]);
 
   // Find & Rename: "Rename selected" — renames just the one match currently
@@ -1015,14 +1026,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const displayQueue = useMemo(() => {
     const base = shuffleMode ? shuffledFiles : allTracks;
     const filter = project?.preferences.fileFilter ?? 'all';
+    const buzzFilter = project?.buzzdetectDirectoryAbs ? (project?.preferences.buzzdetectFileFilter ?? 'all') : 'all';
     let list = base;
-    if (filter === 'annotated') list = list.filter(f => annotatedTracks.has(f));
-    else if (filter === 'unannotated') list = list.filter(f => !annotatedTracks.has(f));
+    if (filter !== 'all') list = list.filter(f => passesFileFilter(annotatedTracks.has(f), filter));
+    if (buzzFilter !== 'all') list = list.filter(f => passesFileFilter(buzzdetectTracks.has(f), buzzFilter));
     const entered = project?.preferences.enteredFolderPath;
     if (entered && !shuffleMode) list = list.filter(f => isInsideDir(entered, f));
     return list;
-  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter,
-      project?.preferences.enteredFolderPath, annotatedTracks]);
+  }, [shuffleMode, shuffledFiles, allTracks, project?.preferences.fileFilter, project?.preferences.buzzdetectFileFilter,
+      project?.buzzdetectDirectoryAbs, project?.preferences.enteredFolderPath, annotatedTracks, buzzdetectTracks]);
 
   // Index lookup map for O(1) navigation
   const displayQueueIndex = useMemo(() => {
@@ -1171,12 +1183,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [activationStack, clearSelectionEnd, selectionToSource, frameSourceRef]);
 
+  // Entering or leaving a folder ends a shuffle: the queue was scoped to the
+  // folder it started in. (startShuffle sets the entered folder itself, so it
+  // doesn't come through here.)
   const handleEnteredFolderChange = useCallback((path: string | null) => {
     updateProjectPreferences(project.id, {
       ...project.preferences,
       enteredFolderPath: path ?? undefined,
+      ...(shuffleMode ? { shuffleMode: false } : {}),
     });
-  }, [project, updateProjectPreferences]);
+    if (shuffleMode) setShuffleMode(false);
+  }, [project, updateProjectPreferences, shuffleMode, setShuffleMode]);
 
   // Select + scroll to an annotation matching `match` on the current track.
   // Shared by the same-track and cross-track ("Go") paths so the two don't
@@ -1303,7 +1320,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setHasLocalChanges,
     hasRemoteChanges,
     reloadNonce,
-    bumpReloadNonce,
     handleSync,
     confirmPendingClears,
     flushPendingAutosave,
@@ -1542,7 +1558,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     const openInitialTrack = (files: string[]) => {
       let firstFile = files[0];
       if (project.preferences.shuffleMode && files.length > 0) {
-        const shuffled = shuffleArray(files);
+        // Shuffle within the folder the panel was left in, as startShuffle does.
+        const entered = project.preferences.enteredFolderPath;
+        const shuffled = shuffleArray(entered ? files.filter(f => isInsideDir(entered, f)) : files);
         setShuffledFiles(shuffled);
         firstFile = shuffled[0];
       }
@@ -1704,9 +1722,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, [project, updateProjectSettings, updateProjectPreferences, handleOpenTrack, loadAnnotationTools, runMediaScan]);
 
   const handleToggleFileFilter = useCallback(() => {
-    const current = project.preferences.fileFilter ?? 'all';
-    const next = ({ all: 'unannotated', unannotated: 'annotated', annotated: 'all' } as const)[current];
-    updateProjectPreferences(project.id, { ...project.preferences, fileFilter: next });
+    updateProjectPreferences(project.id, {
+      ...project.preferences,
+      fileFilter: nextFileFilter(project.preferences.fileFilter ?? 'all'),
+    });
+  }, [project, updateProjectPreferences]);
+
+  const handleToggleBuzzdetectFilter = useCallback(() => {
+    updateProjectPreferences(project.id, {
+      ...project.preferences,
+      buzzdetectFileFilter: nextFileFilter(project.preferences.buzzdetectFileFilter ?? 'all'),
+    });
   }, [project, updateProjectPreferences]);
 
   // The file panel's expand/collapse state lives inside FileTree; it reports it
@@ -2246,7 +2272,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       spectrogramSettingsOpen: showSettings,
       sampleRate,
       filePanel: {
-        fileFilter: (project?.preferences.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
+        fileFilter: project?.preferences.fileFilter ?? 'all',
+        buzzdetectFilter: project?.preferences.buzzdetectFileFilter ?? 'all',
+        hasBuzzdetect: project.buzzdetectDirectoryAbs !== null,
         shuffleMode,
         anyExpanded: fileTreeAnyExpanded,
       },
@@ -2297,7 +2325,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => fileTreeHeaderRef.current?.toggleExpandCollapse(),
       toggleFileFilter: handleToggleFileFilter,
-      toggleShuffle: toggleShuffle,
+      toggleBuzzdetectFilter: handleToggleBuzzdetectFilter,
       activateTool: handleToolActivate,
       activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
       openToolSettings: () => setShowToolSettings(true),
@@ -2628,10 +2656,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             canNavigatePrev: currentFileIndex > 0,
             canNavigateNext: currentFileIndex < displayQueue.length - 1,
             shuffleMode,
-            onToggleShuffle: toggleShuffle,
+            onStartShuffle: (folder: string) => startShuffle(folder === currentDirectory ? null : folder),
+            onStopShuffle: stopShuffle,
             annotatedTracks,
-            fileFilter: (project?.preferences.fileFilter ?? 'all') as 'all' | 'annotated' | 'unannotated',
+            buzzdetectTracks,
+            showBuzzdetect: project.buzzdetectDirectoryAbs !== null,
+            fileFilter: project?.preferences.fileFilter ?? 'all',
             onToggleFileFilter: handleToggleFileFilter,
+            buzzdetectFilter: project?.preferences.buzzdetectFileFilter ?? 'all',
+            onToggleBuzzdetectFilter: handleToggleBuzzdetectFilter,
+            onRefreshFileTree: refreshFileTree,
             onRevealInFinder: handleRevealInFinder,
             onRevealAnnotations: handleRevealAnnotations,
             onRevealAnnotationsRoot: annotationDirectory
@@ -2710,6 +2744,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
                   onShowExamples={handleShowExamples}
+                  onRefreshAnnotations={refreshAnnotations}
                   collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_LABELS)}
                   onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_LABELS)}
                 />
@@ -2722,6 +2757,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               node: (
                 <NeuronPalette
                   data={buzzdetectData}
+                  onRefreshBuzzdetect={refreshBuzzdetect}
                   thresholds={buzzdetectThresholds}
                   subsetThresholds={buzzdetectSubsetThresholds}
                   hiddenNeurons={buzzdetectHiddenNeurons}
@@ -3025,7 +3061,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             <FindLabelPanel
               annotations={annotations}
               annotationTools={annotationTools}
-              allTracks={allTracks}
+              allTracks={annotatedSearchTracks}
               trackPath={trackPath}
               folderPath={project.preferences.enteredFolderPath ?? null}
               annotationsLoaded={trackPath !== null && annotationsLoadedTrack === trackPath}
@@ -3042,7 +3078,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               scope={findLabelScope}
               onScopeChange={setFindLabelScope}
               focusNonce={findLabelFocusNonce}
-              reloadNonce={reloadNonce}
+              reloadNonce={reloadNonce + annotationReloadNonce}
               onClose={() => setShowFindLabel(false)}
               onGo={handleGoToLabelMatch}
               onRename={handleFindLabelRename}
