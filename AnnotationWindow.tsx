@@ -712,6 +712,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     durationRef: displayDurationRef,
     zoomSecRef,
     preZoomExtentRef,
+    selectionRef,
     getViewportStartTime: () => {
       const { scrollLeft, pixelsPerSecond } = viewportStoreRef.current.get();
       return pixelsPerSecond > 0 ? scrollLeft / pixelsPerSecond : 0;

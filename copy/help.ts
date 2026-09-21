@@ -171,7 +171,7 @@ export const help = {
 
   spectrogram: {
     get li1() { return getOverride('help.spectrogram.li1') ?? "**Pan:** Right-click & drag, or scroll wheel."; },
-    get li2() { return getOverride('help.spectrogram.li2') ?? "**Zoom:** `{mod}` + scroll wheel."; },
+    get li2() { return getOverride('help.spectrogram.li2') ?? "**Zoom:** `{mod}` + scroll wheel. With a selection active, `{mod}+Shift+=` zooms to fill it, with 10% padding on either side."; },
     get li3() { return getOverride('help.spectrogram.li3') ?? "**Seek:** Left-click (in Selection Mode) to move the playhead."; },
     get li4() { return getOverride('help.spectrogram.li4') ?? "**Play/Pause:** `Space`."; },
     get li5() { return getOverride('help.spectrogram.li5') ?? "**Toggle playback rate (1× ↔ last defined):** `R`."; },

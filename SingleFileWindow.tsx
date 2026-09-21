@@ -130,7 +130,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // AnnotationWindow's (see hooks/useSpectrogramZoomHotkeys.ts); this window
   // has no viewport store to read for the mod+0 "remember where I was"
   // snapshot, so it falls back to the hook's default (start of window = 0).
-  useSpectrogramZoomHotkeys({ spectrogramRef, durationRef, zoomSecRef, preZoomExtentRef });
+  useSpectrogramZoomHotkeys({ spectrogramRef, durationRef, zoomSecRef, preZoomExtentRef, selectionRef });
 
   const bandPassProjectRef = useRef({ id: 'single-file', preferences: {} as { bandPassFilter?: import('./types').BandPassFilter | null } });
   const prevProjectIdRef = useRef<string | null>('single-file');
