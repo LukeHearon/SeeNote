@@ -5,6 +5,7 @@ import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { resolveRenderCps } from '../utils/viewportTransform';
 import { syncCanvasBitmap } from '../utils/canvasDpr';
 import { Timeline, sourceRangesForDisplayRange } from '../utils/subsetTimeline';
+import { chunkDiag } from '../utils/chunkDiag';
 
 // TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
 // we can tell a real playback hitch (dropped frame) from the sampling twinkle.
@@ -349,7 +350,8 @@ export function useChunkRenderer({
         const canIncremental =
             shiftAbs <= maxIncrCols &&
             offscreenReady &&
-            !cpsChanged;
+            !cpsChanged &&
+            !chunkDiag.fullRedraw; // TEMP DIAGNOSTIC — see utils/chunkDiag.ts
 
         if (DIAG_FRAME_TIMING && prevStartCol !== null && !canIncremental) {
           const why =
@@ -558,6 +560,45 @@ export function useChunkRenderer({
         if (endXCss < cssWidth) {
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(endXCss * dpr, 0, (cssWidth - endXCss) * dpr, canvas.height);
+        }
+
+        // TEMP DIAGNOSTIC — label every chunk boundary on screen with the tier
+        // and chunk the columns come from (see utils/chunkDiag.ts).
+        if (chunkDiag.overlay) {
+          const physPerSec = pixelsPerSecond * dpr;
+          const fontPx = 11 * dpr;
+          ctx.save();
+          ctx.font = `${fontPx}px monospace`;
+          ctx.textBaseline = 'top';
+          ctx.lineWidth = dpr;
+          let prev: unknown = null;
+          let labelRow = 0;
+          for (let x = 0; x < canvas.width; x++) {
+            const dispT = startTime + x / physPerSec;
+            if (dispT >= duration) break;
+            const r = chunkCache.getChunkWithFallback(timeline.toSource(dispT), activeTier.tier);
+            const chunk = r?.chunk ?? null;
+            if (chunk === prev) continue;
+            prev = chunk;
+            if (!r) continue;
+            const rec = chunkCache.diagRecord(r.chunk);
+            const color = rec?.suspect ? '#ff3b3b' : r.tier !== activeTier.tier ? '#ffd23b' : '#3bff9d';
+            ctx.strokeStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, 0);
+            ctx.lineTo(x + 0.5, canvas.height);
+            ctx.stroke();
+            const label = `T${r.tier} ${r.chunk.startSec.toFixed(1)}s #${rec?.print ?? '?'}`;
+            const y = 2 * dpr + (labelRow++ % 3) * (fontPx + 3 * dpr);
+            const w = ctx.measureText(label).width;
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(x + 2 * dpr, y - dpr, w + 4 * dpr, fontPx + 2 * dpr);
+            ctx.fillStyle = color;
+            ctx.fillText(label, x + 4 * dpr, y);
+          }
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(`active T${activeTier.tier}${chunkDiag.fullRedraw ? ' · fullRedraw' : ''}`, 4 * dpr, canvas.height - fontPx - 4 * dpr);
+          ctx.restore();
         }
     } else if (!chunkCache && duration > 0 && !isProcessing) {
         ctx.fillStyle = '#0f172a';

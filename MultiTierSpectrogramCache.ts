@@ -1,5 +1,6 @@
 import { getSpectrogramChunkRange } from './utils/tauriCommands';
 import { buildTierLadder, TierConfig } from './constants';
+import { chunkDiag, ChunkDiagLog, ChunkRecord } from './utils/chunkDiag';
 
 export interface CachedChunk {
   data: Uint16Array;
@@ -124,6 +125,8 @@ export class MultiTierSpectrogramCache {
   private generationId: number = 0;
   // Per-tier LRU capacity narrowed to the subset's own footprint (setSubsetRanges).
   private capByTier = new Map<number, number>();
+  // TEMP DIAGNOSTIC — see utils/chunkDiag.ts.
+  private diagLog = new ChunkDiagLog();
 
   constructor(
     private readonly filePath: string,
@@ -247,6 +250,11 @@ export class MultiTierSpectrogramCache {
     }
 
     return null;
+  }
+
+  /** TEMP DIAGNOSTIC: what chunkDiag recorded for a chunk, for the overlay. */
+  diagRecord(chunk: CachedChunk): ChunkRecord | undefined {
+    return this.diagLog.lookup(chunk);
   }
 
   // ── Build-progress probes (read-only) ─────────────────────────────────────────
@@ -425,6 +433,9 @@ export class MultiTierSpectrogramCache {
     for (const key of keys) this.inFlight.add(key);
     this.activeRequests += 1;
     const generation = this.generationId;
+    if (chunkDiag.log) {
+      console.log(`[chunkDiag] request T${tier} #${firstIndex}..${firstIndex + count - 1} (hop ${tierConfig.hopSize}, ${tierConfig.chunkDuration.toFixed(3)}s/chunk)`);
+    }
 
     getSpectrogramChunkRange(
       this.filePath,
@@ -444,6 +455,24 @@ export class MultiTierSpectrogramCache {
           actualDurationSec: result.actual_duration_sec,
           sampleRate: result.sample_rate,
         };
+        if (chunkDiag.log || chunkDiag.overlay) {
+          const { rec, warnings } = this.diagLog.record(tier, chunk, chunk.data, {
+            chunkIndex: result.chunk_index,
+            chunkDuration: tierConfig.chunkDuration,
+            expectedFreqBins: this.fftSize / 2,
+            startSec: chunk.startSec,
+            nCols: chunk.nCols,
+            nFreqBins: chunk.nFreqBins,
+            actualDurationSec: chunk.actualDurationSec,
+            dataLength: chunk.data.length,
+          });
+          if (chunkDiag.log) {
+            const line = `[chunkDiag] T${tier} #${result.chunk_index} start ${chunk.startSec.toFixed(1)}s ` +
+              `${chunk.nCols}×${chunk.nFreqBins} #${rec.print} (request #${firstIndex}..${firstIndex + count - 1})`;
+            if (warnings.length) console.warn(`${line}\n  ${warnings.join('\n  ')}`);
+            else console.log(line);
+          }
+        }
         this.evictLRU(tier);
         cache.set(result.chunk_index, chunk);
         // Fires per chunk, not per request, so the view fills in progressively
@@ -490,6 +519,7 @@ export class MultiTierSpectrogramCache {
         if (!pinned?.has(key)) { victim = key; break; }
       }
       if (victim === undefined) return; // everything left is still being drawn
+      if (chunkDiag.log) console.log(`[chunkDiag] evict T${tier} #${victim}`);
       cache.delete(victim);
     }
   }
