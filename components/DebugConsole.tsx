@@ -5,6 +5,7 @@ import { debugConsole } from '../copy/ui';
 import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
 import { APP_VERSION } from '../utils/appVersion';
 import { measureLoopbackLatency, formatLoopbackResult } from '../utils/audioLoopback';
+import { chunkDiag, setChunkDiag, ChunkDiagFlags } from '../utils/chunkDiag';
 
 export interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -16,6 +17,9 @@ interface DebugConsolePanelProps {
   logs: DebugLog[];
   /** When set, the header shows a close button. Omitted by the guide's copy. */
   onClose?: () => void;
+  /** Show the chunk-diagnostic toggles. Only the app's own console sets this:
+   *  the guide is a separate window, whose flags wouldn't reach the spectrogram. */
+  showChunkDiag?: boolean;
 }
 
 /**
@@ -75,11 +79,37 @@ function LoopbackTest() {
 }
 
 /**
+ * TEMP DIAGNOSTIC, dev only — checkboxes for utils/chunkDiag.ts. Strings are
+ * inline for the same reason as LoopbackTest's. The overlay appears on the
+ * spectrogram's next redraw (pan, zoom, or playback).
+ */
+function ChunkDiagToggles() {
+  const [flags, setFlags] = useState<ChunkDiagFlags>({ ...chunkDiag });
+  const toggle = (key: keyof ChunkDiagFlags) => setFlags(setChunkDiag({ ...flags, [key]: !flags[key] }));
+  const options: Array<[keyof ChunkDiagFlags, string]> = [
+    ['overlay', 'chunk overlay'],
+    ['log', 'chunk log (devtools console)'],
+    ['fullRedraw', 'force full redraw'],
+  ];
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+      <span className="text-slate-500">spectrogram chunks (dev):</span>
+      {options.map(([key, label]) => (
+        <label key={key} className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={flags[key]} onChange={() => toggle(key)} />
+          {label}
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The console body — diagnostic line, log list, copy button. No backdrop, so it
  * embeds anywhere: the app wraps it in `DebugConsole`'s modal, the help guide
  * drops it straight onto the page.
  */
-export function DebugConsolePanel({ logs, onClose }: DebugConsolePanelProps) {
+export function DebugConsolePanel({ logs, onClose, showChunkDiag }: DebugConsolePanelProps) {
   const [copied, setCopied] = useState(false);
   const { info, error: diagError } = useDiagnosticInfo(true);
   // The version comes from the build, not from `info`, so this line renders
@@ -129,6 +159,7 @@ export function DebugConsolePanel({ logs, onClose }: DebugConsolePanelProps) {
           ))
         )}
       </div>
+      {DEV_MODE && showChunkDiag && <ChunkDiagToggles />}
       {DEV_MODE && <LoopbackTest />}
     </div>
   );
@@ -151,7 +182,7 @@ export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps)
         className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-2xl w-full h-[600px] flex flex-col p-6 relative"
         onClick={(e) => e.stopPropagation()}
       >
-        <DebugConsolePanel logs={logs} onClose={onClose} />
+        <DebugConsolePanel logs={logs} onClose={onClose} showChunkDiag />
       </div>
     </div>
   );

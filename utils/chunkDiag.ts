@@ -2,9 +2,9 @@
 // of a very long file (~50h) renders another stretch's spectrogram at one tier:
 // it moves with the audio, pops in and out, and clears on a tier switch.
 //
-// Off by default and costs nothing when off. Toggle from the devtools console
-// (`npm run tauri dev`, right-click → Inspect); the setting persists across
-// reloads:
+// Off by default and costs nothing when off. Toggle from the debug console's
+// dev-only checkboxes (`npm run tauri dev`), or from the devtools console; the
+// setting persists across reloads:
 //
 //   seenoteChunkDiag({ log: true, overlay: true })   // turn on
 //   seenoteChunkDiag({ fullRedraw: true })           // also rule out the blit
@@ -40,14 +40,17 @@ function loadFlags(): ChunkDiagFlags {
 
 export const chunkDiag: ChunkDiagFlags = loadFlags();
 
+/** Set every flag at once (omitted ones turn off) and persist across reloads. */
+export function setChunkDiag(next: Partial<ChunkDiagFlags>): ChunkDiagFlags {
+  chunkDiag.log = !!next.log;
+  chunkDiag.overlay = !!next.overlay;
+  chunkDiag.fullRedraw = !!next.fullRedraw;
+  try { globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(chunkDiag)); } catch { /* ignore */ }
+  return { ...chunkDiag };
+}
+
 if (typeof window !== 'undefined') {
-  (window as unknown as Record<string, unknown>).seenoteChunkDiag = (next: Partial<ChunkDiagFlags>) => {
-    chunkDiag.log = !!next.log;
-    chunkDiag.overlay = !!next.overlay;
-    chunkDiag.fullRedraw = !!next.fullRedraw;
-    try { globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(chunkDiag)); } catch { /* ignore */ }
-    return { ...chunkDiag };
-  };
+  (window as unknown as Record<string, unknown>).seenoteChunkDiag = setChunkDiag;
 }
 
 /** FNV-1a over every value, as 8 hex digits. Identical data ⇒ identical print. */
