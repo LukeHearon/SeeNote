@@ -8,6 +8,10 @@ import {
   isInsideProjectDir,
   isInsideDir,
   makeProjectPath,
+  normalizePath,
+  inputToProjectPath,
+  projectPathInput,
+  MAX_RELATIVE_UPS,
 } from '../utils/projectPaths';
 
 const PROJ = '/Users/me/projects/birdsong';
@@ -222,5 +226,116 @@ describe('round-trip: resolveProjectPath(makeProjectPath(absPath))', () => {
   it('round-trips when the project dir has a trailing slash on the make side', () => {
     const abs = `${PROJ}/annotations`;
     expect(resolveProjectPath(PROJ, makeProjectPath(PROJ + '/', abs))).toBe(abs);
+  });
+});
+
+describe('normalizePath', () => {
+  it('returns paths without dot segments unchanged', () => {
+    expect(normalizePath('/a/b/c')).toBe('/a/b/c');
+    expect(normalizePath('C:\\a\\b')).toBe('C:\\a\\b');
+  });
+
+  it('collapses .. and . segments', () => {
+    expect(normalizePath('/a/b/../c/./d')).toBe('/a/c/d');
+  });
+
+  it('never climbs above the root', () => {
+    expect(normalizePath('/a/../../b')).toBe('/b');
+    expect(normalizePath('~/../x')).toBe('~/x');
+  });
+
+  it('keeps leading .. on relative paths', () => {
+    expect(normalizePath('../../a/../b')).toBe('../../b');
+    expect(normalizePath('./a/..')).toBe('.');
+  });
+
+  it('keeps the first separator style (windows)', () => {
+    expect(normalizePath('C:\\proj/../audio')).toBe('C:\\audio');
+  });
+});
+
+describe('outside-project paths', () => {
+  it('resolves a ../ relative path to a normalized absolute path', () => {
+    expect(resolveProjectPath(PROJ, { kind: 'relative', path: '../audio' }))
+      .toBe('/Users/me/projects/audio');
+    expect(resolveProjectPath(PROJ, { kind: 'relative', path: './../audio' }))
+      .toBe('/Users/me/projects/audio');
+    expect(resolveInputPath(PROJ, '../audio')).toBe('/Users/me/projects/audio');
+  });
+
+  it('does not treat a ../ path as inside the project', () => {
+    expect(isInsideProjectDir(PROJ, resolveInputPath(PROJ, '../audio'))).toBe(false);
+  });
+
+  it('stores a sibling as ../', () => {
+    expect(makeProjectPath(PROJ, '/Users/me/projects/audio'))
+      .toEqual({ kind: 'relative', path: '../audio' });
+  });
+
+  it('stores up to MAX_RELATIVE_UPS levels up as relative', () => {
+    expect(MAX_RELATIVE_UPS).toBe(2);
+    const proj = '/data/lab/exp1/proj';
+    expect(makeProjectPath(proj, '/data/lab/raw/audio'))
+      .toEqual({ kind: 'relative', path: '../../raw/audio' });
+    expect(makeProjectPath(proj, '/data/other/audio'))
+      .toEqual({ kind: 'absolute', path: '/data/other/audio' });
+  });
+
+  it('keeps long descending tails relative', () => {
+    expect(makeProjectPath(PROJ, '/Users/me/projects/data/raw/audio/2026/site_a'))
+      .toEqual({ kind: 'relative', path: '../data/raw/audio/2026/site_a' });
+  });
+
+  it('stores absolute when the shared ancestor is home or a top-level dir', () => {
+    // Shared ancestor is ~ (/Users/me).
+    expect(makeProjectPath('/Users/me/Documents/proj', '/Users/me/Downloads/audio'))
+      .toEqual({ kind: 'absolute', path: '/Users/me/Downloads/audio' });
+    // Shared ancestor is /Volumes (different drives).
+    expect(makeProjectPath('/Volumes/a/proj', '/Volumes/b/audio'))
+      .toEqual({ kind: 'absolute', path: '/Volumes/b/audio' });
+    expect(makeProjectPath('C:\\Users\\me\\proj', 'D:\\audio'))
+      .toEqual({ kind: 'absolute', path: 'D:\\audio' });
+    expect(makeProjectPath('/home/me/proj', '/home/me/audio'))
+      .toEqual({ kind: 'absolute', path: '/home/me/audio' });
+  });
+
+  it('allows a shared ancestor that is a drive folder', () => {
+    expect(makeProjectPath('/Volumes/data/proj', '/Volumes/data/audio'))
+      .toEqual({ kind: 'relative', path: '../audio' });
+  });
+
+  it('round-trips a nearby outside path', () => {
+    const abs = '/Users/me/projects/audio';
+    expect(resolveProjectPath(PROJ, makeProjectPath(PROJ, abs))).toBe(abs);
+  });
+});
+
+describe('inputToProjectPath / projectPathInput', () => {
+  it('keeps typed relative paths relative, however far up', () => {
+    expect(inputToProjectPath(PROJ, '../../../../x'))
+      .toEqual({ kind: 'relative', path: '../../../../x' });
+  });
+
+  it('stores typed children with a ./ prefix', () => {
+    expect(inputToProjectPath(PROJ, 'audio')).toEqual({ kind: 'relative', path: './audio' });
+    expect(inputToProjectPath(PROJ, '.')).toEqual({ kind: 'relative', path: './' });
+  });
+
+  it('applies the cap to typed absolute paths', () => {
+    expect(inputToProjectPath(PROJ, '/Users/me/projects/audio'))
+      .toEqual({ kind: 'relative', path: '../audio' });
+    expect(inputToProjectPath(PROJ, '/elsewhere/audio'))
+      .toEqual({ kind: 'absolute', path: '/elsewhere/audio' });
+  });
+
+  it('round-trips stored paths through the field value', () => {
+    for (const p of [
+      { kind: 'relative', path: './audio' },
+      { kind: 'relative', path: './' },
+      { kind: 'relative', path: '../../../x' },
+      { kind: 'absolute', path: '/elsewhere/audio' },
+    ] as const) {
+      expect(inputToProjectPath(PROJ, projectPathInput(p))).toEqual(p);
+    }
   });
 });

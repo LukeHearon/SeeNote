@@ -8,7 +8,7 @@ import { copyAnnotationFiles, revealInFileManager } from '../utils/projectComman
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { DateTimeFormat, previewDateTimeFormat } from '../utils/datetimeDisplay';
 import { FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
-import { makeProjectPath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
+import { inputToProjectPath, projectPathInput, resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
@@ -29,10 +29,10 @@ interface Props {
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
   const [name, setName] = useState(project?.settings.projectName ?? '');
-  const [mediaDir, setMediaDir] = useState(() => project ? trimProjectPrefix(project.projectDir, project.mediaDirectoryAbs) : '');
-  const [annotationDir, setAnnotationDir] = useState(() => project ? trimProjectPrefix(project.projectDir, project.annotationDirectoryAbs) : '');
+  const [mediaDir, setMediaDir] = useState(() => project ? projectPathInput(project.settings.mediaDirectory) : '');
+  const [annotationDir, setAnnotationDir] = useState(() => project ? projectPathInput(project.settings.annotationDirectory) : '');
   const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
-    project?.buzzdetectDirectoryAbs ? trimProjectPrefix(project.projectDir, project.buzzdetectDirectoryAbs) : '');
+    project?.settings.buzzdetectDirectory ? projectPathInput(project.settings.buzzdetectDirectory) : '');
   const [filenameTimeFormat, setFilenameTimeFormat] = useState(project?.settings.filenameTimeFormat ?? '');
   const [filenameTimeOffsetSeparator, setFilenameTimeOffsetSeparator] = useState(project?.settings.filenameTimeOffsetSeparator ?? '');
   const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
@@ -152,9 +152,9 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     const settings: ProjectSettings = {
       ...project.settings,
       projectName: name.trim(),
-      mediaDirectory: makeProjectPath(project.projectDir, resolvedMediaDir),
-      annotationDirectory: makeProjectPath(project.projectDir, resolvedAnnotationDir),
-      buzzdetectDirectory: buzzdetectDir ? makeProjectPath(project.projectDir, resolvedBuzzdetectDir) : undefined,
+      mediaDirectory: inputToProjectPath(project.projectDir, mediaDir),
+      annotationDirectory: inputToProjectPath(project.projectDir, annotationDir),
+      buzzdetectDirectory: buzzdetectDir ? inputToProjectPath(project.projectDir, buzzdetectDir) : undefined,
       buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
       buzzdetectTrimActivationPrefix,
       filenameTimeFormat: filenameTimeFormat.trim() || undefined,

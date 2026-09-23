@@ -7,7 +7,7 @@ import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool
 import { readProjectSettings, writeProjectPreferences } from '../utils/projectCommands';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
-import { makeProjectPath, resolveInputPath } from '../utils/projectPaths';
+import { inputToProjectPath, resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
@@ -120,9 +120,9 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
 
       const settings: ProjectSettings = {
         projectName: name.trim(),
-        mediaDirectory: makeProjectPath(projectDir, resolvedMediaDir),
-        annotationDirectory: makeProjectPath(projectDir, resolvedAnnotationDir),
-        buzzdetectDirectory: buzzdetectDir ? makeProjectPath(projectDir, resolvedBuzzdetectDir) : undefined,
+        mediaDirectory: inputToProjectPath(projectDir, mediaDir),
+        annotationDirectory: inputToProjectPath(projectDir, annotationDir),
+        buzzdetectDirectory: buzzdetectDir ? inputToProjectPath(projectDir, buzzdetectDir) : undefined,
         buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
         buzzdetectTrimActivationPrefix,
       filenameTimeFormat: filenameTimeFormat.trim() || undefined,

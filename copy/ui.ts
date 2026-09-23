@@ -219,6 +219,7 @@ export const projectBaseFields = {
 
 export const directoryField = {
   get portabilityWarning() { return getOverride('ui.directoryField.portabilityWarning') ?? "This path is outside the project directory; SeeNote can read the files, but the project will not be portable to other machines."; },
+  get nearbyNote() { return getOverride('ui.directoryField.nearbyNote') ?? "Outside the project directory, so it's saved relative to the project (../). Move this folder and the project together."; },
 };
 
 export const openProjectModal = {

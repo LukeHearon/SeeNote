@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { openDirectoryDialog, checkDirExists } from '../utils/tauriCommands';
-import { isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix } from '../utils/projectPaths';
+import { isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix, inputToProjectPath } from '../utils/projectPaths';
 import { directoryField } from '../copy/ui';
 
 export const PORTABILITY_WARNING = directoryField.portabilityWarning;
@@ -25,7 +25,8 @@ interface DirectoryFieldProps {
 /**
  * Shared directory picker used by the Create Project and Project Settings
  * modals: a relative-aware label, a text input, a Browse button, the resolved
- * absolute path, a portability warning when the path escapes the project, and a
+ * absolute path, a portability warning when the path escapes the project (or a
+ * softer note when it stays nearby and is stored as `../`), and a
  * debounced existence check. Resolution/trimming use the same helpers
  * everywhere so the two modals can't drift.
  */
@@ -35,6 +36,8 @@ export default function DirectoryField({
   const resolved = resolveInputPath(projectDir, value);
   const isRelative = !!value && !isAbsolutePath(value);
   const isOutside = !!resolved && !!projectDir && !isInsideProjectDir(projectDir, resolved);
+  // Outside the project but close enough to be stored as a `../` path.
+  const isNearby = isOutside && inputToProjectPath(projectDir, value).kind === 'relative';
 
   // Debounced existence check; reset to null on change so a stale result never
   // flashes against a path the user is mid-way through typing.
@@ -79,8 +82,11 @@ export default function DirectoryField({
       {isRelative && resolved && (
         <p className="text-gray-500 text-xs mt-1">→ {resolved}</p>
       )}
-      {isOutside && (
+      {isOutside && !isNearby && (
         <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
+      )}
+      {isNearby && (
+        <p className="text-gray-500 text-xs mt-1">{directoryField.nearbyNote}</p>
       )}
       {notExistMessage && value && exists === false && (
         <p className="text-yellow-400 text-xs mt-1">{notExistMessage}</p>
