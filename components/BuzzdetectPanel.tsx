@@ -12,12 +12,12 @@ import {
   sourceIntervalOf,
 } from '../utils/subsetTimeline';
 import {
-  buzzdetectNeuronColor,
   MIN_BUZZDETECT_PANEL_HEIGHT,
   MAX_BUZZDETECT_PANEL_HEIGHT,
   Y_AXIS_WIDTH,
   DEFAULT_DATE_TIME_FORMAT,
 } from '../constants';
+import { neuronColor } from '../utils/neuronColors';
 import { clamp, decimalsForTimes, formatTimeForUnit, TimeDisplayUnit } from '../utils/helpers';
 import type { DateTimeFormat } from '../utils/datetimeDisplay';
 import { timeToX, xToTime } from '../utils/viewportTransform';
@@ -111,8 +111,10 @@ interface BuzzdetectPanelProps {
    */
   isolatedNeurons?: readonly string[];
   // Per-neuron color override, keyed by neuron label. Absent entries fall
-  // back to the palette-by-index default (buzzdetectNeuronColor).
+  // back to the matching tool's color, then the palette (see neuronColor).
   neuronColors: Record<string, string>;
+  /** Annotation tool colors keyed by label (toolColorsByLabel). */
+  toolColors: Record<string, string>;
   // Which series the panel plots.
   seriesMode: BuzzdetectSeriesMode;
   // User-pinned bin width (seconds); null = auto-calculated. Persisted, and
@@ -167,6 +169,7 @@ export default function BuzzdetectPanel({
   hiddenNeurons,
   isolatedNeurons = EMPTY_ISOLATION,
   neuronColors: neuronColorOverrides,
+  toolColors,
   seriesMode,
   binWidthOverride,
   subsetActive,
@@ -259,8 +262,8 @@ export default function BuzzdetectPanel({
   // files) if set, else the palette-by-index default — so a neuron keeps its
   // color across files and toggles even before it's ever been customized.
   const neuronColors = useMemo(
-    () => (data ? data.neurons.map((n, i) => neuronColorOverrides[n] ?? buzzdetectNeuronColor(i)) : []),
-    [data, neuronColorOverrides],
+    () => (data ? data.neurons.map((n, i) => neuronColor(n, i, neuronColorOverrides, toolColors)) : []),
+    [data, neuronColorOverrides, toolColors],
   );
 
   // Infinity where a neuron's threshold has been cleared — nothing reaches it,

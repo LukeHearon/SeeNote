@@ -268,6 +268,7 @@ export function ExampleBuzzdetectPanel() {
         thresholds={thresholds}
         hiddenNeurons={hiddenNeurons}
         neuronColors={neuronColors}
+        toolColors={{}}
         seriesMode={seriesMode}
         binWidthOverride={binWidthOverride}
         subsetActive={subsetActive}

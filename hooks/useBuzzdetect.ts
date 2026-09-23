@@ -90,6 +90,8 @@ export interface BuzzdetectApi {
   handleBuzzdetectSubsetThresholdChange: (neuron: string, value: number | null) => void;
   handleBuzzdetectToggleNeuron: (neuron: string, wasEnabled: boolean) => void;
   handleBuzzdetectNeuronColorChange: (neuron: string, color: string) => void;
+  /** Drops the manual color, re-linking the neuron to its tool (or palette) color. */
+  handleBuzzdetectNeuronColorReset: (neuron: string) => void;
   /** Pin a neuron to the top of the palette, or unpin it. Newly pinned goes last among the pinned. */
   handleBuzzdetectTogglePinNeuron: (neuron: string) => void;
   /**
@@ -254,6 +256,14 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
   const handleBuzzdetectNeuronColorChange = useCallback((neuron: string, color: string) => {
     setBuzzdetectNeuronColors(prev => ({ ...prev, [neuron]: color }));
   }, []);
+  const handleBuzzdetectNeuronColorReset = useCallback((neuron: string) => {
+    setBuzzdetectNeuronColors(prev => {
+      if (!(neuron in prev)) return prev;
+      const next = { ...prev };
+      delete next[neuron];
+      return next;
+    });
+  }, []);
   const handleBuzzdetectSetAllNeuronsHidden = useCallback((neurons: string[], hidden: boolean) => {
     setBuzzdetectHiddenNeurons(hidden ? neurons : []);
   }, []);
@@ -344,6 +354,7 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
     handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
+    handleBuzzdetectNeuronColorReset,
     handleBuzzdetectTogglePinNeuron,
     buzzdetectIsolatedNeurons,
     handleBuzzdetectToggleIsolateNeuron,

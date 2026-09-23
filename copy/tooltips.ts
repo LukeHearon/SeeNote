@@ -80,6 +80,8 @@ export const tooltips = {
   get buzzdetectYAxisReset() { return getOverride('tooltips.buzzdetectYAxisReset') ?? "Reset to auto-calculated range"; },
   get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
+  get buzzdetectNeuronColorRelink() { return getOverride('tooltips.buzzdetectNeuronColorRelink') ?? "Link back to the annotation tool's color"; },
+  get buzzdetectNeuronColorReset() { return getOverride('tooltips.buzzdetectNeuronColorReset') ?? "Reset to the default color"; },
   get buzzdetectThreshold() { return getOverride('tooltips.buzzdetectThreshold') ?? "Activation at or above which this neuron counts as detecting.\nLeave it blank and the neuron never detects: its dots all draw open."; },
   get buzzdetectPlotNeuron() { return getOverride('tooltips.buzzdetectPlotNeuron') ?? "Plot this neuron on the graph"; },
   get buzzdetectNeuronRow() { return getOverride('tooltips.buzzdetectNeuronRow') ?? "Click the color dot to plot or unplot.\nRight-click for pin, isolate and color."; },

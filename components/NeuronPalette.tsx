@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, Focus, Palette, Pin, PinOff, RotateCcw, Scissors, Settings, X } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
-import { BUZZDETECT_PALETTE, defaultBuzzdetectThreshold, buzzdetectNeuronColor } from '../constants';
+import { BUZZDETECT_PALETTE, defaultBuzzdetectThreshold } from '../constants';
+import { neuronColor } from '../utils/neuronColors';
 import { SubsetStats } from '../utils/buzzdetectStats';
 import { pickedNeuronsIn } from '../utils/buzzdetectSubset';
 import { clamp, formatTime } from '../utils/helpers';
@@ -26,7 +27,10 @@ interface NeuronPaletteProps {
   /** Per-neuron "Subset at" values. An entry here is what picks a neuron for the subset. */
   subsetThresholds: Record<string, number>;
   hiddenNeurons: string[];
+  /** Manual per-neuron colors; a neuron without one follows its tool's color. */
   neuronColors: Record<string, string>;
+  /** Annotation tool colors keyed by label (toolColorsByLabel). */
+  toolColors: Record<string, string>;
   subsetNeurons: string[];
   pinnedNeurons: string[];
   collapsed: boolean;
@@ -40,6 +44,8 @@ interface NeuronPaletteProps {
   isolateEnabled: boolean;
   onToggleIsolate: () => void;
   onNeuronColorChange: (neuron: string, color: string) => void;
+  /** Drops a manual color, re-linking the neuron to its tool (or palette) color. */
+  onNeuronColorReset: (neuron: string) => void;
   /** null clears the threshold, so the neuron stops detecting anything. */
   onThresholdChange: (neuron: string, value: number | null) => void;
   /** null clears the value, taking the neuron out of the subset entirely. */
@@ -113,6 +119,7 @@ function NeuronPalette({
   subsetThresholds,
   hiddenNeurons,
   neuronColors: neuronColorOverrides,
+  toolColors,
   subsetNeurons,
   pinnedNeurons,
   collapsed,
@@ -124,6 +131,7 @@ function NeuronPalette({
   isolateEnabled,
   onToggleIsolate,
   onNeuronColorChange,
+  onNeuronColorReset,
   onThresholdChange,
   onSubsetThresholdChange,
   onTogglePinNeuron,
@@ -173,8 +181,8 @@ function NeuronPalette({
   // Colors are indexed against the FILE's neuron order, not the plotted list,
   // so removing a neuron never recolors the ones left behind.
   const colorOf = useCallback(
-    (n: string) => neuronColorOverrides[n] ?? buzzdetectNeuronColor(neurons.indexOf(n)),
-    [neuronColorOverrides, neurons],
+    (n: string) => neuronColor(n, neurons.indexOf(n), neuronColorOverrides, toolColors),
+    [neuronColorOverrides, toolColors, neurons],
   );
 
   // Three blocks, in this order: pinned (regardless of plot state), then the
@@ -337,14 +345,27 @@ function NeuronPalette({
             ref={colorRef}
             className="absolute left-0 right-0 top-full mt-1 z-30 bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-1.5"
           >
-            <ColorSwatchPicker
-              value={color}
-              swatchColors={BUZZDETECT_PALETTE}
-              onChange={(c) => onNeuronColorChange(n, c)}
-              customColorTitle={copy.customColorTitle}
-              size={16}
-              popoverPosition="bottom"
-            />
+            <div className="flex items-center gap-1">
+              <ColorSwatchPicker
+                value={color}
+                swatchColors={BUZZDETECT_PALETTE}
+                onChange={(c) => onNeuronColorChange(n, c)}
+                customColorTitle={copy.customColorTitle}
+                size={16}
+                popoverPosition="bottom"
+              />
+              {/* Only a manual color has anything to reset: without one the
+                  neuron already follows its tool (or the palette). */}
+              {n in neuronColorOverrides && (
+                <button
+                  onClick={() => onNeuronColorReset(n)}
+                  className="flex-none ml-auto text-slate-500 hover:text-[#e65161]"
+                  data-tooltip={n in toolColors ? tooltips.buzzdetectNeuronColorRelink : tooltips.buzzdetectNeuronColorReset}
+                >
+                  <RotateCcw size={10} />
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

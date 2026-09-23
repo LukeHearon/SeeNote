@@ -12,6 +12,7 @@ import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stri
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
+import { toolColorsByLabel } from './utils/neuronColors';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
 import { getFileInfo, readScanCache, clearScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import type { DirScan, ScanSpec } from './utils/tauriCommands';
@@ -379,6 +380,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleBuzzdetectSubsetThresholdChange,
     handleBuzzdetectToggleNeuron,
     handleBuzzdetectNeuronColorChange,
+    handleBuzzdetectNeuronColorReset,
     handleBuzzdetectTogglePinNeuron,
     buzzdetectIsolatedNeurons,
     handleBuzzdetectToggleIsolateNeuron,
@@ -555,6 +557,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     getAnnotationPath,
   });
+
+  // Neurons named like a tool draw in that tool's color and follow it.
+  const toolColors = useMemo(() => toolColorsByLabel(annotationTools), [annotationTools]);
 
   // Tracks Find & Rename has anything to read from: those with an annotation
   // file on disk, plus the open track (whose annotations may be unsaved). The
@@ -2814,6 +2819,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   subsetThresholds={buzzdetectSubsetThresholds}
                   hiddenNeurons={buzzdetectHiddenNeurons}
                   neuronColors={buzzdetectNeuronColors}
+                  toolColors={toolColors}
                   subsetNeurons={buzzdetectSubsetNeurons}
                   pinnedNeurons={buzzdetectPinnedNeurons}
                   collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
@@ -2825,6 +2831,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   isolateEnabled={buzzdetectIsolateEnabled}
                   onToggleIsolate={toggleBuzzdetectIsolate}
                   onNeuronColorChange={handleBuzzdetectNeuronColorChange}
+                  onNeuronColorReset={handleBuzzdetectNeuronColorReset}
                   onThresholdChange={handleBuzzdetectThresholdChange}
                   onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
                   onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
@@ -3064,6 +3071,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  hiddenNeurons={buzzdetectHiddenNeurons}
                  isolatedNeurons={activeIsolatedNeurons}
                  neuronColors={buzzdetectNeuronColors}
+                 toolColors={toolColors}
                  seriesMode={buzzdetectSeriesMode}
                  binWidthOverride={buzzdetectBinWidthOverride}
                  subsetActive={subsetActive}
