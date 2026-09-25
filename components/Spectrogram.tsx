@@ -15,6 +15,7 @@ import {
   minSegmentDuration,
   segmentJoins,
 } from '../utils/subsetTimeline';
+import { mergeStops, prevStop, nextStop } from '../utils/jumpStops';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { wheelZoomFactor, isGestureContinuation } from '../utils/zoomGesture';
@@ -1207,7 +1208,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
   // --- Annotation navigation ---
 
-  const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
+  // Annotation starts plus, under a subset, the segment joins.
+  const jumpStops = useMemo(() => mergeStops(annotations.map(a => a.start), subsetJoins), [annotations, subsetJoins]);
 
   const scrollToAnnotation = useCallback((annotStart: number) => {
     if (!containerRef.current) return;
@@ -1230,15 +1232,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         return;
       }
     }
-    const prev = [...sortedAnnotations].reverse().find(a => a.start < currentTimeStore.get() - 0.05);
-    if (prev) {
-      onSeek(prev.start);
-      scrollToAnnotation(prev.start);
-    } else {
-      onSeek(0);
-      scrollToAnnotation(0);
-    }
-  }, [sortedAnnotations, currentTimeStore, onSeek, scrollToAnnotation, selection, onSelectionChange, onBoundAnnotationChange]);
+    const prev = prevStop(jumpStops, currentTimeStore.get());
+    onSeek(prev);
+    scrollToAnnotation(prev);
+  }, [jumpStops, currentTimeStore, onSeek, scrollToAnnotation, selection, onSelectionChange, onBoundAnnotationChange]);
 
   const goToNextAnnotation = useCallback(() => {
     // Any active selection (free or bound): jump to selection end
@@ -1247,15 +1244,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       scrollToAnnotation(selection.end);
       return;
     }
-    const next = sortedAnnotations.find(a => a.start > currentTimeStore.get() + 0.05);
-    if (next) {
-      onSeek(next.start);
-      scrollToAnnotation(next.start);
-    } else {
-      onSeek(duration);
-      scrollToAnnotation(duration);
-    }
-  }, [sortedAnnotations, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
+    const next = nextStop(jumpStops, currentTimeStore.get(), duration);
+    onSeek(next);
+    scrollToAnnotation(next);
+  }, [jumpStops, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
 
   // Track start/end: unlike prev/next annotation, these always clear any
   // active selection/binding rather than jumping to its edge first — they're

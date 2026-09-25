@@ -254,7 +254,7 @@ export const help = {
   },
 
   transport: {
-    get p1() { return getOverride('help.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere. `{mod}+←` / `{mod}+→` jump straight to the start/end of the track; `Alt+←` / `Alt+→` step to the previous/next annotation."; },
+    get p1() { return getOverride('help.transport.p1') ?? "The [transport buttons](transport-buttons) let you skip to the start/end of the file, step between annotations, and play/pause. Press `Space` to play or pause from anywhere. `{mod}+←` / `{mod}+→` jump straight to the start/end of the track; `Alt+←` / `Alt+→` step to the previous/next annotation (or, in subset mode, the start of a subset segment, whichever comes first)."; },
     get h_lock() { return getOverride('help.transport.h_lock') ?? "Playhead lock"; },
     get p_lock() { return getOverride('help.transport.p_lock') ?? "The [lock playhead button](recenter-playhead) (or `C`) toggles lock mode: when active, the view stays centered on the playhead during playback and you cannot scroll away. Press `C` again to unlock and scroll freely. Holding `Alt`/`Option` suspends the lock for as long as it's held (the icon pales), so alt-dragging annotations doesn't fight the auto-scroll."; },
     get h_volume() { return getOverride('help.transport.h_volume') ?? "Volume"; },
