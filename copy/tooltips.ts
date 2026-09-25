@@ -92,6 +92,7 @@ export const tooltips = {
   get buzzdetectSubsetAbsent() { return getOverride('tooltips.buzzdetectSubsetAbsent') ?? "This track's results have no column for this neuron, so it isn't cutting here.\nClick to drop it from the subset entirely."; },
   get buzzdetectSubsetBuffer() { return getOverride('tooltips.buzzdetectSubsetBuffer') ?? "Seconds of audio kept either side of every subset region, for context around each detection."; },
   get buzzdetectSubset() { return getOverride('tooltips.buzzdetectSubset') ?? "Subset track to detections (Shift+S)"; },
+  get buzzdetectBaseline() { return getOverride('tooltips.buzzdetectBaseline') ?? "Adjust to baseline — shift each neuron so its detection threshold sits at 0"; },
   get buzzdetectIsolate() { return getOverride('tooltips.buzzdetectIsolate') ?? "Isolate the chosen neurons — fade every other line on the graph"; },
   get importToolsDir() { return getOverride('tooltips.importToolsDir') ?? "Pick a directory of {label}/ folders of audio clips; clips are copied in as examples and tools are created for new labels"; },
   get annotationFilterAll() { return getOverride('tooltips.annotationFilterAll') ?? "Annotations: not filtering"; },

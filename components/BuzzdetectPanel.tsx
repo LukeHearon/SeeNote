@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import { GripHorizontal } from 'lucide-react';
+import { FoldVertical, GripHorizontal } from 'lucide-react';
 import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -39,8 +39,9 @@ import {
   rangeSum,
   rangeMean,
 } from '../utils/prefixSums';
-import { detectionThreshold } from '../utils/buzzdetectThresholds';
+import { baselineOffset, detectionThreshold } from '../utils/buzzdetectThresholds';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
+import { tooltips } from '../copy/tooltips';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 
 const PAD_TOP = 12;
@@ -77,6 +78,9 @@ const READOUT_MAX_DECIMALS = 2;
 // Auto Y-range for detection-rate mode: it's a fraction of the frames in a bin
 // clearing the threshold, so always 0..1 — no data scan needed.
 const DETECTION_RATE_Y_RANGE = { min: 0, max: 1 };
+// Tick labels are kept clear of this much of the gutter's top, where the
+// baseline toggle sits.
+const BASELINE_TOGGLE_CLEARANCE_PX = 24;
 
 interface BuzzdetectPanelProps {
   data: BuzzdetectData | null;
@@ -140,6 +144,14 @@ interface BuzzdetectPanelProps {
    */
   yAxisOverride: { min: number; max: number } | null;
   /**
+   * Shift each neuron's line down by its own detection threshold, so every
+   * threshold sits at 0 and lines that run offset from one another can be
+   * compared by shape. Activation mode only. The Y axis loses its numbers
+   * while it's on — they'd name a different value for every line.
+   */
+  baselineAdjusted: boolean;
+  onBaselineAdjustedChange: (adjusted: boolean) => void;
+  /**
    * While true, the auto bin width and auto Y-range are reported upward at draw
    * time (they change with zoom). The palette sets it only while its settings
    * block is open, so a closed block costs no renders.
@@ -175,6 +187,8 @@ export default function BuzzdetectPanel({
   subsetActive,
   timeline,
   yAxisOverride,
+  baselineAdjusted,
+  onBaselineAdjustedChange,
   reportAutoValues,
   height,
   onAutoBinWidthChange,
@@ -275,6 +289,15 @@ export default function BuzzdetectPanel({
     [thresholds],
   );
 
+  // How far neuron `n`'s line is drawn below its values (see baselineOffset).
+  // Zero everywhere unless adjusting, and adjusting only means anything in
+  // activation mode, where the threshold is a value on this axis.
+  const adjusting = baselineAdjusted && seriesMode === 'activation';
+  const offsetOf = useCallback(
+    (n: number) => (data ? baselineOffset(thresholdOf(data.neurons[n]), adjusting) : 0),
+    [data, thresholdOf, adjusting],
+  );
+
   // Stable string key representing which neurons are currently enabled, in
   // index order. Recomputes only when `data` or `hidden` changes — not on scroll.
   const enabledKey = useMemo(() => {
@@ -337,26 +360,37 @@ export default function BuzzdetectPanel({
     [data, thresholdKey, enabled],
   );
 
-  // File-wide activation range across ALL bins for the currently enabled neurons.
-  // Memoised so scrolling/panning never triggers a rescan of the full data arrays.
-  const fileWideRange = useMemo<{ min: number; max: number } | null>(() => {
-    if (!data || data.starts.length === 0) return null;
-    const { neurons, values } = data;
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let n = 0; n < neurons.length; n++) {
-      if (hidden.has(neurons[n])) continue;
-      const arr = values[n];
+  // Per-neuron activation range across ALL bins. Memoised on the data alone so
+  // neither scrolling/panning nor toggling neurons or the baseline triggers a
+  // rescan of the full data arrays.
+  const neuronRanges = useMemo(() => {
+    if (!data) return [];
+    return data.values.map(arr => {
+      let lo = Infinity;
+      let hi = -Infinity;
       for (let i = 0; i < arr.length; i++) {
         const v = arr[i];
         if (v < lo) lo = v;
         if (v > hi) hi = v;
       }
+      return { lo, hi };
+    });
+  }, [data]);
+
+  // File-wide plotted range for the currently enabled neurons — each shifted by
+  // its baseline offset, so the auto range fits the lines as drawn.
+  const fileWideRange = useMemo<{ min: number; max: number } | null>(() => {
+    if (!data || data.starts.length === 0) return null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const n of enabled) {
+      const off = offsetOf(n);
+      lo = Math.min(lo, neuronRanges[n].lo - off);
+      hi = Math.max(hi, neuronRanges[n].hi - off);
     }
     if (!isFinite(lo) || !isFinite(hi)) return null;
     return { min: lo, max: hi };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, enabledKey]);
+  }, [data, enabled, neuronRanges, offsetOf]);
 
   const fileWideDetectionRateRange = data ? DETECTION_RATE_Y_RANGE : null;
 
@@ -441,11 +475,11 @@ export default function BuzzdetectPanel({
     let best: string | null = null;
     let bestDist = NEURON_HOVER_PX;
     for (const i of enabled) {
-      const d = Math.abs(yOf(unitValueOf(i, unit)) - y);
+      const d = Math.abs(yOf(unitValueOf(i, unit) - offsetOf(i)) - y);
       if (d < bestDist) { bestDist = d; best = data.neurons[i]; }
     }
     return best;
-  }, [data, enabled, unitValueOf]);
+  }, [data, enabled, unitValueOf, offsetOf]);
 
   // A unit's own time extent, end clamped to EOF — the same span the panel
   // washes and highlights, so a selection lands exactly on what the cursor
@@ -630,8 +664,9 @@ export default function BuzzdetectPanel({
         for (const n of enabled) {
           const th = thresholdOf(neurons[n]);
           if (!isFinite(th)) continue;
-          if (th < yMin) yMin = th;
-          if (th > yMax) yMax = th;
+          const y = th - offsetOf(n);
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
         }
       }
       if (!isFinite(yMin) || !isFinite(yMax)) { yMin = -2; yMax = 1; }
@@ -801,7 +836,7 @@ export default function BuzzdetectPanel({
         for (const n of enabled) {
           const th = thresholdOf(neurons[n]);
           if (!isFinite(th)) continue;
-          const y = yOf(th);
+          const y = yOf(th - offsetOf(n));
           ctx.globalAlpha = alphaOf(n);
           ctx.strokeStyle = neuronColors[n] + '66';
           ctx.lineWidth = 1;
@@ -822,19 +857,20 @@ export default function BuzzdetectPanel({
         const color = neuronColors[n];
         ctx.globalAlpha = alphaOf(n);
         const th = thresholdOf(neurons[n]);
+        const off = offsetOf(n);
         // NaN for a missing frame in EITHER mode — not just when its own raw
         // value is read directly — so a frame with no value never renders as
         // a fake "undetected" point in detection-rate mode either.
         const perFrameValue = (i: number) => {
           const raw = values[n][i];
           if (Number.isNaN(raw)) return NaN;
-          return seriesMode === 'activation' ? raw : (raw >= th ? 1 : 0);
+          return seriesMode === 'activation' ? raw - off : (raw >= th ? 1 : 0);
         };
         // Bucket aggregate, hoisted: the grouped polyline and the grouped dots
         // (drawn under a subset, where there is no polyline) both need it.
         const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
         const unitMean = (u: { start: number; end: number }) =>
-          (prefix ? rangeMean(prefix, u.start, u.end, validCountPrefix?.[n]) : 0);
+          (prefix ? rangeMean(prefix, u.start, u.end, validCountPrefix?.[n]) : 0) - off;
 
         // Under a subset the x-axis has cuts in it: consecutive points can be
         // minutes apart in the file even though they abut on screen, and a line
@@ -971,12 +1007,16 @@ export default function BuzzdetectPanel({
           if (binaryDetection) {
             const yTop = yOf(1);
             if (yTop >= 8 && yTop <= h - 6) yctx.fillText(buzzdetectCopy.detection, Y_AXIS_WIDTH - 6, yTop, Y_AXIS_WIDTH - 8);
-          } else {
+          } else if (!adjusting) {
+            // Adjusted, every line is shifted by its own amount, so no one
+            // number would be true of a height — the axis goes unlabelled.
             const TICKS = 4;
+            // In activation mode the baseline toggle covers the top of the gutter.
+            const minLabelY = seriesMode === 'activation' ? BASELINE_TOGGLE_CLEARANCE_PX : 8;
             for (let k = 0; k <= TICKS; k++) {
               const v = yMin + (k / TICKS) * (yMax - yMin);
               const y = yOf(v);
-              if (y < 8 || y > h - 6) continue;
+              if (y < minLabelY || y > h - 6) continue;
               yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
             }
           }
@@ -1028,7 +1068,7 @@ export default function BuzzdetectPanel({
     if (!strip) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(strip, (st.originScroll - scrollLeft) * dpr, 0);
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, isolatedNeurons, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, offsetOf, adjusting, isolatedNeurons, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1375,6 +1415,23 @@ export default function BuzzdetectPanel({
       <div className="flex-1 flex min-h-0 relative">
         {/* Y-axis gutter, aligned to the spectrogram's 50px gutter */}
         <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: Y_AXIS_WIDTH }} />
+        {data && seriesMode === 'activation' && (
+          <button
+            type="button"
+            data-buzz-ui
+            data-help-target="buzzdetect-baseline-toggle"
+            data-tooltip={tooltips.buzzdetectBaseline}
+            onClick={() => onBaselineAdjustedChange(!baselineAdjusted)}
+            className={`absolute top-1 flex items-center justify-center h-5 rounded transition-colors ${
+              baselineAdjusted
+                ? 'bg-[#e65161]/80 text-white hover:bg-[#e65161]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+            }`}
+            style={{ left: 4, width: Y_AXIS_WIDTH - 10 }}
+          >
+            <FoldVertical size={13} />
+          </button>
+        )}
 
         {/* Drawing area — shares the spectrogram's time→pixel transform */}
         <div

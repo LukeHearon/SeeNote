@@ -73,6 +73,12 @@ export interface BuzzdetectApi {
   buzzdetectYAxisOverride: { min: number; max: number } | null;
   setBuzzdetectYAxisOverride: React.Dispatch<React.SetStateAction<{ min: number; max: number } | null>>;
   /**
+   * Whether the graph is adjusted to baseline (see BuzzdetectPanel). Transient,
+   * like isolation: a way of looking at the lines, not a setting.
+   */
+  buzzdetectBaselineAdjusted: boolean;
+  setBuzzdetectBaselineAdjusted: React.Dispatch<React.SetStateAction<boolean>>;
+  /**
    * The auto values the graph is currently drawing with, reported back up by
    * BuzzdetectPanel at draw time so the palette's fields can show them as
    * placeholders. Both change with zoom, so the panel only reports while the
@@ -169,6 +175,7 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
   const [buzzdetectData, setBuzzdetectData] = useState<BuzzdetectData | null>(null);
   const [buzzdetectSettingsOpen, setBuzzdetectSettingsOpen] = useState(false);
   const [buzzdetectYAxisOverride, setBuzzdetectYAxisOverride] = useState<{ min: number; max: number } | null>(null);
+  const [buzzdetectBaselineAdjusted, setBuzzdetectBaselineAdjusted] = useState(false);
   const [buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth] = useState(0);
   const [buzzdetectAutoYRange, setBuzzdetectAutoYRange] = useState<{ min: number; max: number } | null>(null);
 
@@ -186,6 +193,10 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
     setBuzzdetectYAxisOverride(null);
     setBuzzdetectBinWidthOverride(null);
   }, [buzzdetectSeriesMode]);
+
+  // Adjusting to baseline shifts every line, so a Y-range pinned against the
+  // unshifted values no longer frames them.
+  useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectBaselineAdjusted]);
 
   // Load buzzdetect activations for the current track, located by ident under
   // the configured buzzdetect directory. `cancelled` guards against the track
@@ -346,6 +357,8 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
     setBuzzdetectSettingsOpen,
     buzzdetectYAxisOverride,
     setBuzzdetectYAxisOverride,
+    buzzdetectBaselineAdjusted,
+    setBuzzdetectBaselineAdjusted,
     buzzdetectAutoBinWidth,
     setBuzzdetectAutoBinWidth,
     buzzdetectAutoYRange,

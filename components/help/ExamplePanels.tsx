@@ -202,6 +202,7 @@ export function ExampleBuzzdetectPanel() {
   const [neuronColors, setNeuronColors] = useState<Record<string, string>>({});
   const [seriesMode, setSeriesMode] = useState<BuzzdetectSeriesMode>('activation');
   const [binWidthOverride, setBinWidthOverride] = useState<number | null>(null);
+  const [baselineAdjusted, setBaselineAdjusted] = useState(false);
   const [height, setHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [selection, setSelection] = useState<Selection | null>(null);
   // Subset picks ARE the subset thresholds, exactly as in the app: a neuron
@@ -274,6 +275,8 @@ export function ExampleBuzzdetectPanel() {
         subsetActive={subsetActive}
         timeline={timeline}
         yAxisOverride={null}
+        baselineAdjusted={baselineAdjusted}
+        onBaselineAdjustedChange={setBaselineAdjusted}
         reportAutoValues={false}
         height={height}
         onAutoBinWidthChange={() => {}}

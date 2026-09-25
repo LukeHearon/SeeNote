@@ -374,6 +374,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectData, setBuzzdetectData,
     buzzdetectSettingsOpen, setBuzzdetectSettingsOpen,
     buzzdetectYAxisOverride, setBuzzdetectYAxisOverride,
+    buzzdetectBaselineAdjusted, setBuzzdetectBaselineAdjusted,
     buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
     buzzdetectAutoYRange, setBuzzdetectAutoYRange,
     handleBuzzdetectThresholdChange,
@@ -3077,6 +3078,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  subsetActive={subsetActive}
                  timeline={timeline}
                  yAxisOverride={buzzdetectYAxisOverride}
+                 baselineAdjusted={buzzdetectBaselineAdjusted}
+                 onBaselineAdjustedChange={setBuzzdetectBaselineAdjusted}
                  reportAutoValues={buzzdetectSettingsOpen}
                  height={buzzdetectPanelHeight}
                  onAutoBinWidthChange={setBuzzdetectAutoBinWidth}

@@ -19,3 +19,14 @@ export function detectionThreshold(value: number | null | undefined, neuron: str
   if (value === undefined) return defaultBuzzdetectThreshold(neuron);
   return value ?? Infinity;
 }
+
+/**
+ * How far a neuron's line is shifted down when the graph is adjusted to
+ * baseline: by its own detection threshold, so every neuron's threshold lands
+ * on 0 and lines from models that run hotter or colder than each other sit
+ * against one another. A neuron with no threshold has nothing to align to and
+ * stays where it is.
+ */
+export function baselineOffset(threshold: number, adjusted: boolean): number {
+  return adjusted && isFinite(threshold) ? threshold : 0;
+}
