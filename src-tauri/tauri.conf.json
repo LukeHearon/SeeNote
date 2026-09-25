@@ -1,6 +1,6 @@
 {
   "productName": "SeeNote",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "identifier": "com.seenote.app",
   "build": {
     "beforeDevCommand": "npm run dev",
