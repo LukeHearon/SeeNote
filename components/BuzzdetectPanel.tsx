@@ -78,9 +78,6 @@ const READOUT_MAX_DECIMALS = 2;
 // Auto Y-range for detection-rate mode: it's a fraction of the frames in a bin
 // clearing the threshold, so always 0..1 — no data scan needed.
 const DETECTION_RATE_Y_RANGE = { min: 0, max: 1 };
-// Tick labels are kept clear of this much of the gutter's top, where the
-// baseline toggle sits.
-const BASELINE_TOGGLE_CLEARANCE_PX = 24;
 
 interface BuzzdetectPanelProps {
   data: BuzzdetectData | null;
@@ -293,6 +290,7 @@ export default function BuzzdetectPanel({
   // Zero everywhere unless adjusting, and adjusting only means anything in
   // activation mode, where the threshold is a value on this axis.
   const adjusting = baselineAdjusted && seriesMode === 'activation';
+  const showBaselineToggle = !!data && seriesMode === 'activation';
   const offsetOf = useCallback(
     (n: number) => (data ? baselineOffset(thresholdOf(data.neurons[n]), adjusting) : 0),
     [data, thresholdOf, adjusting],
@@ -1011,12 +1009,10 @@ export default function BuzzdetectPanel({
             // Adjusted, every line is shifted by its own amount, so no one
             // number would be true of a height — the axis goes unlabelled.
             const TICKS = 4;
-            // In activation mode the baseline toggle covers the top of the gutter.
-            const minLabelY = seriesMode === 'activation' ? BASELINE_TOGGLE_CLEARANCE_PX : 8;
             for (let k = 0; k <= TICKS; k++) {
               const v = yMin + (k / TICKS) * (yMax - yMin);
               const y = yOf(v);
-              if (y < minLabelY || y > h - 6) continue;
+              if (y < 8 || y > h - 6) continue;
               yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
             }
           }
@@ -1348,7 +1344,7 @@ export default function BuzzdetectPanel({
     const shown = [tStart, tEnd].map(t => Number(t.toFixed(READOUT_MAX_DECIMALS)));
     const dp = decimalsForTimes(shown, READOUT_MAX_DECIMALS);
     return (
-      <div className="absolute top-1 left-2 pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]">
+      <div className={`absolute top-1 ${showBaselineToggle ? 'left-8' : 'left-2'} pointer-events-none text-[10px] leading-tight font-mono bg-black/50 rounded px-1.5 py-1 max-w-[60%]`}>
         <div className="text-slate-400 font-bold">{buzzdetectCopy.timeReadoutHeader}</div>
         <div className="text-slate-300">
           {`${formatTimeForUnit(shown[0], timeDisplayUnit, dp, trackStartDate, dateTimeFormat)}–${formatTimeForUnit(shown[1], timeDisplayUnit, dp, trackStartDate, dateTimeFormat)}`}
@@ -1415,23 +1411,6 @@ export default function BuzzdetectPanel({
       <div className="flex-1 flex min-h-0 relative">
         {/* Y-axis gutter, aligned to the spectrogram's 50px gutter */}
         <canvas ref={yAxisCanvasRef} className="h-full flex-shrink-0 pointer-events-none" style={{ width: Y_AXIS_WIDTH }} />
-        {data && seriesMode === 'activation' && (
-          <button
-            type="button"
-            data-buzz-ui
-            data-help-target="buzzdetect-baseline-toggle"
-            data-tooltip={tooltips.buzzdetectBaseline}
-            onClick={() => onBaselineAdjustedChange(!baselineAdjusted)}
-            className={`absolute top-1 flex items-center justify-center h-5 rounded transition-colors ${
-              baselineAdjusted
-                ? 'bg-[#e65161]/80 text-white hover:bg-[#e65161]'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
-            }`}
-            style={{ left: 4, width: Y_AXIS_WIDTH - 10 }}
-          >
-            <FoldVertical size={13} />
-          </button>
-        )}
 
         {/* Drawing area — shares the spectrogram's time→pixel transform */}
         <div
@@ -1444,6 +1423,23 @@ export default function BuzzdetectPanel({
         >
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
           <canvas ref={overlayCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+
+          {showBaselineToggle && (
+            <button
+              type="button"
+              data-buzz-ui
+              data-help-target="buzzdetect-baseline-toggle"
+              data-tooltip={tooltips.buzzdetectBaseline}
+              onClick={() => onBaselineAdjustedChange(!baselineAdjusted)}
+              className={`absolute top-1 left-1 z-10 flex items-center justify-center w-6 h-6 rounded transition-colors ${
+                baselineAdjusted
+                  ? 'bg-[#e65161]/80 text-white hover:bg-[#e65161]'
+                  : 'bg-black/50 text-slate-400 hover:text-slate-200 hover:bg-slate-700/80'
+              }`}
+            >
+              <FoldVertical size={13} />
+            </button>
+          )}
 
           {!data && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
