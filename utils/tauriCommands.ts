@@ -195,6 +195,11 @@ export const guessProjectFolderName = (archivePath: string): Promise<string> =>
 export const extractArchive = (archivePath: string, destDir: string, folderName: string): Promise<string> =>
   invoke('extract_archive', { archivePath, destDir, folderName });
 
+type RawBuzzdetectData = Omit<BuzzdetectData, 'values'> & { values: (number | null)[][] };
+
+const fromRawBuzzdetect = (data: RawBuzzdetectData): BuzzdetectData =>
+  ({ ...data, values: data.values.map(row => row.map(v => v ?? NaN)) });
+
 /**
  * Read `{buzzdetectDir}/{ident}_buzzdetect.csv` and parse it. Resolves to
  * `null` when no file exists for this ident. `frameLength`, when given,
@@ -213,12 +218,27 @@ export const readBuzzdetect = (
   frameLength?: number,
   trimActivationPrefix?: boolean,
 ): Promise<BuzzdetectData | null> =>
-  invoke<Omit<BuzzdetectData, 'values'> & { values: (number | null)[][] } | null>('read_buzzdetect', {
+  invoke<RawBuzzdetectData | null>('read_buzzdetect', {
     buzzdetectDir,
     ident,
     frameLength: frameLength ?? null,
     trimActivationPrefix: trimActivationPrefix ?? true,
-  }).then(data => data && { ...data, values: data.values.map(row => row.map(v => v ?? NaN)) });
+  }).then(data => data && fromRawBuzzdetect(data));
+
+/** Parse one buzzdetect CSV picked by absolute path — for single-file mode,
+ * which has no results directory to locate a track's file in. Same parse and
+ * same `NaN`-for-missing convention as `readBuzzdetect`, but a bad file
+ * rejects rather than resolving `null`. */
+export const readBuzzdetectFile = (
+  path: string,
+  frameLength?: number,
+  trimActivationPrefix?: boolean,
+): Promise<BuzzdetectData> =>
+  invoke<RawBuzzdetectData>('read_buzzdetect_file', {
+    path,
+    frameLength: frameLength ?? null,
+    trimActivationPrefix: trimActivationPrefix ?? true,
+  }).then(fromRawBuzzdetect);
 
 export const createDirAll = (path: string): Promise<void> =>
   invoke('create_dir_all', { path });

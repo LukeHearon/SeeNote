@@ -35,9 +35,9 @@ import { useAnnotationHistory } from './hooks/useAnnotationHistory';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
-import { subsetTimelineFor, subsetBuzzdetectData, subsetCriteriaFrom, type SubsetCriteria } from './utils/buzzdetectSubset';
-import { subsetStats } from './utils/buzzdetectStats';
-import { sourceIntervalOf, displayOfNearestKept, projectIntervalToDisplay, sourceRangesForDisplayRange } from './utils/subsetTimeline';
+import { useSubsetTimeline } from './hooks/useSubsetTimeline';
+import { useSubsetChunkCache, useTimelineSwap } from './hooks/useSubsetSync';
+import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
@@ -78,10 +78,6 @@ export interface AnnotationWindowProps {
   updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
   touchLastOpened: (id: string) => void;
 }
-
-// Stable identity for "no isolation", so a switched-off isolation doesn't hand
-// the panel a fresh array every render and redraw the canvas for nothing.
-const EMPTY_STRING_LIST: string[] = [];
 
 export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences, touchLastOpened }: AnnotationWindowProps) {
   // Ref that stays in sync with project prop — avoids stale-closure bugs in
@@ -357,6 +353,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // here, well before the hooks that consume it, because the subset timeline
   // derived from it (below) decides the DISPLAY duration and the effective
   // video mode — both of which the frame source and the transport need.
+  const buzzdetect = useBuzzdetect({
+    initialUi: project.preferences.uiSettings,
+    dir: project.buzzdetectDirectoryAbs,
+    ident,
+    file: null,
+    frameLength: project.settings.buzzdetectFrameLength,
+    trimActivationPrefix: project.settings.buzzdetectTrimActivationPrefix,
+    reloadNonce: buzzdetectReloadNonce,
+    addLog,
+  });
   const {
     buzzdetectEnabled, setBuzzdetectEnabled,
     buzzdetectThresholds, setBuzzdetectThresholds,
@@ -389,99 +395,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     toggleBuzzdetectIsolate,
     toggleBuzzdetectSubset,
     handleBuzzdetectSetAllNeuronsHidden,
-  } = useBuzzdetect({ project, ident, reloadNonce: buzzdetectReloadNonce, addLog });
+  } = buzzdetect;
 
   // ── Subset mode ─────────────────────────────────────────────────────────────
-  // The criteria the subset is keyed to, or null when it's off. Null here is
-  // what makes every path below run the whole-file case unchanged.
-  const subsetCriteria = useMemo<SubsetCriteria | null>(() => subsetCriteriaFrom({
-    enabled: buzzdetectSubsetEnabled,
-    subsetThresholds: buzzdetectSubsetThresholds,
-    thresholds: buzzdetectThresholds,
-    mode: buzzdetectSeriesMode,
-    minDetectionRate: buzzdetectMinDetectionRate,
-    binWidthOverride: buzzdetectBinWidthOverride,
-    frameHop: buzzdetectData?.frameHop ?? 0,
-    buffer: buzzdetectSubsetBuffer,
-    availableNeurons: buzzdetectData?.neurons ?? null,
-  }), [buzzdetectSubsetEnabled, buzzdetectSeriesMode, buzzdetectSubsetThresholds, buzzdetectThresholds,
-      buzzdetectMinDetectionRate, buzzdetectBinWidthOverride, buzzdetectData, buzzdetectSubsetBuffer]);
-
-  // The display axis. Identity (i.e. the whole file, unchanged) whenever the
-  // subset is off. `duration` here is the file's own length; `displayDuration`
-  // below is what the whole UI and the transport are measured in.
-  const timeline = useMemo(
-    () => subsetTimelineFor(buzzdetectData, subsetCriteria, duration),
-    [buzzdetectData, subsetCriteria, duration],
-  );
-  const displayDuration = timeline.duration;
-  // "The user has asked for a subset", as distinct from "the timeline differs
-  // from the file": a subset that happens to keep everything still draws as a
-  // subset, and one that keeps nothing is still engaged.
-  const subsetActive = subsetCriteria !== null;
-
-  // The isolation the graph actually draws: the picked neurons while the master
-  // switch is on, nothing otherwise. Reduced here so the panel is handed one
-  // list rather than a set and a flag to combine for itself.
-  const activeIsolatedNeurons = useMemo(
-    () => (buzzdetectIsolateEnabled ? buzzdetectIsolatedNeurons : EMPTY_STRING_LIST),
-    [buzzdetectIsolateEnabled, buzzdetectIsolatedNeurons],
-  );
-
-  // ── Subset ↔ spectrogram cache ─────────────────────────────────────────────
-  // Two things the chunk cache needs from the subset, and they change on
-  // different clocks:
-  //
-  //   grain   the bin width, which sizes the chunk grid (see buildTierLadder).
-  //           Changing it invalidates every cached chunk, so the cache is
-  //           rebuilt — but it only moves when the user changes bin width or
-  //           turns the subset on/off, not when they drag a threshold.
-  //   ranges  the kept spans, which cap each tier's LRU at the subset's own
-  //           footprint. These move on every threshold nudge and are applied to
-  //           the live cache without dropping anything.
-  const subsetGrainSec = subsetCriteria && subsetCriteria.binWidth > 0
-    ? subsetCriteria.binWidth
-    : undefined;
-  const subsetSourceRanges = useMemo(
-    () => (timeline.identity ? null : timeline.spans.map(s => ({ start: s.srcStart, end: s.srcEnd }))),
-    [timeline],
-  );
-  // How much audio the cut came to, for the palette's readout. Walks the frames
-  // once per timeline — i.e. per threshold nudge, on the same clock the
-  // timeline itself is rebuilt on, so it costs nothing the subset didn't.
-  const buzzdetectSubsetStats = useMemo(
-    () => subsetStats(buzzdetectData, timeline, duration),
-    [buzzdetectData, timeline, duration],
-  );
-  // Read by installChunkCache, which runs from callbacks that must not re-bind
-  // every time a threshold moves.
-  const subsetGrainRef = useRef(subsetGrainSec);
-  subsetGrainRef.current = subsetGrainSec;
-  const subsetSourceRangesRef = useRef(subsetSourceRanges);
-  subsetSourceRangesRef.current = subsetSourceRanges;
-  const timelineRef = useRef(timeline);
-  timelineRef.current = timeline;
-
-  // Video is turned off outright while a subset is on. The picture can't follow
-  // a timeline that jumps between distant parts of the file without stalling on
-  // every join, and the point of the subset is to hear the detections back to
-  // back. The user's own videoMode preference is left untouched — this only
-  // overrides what's in effect right now.
-  const effectiveVideoMode: VideoMode = subsetActive ? 'off' : videoMode;
-  const effectiveVideoModeRef = useRef(effectiveVideoMode);
-  effectiveVideoModeRef.current = effectiveVideoMode;
-
-  // A selection is display-time everywhere (view + playback bounds); an
-  // annotation made from one has to be converted — the same conversion the
-  // toolbar and panel readouts make (utils/subsetTimeline).
-  const selectionToSource = useCallback(
-    (sel: Selection): Selection => sourceIntervalOf(timeline, sel.start, sel.end),
-    [timeline],
-  );
-
-  // Display duration mirror for the hooks that clamp seeks/pans against it.
-  const displayDurationRef = useRef(displayDuration);
-  displayDurationRef.current = displayDuration;
+  // The timeline the palette's subset cuts, and everything read off it. Identity
+  // (the whole file) whenever the subset is off. See hooks/useSubsetTimeline.ts.
+  const {
+    timeline, displayDuration, subsetActive, activeIsolatedNeurons,
+    subsetGrainSec, subsetSourceRanges, subsetStats: buzzdetectSubsetStats, displayBuzzdetectData,
+    effectiveVideoMode, effectiveVideoModeRef, timelineRef, displayDurationRef,
+    subsetGrainRef, subsetSourceRangesRef, selectionToSource,
+  } = useSubsetTimeline(buzzdetect, duration, videoMode);
 
   // ── Subset seam ────────────────────────────────────────────────────────────
   // Annotations are stored in source time (they name audio in the file, and
@@ -492,14 +416,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     () => projectAnnotations(annotations, timeline),
     [annotations, timeline],
   );
-  // The activations, re-expressed on the display axis. The panel is handed only
-  // the frames the subset kept, so it plots the subset without knowing one
-  // exists (see utils/buzzdetectSubset.ts).
-  const displayBuzzdetectData = useMemo(
-    () => subsetBuzzdetectData(buzzdetectData, timeline),
-    [buzzdetectData, timeline],
-  );
-
   const toSourceAnnotations = useCallback(
     (displayed: Annotation[]) => reconcileAnnotations(displayed, annotations, hiddenAnnotations, timeline),
     [annotations, hiddenAnnotations, timeline],
@@ -817,29 +733,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     addLog,
   });
 
-  // Build the spectrogram chunk cache for a file and kick off its first
-  // viewport. Shared by every path that has to (re)build one — opening a track,
-  // changing the FFT size, and engaging or re-graining a subset — so the tier
-  // grain and the subset footprint can't be wired up at one call site and
-  // forgotten at another.
-  const installChunkCache = useCallback((
-    path: string, sr: number, dur: number, zoom: number,
-  ) => {
-    const cache = new MultiTierSpectrogramCache(
-      path, settings.fftSize, sr, dur, bumpCacheVersion, subsetGrainRef.current,
-    );
-    cache.setSubsetRanges(subsetSourceRangesRef.current);
-    swapChunkCache(chunkCacheRef, cache);
-    bumpCacheVersion();
-    // The warm-up viewport is the first `zoom` seconds of the DISPLAY axis,
-    // which under a subset is several stretches scattered through the file, not
-    // the file's first `zoom` seconds — those may not be on the axis at all.
-    cache.prefetchRanges(
-      sourceRangesForDisplayRange(timelineRef.current, 0, zoom),
-      cache.selectTier(zoom, 1200).tier,
-    );
-    return cache;
-  }, [settings.fftSize, bumpCacheVersion]);
+  // Builds the spectrogram chunk cache (opening a track, changing the FFT size,
+  // engaging or re-graining a subset) and keeps it in step with the subset.
+  const installChunkCache = useSubsetChunkCache({
+    chunkCacheRef, bumpCacheVersion, fftSize: settings.fftSize,
+    trackPath, sampleRate, duration, displayDuration, zoomSec,
+    subsetGrainSec, subsetSourceRanges, subsetGrainRef, subsetSourceRangesRef, timelineRef,
+  });
 
   // Open a track by absolute path (called from button or file panel)
   const handleOpenTrack = useCallback(async (absolutePath: string) => {
@@ -1000,31 +900,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     videoEngineRef.current?.pause();
     setIsPlaying(false);
   }, [exampleAudioActive, engineRef, videoEngineRef]);
-
-  // Rebuild the cache when what a cached chunk *is* changes underneath it while
-  // a track is open: the FFT size (the bins in a chunk) or the subset grain (the
-  // stretch of file a chunk covers — see buildTierLadder). Both make every
-  // chunk already held unusable, so the cache is replaced rather than trimmed.
-  // Threshold edits reshape the subset without changing the grain and are
-  // handled below, without discarding anything.
-  useEffect(() => {
-    if (!trackPath || !sampleRate || !duration) return;
-    // Engaging a subset shrinks the axis, and the effect that fits the zoom
-    // window to it runs after this one — so fit it here too, or the warm-up
-    // prefetch picks a tier for a window wider than the whole subset and
-    // fetches chunks the very next draw supersedes.
-    const zoom = displayDuration > 0 ? Math.min(zoomSec, displayDuration) : zoomSec;
-    installChunkCache(trackPath, sampleRate, duration, zoom);
-  }, [settings.fftSize, subsetGrainSec]);
-
-  // Narrow the live cache to the subset's footprint as the spans move (a
-  // threshold drag), and widen it back when the subset is turned off.
-  useEffect(() => {
-    chunkCacheRef.current?.setSubsetRanges(subsetSourceRanges);
-    // Not keyed on the cache itself: every path that installs one already
-    // applies the current ranges (installChunkCache), so re-running this on a
-    // cache swap would only repeat the walk.
-  }, [subsetSourceRanges]);
 
   // The ordered list used for navigation. Mirrors what the file tree actually
   // shows: shuffle order, the active fileFilter, and the entered-folder subtree —
@@ -2207,46 +2082,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     enabled: libraryToolIndex === null,
   });
 
-  // Hand the engine the axis it should play, and bring the rest of the view
-  // onto it. Fires on every timeline change (subset toggled, threshold edited,
-  // track swapped). AudioEngine stops playback rather than remapping audio
-  // already scheduled against the old axis.
-  //
-  // The selection is reset outright: its endpoints named audio by where they
-  // sat, and the cuts have moved. The playhead instead follows the source
-  // time it was actually at — read it off the OLD timeline before that
-  // timeline is replaced, then land on the nearest point the NEW timeline can
-  // express (exact, unless subsetting just hid that source time). That's what
-  // keeps "unclick subset" landing back on the real spot in the full track
-  // rather than reinterpreting the old display number under the new axis.
-  // Skipped on the first run, which is just the empty initial state.
-  //
-  // Everything here is gated on the timeline object actually changing, not just
-  // on the effect running: `seek` and `handleSelectionChange` are callbacks whose
-  // identity turns over on unrelated renders, and setTimeline stops playback —
-  // so an ungated call would cut the audio at arbitrary moments mid-play.
-  const prevTimelineRef = useRef(timeline);
-  useEffect(() => {
-    const prevTimeline = prevTimelineRef.current;
-    const changed = prevTimeline !== timeline;
-    prevTimelineRef.current = timeline;
-    if (!changed) return;
-    engineRef.current?.setTimeline(timeline);
-    handleSelectionChange(null);
-    const sourceTime = prevTimeline.toSource(currentTimeRef.current);
-    const newDisplayTime = displayOfNearestKept(timeline, sourceTime);
-    if (newDisplayTime !== currentTimeRef.current) seek(newDisplayTime);
-    // Always recenter, even when the display time itself didn't change: the
-    // timeline swap can redraw entirely different content under the same
-    // playhead position, so the view still needs to follow it.
-    spectrogramRef.current?.scrollToTime(newDisplayTime);
-    // A subset can be a few seconds of a multi-hour file. Fit the window to it
-    // rather than leaving the user staring at one narrow band of content in a
-    // screen of blank — the same courtesy handleOpenTrack does for short files.
-    if (displayDuration > 0 && zoomSecRef.current > displayDuration) {
-      setZoomSec(Math.max(MIN_ZOOM_SEC, displayDuration));
-    }
-  }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef, spectrogramRef]);
+  // Hand the engine the subset's axis and bring the view onto it — see
+  // hooks/useSubsetSync.ts. Ordering against the Find & Rename "Go" below matters.
+  useTimelineSwap({
+    timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef,
+    spectrogramRef, zoomSecRef, setZoomSec,
+  });
 
   // Finish a cross-track Find & Rename "Go": select + scroll once the target
   // track has finished loading and its annotations are in memory.

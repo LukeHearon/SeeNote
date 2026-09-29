@@ -162,6 +162,7 @@ pub fn run() {
             commands::window::open_copy_editor_window,
             commands::window::take_pending_open_file,
             commands::buzzdetect::read_buzzdetect,
+            commands::buzzdetect::read_buzzdetect_file,
             commands::annotation_tools::list_annotation_tools,
             commands::annotation_tools::list_tool_examples,
             commands::annotation_tools::create_annotation_tool,

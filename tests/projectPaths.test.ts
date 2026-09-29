@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   basename,
+  dirname,
   isAbsolutePath,
   resolveInputPath,
   trimProjectPrefix,
@@ -15,6 +16,24 @@ import {
 } from '../utils/projectPaths';
 
 const PROJ = '/Users/me/projects/birdsong';
+
+describe('dirname', () => {
+  it('returns everything before the last separator', () => {
+    expect(dirname('/Users/me/results/a_buzzdetect.csv')).toBe('/Users/me/results');
+  });
+
+  it('handles windows-style separators', () => {
+    expect(dirname('C:\\Users\\me\\a.csv')).toBe('C:\\Users\\me');
+  });
+
+  it('keeps the root for a file directly under it', () => {
+    expect(dirname('/a.csv')).toBe('/');
+  });
+
+  it('returns empty string when there is no separator', () => {
+    expect(dirname('a.csv')).toBe('');
+  });
+});
 
 describe('basename', () => {
   it('returns the last segment of a unix path', () => {

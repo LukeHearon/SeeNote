@@ -11,6 +11,14 @@ export function basename(p: string): string {
   return idx >= 0 ? stripped.slice(idx + 1) : stripped;
 }
 
+/** Directory holding a file: everything before the last separator, or '' when
+ * the path has none. The inverse split of `basename`. */
+export function dirname(p: string): string {
+  const stripped = stripTrailingSep(p);
+  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf('\\'));
+  return idx > 0 ? stripped.slice(0, idx) : idx === 0 ? '/' : '';
+}
+
 /** Join a base directory with a relative segment, always with `/` (this
  * codebase displays resolved paths with forward slashes regardless of
  * platform — see `resolveInputPath`). Leading `./`/`/` on `rest` is stripped. */

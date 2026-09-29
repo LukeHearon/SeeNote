@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { BuzzdetectData, BuzzdetectSeriesMode, Project, ProjectUiSettings } from '../types';
+import { BuzzdetectData, BuzzdetectSeriesMode, ProjectUiSettings } from '../types';
 import {
   DEFAULT_BUZZDETECT_PANEL_HEIGHT,
   DEFAULT_BUZZDETECT_MIN_DETECTION_RATE,
   DEFAULT_BUZZDETECT_SUBSET_BUFFER,
   defaultBuzzdetectThreshold,
 } from '../constants';
-import { readBuzzdetect, readTextFile } from '../utils/tauriCommands';
-import { joinPath } from '../utils/projectPaths';
+import { readBuzzdetect, readBuzzdetectFile, readTextFile } from '../utils/tauriCommands';
+import { joinPath, dirname } from '../utils/projectPaths';
 import { BUZZDETECT_MANIFEST, manifestThresholds, prefillThresholds } from '../utils/buzzdetectManifest';
 
 /**
@@ -133,12 +133,23 @@ export interface BuzzdetectApi {
 }
 
 export interface BuzzdetectParams {
-  project: Project;
-  // Ident of the active track (relative path without extension), or null.
+  /** Persisted panel settings to start from — a project's, or none (single-file mode). */
+  initialUi: ProjectUiSettings | undefined;
+  /**
+   * Where the results come from: a results directory plus the active track's
+   * ident (a project — the file is `{ident}_buzzdetect.csv` under it), or one
+   * CSV picked by path (single-file mode). `dir` and `file` are alternatives;
+   * with neither, or `dir` without an `ident`, there is nothing to load.
+   */
+  dir: string | null;
   ident: string | null;
-  // Bumped to force a re-read of the current track's activations from disk
-  // (e.g. the header's manual refresh) even though ident/dir/frameLength
-  // haven't changed.
+  file: string | null;
+  /** Override for how much audio each row describes; absent = the row spacing. */
+  frameLength: number | undefined;
+  /** Whether a leading `activation_` is stripped from neuron names. Default true. */
+  trimActivationPrefix: boolean | undefined;
+  // Bumped to force a re-read of the current results from disk (e.g. the
+  // header's manual refresh) even though the source hasn't changed.
   reloadNonce: number;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
@@ -148,26 +159,26 @@ export interface BuzzdetectParams {
  * (enabled/thresholds/hiddenNeurons — still persisted by AnnotationWindow's
  * consolidated UI-persistence effect, which reads these returned values), the
  * transient panel height + loaded data, and the load effect that reads
- * activations by ident under the configured buzzdetect directory.
+ * activations from the source above.
  */
-export function useBuzzdetect({ project, ident, reloadNonce, addLog }: BuzzdetectParams): BuzzdetectApi {
+export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimActivationPrefix, reloadNonce, addLog }: BuzzdetectParams): BuzzdetectApi {
   // buzzdetect activations panel — UI fields persisted in uiSettings.
-  const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(project.preferences.uiSettings?.buzzdetectEnabled ?? false);
-  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number | null>>(project.preferences.uiSettings?.buzzdetectThresholds ?? {});
+  const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(initialUi?.buzzdetectEnabled ?? false);
+  const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number | null>>(initialUi?.buzzdetectThresholds ?? {});
   const [buzzdetectSubsetThresholds, setBuzzdetectSubsetThresholds] = useState<Record<string, number>>(
-    () => migrateSubsetThresholds(project.preferences.uiSettings),
+    () => migrateSubsetThresholds(initialUi),
   );
-  const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectHiddenNeurons ?? []);
-  const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(project.preferences.uiSettings?.buzzdetectNeuronColors ?? {});
-  const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<BuzzdetectSeriesMode>(project.preferences.uiSettings?.buzzdetectSeriesMode ?? 'activation');
-  const [buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride] = useState<number | null>(project.preferences.uiSettings?.buzzdetectBinWidthOverride ?? null);
+  const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(initialUi?.buzzdetectHiddenNeurons ?? []);
+  const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(initialUi?.buzzdetectNeuronColors ?? {});
+  const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<BuzzdetectSeriesMode>(initialUi?.buzzdetectSeriesMode ?? 'activation');
+  const [buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride] = useState<number | null>(initialUi?.buzzdetectBinWidthOverride ?? null);
   // Subset mode's master toggle — "subset by everything" vs "subset by
   // nothing". Kept apart from the picks (the subset thresholds above) so
   // flipping the subset off and on again doesn't cost the user their selection.
-  const [buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled] = useState(project.preferences.uiSettings?.buzzdetectSubsetEnabled ?? false);
-  const [buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate] = useState<number>(project.preferences.uiSettings?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
-  const [buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer] = useState<number>(project.preferences.uiSettings?.buzzdetectSubsetBuffer ?? DEFAULT_BUZZDETECT_SUBSET_BUFFER);
-  const [buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons] = useState<string[]>(project.preferences.uiSettings?.buzzdetectPinnedNeurons ?? []);
+  const [buzzdetectSubsetEnabled, setBuzzdetectSubsetEnabled] = useState(initialUi?.buzzdetectSubsetEnabled ?? false);
+  const [buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate] = useState<number>(initialUi?.buzzdetectMinDetectionRate ?? DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+  const [buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer] = useState<number>(initialUi?.buzzdetectSubsetBuffer ?? DEFAULT_BUZZDETECT_SUBSET_BUFFER);
+  const [buzzdetectPinnedNeurons, setBuzzdetectPinnedNeurons] = useState<string[]>(initialUi?.buzzdetectPinnedNeurons ?? []);
   // Transient (see BuzzdetectApi): a fade over the other lines, not a setting.
   const [buzzdetectIsolatedNeurons, setBuzzdetectIsolatedNeurons] = useState<string[]>([]);
   const [buzzdetectIsolateEnabled, setBuzzdetectIsolateEnabled] = useState(false);
@@ -198,19 +209,23 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
   // unshifted values no longer frames them.
   useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectBaselineAdjusted]);
 
-  // Load buzzdetect activations for the current track, located by ident under
-  // the configured buzzdetect directory. `cancelled` guards against the track
-  // changing while the read is in flight.
+  // Load buzzdetect activations from the source, located by ident under the
+  // results directory or read straight from the picked file. `cancelled` guards
+  // against the source changing while the read is in flight.
   useEffect(() => {
-    const dir = project.buzzdetectDirectoryAbs;
-    if (!dir || !ident) { setBuzzdetectData(null); return; }
+    const read = file
+      ? () => readBuzzdetectFile(file, frameLength, trimActivationPrefix)
+      : dir && ident
+        ? () => readBuzzdetect(dir, ident, frameLength, trimActivationPrefix)
+        : null;
+    if (!read) { setBuzzdetectData(null); return; }
     let cancelled = false;
     setBuzzdetectData(null);
-    readBuzzdetect(dir, ident, project.settings.buzzdetectFrameLength, project.settings.buzzdetectTrimActivationPrefix)
+    read()
       .then(d => { if (!cancelled) setBuzzdetectData(d); })
       .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
     return () => { cancelled = true; };
-  }, [ident, project.buzzdetectDirectoryAbs, project.settings.buzzdetectFrameLength, project.settings.buzzdetectTrimActivationPrefix, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ident, dir, file, frameLength, trimActivationPrefix, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const thresholdsRef = useRef(buzzdetectThresholds);
   thresholdsRef.current = buzzdetectThresholds;
@@ -219,11 +234,13 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
   // yet are filled, so anything the user set or cleared stays theirs; the fill
   // lands in the thresholds map and is saved with the project like a typed value.
   useEffect(() => {
-    const dir = project.buzzdetectDirectoryAbs;
-    if (!dir) return;
+    // buzzdetect writes the manifest at the top of a results folder; a single
+    // picked file is looked for beside it.
+    const manifestDir = file ? dirname(file) : dir;
+    if (!manifestDir) return;
     let cancelled = false;
-    const trim = project.settings.buzzdetectTrimActivationPrefix ?? true;
-    readTextFile(joinPath(dir, BUZZDETECT_MANIFEST))
+    const trim = trimActivationPrefix ?? true;
+    readTextFile(joinPath(manifestDir, BUZZDETECT_MANIFEST))
       .then(text => {
         if (cancelled || text === null) return;
         const suggested = manifestThresholds(text, trim);
@@ -236,7 +253,7 @@ export function useBuzzdetect({ project, ident, reloadNonce, addLog }: Buzzdetec
       })
       .catch(err => { if (!cancelled) addLog(`buzzdetect manifest read error: ${err}`, 'error'); });
     return () => { cancelled = true; };
-  }, [project.buzzdetectDirectoryAbs, project.settings.buzzdetectTrimActivationPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dir, file, trimActivationPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // buzzdetect panel callbacks.
   // null is kept in the map rather than deleted: an absent entry means "never

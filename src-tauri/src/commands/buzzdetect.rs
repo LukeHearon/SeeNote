@@ -85,7 +85,6 @@ pub async fn read_buzzdetect(
     frame_length: Option<f32>,
     trim_activation_prefix: Option<bool>,
 ) -> Result<Option<BuzzdetectData>, String> {
-    let trim_activation_prefix = trim_activation_prefix.unwrap_or(true);
     let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
     let finished_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
     let partial_path = Path::new(dir).join(format!("{}_buzzpart.csv", ident));
@@ -96,8 +95,36 @@ pub async fn read_buzzdetect(
     } else {
         return Ok(None);
     };
+    parse_buzzdetect_csv(&csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
+        .map(Some)
+}
 
-    let content = std::fs::read_to_string(&csv_path)
+/// Read one buzzdetect CSV picked by path (single-file mode, which has no
+/// results directory to look an ident up in) and parse it exactly as
+/// [`read_buzzdetect`] would. A `_buzzpart.csv` name is treated as an in-progress
+/// run, so its possibly half-written last line is tolerated.
+#[tauri::command]
+pub async fn read_buzzdetect_file(
+    path: String,
+    frame_length: Option<f32>,
+    trim_activation_prefix: Option<bool>,
+) -> Result<BuzzdetectData, String> {
+    let csv_path = Path::new(&path);
+    let is_partial = csv_path
+        .file_name()
+        .map(|n| n.to_string_lossy().ends_with("_buzzpart.csv"))
+        .unwrap_or(false);
+    parse_buzzdetect_csv(csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
+}
+
+/// The shared parse behind both readers; see [`read_buzzdetect`] for the CSV contract.
+fn parse_buzzdetect_csv(
+    csv_path: &Path,
+    is_partial: bool,
+    frame_length: Option<f32>,
+    trim_activation_prefix: bool,
+) -> Result<BuzzdetectData, String> {
+    let content = std::fs::read_to_string(csv_path)
         .map_err(|e| format!("failed to read '{}': {}", csv_path.display(), e))?;
 
     // Non-empty lines only; tolerate both \n and \r\n.
@@ -200,13 +227,13 @@ pub async fn read_buzzdetect(
         (Err(e), None) => return Err(format!("'{}': {}", csv_path.display(), e)),
     };
 
-    Ok(Some(BuzzdetectData {
+    Ok(BuzzdetectData {
         frame_length: frame_length.unwrap_or(hop),
         frame_hop: hop,
         neurons: kept_neurons,
         starts,
         values: kept_values,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +272,15 @@ mod tests {
         assert_eq!(data.neurons, vec!["a", "b"]);
         assert_eq!(data.values[0], vec![Some(1.0), None, None]);
         assert_eq!(data.values[1], vec![Some(2.0), Some(4.0), Some(6.0)]);
+    }
+
+    #[tokio::test]
+    async fn a_file_picked_by_path_parses_like_one_found_by_ident() {
+        let dir = write_csv("t", "start,activation_a\n0,1.0\n0.96,2.0\n");
+        let path = dir.join("t_buzzdetect.csv").to_string_lossy().to_string();
+        let data = read_buzzdetect_file(path, None, None).await.unwrap();
+        assert_eq!(data.neurons, vec!["a"]);
+        assert_eq!(data.values[0], vec![Some(1.0), Some(2.0)]);
     }
 
     #[tokio::test]
