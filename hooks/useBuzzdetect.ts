@@ -152,6 +152,8 @@ export interface BuzzdetectParams {
   // header's manual refresh) even though the source hasn't changed.
   reloadNonce: number;
   addLog: (msg: string, type?: 'info' | 'error') => void;
+  /** Told when a read fails, for a window that has to show the user why nothing loaded. */
+  onLoadError?: (message: string) => void;
 }
 
 /**
@@ -161,7 +163,7 @@ export interface BuzzdetectParams {
  * transient panel height + loaded data, and the load effect that reads
  * activations from the source above.
  */
-export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimActivationPrefix, reloadNonce, addLog }: BuzzdetectParams): BuzzdetectApi {
+export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimActivationPrefix, reloadNonce, addLog, onLoadError }: BuzzdetectParams): BuzzdetectApi {
   // buzzdetect activations panel — UI fields persisted in uiSettings.
   const [buzzdetectEnabled, setBuzzdetectEnabled] = useState(initialUi?.buzzdetectEnabled ?? false);
   const [buzzdetectThresholds, setBuzzdetectThresholds] = useState<Record<string, number | null>>(initialUi?.buzzdetectThresholds ?? {});
@@ -223,7 +225,12 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
     setBuzzdetectData(null);
     read()
       .then(d => { if (!cancelled) setBuzzdetectData(d); })
-      .catch(err => { if (!cancelled) { setBuzzdetectData(null); addLog(`buzzdetect load error: ${err}`, 'error'); } });
+      .catch(err => {
+        if (cancelled) return;
+        setBuzzdetectData(null);
+        addLog(`buzzdetect load error: ${err}`, 'error');
+        onLoadError?.(String(err));
+      });
     return () => { cancelled = true; };
   }, [ident, dir, file, frameLength, trimActivationPrefix, reloadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 

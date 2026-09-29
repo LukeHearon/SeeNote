@@ -6,6 +6,12 @@ export interface PanelLayoutInitial {
   splitRatio: number;
   sidebarSections: SidebarSectionsState;
   leftPanelWidth: number;
+  /**
+   * Whether dragging the left panel narrow collapses it to a rail. Default true;
+   * off where the panel is shown or hidden outright (single-file mode's neuron
+   * palette), so a narrow drag just stops at the minimum.
+   */
+  leftPanelCollapsible?: boolean;
   findPanelWidth: number;
 }
 
@@ -75,6 +81,7 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     minWidth: LEFT_PANEL_COLLAPSE_THRESHOLD,
     maxWidth: LEFT_PANEL_MAX_WIDTH,
     collapsedWidth: LEFT_PANEL_COLLAPSED_PX,
+    collapsible: initial.leftPanelCollapsible,
   });
 
   // Same behaviour mirrored onto the right edge for the find dock, minus the

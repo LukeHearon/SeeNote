@@ -1,18 +1,23 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Bug, ChevronDown, HelpCircle } from 'lucide-react';
+import { Activity, ArrowLeft, Bug, ChevronDown, HelpCircle, X } from 'lucide-react';
 import VideoPane from './components/VideoPane';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import Toolbar, { speedRangeFor } from './components/Toolbar';
+import BuzzdetectPanel from './components/BuzzdetectPanel';
+import NeuronPalette from './components/NeuronPalette';
+import SidebarStack from './components/SidebarStack';
+import MessageDialog from './components/MessageDialog';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import TooltipLayer from './components/TooltipLayer';
 import { Selection, SpectrogramSettings, VideoMode } from './types';
-import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, isVideoFile } from './constants';
+import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
 import { suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
-import { getFileInfo, toAssetUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import { getFileInfo, toAssetUrl, saveFileDialog, exportAudioRange, openFileDialog } from './utils/tauriCommands';
+import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
@@ -27,9 +32,15 @@ import { useArrowKeys } from './hooks/useArrowKeys';
 import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useHotkeys } from './hooks/useHotkeys';
-import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
-import { annotationWindow } from './copy/ui';
+import { useBuzzdetect } from './hooks/useBuzzdetect';
+import { useSubsetTimeline } from './hooks/useSubsetTimeline';
+import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
+import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
+import { annotationWindow, singleFileWindow } from './copy/ui';
 import { tooltips } from './copy/tooltips';
+
+// Stable identity: there are no annotation tools here for a neuron to take a color from.
+const NO_TOOL_COLORS: Record<string, string> = {};
 
 export interface SingleFileWindowProps {
   filePath: string;
@@ -37,7 +48,10 @@ export interface SingleFileWindowProps {
 }
 
 // Lean viewer for a single audio/video file opened via "Open File" on the
-// launch screen — no project, no file tree, no annotation tooling. Reuses the
+// launch screen — no project, no file tree, no annotation tooling. The one
+// extra is buzzdetect: a results CSV can be imported by hand (there is no
+// project directory to look one up in), which brings the neuron palette, the
+// activations panel and subset mode, all sharing AnnotationWindow's hooks. Reuses the
 // same playback/spectrogram/video plumbing as AnnotationWindow (none of that
 // is actually project-coupled — see useBandPassFilter/usePlaybackTransport/
 // useVideoFrameSource, which all take plain shapes, not the Project type) but
@@ -80,6 +94,82 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const videoModeRef = useRef(videoMode);
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
 
+  // ── buzzdetect ──────────────────────────────────────────────────────────────
+  // Results come from one CSV picked by hand; nothing is persisted, so every
+  // setting here is session state. Instantiated ahead of the frame source and
+  // the transport for the same reason as in AnnotationWindow: the subset's
+  // timeline decides the display duration and the effective video mode.
+  const [buzzdetectFile, setBuzzdetectFile] = useState<string | null>(null);
+  const [buzzdetectReloadNonce, setBuzzdetectReloadNonce] = useState(0);
+  const [buzzdetectError, setBuzzdetectError] = useState<string | null>(null);
+  const buzzdetect = useBuzzdetect({
+    initialUi: undefined,
+    dir: null,
+    ident: null,
+    file: buzzdetectFile,
+    frameLength: undefined,
+    trimActivationPrefix: undefined,
+    reloadNonce: buzzdetectReloadNonce,
+    addLog,
+    onLoadError: msg => { setBuzzdetectFile(null); setBuzzdetectError(msg); },
+  });
+  const {
+    buzzdetectEnabled, setBuzzdetectEnabled,
+    buzzdetectThresholds, buzzdetectSubsetThresholds, setBuzzdetectSubsetEnabled,
+    buzzdetectHiddenNeurons, buzzdetectNeuronColors,
+    buzzdetectSeriesMode, setBuzzdetectSeriesMode,
+    buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
+    buzzdetectSubsetNeurons,
+    buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate,
+    buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer,
+    buzzdetectPinnedNeurons,
+    buzzdetectPanelHeight, setBuzzdetectPanelHeight,
+    buzzdetectData,
+    buzzdetectSettingsOpen, setBuzzdetectSettingsOpen,
+    buzzdetectYAxisOverride, setBuzzdetectYAxisOverride,
+    buzzdetectBaselineAdjusted, setBuzzdetectBaselineAdjusted,
+    buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
+    buzzdetectAutoYRange, setBuzzdetectAutoYRange,
+    handleBuzzdetectThresholdChange,
+    handleBuzzdetectSubsetThresholdChange,
+    handleBuzzdetectToggleNeuron,
+    handleBuzzdetectNeuronColorChange,
+    handleBuzzdetectNeuronColorReset,
+    handleBuzzdetectTogglePinNeuron,
+    buzzdetectIsolatedNeurons,
+    handleBuzzdetectToggleIsolateNeuron,
+    buzzdetectIsolateEnabled,
+    toggleBuzzdetectIsolate,
+    toggleBuzzdetectSubset,
+    handleBuzzdetectSetAllNeuronsHidden,
+  } = buzzdetect;
+  const {
+    timeline, displayDuration, subsetActive, activeIsolatedNeurons,
+    subsetGrainSec, subsetSourceRanges, subsetStats: buzzdetectSubsetStats, displayBuzzdetectData,
+    effectiveVideoMode, effectiveVideoModeRef, timelineRef, displayDurationRef,
+    subsetGrainRef, subsetSourceRangesRef, selectionToSource, selectAllSpanAt,
+  } = useSubsetTimeline(buzzdetect, duration, videoMode);
+
+  // Pick a CSV and load it. Every import opens the panel, including a replace:
+  // an import that leaves nothing visible reads as a failure.
+  const handleImportBuzzdetect = useCallback(async () => {
+    const path = await openFileDialog(buzzdetectFile ?? filePath, [
+      { name: singleFileWindow.importBuzzdetectFilter, extensions: ['csv'] },
+    ]);
+    if (!path) return;
+    setBuzzdetectFile(path);
+    setBuzzdetectReloadNonce(n => n + 1);
+    setBuzzdetectEnabled(true);
+    addLog(`Importing buzzdetect results: ${basename(path)}`);
+  }, [buzzdetectFile, filePath, addLog, setBuzzdetectEnabled]);
+  // Dropping the results also drops the subset: with nothing loaded there is
+  // nothing for it to cut by, and the picks would otherwise sit engaged.
+  const handleRemoveBuzzdetect = useCallback(() => {
+    setBuzzdetectFile(null);
+    setBuzzdetectSubsetEnabled(false);
+  }, [setBuzzdetectSubsetEnabled]);
+  const refreshBuzzdetect = useCallback(() => setBuzzdetectReloadNonce(n => n + 1), []);
+
   // No project to persist against in single-file mode — plain session state.
   const [videoBrightness, setVideoBrightness] = useState(100);
   const [videoContrast, setVideoContrast] = useState(100);
@@ -87,10 +177,16 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const [settings, setSettings] = useState<SpectrogramSettings>(DEFAULT_SPECTROGRAM_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
 
+  // The left panel holds only the neuron palette, so it exists (and is
+  // resizable, without the file panel's drag-to-collapse) once results are loaded.
   const {
     splitRatio, videoCollapsed, setVideoCollapsed,
     hideLabels, VIDEO_COLLAPSED_BAR_PX, handleSplitDrag,
-  } = usePanelLayout({ splitRatio: DEFAULT_SPLIT_RATIO, sidebarSections: {}, leftPanelWidth: 0, findPanelWidth: 0 });
+    sidebarSections, leftPanelWidth, handleLeftPanelWidthDrag,
+  } = usePanelLayout({
+    splitRatio: DEFAULT_SPLIT_RATIO, sidebarSections: {},
+    leftPanelWidth: DEFAULT_LEFT_PANEL_WIDTH, leftPanelCollapsible: false, findPanelWidth: 0,
+  });
 
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
   const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
@@ -105,7 +201,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     frameSourceRef, frameSourceVersion, setFrameSourceVersion, frameSourceDecodeError,
     videoPrefetchEndRef, videoPrefetchBusyRef, preZoomExtentRef, prerollVideo,
   } = useVideoFrameSource({
-    trackPath: filePath, trackPathRef, isAudioTrack, videoMode, durationRef, selectionRef, addLog,
+    // Effective, not preferred: a subset closes the frame source outright.
+    trackPath: filePath, trackPathRef, isAudioTrack, videoMode: effectiveVideoMode, durationRef, selectionRef,
+    timelineRef, addLog,
   });
 
   // No annotation tools exist in this mode; the example-player mutual-exclusion
@@ -120,17 +218,20 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
   } = usePlaybackTransport({
     project: { preferences: {} },
-    isAudioTrack, isAudioTrackRef, videoMode, videoModeRef,
-    videoSrc, videoSrcRef: useRef(videoSrc), duration, durationRef,
+    // The transport runs on the DISPLAY axis, so it gets the display duration and
+    // the effective video mode (see AnnotationWindow).
+    isAudioTrack, isAudioTrackRef, videoMode: effectiveVideoMode, videoModeRef: effectiveVideoModeRef,
+    videoSrc, videoSrcRef: useRef(videoSrc), duration: displayDuration, durationRef: displayDurationRef,
     selection, selectionRef, frameSourceRef, videoPrefetchEndRef, videoPrefetchBusyRef,
-    prerollVideo, spectrogramRef, examplePlayer, addLog,
+    prerollVideo, timelineRef, spectrogramRef, examplePlayer, addLog,
   });
+  const getFrameTime = useSourceFrameTime(timelineRef, getMediaTime);
 
   // Spectrogram zoom-in/out/fit-to-track hotkeys — identical registration to
   // AnnotationWindow's (see hooks/useSpectrogramZoomHotkeys.ts); this window
   // has no viewport store to read for the mod+0 "remember where I was"
   // snapshot, so it falls back to the hook's default (start of window = 0).
-  useSpectrogramZoomHotkeys({ spectrogramRef, durationRef, zoomSecRef, preZoomExtentRef, selectionRef });
+  useSpectrogramZoomHotkeys({ spectrogramRef, durationRef: displayDurationRef, zoomSecRef, preZoomExtentRef, selectionRef });
 
   const bandPassProjectRef = useRef({ id: 'single-file', preferences: {} as { bandPassFilter?: import('./types').BandPassFilter | null } });
   const prevProjectIdRef = useRef<string | null>('single-file');
@@ -146,7 +247,15 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     prevProjectIdRef,
     updateProjectPreferences: async () => undefined,
     isAudioTrack,
-    videoMode,
+    videoMode: effectiveVideoMode,
+  });
+
+  // Builds the spectrogram chunk cache (opening the file, changing the FFT size,
+  // engaging or re-graining a subset) and keeps it in step with the subset.
+  const installChunkCache = useSubsetChunkCache({
+    chunkCacheRef, bumpCacheVersion, fftSize: settings.fftSize,
+    trackPath: filePath, sampleRate, duration, displayDuration, zoomSec,
+    subsetGrainSec, subsetSourceRanges, subsetGrainRef, subsetSourceRangesRef, timelineRef,
   });
 
   // Load the file once on mount (this window is scoped to exactly one file —
@@ -181,10 +290,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
         if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
 
-        const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sr, dur, bumpCacheVersion);
-        swapChunkCache(chunkCacheRef, cache);
-        bumpCacheVersion();
-        cache.prefetchViewport(0, effectiveZoom, cache.selectTier(effectiveZoom, 1200).tier);
+        installChunkCache(filePath, sr, dur, effectiveZoom);
         addLog('Spectrogram loading...');
       } catch (err) {
         if (cancelled) return;
@@ -200,16 +306,6 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
-
-  // Rebuild cache when FFT size changes.
-  useEffect(() => {
-    if (!sampleRate || !duration) return;
-    const cache = new MultiTierSpectrogramCache(filePath, settings.fftSize, sampleRate, duration, bumpCacheVersion);
-    swapChunkCache(chunkCacheRef, cache);
-    bumpCacheVersion();
-    cache.prefetchViewport(0, zoomSec, cache.selectTier(zoomSec, 1200).tier);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.fftSize]);
 
   const handleSelectionChange = useCallback((s: Selection | null) => {
     setSelection(s);
@@ -231,26 +327,34 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     }
   }, [activationStack, frameSourceRef, clearSelectionEnd]);
 
-  // Export the current selection's audio to a file. No project here (this
-  // window has none), so there's no display->source timeline conversion and
-  // no filename-timestamp scheme to reuse — suggestExportFilename falls back
-  // to its "_s<offset>" default.
+  // Hand the engine the subset's axis and bring the view onto it — see
+  // hooks/useSubsetSync.ts.
+  useTimelineSwap({
+    timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef,
+    spectrogramRef, zoomSecRef, setZoomSec,
+  });
+
+  // Export the current selection's audio to a file. The selection is display
+  // time; the file is read at its source time (selectionToSource), which under
+  // a subset is not the same thing. No project here, so no filename-timestamp
+  // scheme to reuse — suggestExportFilename falls back to its "_s<offset>" default.
   const handleExportSelection = useCallback(async () => {
     if (!selection) return;
+    const src = selectionToSource(selection);
     const filename = basename(filePath);
     const dir = filePath.slice(0, filePath.length - filename.length);
-    const suggested = suggestExportFilename(filename, selection.start);
+    const suggested = suggestExportFilename(filename, src.start);
     const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
       { name: 'Audio File', extensions: audioExportExtensions(filename) },
     ]);
     if (!chosenPath) return;
     try {
-      await exportAudioRange(filePath, selection.start, selection.end - selection.start, chosenPath);
+      await exportAudioRange(filePath, src.start, src.end - src.start, chosenPath);
       addLog(`Exported selection to ${basename(chosenPath)}`);
     } catch (err) {
       addLog(`Error exporting audio: ${err}`, 'error');
     }
-  }, [selection, filePath, addLog]);
+  }, [selection, filePath, selectionToSource, addLog]);
 
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
@@ -258,7 +362,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   useArrowKeys({
     selectionRef,
     currentTimeRef,
-    durationRef,
+    durationRef: displayDurationRef,
     zoomSecRef,
     getPixelsPerSecond: () => viewportStoreRef.current.get().pixelsPerSecond,
     seek,
@@ -287,7 +391,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   useHotkeys([
     // Help guide — also fires inside text inputs, since help is universal.
     { key: 'F1', allowInInput: true, handler: () => showHelpPage('single-file') },
-    { key: 'a', mods: ['mod'], handler: () => { if (duration > 0) handleSelectionChange({ start: 0, end: duration }); } },
+    { key: 'a', mods: ['mod'], handler: () => { if (displayDuration > 0) handleSelectionChange(selectAllSpanAt(currentTimeRef.current)); } },
+    // No annotations here, so these walk the subset's segment starts.
+    { key: 'ArrowLeft', mods: ['alt'], handler: () => spectrogramRef.current?.goToPrevAnnotation() },
+    { key: 'ArrowRight', mods: ['alt'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
+    // Shift+S: subset the track to the picked neurons' detections, and back.
+    { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
     { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
     { key: 'Escape', allowInInput: true, handler: () => {
         const top = activationStack.popTop();
@@ -327,7 +436,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       lastDefinedSpeed,
       speedMin: liveSpeedRange.min,
       speedMax: liveSpeedRange.max,
-      selection,
+      // Source time, like everything else on the bridge (see LiveSnapshot).
+      selection: selection && selectionToSource(selection),
       timeDisplayUnit,
       selectedTimeDisplayUnit: timeDisplayUnit,
       // No project, so no filename-timestamp format to read a start from —
@@ -343,13 +453,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       filterEnabled: bandPassFilter !== null,
       filterStrength,
       bandPassFilter,
-      buzzdetectAvailable: false,
-      buzzdetectEnabled: false,
-      // No buzzdetect here, so nothing to subset by and nothing to isolate.
-      subsetAvailable: false,
-      subsetActive: false,
-      isolateAvailable: false,
-      isolateActive: false,
+      buzzdetectAvailable: buzzdetectFile !== null,
+      buzzdetectEnabled,
+      subsetAvailable: buzzdetectSubsetNeurons.length > 0,
+      subsetActive,
+      isolateAvailable: buzzdetectIsolatedNeurons.length > 0,
+      isolateActive: activeIsolatedNeurons.length > 0,
       spectrogramSettings: settings,
       spectrogramSettingsOpen: showSettings,
       sampleRate,
@@ -361,9 +470,11 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     },
     {
       play: togglePlay,
-      seek: (t, scroll) => seek(t, scroll),
+      // A time a subset cut out has no place on the axis, so it goes to the
+      // nearest kept moment — the same answer typing it into the toolbar gives.
+      seek: (t, scroll) => seek(displayOfNearestKept(timeline, t), scroll),
       skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
-      skipToEnd: () => { seek(duration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
+      skipToEnd: () => { seek(displayDuration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
       prevAnnotation: () => {},
       nextAnnotation: () => {},
       togglePlayheadLock: () => {
@@ -376,7 +487,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       setPlaybackSpeed,
       setLastDefinedSpeed,
       setTimeDisplayUnit,
-      setSelection: handleSelectionChange,
+      setSelection: s => {
+        const d = projectIntervalToDisplay(timeline, s.start, s.end);
+        if (d) handleSelectionChange(d);
+      },
       toggleFilterTool: handleToggleFilterTool,
       setFilterStrength: s => {
         setFilterStrength(s);
@@ -384,9 +498,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       },
       enableFilter: handleEnableBandPassFilter,
       disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
-      toggleBuzzdetect: () => {},
-      toggleSubset: () => {},
-      toggleIsolate: () => {},
+      toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
+      toggleSubset: toggleBuzzdetectSubset,
+      toggleIsolate: toggleBuzzdetectIsolate,
       toggleSpectrogramSettings: () => setShowSettings(s => !s),
       setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
       toggleFileExpandCollapse: () => {},
@@ -402,6 +516,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       showExamples: () => {},
     },
     currentTimeStoreRef.current,
+    // Bound, not passed as a bare method reference — Timeline is a class.
+    t => timeline.toSource(t),
   );
 
   return (
@@ -416,6 +532,30 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
             <ArrowLeft size={18} />
           </button>
           <h1 className="text-lg font-semibold truncate">{trackName}</h1>
+          {/* Single-file mode has no results directory to find a track's buzzdetect
+              file in, so it's picked by hand. Once loaded the same button replaces it. */}
+          <div className="flex items-center flex-none min-w-0">
+            <button
+              onClick={handleImportBuzzdetect}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded transition-colors min-w-0 ${buzzdetectFile ? 'bg-slate-700 text-[#e65161]' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
+              data-tooltip={buzzdetectFile ? tooltips.replaceBuzzdetect : tooltips.importBuzzdetect}
+            >
+              <Activity size={16} className="flex-none" />
+              <span className="text-xs font-medium">{singleFileWindow.importBuzzdetectLabel}</span>
+              {buzzdetectFile && (
+                <span className="text-xs text-slate-400 truncate max-w-[14rem]">{basename(buzzdetectFile)}</span>
+              )}
+            </button>
+            {buzzdetectFile && (
+              <button
+                onClick={handleRemoveBuzzdetect}
+                className="p-1.5 rounded text-slate-500 hover:bg-slate-700 hover:text-white transition-colors"
+                data-tooltip={tooltips.removeBuzzdetect}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex items-center space-x-3">
           <button
@@ -436,163 +576,275 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
 
       <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
 
-      <div className="flex-1 flex flex-col relative overflow-hidden">
-        {!isAudioTrack && (
-          <>
+      {buzzdetectError && (
+        <MessageDialog
+          title={singleFileWindow.importBuzzdetectErrorTitle}
+          message={buzzdetectError}
+          okLabel={singleFileWindow.importBuzzdetectErrorOk}
+          onClose={() => setBuzzdetectError(null)}
+        />
+      )}
+
+      <div className="flex-1 flex min-h-0 relative overflow-hidden">
+        {/* Left: the neuron palette, alone, once results are loaded. It's a stack
+            of one so it takes the same collapse/sizing as AnnotationWindow's. */}
+        {buzzdetectFile !== null && (
+          <div
+            className="flex-none bg-slate-900 border-r border-slate-700 flex flex-col h-full relative"
+            style={{ width: leftPanelWidth }}
+          >
+            <SidebarStack
+              sections={sidebarSections}
+              items={[{
+                id: SIDEBAR_SECTION_NEURONS,
+                node: (
+                  <NeuronPalette
+                    data={buzzdetectData}
+                    onRefreshBuzzdetect={refreshBuzzdetect}
+                    thresholds={buzzdetectThresholds}
+                    subsetThresholds={buzzdetectSubsetThresholds}
+                    hiddenNeurons={buzzdetectHiddenNeurons}
+                    neuronColors={buzzdetectNeuronColors}
+                    toolColors={NO_TOOL_COLORS}
+                    subsetNeurons={buzzdetectSubsetNeurons}
+                    pinnedNeurons={buzzdetectPinnedNeurons}
+                    collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
+                    onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
+                    onToggleNeuron={handleBuzzdetectToggleNeuron}
+                    onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
+                    isolatedNeurons={buzzdetectIsolatedNeurons}
+                    onToggleIsolateNeuron={handleBuzzdetectToggleIsolateNeuron}
+                    isolateEnabled={buzzdetectIsolateEnabled}
+                    onToggleIsolate={toggleBuzzdetectIsolate}
+                    onNeuronColorChange={handleBuzzdetectNeuronColorChange}
+                    onNeuronColorReset={handleBuzzdetectNeuronColorReset}
+                    onThresholdChange={handleBuzzdetectThresholdChange}
+                    onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
+                    onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
+                    seriesMode={buzzdetectSeriesMode}
+                    binWidthOverride={buzzdetectBinWidthOverride}
+                    autoBinWidth={buzzdetectAutoBinWidth}
+                    autoYRange={buzzdetectAutoYRange}
+                    yAxisOverride={buzzdetectYAxisOverride}
+                    minDetectionRate={buzzdetectMinDetectionRate}
+                    subsetEnabled={subsetActive}
+                    onToggleSubset={toggleBuzzdetectSubset}
+                    panelOpen={buzzdetectEnabled}
+                    onTogglePanel={() => setBuzzdetectEnabled(v => !v)}
+                    subsetBuffer={buzzdetectSubsetBuffer}
+                    subsetStats={buzzdetectSubsetStats}
+                    settingsOpen={buzzdetectSettingsOpen}
+                    onSettingsOpenChange={setBuzzdetectSettingsOpen}
+                    onSeriesModeChange={setBuzzdetectSeriesMode}
+                    onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
+                    onYAxisOverrideChange={setBuzzdetectYAxisOverride}
+                    onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
+                    onSubsetBufferChange={setBuzzdetectSubsetBuffer}
+                  />
+                ),
+              }]}
+            />
+            {/* Right-edge width resize handle — sits on the outer face of the border */}
             <div
-              style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
-              className="bg-black relative flex flex-none overflow-hidden"
-            >
-              {/* getFrameTime is the transport clock unconverted: this window
-                  has no subset, so display time is source time. */}
-              <VideoPane
-                frameSource={frameSourceRef.current}
-                frameSourceVersion={frameSourceVersion}
-                frameSourceDecodeError={frameSourceDecodeError}
-                isAudioTrack={isAudioTrack}
-                videoSrc={videoSrc}
-                isProcessing={isProcessing}
-                isBuffering={isBuffering}
-                getFrameTime={getMediaTime}
-                onDebugLog={addLog}
-                onDurationChange={setDuration}
-                videoMode={videoMode}
-                hasSelection={selection !== null}
-                onVideoModeChange={setVideoMode}
-                onVideoElement={attachVideoElement}
-                brightness={videoBrightness}
-                contrast={videoContrast}
-                onBrightnessChange={setVideoBrightness}
-                onContrastChange={setVideoContrast}
-              />
-              {videoCollapsed && (
-                <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
-                  <button
-                    type="button"
-                    onClick={() => setVideoCollapsed(false)}
-                    className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
-                    data-tooltip={tooltips.expandVideoPanel}
-                  >
-                    <ChevronDown size={16} />
-                    <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div
-              className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors z-10 flex justify-center items-center"
-              onMouseDown={handleSplitDrag}
-            >
-              <div className="w-12 h-1 bg-slate-600 rounded-full" />
-            </div>
-          </>
-        )}
-
-        <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
-          {showSettings && (
-            <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-              <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
-            </div>
-          )}
-
-          <Toolbar
-            isPlaying={isPlaying}
-            isBuffering={isBuffering}
-            videoSrc={videoSrc}
-            currentTimeStore={currentTimeStoreRef.current}
-            duration={duration}
-            selection={selection}
-            volume={volume}
-            muted={muted}
-            canGoPrevAnnotation={false}
-            canGoNextAnnotation={false}
-            spectrogramRef={spectrogramRef}
-            setVolume={setVolume}
-            setMuted={setMuted}
-            onPlay={togglePlay}
-            onSeek={seek}
-            onSelectionChange={handleSelectionChange}
-            onBoundAnnotationChange={setBoundAnnotationId}
-            showSettings={showSettings}
-            onToggleSettings={() => setShowSettings(s => !s)}
-            playbackSpeed={playbackSpeed}
-            setPlaybackSpeed={setPlaybackSpeed}
-            lastDefinedSpeed={lastDefinedSpeed}
-            setLastDefinedSpeed={setLastDefinedSpeed}
-            filterToolActive={filterToolActive}
-            onToggleFilterTool={handleToggleFilterTool}
-            bandPassFilter={bandPassFilter}
-            setBandPassFilter={setBandPassFilter}
-            onDisableBandPassFilter={handleDisableBandPassFilter}
-            onEnableBandPassFilter={handleEnableBandPassFilter}
-            filterStrength={filterStrength}
-            setFilterStrength={setFilterStrength}
-            videoMode={videoMode}
-            isAudioTrack={isAudioTrack}
-            onRestartAudio={() => { engineRef.current?.restart(); }}
-            playheadLocked={playheadLocked}
-            onTogglePlayheadLock={() => {
-              const willLock = !playheadLocked;
-              setPlayheadLocked(willLock);
-              if (willLock) spectrogramRef.current?.recenterPlayhead();
-            }}
-            timeDisplayUnit={timeDisplayUnit}
-            onTimeDisplayUnitChange={setTimeDisplayUnit}
-          />
-
-          <div className="flex-1 relative overflow-hidden">
-            <Spectrogram
-              ref={spectrogramRef}
-              chunkCache={chunkCacheRef.current}
-              sampleRate={sampleRate}
-              cacheVersion={cacheVersion}
-              currentTimeStore={currentTimeStoreRef.current}
-              duration={duration}
-              isPlaying={isPlaying}
-              isProcessing={isProcessing}
-              ident={null}
-              settings={settings}
-              onSettingsChange={patch => setSettings(s => ({ ...s, ...patch }))}
-              zoomSec={zoomSec}
-              annotations={[]}
-              selectedAnnotationId={null}
-              activeAnnotationTool={null}
-              annotationTools={[]}
-              selection={selection}
-              sweepStart={sweepStart}
-              boundAnnotationId={boundAnnotationId}
-              onSeek={seek}
-              onAnnotationsChange={() => {}}
-              onAnnotationsCommit={() => {}}
-              onSelectAnnotation={() => {}}
-              onSelectionChange={handleSelectionChange}
-              onBoundAnnotationChange={setBoundAnnotationId}
-              onZoomChange={setZoomSec}
-              onViewportChange={v => viewportStoreRef.current.set(v)}
-              filterToolActive={filterToolActive}
-              bandPassFilter={bandPassFilter}
-              onBandPassFilterChange={setBandPassFilter}
-              onBandPassFilterDrawn={handleBandPassFilterDrawn}
-              topTool={activationStack.topOf(['filterTool']) as 'filterTool' | null}
-              videoMode={videoMode}
-              isAudioTrack={isAudioTrack}
-              playheadLocked={playheadLocked}
-              hideLabels={hideLabels}
-              onExportSelection={handleExportSelection}
-              onCreateTool={() => {}}
-              onBindHotkey={() => {}}
-              onListenExample={() => {}}
+              className="absolute top-0 bottom-0 cursor-col-resize hover:bg-[#e65161]/60 transition-colors z-50"
+              style={{ right: '-6px', width: '6px' }}
+              onMouseDown={handleLeftPanelWidthDrag}
             />
           </div>
+        )}
 
-          {!videoSrc && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-slate-600 text-center">
-                <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
+        <div className="flex-1 flex flex-col relative overflow-hidden">
+          {!isAudioTrack && (
+            <>
+              <div
+                style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
+                className="bg-black relative flex flex-none overflow-hidden"
+              >
+                <VideoPane
+                  frameSource={frameSourceRef.current}
+                  frameSourceVersion={frameSourceVersion}
+                  frameSourceDecodeError={frameSourceDecodeError}
+                  isAudioTrack={isAudioTrack}
+                  videoSrc={videoSrc}
+                  isProcessing={isProcessing}
+                  isBuffering={isBuffering}
+                  getFrameTime={getFrameTime}
+                  onDebugLog={addLog}
+                  onDurationChange={setDuration}
+                  videoMode={videoMode}
+                  hasSelection={selection !== null}
+                  onVideoModeChange={setVideoMode}
+                  onVideoElement={attachVideoElement}
+                  brightness={videoBrightness}
+                  contrast={videoContrast}
+                  onBrightnessChange={setVideoBrightness}
+                  onContrastChange={setVideoContrast}
+                />
+                {videoCollapsed && (
+                  <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
+                    <button
+                      type="button"
+                      onClick={() => setVideoCollapsed(false)}
+                      className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
+                      data-tooltip={tooltips.expandVideoPanel}
+                    >
+                      <ChevronDown size={16} />
+                      <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
+
+              <div
+                className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors z-10 flex justify-center items-center"
+                onMouseDown={handleSplitDrag}
+              >
+                <div className="w-12 h-1 bg-slate-600 rounded-full" />
+              </div>
+            </>
           )}
+
+          <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
+            {showSettings && (
+              <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
+                <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
+              </div>
+            )}
+
+            <Toolbar
+              isPlaying={isPlaying}
+              isBuffering={isBuffering}
+              videoSrc={videoSrc}
+              currentTimeStore={currentTimeStoreRef.current}
+              duration={displayDuration}
+              selection={selection}
+              volume={volume}
+              muted={muted}
+              canGoPrevAnnotation={false}
+              canGoNextAnnotation={false}
+              spectrogramRef={spectrogramRef}
+              setVolume={setVolume}
+              setMuted={setMuted}
+              onPlay={togglePlay}
+              onSeek={seek}
+              onSelectionChange={handleSelectionChange}
+              onBoundAnnotationChange={setBoundAnnotationId}
+              showSettings={showSettings}
+              onToggleSettings={() => setShowSettings(s => !s)}
+              playbackSpeed={playbackSpeed}
+              setPlaybackSpeed={setPlaybackSpeed}
+              lastDefinedSpeed={lastDefinedSpeed}
+              setLastDefinedSpeed={setLastDefinedSpeed}
+              filterToolActive={filterToolActive}
+              onToggleFilterTool={handleToggleFilterTool}
+              bandPassFilter={bandPassFilter}
+              setBandPassFilter={setBandPassFilter}
+              onDisableBandPassFilter={handleDisableBandPassFilter}
+              onEnableBandPassFilter={handleEnableBandPassFilter}
+              filterStrength={filterStrength}
+              setFilterStrength={setFilterStrength}
+              videoMode={effectiveVideoMode}
+              isAudioTrack={isAudioTrack}
+              onRestartAudio={() => { engineRef.current?.restart(); }}
+              playheadLocked={playheadLocked}
+              onTogglePlayheadLock={() => {
+                const willLock = !playheadLocked;
+                setPlayheadLocked(willLock);
+                if (willLock) spectrogramRef.current?.recenterPlayhead();
+              }}
+              timeDisplayUnit={timeDisplayUnit}
+              onTimeDisplayUnitChange={setTimeDisplayUnit}
+              timeline={timeline}
+            />
+
+            <div className="flex-1 relative overflow-hidden">
+              <Spectrogram
+                ref={spectrogramRef}
+                chunkCache={chunkCacheRef.current}
+                sampleRate={sampleRate}
+                cacheVersion={cacheVersion}
+                currentTimeStore={currentTimeStoreRef.current}
+                duration={displayDuration}
+                timeline={timeline}
+                isPlaying={isPlaying}
+                isProcessing={isProcessing}
+                ident={null}
+                settings={settings}
+                onSettingsChange={patch => setSettings(s => ({ ...s, ...patch }))}
+                zoomSec={zoomSec}
+                annotations={[]}
+                selectedAnnotationId={null}
+                activeAnnotationTool={null}
+                annotationTools={[]}
+                selection={selection}
+                sweepStart={sweepStart}
+                boundAnnotationId={boundAnnotationId}
+                onSeek={seek}
+                onAnnotationsChange={() => {}}
+                onAnnotationsCommit={() => {}}
+                onSelectAnnotation={() => {}}
+                onSelectionChange={handleSelectionChange}
+                onBoundAnnotationChange={setBoundAnnotationId}
+                onZoomChange={setZoomSec}
+                onViewportChange={v => viewportStoreRef.current.set(v)}
+                filterToolActive={filterToolActive}
+                bandPassFilter={bandPassFilter}
+                onBandPassFilterChange={setBandPassFilter}
+                onBandPassFilterDrawn={handleBandPassFilterDrawn}
+                topTool={activationStack.topOf(['filterTool']) as 'filterTool' | null}
+                videoMode={effectiveVideoMode}
+                isAudioTrack={isAudioTrack}
+                playheadLocked={playheadLocked}
+                hideLabels={hideLabels}
+                onExportSelection={handleExportSelection}
+                onCreateTool={() => {}}
+                onBindHotkey={() => {}}
+                onListenExample={() => {}}
+              />
+            </div>
+
+            {buzzdetectFile !== null && buzzdetectEnabled && (
+              <BuzzdetectPanel
+                data={displayBuzzdetectData}
+                viewportStore={viewportStoreRef.current}
+                duration={displayDuration}
+                currentTimeStore={currentTimeStoreRef.current}
+                selection={selection}
+                timeDisplayUnit={timeDisplayUnit}
+                thresholds={buzzdetectThresholds}
+                hiddenNeurons={buzzdetectHiddenNeurons}
+                isolatedNeurons={activeIsolatedNeurons}
+                neuronColors={buzzdetectNeuronColors}
+                toolColors={NO_TOOL_COLORS}
+                seriesMode={buzzdetectSeriesMode}
+                binWidthOverride={buzzdetectBinWidthOverride}
+                subsetActive={subsetActive}
+                timeline={timeline}
+                yAxisOverride={buzzdetectYAxisOverride}
+                baselineAdjusted={buzzdetectBaselineAdjusted}
+                onBaselineAdjustedChange={setBuzzdetectBaselineAdjusted}
+                reportAutoValues={buzzdetectSettingsOpen}
+                height={buzzdetectPanelHeight}
+                onAutoBinWidthChange={setBuzzdetectAutoBinWidth}
+                onAutoYRangeChange={setBuzzdetectAutoYRange}
+                onHeightChange={setBuzzdetectPanelHeight}
+                onSelectionChange={handleSelectionChange}
+                onBoundAnnotationChange={setBoundAnnotationId}
+                onSeek={seek}
+                onScrollWheel={(deltaX, deltaY, ctrlKey, metaKey, clientX) =>
+                  spectrogramRef.current?.applyWheel(deltaX, deltaY, ctrlKey, metaKey, clientX)
+                }
+              />
+            )}
+
+            {!videoSrc && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-slate-600 text-center">
+                  <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <TooltipLayer />

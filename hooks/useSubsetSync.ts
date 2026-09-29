@@ -142,3 +142,16 @@ export function useTimelineSwap({
     }
   }, [timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef, spectrogramRef]); // eslint-disable-line react-hooks/exhaustive-deps
 }
+
+/**
+ * The canvas video player's draw clock. `getMediaTime` is display time (the
+ * transport's axis); the frame cache is indexed by position in the file, so
+ * every rAF tick converts. Read off the ref rather than closing over `timeline`
+ * so the rAF loop isn't torn down and rebuilt on every threshold nudge.
+ */
+export function useSourceFrameTime(
+  timelineRef: MutableRefObject<Timeline>,
+  getMediaTime: () => number,
+): () => number {
+  return useCallback(() => timelineRef.current.toSource(getMediaTime()), [timelineRef, getMediaTime]);
+}

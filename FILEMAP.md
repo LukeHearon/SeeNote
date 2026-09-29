@@ -4,6 +4,7 @@ Quick reference for agents. One phrase per file.
 
 ## Entrypoints
 - `AnnotationWindow.tsx` — thin app orchestrator; wires together state and the hooks below (persistence, sync, playback, tools, navigation), owns top-level layout
+- `SingleFileWindow.tsx` — lean viewer for one file opened without a project; buzzdetect results are imported by hand (header button) and drive the neuron palette, panel and subset through the same hooks as AnnotationWindow
 - `App.tsx` — top-level router: launch screen → project selection → AnnotationWindow
 - `index.tsx` / `main.tsx` — Vite/React mount point
 
@@ -16,6 +17,7 @@ Quick reference for agents. One phrase per file.
 - `components/ToolCell.tsx` — compact tool button used inside the annotation tools panel
 - `components/RepairProjectModal.tsx` — modal to re-point a project at a moved media directory
 - `components/ReleaseNotesModal.tsx` — launch-screen "View changes" modal; fetches the live GitHub release body and renders it via `utils/releaseNotes.ts`
+- `components/MessageDialog.tsx` — modal with a title, message and one dismiss button (import errors)
 - `components/DebugConsole.tsx` — collapsible overlay listing debug logs (video/decode diagnostics) with copy-all
 - `components/BuzzdetectPanel.tsx` — line graph of buzzdetect activations docked below the spectrogram; shares its time→pixel transform
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
@@ -97,7 +99,7 @@ Quick reference for agents. One phrase per file.
 - `src-tauri/src/commands/archive.rs` — extracts .zip/.tar/.tar.gz archives for "Open Project > From Archive", resolving the same extraction-target path the frontend previews
 - `src-tauri/src/commands/projects.rs` — project CRUD and annotation read/write
 - `src-tauri/src/commands/audio.rs` — spectrogram decode and PCM range commands
-- `src-tauri/src/commands/buzzdetect.rs` — parses `{ident}_buzzdetect.csv` activations (CSV only; bin width inferred)
+- `src-tauri/src/commands/buzzdetect.rs` — parses `{ident}_buzzdetect.csv` activations, or one CSV picked by path (`read_buzzdetect_file`); CSV only, bin width inferred
 - `src-tauri/src/commands/shared.rs` — cross-module helpers: audio/video extension tables, `atomic_write`, recursive `walk_files`
 - `src-tauri/src/commands/git_sync/mod.rs` — annotation sync to a remote git repo via embedded libgit2 (no system git required); module entry/exports
 - `src-tauri/src/commands/git_sync/auth.rs` — credentials and auth-error classification for remote git operations
@@ -118,7 +120,9 @@ Quick reference for agents. One phrase per file.
 - `hooks/useCollapsibleSidebar.ts` — width + drag-to-collapse for a docked side panel (the file panel, the guide's section rail, the find dock)
 - `hooks/useDebouncedValue.ts` — a value as of when it last held still; keeps expensive work off the typing path
 - `hooks/useBandPassFilter.ts` — band-pass filter tool state and draw/apply wiring
-- `hooks/useBuzzdetect.ts` — buzzdetect panel enable/load state for the active track
+- `hooks/useBuzzdetect.ts` — buzzdetect panel state plus the load effect; source is a results dir + ident (project) or one picked CSV (single-file mode)
+- `hooks/useSubsetTimeline.ts` — subset criteria, the timeline they cut, and everything read off it (display duration, effective video mode, kept ranges); shared by both windows
+- `hooks/useSubsetSync.ts` — keeps the chunk cache and the playback engine on the subset's axis (cache installer, timeline-swap effect, video draw clock)
 - `hooks/useProjectPersistence.ts` — debounced persistence of project settings/preferences
 - `hooks/useSyncManagement.ts` — git-sync status polling and sync/commit actions
 - `hooks/useChunkRenderer.ts` — draws cached spectrogram tiles to the canvas as the viewport moves

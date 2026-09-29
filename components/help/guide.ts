@@ -100,6 +100,7 @@ export const GUIDE: Part[] = [
         blocks: () => [
           { kind: 'p', text: help.singleFile.p1 },
           { kind: 'p', text: help.singleFile.p2 },
+          { kind: 'p', text: help.singleFile.p_buzzdetect },
           { kind: 'note', text: help.singleFile.note_assoc },
         ],
       },

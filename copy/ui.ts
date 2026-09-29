@@ -462,3 +462,10 @@ export const annotationWindow = {
   get noMediaTitle() { return getOverride('ui.annotationWindow.noMediaTitle') ?? "No Media Loaded"; },
   get noMediaHint() { return getOverride('ui.annotationWindow.noMediaHint') ?? "Open a video or audio file to begin annotating"; },
 };
+
+export const singleFileWindow = {
+  get importBuzzdetectLabel() { return getOverride('ui.singleFileWindow.importBuzzdetectLabel') ?? "buzzdetect"; },
+  get importBuzzdetectFilter() { return getOverride('ui.singleFileWindow.importBuzzdetectFilter') ?? "buzzdetect results"; },
+  get importBuzzdetectErrorTitle() { return getOverride('ui.singleFileWindow.importBuzzdetectErrorTitle') ?? "Could not import buzzdetect results"; },
+  get importBuzzdetectErrorOk() { return getOverride('ui.singleFileWindow.importBuzzdetectErrorOk') ?? "OK"; },
+};

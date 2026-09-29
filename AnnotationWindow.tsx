@@ -36,7 +36,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useSubsetTimeline } from './hooks/useSubsetTimeline';
-import { useSubsetChunkCache, useTimelineSwap } from './hooks/useSubsetSync';
+import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
 import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
@@ -68,6 +68,7 @@ import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar, { speedRangeFor } from './components/Toolbar';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import BuzzdetectPanel from './components/BuzzdetectPanel';
+import MessageDialog from './components/MessageDialog';
 import { tooltips } from './copy/tooltips';
 import { annotationWindow, debugConsole } from './copy/ui';
 
@@ -404,7 +405,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     timeline, displayDuration, subsetActive, activeIsolatedNeurons,
     subsetGrainSec, subsetSourceRanges, subsetStats: buzzdetectSubsetStats, displayBuzzdetectData,
     effectiveVideoMode, effectiveVideoModeRef, timelineRef, displayDurationRef,
-    subsetGrainRef, subsetSourceRangesRef, selectionToSource,
+    subsetGrainRef, subsetSourceRangesRef, selectionToSource, selectAllSpanAt,
   } = useSubsetTimeline(buzzdetect, duration, videoMode);
 
   // ── Subset seam ────────────────────────────────────────────────────────────
@@ -633,16 +634,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     enabled: libraryToolIndex === null,
   });
 
-  // The canvas video player's draw clock. getMediaTime is display time (the
-  // transport's axis); the frame cache is indexed by position in the file, so
-  // every rAF tick converts. Read off the ref rather than closing over
-  // `timeline` so the rAF loop isn't torn down and rebuilt on every threshold
-  // nudge. Identity while no subset is on, which is when a frame source can be
-  // open at all today — the conversion is what stops that from being load-bearing.
-  const getFrameTime = useCallback(
-    () => timelineRef.current.toSource(getMediaTime()),
-    [getMediaTime],
-  );
+  const getFrameTime = useSourceFrameTime(timelineRef, getMediaTime);
 
   // Spectrogram zoom-in/out/fit-to-track hotkeys (mod+=/mod+-/mod+shift+plus/
   // mod+0), shared verbatim with SingleFileWindow. mod+0's "remember where I
@@ -1788,13 +1780,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // so we don't need to manage a dep list here.
   const selectAllOrAnnotateFullTrack = () => {
       if (displayDuration <= 0) return;
-      // Under a subset, "everything" means the segment the playhead is sitting
-      // in, not the whole concatenated timeline: a selection spanning a cut
-      // would cover audio that isn't between its own endpoints in the file.
-      const span = {
-        start: timeline.clampToSpanOfDisplay(currentTimeRef.current, 0),
-        end: timeline.clampToSpanOfDisplay(currentTimeRef.current, displayDuration),
-      };
+      const span = selectAllSpanAt(currentTimeRef.current);
       if (activeToolKey !== null) {
           const tool = annotationTools.find(t => t.key === activeToolKey);
           if (tool) {
@@ -2516,20 +2502,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       {/* Import parse error */}
       {importError && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
-          <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
-            <h3 className="text-sm font-semibold text-slate-100 mb-2">{annotationWindow.importErrorTitle}</h3>
-            <p className="text-xs text-slate-300 leading-relaxed mb-4">{importError}</p>
-            <div className="flex justify-end">
-              <button
-                className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
-                onClick={() => setImportError(null)}
-              >
-                {annotationWindow.importOk}
-              </button>
-            </div>
-          </div>
-        </div>
+        <MessageDialog
+          title={annotationWindow.importErrorTitle}
+          message={importError}
+          okLabel={annotationWindow.importOk}
+          onClose={() => setImportError(null)}
+        />
       )}
 
       {/* Main Content Area */}

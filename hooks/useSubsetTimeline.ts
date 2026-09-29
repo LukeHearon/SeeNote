@@ -55,6 +55,13 @@ export interface SubsetTimelineApi {
    * converted, the same conversion the toolbar and panel readouts make.
    */
   selectionToSource: (sel: Selection) => Selection;
+  /**
+   * What "select everything" means with the playhead at display time `t`. Under
+   * a subset that's the segment the playhead sits in, not the whole concatenated
+   * timeline: a selection spanning a cut would cover audio that isn't between
+   * its own endpoints in the file.
+   */
+  selectAllSpanAt: (t: number) => Selection;
 }
 
 /**
@@ -148,10 +155,18 @@ export function useSubsetTimeline(
     [timeline],
   );
 
+  const selectAllSpanAt = useMemo(
+    () => (t: number): Selection => ({
+      start: timeline.clampToSpanOfDisplay(t, 0),
+      end: timeline.clampToSpanOfDisplay(t, displayDuration),
+    }),
+    [timeline, displayDuration],
+  );
+
   return {
     subsetCriteria, timeline, displayDuration, subsetActive, activeIsolatedNeurons,
     subsetGrainSec, subsetSourceRanges, subsetStats: stats, displayBuzzdetectData,
     effectiveVideoMode, effectiveVideoModeRef, timelineRef, displayDurationRef,
-    subsetGrainRef, subsetSourceRangesRef, selectionToSource,
+    subsetGrainRef, subsetSourceRangesRef, selectionToSource, selectAllSpanAt,
   };
 }
