@@ -1174,6 +1174,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
           const newPps = newWidth / zoomSecRef.current;
           const newScrollLeft = leftEdgeTime * newPps;
+          // The zoom ref moves in the same step as the scroll it was rescaled
+          // for. Left for the render to update, every draw between here and the
+          // commit — including the synchronous ones just below — paired the new
+          // scroll with the old pps, so a drag-resize showed a different region
+          // of the file on every notification until it stopped. The render's
+          // reconcileZoomProp derives this same value (width / zoomSec).
+          pixelsPerSecondRef.current = newPps;
           setScroll(newScrollLeft, 'resize');
         }
         lastObservedWidthRef.current = newWidth;
