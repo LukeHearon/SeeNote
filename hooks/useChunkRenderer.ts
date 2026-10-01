@@ -122,6 +122,15 @@ export function useChunkRenderer({
   // the viewport is still building. Doubles as drawSpectrogramChunk's colMask
   // (which treats 0 as unbuilt/transparent).
   const offTierRef = useRef<Uint8Array>(new Uint8Array(0));
+  // The other half of the offscreen double buffer: the incremental shift copies
+  // the offscreen into this one and swaps them (see the incremental path).
+  const backCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Display->source map and display duration the buffer was built against. A
+  // subset change (threshold, results arriving) remaps which file time every
+  // column shows without changing the column grid or any column's tier, so the
+  // incremental path would otherwise keep showing the old spans' pixels.
+  const prevTimelineRef = useRef<Timeline | null>(null);
+  const prevDurationRef = useRef(duration);
   // Tiny canvas for rendering 1-2 new columns per frame in the incremental path.
   const incrCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -136,7 +145,7 @@ export function useChunkRenderer({
   const draw = useCallback(() => {
     const t0 = DIAG_FRAME_TIMING ? performance.now() : 0;
     const canvas = canvasRef.current;
-    const offscreen = offscreenCanvasRef.current;
+    let offscreen = offscreenCanvasRef.current;
     if (!canvas || !offscreen) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -313,6 +322,11 @@ export function useChunkRenderer({
           prevChunkCacheRef.current = chunkCache;
           prevBbStartColRef.current = null;
         }
+        if (timeline !== prevTimelineRef.current || duration !== prevDurationRef.current) {
+          prevTimelineRef.current = timeline;
+          prevDurationRef.current = duration;
+          prevBbStartColRef.current = null;
+        }
 
         const prevStartCol = prevBbStartColRef.current;
         const columnsShifted = prevStartCol !== null ? bbStartCol - prevStartCol : Infinity;
@@ -365,7 +379,7 @@ export function useChunkRenderer({
 
         if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
         if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
-        const offCtx = offscreen.getContext('2d');
+        let offCtx = offscreen.getContext('2d');
         if (!offCtx) return;
 
         offCtx.imageSmoothingEnabled = false;
@@ -437,35 +451,37 @@ export function useChunkRenderer({
             const forward = columnsShifted > 0;
             // Columns that survive the shift, and where they land afterwards.
             const keptWidth = bbWidth - shiftAbs;
-            const keptStart = forward ? 0 : shiftAbs;
             // Where the newly-exposed run lands.
             const newStart = forward ? keptWidth : 0;
-            // drawImage of a canvas onto itself is specified to read the whole
-            // source before writing, so the overlap is safe in either direction.
-            offCtx.drawImage(offscreen, -columnsShifted, 0);
+            // Shift by copying into a SECOND, freshly cleared canvas and swapping
+            // the two — never by drawing the offscreen onto itself. A self-blit
+            // is specified to snapshot the source first, but WebKit (the Tauri
+            // webview on macOS) does not reliably do so for an accelerated canvas:
+            // stretches of the buffer kept old content at the old position, which
+            // read as a block of spectrogram "cloned" along X that the
+            // incremental path never revisits (its tier record says the columns
+            // are fine) until a zoom forces a full redraw. A clear-then-copy into
+            // another canvas also means transparent (unbuilt) source columns land
+            // as transparent, rather than leaving the previous pixels underneath
+            // as a source-over self-blit did.
+            const back = backCanvasRef.current ?? document.createElement('canvas');
+            if (back.width !== bbWidth) back.width = bbWidth;
+            if (back.height !== offscreen.height) back.height = offscreen.height;
+            const backCtx = back.getContext('2d');
+            if (!backCtx) return;
+            backCtx.imageSmoothingEnabled = false;
+            backCtx.clearRect(0, 0, bbWidth, back.height);
+            backCtx.drawImage(offscreen, -columnsShifted, 0);
+            backCanvasRef.current = offscreen;
+            offscreenCanvasRef.current = back;
+            offscreen = back;
+            offCtx = backCtx;
             if (forward) {
               offTier.copyWithin(0, shiftAbs, bbWidth);
             } else {
               offTier.copyWithin(shiftAbs, 0, keptWidth);
             }
             offTier.fill(0, newStart, newStart + shiftAbs);
-            // The self-blit composites source-over, so source columns that carry
-            // no data (fully transparent) leave the destination's PREVIOUS pixels
-            // untouched instead of clearing them. Scrolling into a not-yet-fetched
-            // region therefore smears already-rendered content across it, which
-            // reads as duplicated chunks. offTier already records which columns
-            // should be blank, so clear those runs explicitly after the shift.
-            const keptEnd = keptStart + keptWidth;
-            let blankStart = -1;
-            for (let i = keptStart; i <= keptEnd; i++) {
-              const blank = i < keptEnd && offTier[i] === 0;
-              if (blank) {
-                if (blankStart === -1) blankStart = i;
-              } else if (blankStart !== -1) {
-                offCtx.clearRect(blankStart, 0, i - blankStart, offscreen.height);
-                blankStart = -1;
-              }
-            }
             paintColumns(newStart, shiftAbs);
           }
 
