@@ -180,10 +180,16 @@ function NeuronPalette({
   const hidden = useMemo(() => new Set(hiddenNeurons), [hiddenNeurons]);
   // Colors are indexed against the FILE's neuron order, not the plotted list,
   // so removing a neuron never recolors the ones left behind.
+  const neuronIndex = useMemo(() => new Map(neurons.map((n, i) => [n, i])), [neurons]);
   const colorOf = useCallback(
-    (n: string) => neuronColor(n, neurons.indexOf(n), neuronColorOverrides, toolColors),
-    [neuronColorOverrides, toolColors, neurons],
+    (n: string) => neuronColor(n, neuronIndex.get(n) ?? -1, neuronColorOverrides, toolColors),
+    [neuronColorOverrides, toolColors, neuronIndex],
   );
+  // Set lookups for the per-row checks below (a long neuron list made each
+  // render quadratic through `includes`).
+  const subsetSet = useMemo(() => new Set(subsetNeurons), [subsetNeurons]);
+  const pinnedSet = useMemo(() => new Set(pinnedNeurons), [pinnedNeurons]);
+  const isolatedSet = useMemo(() => new Set(isolatedNeurons), [isolatedNeurons]);
 
   // Three blocks, in this order: pinned (regardless of plot state), then the
   // rest of the plotted ones in the file's own order, then everything not
@@ -195,7 +201,6 @@ function NeuronPalette({
   // so a pin naming a neuron this file doesn't have simply drops out here
   // rather than showing an empty row.
   const { pinned, unpinned, unplotted } = useMemo(() => {
-    const pinnedSet = new Set(pinnedNeurons);
     const plotted = neurons.filter(n => !hidden.has(n));
     return {
       pinned: pinnedNeurons.filter(n => neurons.includes(n)),
@@ -284,13 +289,13 @@ function NeuronPalette({
 
   const renderCell = (n: string) => {
     const color = colorOf(n);
-    const isSubset = subsetNeurons.includes(n);
-    const isPinned = pinnedNeurons.includes(n);
+    const isSubset = subsetSet.has(n);
+    const isPinned = pinnedSet.has(n);
     const isPlotted = !hidden.has(n);
     // While isolation is on the palette says so the way the graph does: the
     // neurons it doesn't name recede rather than disappear, and nothing about
     // them changed.
-    const faded = isolateActive && !isolatedNeurons.includes(n);
+    const faded = isolateActive && !isolatedSet.has(n);
     return (
       <div
         key={n}

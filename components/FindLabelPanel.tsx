@@ -204,6 +204,14 @@ export default function FindLabelPanel({
   useEffect(() => {
     if (!needsIndex) return;
     let cancelled = false;
+    // Tracks stream in one at a time; re-deriving the result list (and
+    // re-rendering every row) per track was quadratic over a large project.
+    // Arrivals are batched to one render per frame instead.
+    let frame: number | null = null;
+    const bump = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => { frame = null; setLabelsVersion(v => v + 1); });
+    };
     projectLabelsRef.current = new Map();
     setLabelsVersion(v => v + 1);
     setScanning(true);
@@ -214,13 +222,20 @@ export default function FindLabelPanel({
       (entry) => {
         if (cancelled) return;
         projectLabelsRef.current.set(entry.trackFilePath, entry.labels);
-        setLabelsVersion(v => v + 1);
+        bump();
       },
       () => cancelled,
     )
-      .catch(err => { if (!cancelled) setError(`Search failed: ${String(err)}`); })
-      .finally(() => { if (!cancelled) setScanning(false); });
-    return () => { cancelled = true; };
+      .catch(err => { if (!cancelled) setError(copy.searchFailed(String(err))); })
+      .finally(() => {
+        if (cancelled) return;
+        setScanning(false);
+        setLabelsVersion(v => v + 1);
+      });
+    return () => {
+      cancelled = true;
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [needsIndex, sortedTracks, getAnnotationPath, getIdent, reloadKey, reloadNonce]);
 
   // Disk changed out from under us (a rename we just made, or a git pull), so
@@ -352,7 +367,7 @@ export default function FindLabelPanel({
         setSelected(null);
       }
     } catch (err) {
-      setError(`Rename failed: ${String(err)}`);
+      setError(copy.renameFailed(String(err)));
     } finally {
       setRenamingSelected(false);
     }
@@ -372,7 +387,7 @@ export default function FindLabelPanel({
       setNewLabel('');
       setSelected(null);
     } catch (err) {
-      setError(`Rename failed: ${String(err)}`);
+      setError(copy.renameFailed(String(err)));
     } finally {
       setRenaming(false);
     }

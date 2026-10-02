@@ -40,6 +40,8 @@ export const launchScreen = {
   get updateErrorPrefix() { return getOverride('ui.launchScreen.updateErrorPrefix') ?? "Update failed:"; },
   currentVersion: (version: string) => `v${version}`,
   lastOpened: (dateStr: string) => `Last opened ${dateStr}`,
+  mediaPath: (path: string) => `Media: ${path}`,
+  annotationsPath: (path: string) => `Annotations: ${path}`,
   showInFileManager: (label: string) => `Show project in ${label}`,
   updateAvailable: (bumpType: 'major' | 'minor' | 'patch', version: string) => `New ${bumpType} version available: v${version}`,
 };
@@ -315,6 +317,8 @@ export const neuronPalette = {
 };
 
 export const findLabelPanel = {
+  searchFailed: (err: string) => `Search failed: ${err}`,
+  renameFailed: (err: string) => `Rename failed: ${err}`,
   get title() { return getOverride('ui.findLabelPanel.title') ?? "Find & Rename"; },
   get labelPlaceholder() { return getOverride('ui.findLabelPanel.labelPlaceholder') ?? "Search labels…"; },
   // Short pill captions for the three matching toggles; the spelled-out names

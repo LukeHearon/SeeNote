@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, Download, ExternalLink, Star, Search, ScrollText } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AudioWaveform, Plus, Settings, Loader2, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, Download, ExternalLink, Search, ScrollText } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
 import { openDirectoryDialog, openFileDialog } from '../utils/tauriCommands';
@@ -17,6 +17,7 @@ import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
 import ReleaseNotesModal from './ReleaseNotesModal';
 import RelinkDialog from './RelinkDialog';
+import RecentRow from './RecentRow';
 import ConfirmDialog from './ConfirmDialog';
 import ContextMenu from './ContextMenu';
 import { browseDirectoryNear } from '../utils/dirDialogs';
@@ -254,16 +255,6 @@ export default function LaunchScreen({
     });
   };
 
-  const formatDate = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric', year: 'numeric',
-      });
-    } catch {
-      return iso;
-    }
-  };
-
   const fmLabel = fileManagerLabel();
 
   const renderProjectRow = (entry: ProjectListEntry) => {
@@ -279,35 +270,25 @@ export default function LaunchScreen({
     const gradientColors = isOk
       ? entry.project.settings.nameGradientColors
       : entry.registry.nameGradientColors;
-    const starred = !!entry.registry.starred;
-    const liClass = grayed
-      ? 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all text-gray-500 opacity-50'
-      : 'group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all';
 
-    let pathLines: React.ReactNode = null;
+    let details: React.ReactNode;
     if (entry.status === 'ok') {
       const p = entry.project;
       const mediaInside = isInsideProjectDir(p.projectDir, p.mediaDirectoryAbs);
       const annInside = isInsideProjectDir(p.projectDir, p.annotationDirectoryAbs);
-      if (mediaInside && annInside) {
-        pathLines = (
-          <p className="text-gray-500 text-xs mt-1 truncate">{p.projectDir}</p>
-        );
-      } else {
-        pathLines = (
+      details = mediaInside && annInside
+        ? <p className="text-gray-500 text-xs mt-1 truncate">{p.projectDir}</p>
+        : (
           <>
-            <p className="text-gray-500 text-xs mt-1 truncate">Media: {p.mediaDirectoryAbs}</p>
-            <p className="text-gray-600 text-xs truncate">Annotations: {p.annotationDirectoryAbs}</p>
+            <p className="text-gray-500 text-xs mt-1 truncate">{launchScreen.mediaPath(p.mediaDirectoryAbs)}</p>
+            <p className="text-gray-600 text-xs truncate">{launchScreen.annotationsPath(p.annotationDirectoryAbs)}</p>
           </>
         );
-      }
     } else if (entry.status === 'unchecked') {
-      pathLines = (
-        <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>
-      );
+      details = <p className="text-gray-500 text-xs mt-1 truncate">{entry.registry.projectDir}</p>;
     } else {
       const tag = entry.status === 'missing-dir' ? launchScreen.projectNotFound : launchScreen.projectSettingsUnreadable;
-      pathLines = (
+      details = (
         <p className="text-gray-500 text-xs mt-1 truncate">
           {entry.registry.projectDir} <span className="italic">{tag}</span>
         </p>
@@ -315,161 +296,77 @@ export default function LaunchScreen({
     }
 
     return (
-      <li
+      <RecentRow
         key={entry.registry.id}
-        onClick={() => { handleEntryClick(entry).catch(() => {}); }}
-        onAuxClick={e => { if (e.button === 1) handleRemove(e, entry, name); }}
+        title={gradientColors && !grayed
+          ? <GradientProjectName name={name} nameGradientColors={gradientColors} />
+          : <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>}
+        badge={launchScreen.projectBadge}
+        badgeClassName="bg-blue-950"
+        details={details}
+        lastOpened={entry.registry.lastOpened}
+        grayed={grayed}
+        starred={!!entry.registry.starred}
+        onOpen={() => { handleEntryClick(entry).catch(() => {}); }}
         onContextMenu={e => handleContextMenu(e, entry)}
-        className={liClass}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-bold truncate">
-                {gradientColors && !grayed ? (
-                  <GradientProjectName name={name} nameGradientColors={gradientColors} />
-                ) : (
-                  <span className={grayed ? 'text-gray-500' : 'text-gray-200'}>{name}</span>
-                )}
-              </p>
-              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-950 text-gray-400 border border-gray-700">
-                {launchScreen.projectBadge}
-              </span>
-            </div>
-            {pathLines}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {grayed && (
-              <button
-                onClick={e => handleLocate(e, entry)}
-                className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
-                data-tooltip={tooltips.relinkProject}
-              >
-                <FolderSearch size={13} />
-                {launchScreen.relinkButton}
-              </button>
-            )}
-            {starred && (
-              <button
-                onClick={e => handleStar(e, entry)}
-                className="text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors"
-                data-tooltip={tooltips.unstarProject}
-              >
-                <Star size={15} fill="currentColor" />
-              </button>
-            )}
-            <div className="hidden group-hover:flex items-center gap-2">
-            {!starred && (
-              <button
-                onClick={e => handleStar(e, entry)}
-                className="text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors"
-                data-tooltip={tooltips.starProject}
-              >
-                <Star size={15} />
-              </button>
-            )}
-            {isOk && (
-              <button
-                onClick={e => handleGear(e, entry)}
-                className="text-gray-400 hover:text-white p-1 rounded transition-colors"
-                data-tooltip={tooltips.projectSettings}
-              >
-                <Settings size={15} />
-              </button>
-            )}
-            <button
-              onClick={e => handleRemove(e, entry, name)}
-              className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-              data-tooltip={tooltips.unlinkProject}
-            >
-              <X size={15} />
-            </button>
-            </div>
-          </div>
-        </div>
-        <p className="text-gray-600 text-xs mt-2">
-          {launchScreen.lastOpened(formatDate(entry.registry.lastOpened))}
-        </p>
-      </li>
+        onToggleStar={e => handleStar(e, entry)}
+        onRemove={e => handleRemove(e, entry, name)}
+        removeTooltip={tooltips.unlinkProject}
+        actions={grayed && (
+          <button
+            onClick={e => handleLocate(e, entry)}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
+            data-tooltip={tooltips.relinkProject}
+          >
+            <FolderSearch size={13} />
+            {launchScreen.relinkButton}
+          </button>
+        )}
+        hoverActions={isOk && (
+          <button
+            onClick={e => handleGear(e, entry)}
+            className="text-gray-400 hover:text-white p-1 rounded transition-colors"
+            data-tooltip={tooltips.projectSettings}
+          >
+            <Settings size={15} />
+          </button>
+        )}
+      />
     );
   };
 
-  const renderFileRow = (file: RecentFileEntry) => {
-    const fileName = basename(file.path);
-    const fileDir = dirname(file.path);
-    const starred = !!file.starred;
-    return (
-      <li
-        key={file.id}
-        onClick={() => onOpenFile(file.path)}
-        onAuxClick={e => { if (e.button === 1) handleRemoveFile(e, file); }}
-        className="group bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl px-5 py-4 cursor-pointer transition-all"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-bold truncate text-gray-200">{fileName}</p>
-              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
-                {launchScreen.fileBadge}
-              </span>
-            </div>
-            <p className="text-gray-500 text-xs mt-1 truncate">{fileDir}</p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {starred && (
-              <button
-                onClick={e => handleFileStar(e, file)}
-                className="text-yellow-400 hover:text-yellow-300 p-1 rounded transition-colors"
-                data-tooltip={tooltips.unstarProject}
-              >
-                <Star size={15} fill="currentColor" />
-              </button>
-            )}
-            <div className="hidden group-hover:flex items-center gap-2">
-              {!starred && (
-                <button
-                  onClick={e => handleFileStar(e, file)}
-                  className="text-gray-400 hover:text-yellow-400 p-1 rounded transition-colors"
-                  data-tooltip={tooltips.starProject}
-                >
-                  <Star size={15} />
-                </button>
-              )}
-              <button
-                onClick={e => handleRemoveFile(e, file)}
-                className="text-gray-400 hover:text-red-400 p-1 rounded transition-colors"
-                data-tooltip={tooltips.unlinkFile}
-              >
-                <X size={15} />
-              </button>
-            </div>
-          </div>
-        </div>
-        <p className="text-gray-600 text-xs mt-2">
-          {launchScreen.lastOpened(formatDate(file.lastOpened))}
-        </p>
-      </li>
-    );
-  };
+  const renderFileRow = (file: RecentFileEntry) => (
+    <RecentRow
+      key={file.id}
+      title={<span className="text-gray-200">{basename(file.path)}</span>}
+      badge={launchScreen.fileBadge}
+      badgeClassName="bg-gray-800"
+      details={<p className="text-gray-500 text-xs mt-1 truncate">{dirname(file.path)}</p>}
+      lastOpened={file.lastOpened}
+      starred={!!file.starred}
+      onOpen={() => onOpenFile(file.path)}
+      onToggleStar={e => handleFileStar(e, file)}
+      onRemove={e => handleRemoveFile(e, file)}
+      removeTooltip={tooltips.unlinkFile}
+    />
+  );
 
-  const unifiedEntryName = (item: UnifiedEntry): string =>
-    item.kind === 'file'
-      ? basename(item.entry.path)
-      : (item.entry.registry.name ?? basename(item.entry.registry.projectDir));
-
-  const query = searchQuery.trim().toLowerCase();
-  const matchesQuery = (item: UnifiedEntry): boolean =>
-    query === '' || unifiedEntryName(item).toLowerCase().includes(query);
-
-  const starredEntries: UnifiedEntry[] = [
-    ...entries.filter(entry => entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
-    ...fileEntries.filter(file => file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
-  ].filter(matchesQuery).sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
-
-  const unified: UnifiedEntry[] = [
-    ...entries.filter(entry => !entry.registry.starred).map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
-    ...fileEntries.filter(file => !file.starred).map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
-  ].filter(matchesQuery).sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
+  // Re-sorted only when the lists or the search change, not on every render.
+  const { starredEntries, unified } = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const nameOf = (item: UnifiedEntry): string =>
+      item.kind === 'file'
+        ? basename(item.entry.path)
+        : (item.entry.registry.name ?? basename(item.entry.registry.projectDir));
+    const all: UnifiedEntry[] = [
+      ...entries.map((entry): UnifiedEntry => ({ kind: 'project', lastOpened: entry.registry.lastOpened, entry })),
+      ...fileEntries.map((file): UnifiedEntry => ({ kind: 'file', lastOpened: file.lastOpened, entry: file })),
+    ]
+      .filter(item => query === '' || nameOf(item).toLowerCase().includes(query))
+      .sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));
+    const isStarred = (item: UnifiedEntry) => !!(item.kind === 'file' ? item.entry.starred : item.entry.registry.starred);
+    return { starredEntries: all.filter(isStarred), unified: all.filter(i => !isStarred(i)) };
+  }, [entries, fileEntries, searchQuery]);
 
   const loading = isLoading || isLoadingFiles;
 
@@ -620,7 +517,7 @@ export default function LaunchScreen({
           </div>
         ) : unified.length === 0 && starredEntries.length === 0 ? (
           <div className="border border-dashed border-gray-700 rounded-xl py-16 text-center shrink-0">
-            {query !== '' ? (
+            {searchQuery.trim() !== '' ? (
               <p className="text-gray-500 text-sm">{launchScreen.noSearchResults}</p>
             ) : (
               <>
