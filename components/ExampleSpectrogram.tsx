@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
 import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
-import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
-import { drawSpectrogramChunk } from '../utils/spectrogramPixels';
+import { drawSpectrogramChunk, sampleChunkColumnInto } from '../utils/spectrogramPixels';
+import { timeToX } from '../utils/viewportTransform';
+import { paintGutter, paintFrequencyTicks } from './spectrogram/canvasPainters';
+import { Y_AXIS_WIDTH } from '../constants';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
@@ -16,8 +18,6 @@ interface Props {
   currentTimeStore: CurrentTimeStore;
   onSeek: (timeSec: number) => void;
 }
-
-const Y_AXIS_WIDTH = 50;
 
 /**
  * Read-only spectrogram for the example-clip library. Reuses the same
@@ -41,55 +41,22 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
   const yAxisCanvasRef = useRef<HTMLCanvasElement>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const cacheRef = useRef<MultiTierSpectrogramCache | null>(null);
-  const cacheVersionRef = useRef(0);
+  // Column buffers for renderSpectrogram, reused while the size holds.
+  const bufRef = useRef({ data: new Uint16Array(0), built: new Uint8Array(0) });
+  // Latest renderSpectrogram, for the cache's (coalesced) chunk-arrival callback.
+  const renderSpectrogramRef = useRef<() => void>(() => {});
+  const renderFrameRef = useRef<number | null>(null);
   // Container CSS box, cached from the ResizeObserver below; the draws size
   // their bitmaps from it at the live dpr (see utils/canvasDpr).
   const sizeRef = useRef({ width: 0, height: 0 });
 
-  // Draw the frequency (Y) axis into its own canvas. Mirrors Spectrogram.tsx's
-  // drawYAxis, using the shared freqToY/freqAxisTicks so ticks stay in lockstep
-  // with the rendered spectrogram.
+  // Same gutter and ticks as the main spectrogram (shared painters), so the two
+  // can't drift apart.
   const drawYAxis = useCallback(() => {
     const canvas = yAxisCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const { dpr, width, height } = syncCanvasBitmap(canvas, Y_AXIS_WIDTH, sizeRef.current.height);
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-    ctx.fillRect(0, 0, width, height);
-    ctx.beginPath();
-    ctx.moveTo(width - 1, 0);
-    ctx.lineTo(width - 1, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-
-    let lastLabelY: number | null = null;
-    const MIN_LABEL_SPACING = 13;
-    for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {
-      const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-      if (y < 0 || y > height) continue;
-      if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) continue;
-      lastLabelY = y;
-      ctx.beginPath();
-      ctx.moveTo(width - 5, y);
-      ctx.lineTo(width - 1, y);
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.stroke();
-      let label = freq.toString();
-      if (freq >= 1000) label = (freq / 1000).toFixed(freq % 1000 === 0 ? 0 : 1) + 'k';
-      ctx.fillText(label, width - 7, y);
-    }
-    ctx.restore();
+    paintGutter(canvas, sizeRef.current.height, 'spectrogram', (ctx, width, height) =>
+      paintFrequencyTicks(ctx, width, height, settings));
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Blit the rendered offscreen spectrogram, then the time ruler + playhead,
@@ -121,7 +88,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       for (let s = timeStep; s <= duration; s += timeStep) {
-        const x = (s / duration) * cssW;
+        const x = timeToX(s, 0, cssW / duration);
         ctx.beginPath();
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
@@ -139,7 +106,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
       // Playhead — only while within the clip.
       const t = currentTimeStore.get();
       if (t > 0 && t <= duration) {
-        const x = (t / duration) * cssW;
+        const x = timeToX(t, 0, cssW / duration);
         ctx.fillStyle = '#f8fafc';
         ctx.fillRect(x - 1, 0, 2, cssH);
       }
@@ -166,8 +133,14 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
     const probe = cache.getChunkWithFallback(0, tier.tier);
     if (probe) nFreqBins = probe.chunk.nFreqBins;
 
-    const viewportData = new Uint16Array(bbWidth * nFreqBins);
-    const colBuilt = new Uint8Array(bbWidth);
+    // Reused between renders: a chunk arriving re-renders the whole clip.
+    const need = bbWidth * nFreqBins;
+    if (bufRef.current.data.length !== need) bufRef.current.data = new Uint16Array(need);
+    if (bufRef.current.built.length !== bbWidth) bufRef.current.built = new Uint8Array(bbWidth);
+    const viewportData = bufRef.current.data;
+    const colBuilt = bufRef.current.built;
+    viewportData.fill(0);
+    colBuilt.fill(0);
     for (let i = 0; i < bbWidth; i++) {
       const t = i / cps;
       if (t >= duration) continue;
@@ -175,13 +148,16 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
       if (!result) continue;
       const { chunk } = result;
       if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) continue;
+      // Same two-pixel-window sampling as the main spectrogram's renderer, so a
+      // clip looks the same here as it does in the track.
       const chunkCps = chunk.nCols / chunk.actualDurationSec;
-      let col = Math.round((t - chunk.startSec) * chunkCps);
-      if (col < 0) col = 0;
-      if (col >= chunk.nCols) col = chunk.nCols - 1;
-      const bins = Math.min(nFreqBins, chunk.nFreqBins);
-      const srcOffset = col * chunk.nFreqBins;
-      viewportData.set(chunk.data.subarray(srcOffset, srcOffset + bins), i * nFreqBins);
+      const colsPerPx = chunkCps / cps;
+      const pos = (t - chunk.startSec) * chunkCps - 0.5 * colsPerPx;
+      sampleChunkColumnInto(
+        viewportData, i * nFreqBins, Math.min(nFreqBins, chunk.nFreqBins),
+        chunk.data, chunk.nFreqBins, chunk.nCols,
+        pos, pos + 2 * colsPerPx,
+      );
       colBuilt[i] = 1;
     }
 
@@ -203,16 +179,27 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
   }, [duration, sampleRate, settings, paint, drawYAxis]);
 
   // (Re)create the cache when the clip or FFT size changes. The onChunkLoaded
-  // callback bumps a version and re-renders as chunks stream in.
+  // callback re-renders (once per frame) as chunks stream in.
   useEffect(() => {
     if (!filePath || duration <= 0) return;
     const cache = new MultiTierSpectrogramCache(
       filePath, settings.fftSize, sampleRate, duration,
-      () => { cacheVersionRef.current += 1; renderSpectrogram(); },
+      // Coalesced: a clip's chunks often land several to a frame.
+      () => {
+        if (renderFrameRef.current !== null) return;
+        renderFrameRef.current = requestAnimationFrame(() => {
+          renderFrameRef.current = null;
+          renderSpectrogramRef.current();
+        });
+      },
     );
     swapChunkCache(cacheRef, cache);
     renderSpectrogram();
-    return () => { swapChunkCache(cacheRef, null); };
+    return () => {
+      if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+      swapChunkCache(cacheRef, null);
+    };
     // renderSpectrogram intentionally omitted: it changes with settings, but a
     // settings-only change is handled by the separate effect below (no need to
     // throw away the cache and re-decode).
@@ -220,7 +207,10 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
   }, [filePath, sampleRate, duration, settings.fftSize]);
 
   // Re-render (not re-decode) when display settings change.
-  useEffect(() => { renderSpectrogram(); }, [renderSpectrogram]);
+  useEffect(() => {
+    renderSpectrogramRef.current = renderSpectrogram;
+    renderSpectrogram();
+  }, [renderSpectrogram]);
 
   // Redraw the playhead/ruler on every time-store tick.
   useEffect(() => currentTimeStore.subscribe(paint), [currentTimeStore, paint]);

@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { bandExtentY, freqToY, freqAxisTicks, formatFreqHz } from '../utils/audioProcessing';
+import { bandExtentY } from '../utils/audioProcessing';
 import { previewLayerIndex } from '../utils/previewLayer';
 import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
@@ -10,7 +10,6 @@ import { spanBetween } from '../utils/selectionExtend';
 import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft, reconcileZoomProp } from '../utils/viewportTransform';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import {
-  MIN_SEGMENT_JOIN_PX,
   Timeline,
   identityTimeline,
   minSegmentDuration,
@@ -27,6 +26,7 @@ import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
+import { paintGutter, paintFrequencyTicks, paintSubsetJoins } from './spectrogram/canvasPainters';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
@@ -775,21 +775,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // 1b. Draw subset segment joins — the seams where the display axis skips
     // from the end of one kept span to the start of the next. Dashed and
     // distinct from the playhead/ruler so a cut reads as a splice, not a marker.
-    if (subsetJoins.length > 0 && minSegmentSec * pixelsPerSecond_live >= MIN_SEGMENT_JOIN_PX) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      for (const t of subsetJoins) {
-        const x = timeToX(t, scrollLeft_live, pixelsPerSecond_live);
-        if (x < 0 || x > width) continue;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
+    paintSubsetJoins(ctx, subsetJoins, minSegmentSec, scrollLeft_live, pixelsPerSecond_live, width, height);
 
     // 2. Draw Playhead Line
     const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
@@ -951,61 +937,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const drawYAxis = useCallback(() => {
     const canvas = yAxisCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // The gutter is a fixed CSS width; only its height follows the container.
-    const { dpr, width, height } = syncCanvasBitmap(
-      canvas, Y_AXIS_WIDTH, containerSizeRef.current.height);
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-    ctx.fillRect(0, 0, width, height);
-
-    // Right border line
-    ctx.beginPath();
-    ctx.moveTo(width - 1, 0);
-    ctx.lineTo(width - 1, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-
-    let lastLabelY: number | null = null;
-    const MIN_LABEL_SPACING = 13;
     // The min/max frequency boxes (FrequencyAxisInputs) are docked over the top
     // and bottom of the gutter and already show the endpoint values, so the
     // canvas skips any tick that would land under them.
-    const EDGE_RESERVED = 24;
-
-    const renderTick = (freq: number) => {
-      // Use the shared freq→y mapping so axis labels stay in exact lockstep
-      // with the spectrogram renderer (same function, no drift).
-      const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-
-      if (y < EDGE_RESERVED || y > height - EDGE_RESERVED) return;
-      if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
-      lastLabelY = y;
-
-      ctx.beginPath();
-      ctx.moveTo(width - 5, y);
-      ctx.lineTo(width - 1, y);
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.stroke();
-
-      ctx.fillText(formatFreqHz(freq), width - 7, y);
-    };
-
-    for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {
-      renderTick(freq);
-    }
-    ctx.restore();
+    paintGutter(canvas, containerSizeRef.current.height, 'spectrogram', (ctx, width, height) =>
+      paintFrequencyTicks(ctx, width, height, settings, 24));
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Keep drawRef/drawYAxisRef current and mark dirty whenever the spectrogram

@@ -4,7 +4,6 @@ import { BuzzdetectData, BuzzdetectSeriesMode, Selection } from '../types';
 import type { ViewportStore } from '../utils/viewportStore';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import {
-  MIN_SEGMENT_JOIN_PX,
   Timeline,
   identityTimeline,
   minSegmentDuration,
@@ -43,6 +42,7 @@ import { baselineOffset, detectionThreshold } from '../utils/buzzdetectThreshold
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
+import { paintGutter, paintSubsetJoins } from './spectrogram/canvasPainters';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -759,21 +759,7 @@ export default function BuzzdetectPanel({
       // Subset segment joins — the same seams the spectrogram marks, drawn the
       // same way (gold, dashed), so a cut reads identically on both: a splice,
       // not a marker unique to one panel.
-      if (subsetJoins.length > 0 && minSegmentSec * pixelsPerSecond >= MIN_SEGMENT_JOIN_PX) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        for (const t of subsetJoins) {
-          const x = xOf(t);
-          if (x < -1 || x > width + 1) continue;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, h);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
+      paintSubsetJoins(ctx, subsetJoins, minSegmentSec, originScroll, pixelsPerSecond, width, h);
 
       // (The hovered bin/bin-group band lives on the overlay canvas — see
       // drawOverlay — so moving the cursor doesn't repaint this canvas.)
@@ -971,23 +957,7 @@ export default function BuzzdetectPanel({
       // Y-axis labels in the gutter canvas.
       const yCanvas = yAxisCanvasRef.current;
       if (yCanvas) {
-        const yctx = yCanvas.getContext('2d');
-        if (yctx) {
-          syncCanvasBitmap(yCanvas, Y_AXIS_WIDTH, h);
-          yctx.clearRect(0, 0, yCanvas.width, yCanvas.height);
-          yctx.save();
-          yctx.scale(dpr, dpr);
-          yctx.fillStyle = 'rgba(11,18,32,0.85)';
-          yctx.fillRect(0, 0, Y_AXIS_WIDTH, h);
-          yctx.strokeStyle = 'rgba(255,255,255,0.15)';
-          yctx.lineWidth = 1;
-          yctx.beginPath();
-          yctx.moveTo(Y_AXIS_WIDTH - 1, 0); yctx.lineTo(Y_AXIS_WIDTH - 1, h);
-          yctx.stroke();
-          yctx.fillStyle = 'rgba(255,255,255,0.7)';
-          yctx.font = '10px sans-serif';
-          yctx.textAlign = 'right';
-          yctx.textBaseline = 'middle';
+        paintGutter(yCanvas, h, 'panel', (yctx) => {
           if (binaryDetection) {
             const yTop = yOf(1);
             if (yTop >= 8 && yTop <= h - 6) yctx.fillText(buzzdetectCopy.detection, Y_AXIS_WIDTH - 6, yTop, Y_AXIS_WIDTH - 8);
@@ -1002,8 +972,7 @@ export default function BuzzdetectPanel({
               yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
             }
           }
-          yctx.restore();
-        }
+        });
       }
       return true;
     };
