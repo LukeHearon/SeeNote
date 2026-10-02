@@ -43,17 +43,18 @@ static FFMPEG_PATH_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Cached result of the last resolution attempt (see `resolve_dir`), so
 /// repeated `.wma` opens don't re-walk the candidate directories and re-spawn
-/// version checks each time. `Ok` holds the directory both binaries live in.
-/// Reset by `set_ffmpeg_path_override` so a change takes effect without a
-/// restart.
-static RESOLVED_CACHE: Mutex<Option<Result<PathBuf, String>>> = Mutex::new(None);
+/// version checks each time. Holds the directory both binaries live in; only
+/// successes are cached, so installing ffmpeg while the app runs is picked up
+/// without a restart. Reset by `set_ffmpeg_path_override` so a change takes
+/// effect immediately.
+static RESOLVED_CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Set (or clear, with `None`/empty) the configured ffmpeg/ffprobe location.
 /// Called once at startup with whatever Application Settings holds, and again
 /// whenever the user edits the setting.
 pub fn set_ffmpeg_path_override(path: Option<String>) {
-    *FFMPEG_PATH_OVERRIDE.lock().unwrap() = path.filter(|p| !p.trim().is_empty());
-    *RESOLVED_CACHE.lock().unwrap() = None;
+    *super::lock(&FFMPEG_PATH_OVERRIDE) = path.filter(|p| !p.trim().is_empty());
+    *super::lock(&RESOLVED_CACHE) = None;
 }
 
 /// Executable file name for one of the two binaries we need, with the
@@ -156,13 +157,14 @@ fn candidate_dirs() -> Vec<PathBuf> {
 /// user's choice is never second-guessed by a search), otherwise the first
 /// candidate directory that has both binaries and can run them.
 ///
-/// Cached in `RESOLVED_CACHE`; the search only ever runs once per setting.
+/// A successful search is cached in `RESOLVED_CACHE`; failures are re-searched
+/// on the next call (a few stats when nothing is installed).
 fn resolve_dir() -> Result<PathBuf, String> {
-    if let Some(cached) = RESOLVED_CACHE.lock().unwrap().clone() {
-        return cached;
+    if let Some(cached) = super::lock(&RESOLVED_CACHE).clone() {
+        return Ok(cached);
     }
 
-    let configured = FFMPEG_PATH_OVERRIDE.lock().unwrap().clone();
+    let configured = super::lock(&FFMPEG_PATH_OVERRIDE).clone();
     let result = match configured {
         Some(configured) => {
             // The setting may name either binary or the directory holding them.
@@ -193,7 +195,9 @@ fn resolve_dir() -> Result<PathBuf, String> {
             }),
     };
 
-    *RESOLVED_CACHE.lock().unwrap() = Some(result.clone());
+    if let Ok(dir) = &result {
+        *super::lock(&RESOLVED_CACHE) = Some(dir.clone());
+    }
     result
 }
 
@@ -451,6 +455,11 @@ pub struct FfmpegStream {
     /// bias the throughput estimate down and push the strategy toward the
     /// respawns it is trying to avoid.
     fresh_spawn: bool,
+    /// Reused byte buffer for pipe reads, so a read allocates only its output.
+    scratch: Vec<u8>,
+    /// A child failure noticed on a short read that still returned frames;
+    /// reported by the next `read` (see there).
+    failure: Option<String>,
 }
 
 impl FfmpegStream {
@@ -475,6 +484,8 @@ impl FfmpegStream {
             stdout,
             next_output_frame: (start_sec * info.sample_rate as f64).round() as u64,
             fresh_spawn: true,
+            scratch: Vec::new(),
+            failure: None,
         })
     }
 
@@ -523,6 +534,7 @@ impl FfmpegStream {
         self.stdout = stdout;
         self.next_output_frame = (start_sec * self.sample_rate as f64).round() as u64;
         self.fresh_spawn = true;
+        self.failure = None;
         Ok(())
     }
 
@@ -607,18 +619,24 @@ impl FfmpegStream {
     }
 
     /// Read up to `max_frames` interleaved f32 frames. Returns `(samples,
-    /// frames_read)`; `frames_read == 0` means EOF (true end of stream, or the
-    /// ffmpeg process exited — the exit status is logged either way but not
-    /// distinguished in the return value, matching `SymphoniaStream::read`'s
-    /// treat-EOF-as-normal contract).
+    /// frames_read)`; `frames_read == 0` means EOF.
+    ///
+    /// A short read means the pipe closed. If ffmpeg exited with a failure
+    /// status that is an error, not EOF: the frames read so far are returned,
+    /// and the failure surfaces on the next call (or immediately when no whole
+    /// frame was read), so a decoder that died mid-file is not mistaken for the
+    /// end of the audio.
     pub fn read(&mut self, max_frames: usize) -> Result<(Vec<f32>, usize)> {
-        let ch = self.channels as usize;
+        if let Some(err) = self.failure.take() {
+            return Err(anyhow::anyhow!(err));
+        }
+        let ch = self.channels.max(1) as usize;
         let bytes_per_frame = ch * 4;
-        let mut buf = vec![0u8; max_frames * bytes_per_frame];
+        self.scratch.resize(max_frames * bytes_per_frame, 0);
         let mut filled = 0usize;
         let started = Instant::now();
-        while filled < buf.len() {
-            match self.stdout.read(&mut buf[filled..]) {
+        while filled < self.scratch.len() {
+            match self.stdout.read(&mut self.scratch[filled..]) {
                 Ok(0) => break,
                 Ok(n) => filled += n,
                 Err(e) => return Err(anyhow::anyhow!("ffmpeg stdout read failed: {e}")),
@@ -628,10 +646,10 @@ impl FfmpegStream {
 
         let whole_frames = filled / bytes_per_frame;
         let sample_count = whole_frames * ch;
-        let mut samples = Vec::with_capacity(sample_count);
-        for chunk in buf[..sample_count * 4].chunks_exact(4) {
-            samples.push(f32::from_le_bytes(chunk.try_into().unwrap()));
-        }
+        let samples: Vec<f32> = self.scratch[..sample_count * 4]
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
 
         self.next_output_frame += whole_frames as u64;
         // Feeds the same estimate `discard_frames` does — this is the seek
@@ -642,17 +660,33 @@ impl FfmpegStream {
         }
         self.fresh_spawn = false;
 
-        if whole_frames == 0 {
-            if let Ok(Some(status)) = self.child.try_wait() {
+        if filled < self.scratch.len() {
+            if let Some(status) = self.exit_status_after_eof() {
                 if !status.success() {
-                    eprintln!(
-                        "FfmpegStream: ffmpeg for {} exited with {status}",
-                        self.path
-                    );
+                    let msg = format!("ffmpeg for {} exited with {status}", self.path);
+                    eprintln!("FfmpegStream: {msg}");
+                    if whole_frames == 0 {
+                        return Err(anyhow::anyhow!(msg));
+                    }
+                    self.failure = Some(msg);
                 }
             }
         }
         Ok((samples, whole_frames))
+    }
+
+    /// Exit status of the child after its stdout hit EOF. The pipe can close a
+    /// moment before the process is reapable, so poll briefly rather than
+    /// reporting "still running" for a child that is about to be gone.
+    fn exit_status_after_eof(&mut self) -> Option<std::process::ExitStatus> {
+        for _ in 0..20 {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(_) => return None,
+            }
+        }
+        None
     }
 }
 

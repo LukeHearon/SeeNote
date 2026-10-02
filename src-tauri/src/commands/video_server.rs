@@ -11,16 +11,30 @@
 // macOS/Windows are unaffected (their WebViews' custom-scheme handling doesn't
 // have this gap), so the frontend only calls `get_video_server_url` on Linux.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::TcpListener;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use http_range::HttpRange;
 use tiny_http::{Header, Method, Response, StatusCode};
 
 static SERVER_PORT: OnceLock<u16> = OnceLock::new();
+
+/// Paths handed out by `get_video_server_url`. The server listens on loopback
+/// but any local process (or a web page issuing requests to 127.0.0.1) can reach
+/// it, so it serves only files the app itself registered, never arbitrary paths.
+static REGISTERED_PATHS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn registered_paths() -> &'static Mutex<HashSet<String>> {
+    REGISTERED_PATHS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn is_registered(path: &str) -> bool {
+    crate::audio::lock(registered_paths()).contains(path)
+}
 
 fn ensure_started() -> Result<u16, String> {
     if let Some(&port) = SERVER_PORT.get() {
@@ -65,6 +79,11 @@ fn handle_request(request: tiny_http::Request) -> std::io::Result<()> {
         "[video_server] -> {method} {basename} range={}",
         range_header.as_deref().unwrap_or("none")
     );
+
+    if !is_registered(&path) {
+        eprintln!("[video_server] <- 403 {basename} (path not registered)");
+        return request.respond(Response::empty(StatusCode(403)));
+    }
 
     let file = match File::open(&path) {
         Ok(f) => f,
@@ -183,6 +202,7 @@ fn header(name: &str, value: &str) -> Header {
 #[tauri::command]
 pub fn get_video_server_url(path: String) -> Result<String, String> {
     let port = ensure_started()?;
+    crate::audio::lock(registered_paths()).insert(path.clone());
     let encoded = percent_encoding::utf8_percent_encode(&path, percent_encoding::NON_ALPHANUMERIC);
     Ok(format!("http://127.0.0.1:{port}/{encoded}"))
 }
