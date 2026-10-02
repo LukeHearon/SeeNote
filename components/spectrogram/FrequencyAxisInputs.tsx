@@ -1,7 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React from 'react';
 import { RotateCcw } from 'lucide-react';
 import { SpectrogramSettings } from '../../types';
 import { clampFreqRange, formatFreqHz, parseFreqHz } from '../../utils/audioProcessing';
+import { useDraftField } from '../../hooks/useDraftField';
+import { frequencyAxisInputs as copy } from '../../copy/ui';
 
 // Two number boxes docked on the frequency axis — max at the top of the scale,
 // min at the bottom — so the value typed is read right where it takes effect.
@@ -25,18 +27,15 @@ export default function FrequencyAxisInputs({
 }) {
   const nyquist = Math.floor(sampleRate / 2);
 
-  // While a box is focused it holds a free-text draft; otherwise it shows the
-  // formatted label derived from props.
-  const [editing, setEditing] = useState<null | 'min' | 'max'>(null);
-  const [draft, setDraft] = useState('');
-  // Escape blurs the input; this tells the blur handler to discard the draft.
-  const cancelRef = useRef(false);
-
   const valueOf = (edge: 'min' | 'max') => (edge === 'min' ? minFreq : maxFreq);
   const limitOf = (edge: 'min' | 'max') => (edge === 'min' ? 0 : nyquist);
 
+  // While a box is focused it holds a free-text draft; otherwise it shows the
+  // formatted label derived from props.
+  const draft = useDraftField<'min' | 'max'>((edge, raw) => apply(edge, parseFreqHz(raw)), { stopPropagation: true });
+
   const display = (edge: 'min' | 'max') =>
-    editing === edge ? draft : formatFreqHz(valueOf(edge));
+    draft.editing === edge ? draft.raw : formatFreqHz(valueOf(edge));
 
   const apply = (edge: 'min' | 'max', typed: number) => {
     const next = clampFreqRange(
@@ -62,7 +61,7 @@ export default function FrequencyAxisInputs({
         className={`shrink-0 pl-0.5 text-slate-400 hover:text-[#e65161] ${
           valueOf(edge) !== limitOf(edge) ? 'hidden group-hover:flex' : 'hidden'
         }`}
-        title={edge === 'max' ? 'Reset to the Nyquist limit' : 'Reset to 0 Hz'}
+        title={edge === 'max' ? copy.resetMax : copy.resetMin}
       >
         <RotateCcw size={9} />
       </button>
@@ -70,22 +69,10 @@ export default function FrequencyAxisInputs({
         type="text"
         inputMode="decimal"
         value={display(edge)}
-        onFocus={() => { setEditing(edge); setDraft(String(valueOf(edge))); }}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={() => {
-          if (!cancelRef.current) apply(edge, parseFreqHz(draft));
-          cancelRef.current = false;
-          setEditing(null);
-        }}
-        onKeyDown={e => {
-          if (e.key === 'Enter') e.currentTarget.blur();
-          if (e.key === 'Escape') { cancelRef.current = true; e.currentTarget.blur(); }
-          e.stopPropagation();
-        }}
+        onFocus={() => draft.begin(edge, String(valueOf(edge)))}
+        {...draft.fieldProps()}
         className="flex-1 min-w-0 bg-transparent text-white/80 text-right pr-[7px] font-sans text-[10px] leading-none border-0 outline-none focus:text-white"
-        title={edge === 'max'
-          ? 'Highest frequency to plot — accepts 8000 or 8k'
-          : 'Lowest frequency to plot — accepts 500 or 0.5k'}
+        title={edge === 'max' ? copy.maxTitle : copy.minTitle}
       />
     </div>
   );

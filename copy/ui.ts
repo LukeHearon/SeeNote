@@ -428,6 +428,13 @@ export const fileTree = {
   showAnnotationsIn(manager: string) { return getOverride('ui.fileTree.showAnnotationsIn') ?? `Show Annotations in ${manager}`; },
 };
 
+export const frequencyAxisInputs = {
+  get resetMax() { return getOverride('ui.frequencyAxisInputs.resetMax') ?? "Reset to the Nyquist limit"; },
+  get resetMin() { return getOverride('ui.frequencyAxisInputs.resetMin') ?? "Reset to 0 Hz"; },
+  get maxTitle() { return getOverride('ui.frequencyAxisInputs.maxTitle') ?? "Highest frequency to plot — accepts 8000 or 8k"; },
+  get minTitle() { return getOverride('ui.frequencyAxisInputs.minTitle') ?? "Lowest frequency to plot — accepts 500 or 0.5k"; },
+};
+
 export const keyboardShortcutsView = {
   get noShortcuts() { return getOverride('ui.keyboardShortcutsView.noShortcuts') ?? "No shortcuts for this key"; },
 };

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Gauge } from 'lucide-react';
 import { clamp, speedToSlider, sliderToSpeed } from '../../utils/helpers';
 import { tooltips } from '../../copy/tooltips';
+import { useDraftField } from '../../hooks/useDraftField';
 
 export interface PlaybackSpeedIconProps {
   speed: number;
@@ -56,20 +57,19 @@ export function PlaybackSpeedControl({
   onLastDefinedSpeedChange,
   hideIcon = false,
 }: PlaybackSpeedControlProps) {
-  const [editing, setEditing] = useState(false);
-  const [raw, setRaw] = useState('');
-
   // Read live values inside the non-React wheel handler, which is attached once.
   const speedRef = useRef(speed);
   const rangeRef = useRef({ min, max });
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { rangeRef.current = { min, max }; }, [min, max]);
 
-  const commit = (next: number) => {
-    const clamped = clamp(next, min, max);
+  const draft = useDraftField((_, raw) => {
+    const parsed = parseFloat(raw.replace(/x$/i, '').trim());
+    if (isNaN(parsed)) return;
+    const clamped = clamp(parsed, min, max);
     onSpeedChange(clamped);
     if (clamped !== 1.0) onLastDefinedSpeedChange(clamped);
-  };
+  });
 
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -101,31 +101,17 @@ export function PlaybackSpeedControl({
       {!hideIcon && (
         <PlaybackSpeedIcon speed={speed} lastDefinedSpeed={lastDefinedSpeed} onSpeedChange={onSpeedChange} />
       )}
-      {editing ? (
+      {draft.editing ? (
         <input
           autoFocus
           className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 w-12 outline-none text-center tabular-nums"
-          value={raw}
-          onChange={e => setRaw(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              const parsed = parseFloat(raw.replace(/x$/i, '').trim());
-              if (!isNaN(parsed)) commit(parsed);
-              setEditing(false); setRaw('');
-            }
-            if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setRaw(''); }
-          }}
-          onBlur={() => {
-            const parsed = parseFloat(raw.replace(/x$/i, '').trim());
-            if (!isNaN(parsed)) commit(parsed);
-            setEditing(false); setRaw('');
-          }}
+          value={draft.raw}
+          {...draft.fieldProps()}
         />
       ) : (
         <button
           className="text-xs font-mono text-slate-300 hover:text-white tabular-nums w-10 text-right"
-          onClick={() => { setEditing(true); setRaw(speed.toFixed(2)); }}
+          onClick={() => draft.begin('value', speed.toFixed(2))}
           data-tooltip={tooltips.setSpeed}
         >
           {speed.toFixed(2)}x

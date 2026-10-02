@@ -5,6 +5,7 @@ import { maxDateTimeLength, DateTimeFormat } from '../../utils/datetimeDisplay';
 import { parseTimestamp } from '../../utils/timeAxis';
 import { Timeline, identityTimeline, displayOfNearestKept } from '../../utils/subsetTimeline';
 import { tooltips } from '../../copy/tooltips';
+import { useDraftField } from '../../hooks/useDraftField';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not its whole parent — re-renders per tick.
@@ -60,9 +61,6 @@ export function TimeReadout({
   onSeek,
   onUnitChange,
 }: TimeReadoutProps) {
-  const [editing, setEditing] = useState(false);
-  const [raw, setRaw] = useState('');
-
   // Memoised in the identity case so it isn't a fresh object per render.
   const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
   const tl = timeline ?? fallbackTimeline;
@@ -83,12 +81,10 @@ export function TimeReadout({
   // A typed time is a source time. One that was cut out of the subset has no
   // position on the axis, so it goes to the nearest kept one — the same answer
   // clicking there gives.
-  const commit = () => {
+  const draft = useDraftField((_, raw) => {
     const parsed = parseTimestamp(raw, datetimeMode ? { start: trackStartDate!, duration: tl.sourceDuration } : null);
     if (parsed !== null) onSeek(clamp(displayOfNearestKept(tl, parsed), 0, duration), true);
-    setEditing(false);
-    setRaw('');
-  };
+  });
 
   // Seconds/HMS key off the effective unit, so a 'datetime' choice that a
   // startless track can't honour still lights the unit actually being shown;
@@ -105,25 +101,20 @@ export function TimeReadout({
 
   return (
     <div className="flex flex-col items-center gap-1" data-help-target="current-time">
-      {editing ? (
+      {draft.editing ? (
         <input
           autoFocus
           className="text-sm font-mono font-medium text-white bg-slate-700 border border-[#e65161] rounded-md px-2 py-1 outline-none"
           style={{ width }}
-          value={raw}
-          onChange={e => setRaw(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setRaw(''); }
-          }}
-          onBlur={commit}
+          value={draft.raw}
+          {...draft.fieldProps()}
         />
       ) : (
         <button
           className="flex items-center justify-end px-2 py-1 bg-slate-700/50 rounded-md text-sm font-mono font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
           style={{ width }}
           data-tooltip={tooltips.jumpToTime}
-          onClick={() => { setEditing(true); setRaw(formatTimeForUnit(tl.toSource(currentTimeStore.get()), unit, 2, trackStartDate, dateTimeFormat)); }}
+          onClick={() => draft.begin('value', formatTimeForUnit(tl.toSource(currentTimeStore.get()), unit, 2, trackStartDate, dateTimeFormat))}
         >
           <LiveTime currentTimeStore={currentTimeStore} unit={unit} trackStartDate={trackStartDate} dateTimeFormat={dateTimeFormat} timeline={tl} />
         </button>

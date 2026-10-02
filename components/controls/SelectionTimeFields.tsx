@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Selection } from '../../types';
 import type { CurrentTimeStore } from '../../utils/currentTimeStore';
 import { clamp, formatTime, TimeDisplayUnit } from '../../utils/helpers';
@@ -6,6 +6,7 @@ import { formatDateTime, maxDateTimeLength, DateTimeFormat } from '../../utils/d
 import { parseHMS, parseTimestamp } from '../../utils/timeAxis';
 import { Timeline, identityTimeline, displayOfNearestKept, sourceIntervalOf } from '../../utils/subsetTimeline';
 import { tooltips } from '../../copy/tooltips';
+import { useDraftField } from '../../hooks/useDraftField';
 
 type Field = 'selStart' | 'selEnd' | 'selDur';
 
@@ -47,9 +48,6 @@ export function SelectionTimeFields({
   timeline,
   onApply,
 }: SelectionTimeFieldsProps) {
-  const [editing, setEditing] = useState<Field | null>(null);
-  const [raw, setRaw] = useState('');
-
   // Memoised in the identity case so it isn't a fresh object per render.
   const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
   const tl = timeline ?? fallbackTimeline;
@@ -93,9 +91,7 @@ export function SelectionTimeFields({
     if (lo !== hi) onApply({ start: lo, end: hi });
   };
 
-  const commit = () => {
-    if (!editing) return;
-
+  const draft = useDraftField<Field>((editing, raw) => {
     // selDur accepts negative values (the anchor is always selection.start /
     // the playhead), so it can't go through parseTimestamp, which rejects them.
     if (editing === 'selDur') {
@@ -119,34 +115,27 @@ export function SelectionTimeFields({
         apply(tl.clampToSpanOfDisplay(other, clamped), other);
       }
     }
-    setEditing(null);
-    setRaw('');
-  };
+  });
 
   const input = (
     <input
       autoFocus
       className="text-xs font-mono text-white bg-slate-700 border border-[#e65161] rounded px-1.5 h-5 outline-none text-right"
       style={{ width: inputWidth }}
-      value={raw}
-      onChange={e => setRaw(e.target.value)}
-      onKeyDown={e => {
-        if (e.key === 'Enter') { e.preventDefault(); commit(); }
-        if (e.key === 'Escape') { e.preventDefault(); setEditing(null); setRaw(''); }
-      }}
-      onBlur={commit}
+      value={draft.raw}
+      {...draft.fieldProps()}
     />
   );
 
   const renderField = (field: Field, display: string, label: string) => (
     <div key={field} className="flex items-center gap-1.5">
-      {editing === field ? input : (
+      {draft.editing === field ? input : (
         <button
           style={{ width: fieldWidth }}
           className={`text-xs font-mono px-1.5 h-5 bg-slate-700/50 rounded text-center whitespace-nowrap transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
           onClick={() => {
-            if (has) { setEditing(field); setRaw(display); }
-            else if (canCreate) { setEditing(field); setRaw(''); }
+            if (has) draft.begin(field, display);
+            else if (canCreate) draft.begin(field, '');
           }}
           data-tooltip={has ? tooltips.editSelection(label) : canCreate ? tooltips.setSelection(label) : undefined}
         >

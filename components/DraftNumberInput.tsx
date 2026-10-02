@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useDraftField } from '../hooks/useDraftField';
 
 interface Props {
   value: number | null;
@@ -21,30 +22,24 @@ interface Props {
 /**
  * Controlled numeric input that lets the user type freely — including
  * clearing the field to retype — and only commits a parsed value on blur or
- * Enter. Validating on every keystroke (e.g. rejecting an empty string as
+ * Enter (Escape discards the edit). Validating on every keystroke (e.g. rejecting an empty string as
  * NaN) makes it impossible to backspace and re-enter a value.
  */
 export default function DraftNumberInput({ value, onCommit, className, style, min, allowEmpty, placeholder, tooltip }: Props) {
   const asText = (v: number | null) => (v === null ? '' : String(v));
-  const [draft, setDraft] = useState(asText(value));
-  useEffect(() => { setDraft(asText(value)); }, [value]);
-  const commit = () => {
-    if (allowEmpty && draft.trim() === '') { onCommit(null); return; }
-    const v = parseFloat(draft);
+  // An invalid commit just ends the edit, so the field falls back to `value`.
+  const draft = useDraftField((_, raw) => {
+    if (allowEmpty && raw.trim() === '') { onCommit(null); return; }
+    const v = parseFloat(raw);
     if (!isNaN(v) && (min === undefined || v >= min)) onCommit(v);
-    else setDraft(asText(value));
-  };
+  }, { stopPropagation: true });
   return (
     <input
       type="text"
       inputMode="decimal"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-      }}
+      value={draft.editing ? draft.raw : asText(value)}
+      onFocus={() => draft.begin('value', asText(value))}
+      {...draft.fieldProps()}
       placeholder={placeholder}
       className={className}
       style={style}
