@@ -12,7 +12,6 @@ import {
   matchingLinesInContent,
   exactLabelMatcher,
   regexLabelMatcher,
-  partialLabelMatcher,
   buildLabelMatcher,
   renameLabelInContent,
   renameOneLabelInContent,
@@ -563,9 +562,10 @@ describe('regexLabelMatcher', () => {
   });
 });
 
-describe('partialLabelMatcher', () => {
+describe('buildLabelMatcher (partial)', () => {
+  const partial = (q: string) => buildLabelMatcher(q, { useRegex: false, partial: true, caseSensitive: true });
   it('matches labels containing the text anywhere', () => {
-    const m = partialLabelMatcher('mech_');
+    const m = partial('mech_');
     expect(m).not.toBeNull();
     expect(m!('mech_auto')).toBe(true);
     expect(m!('quiet_mech_auto')).toBe(true);
@@ -573,7 +573,7 @@ describe('partialLabelMatcher', () => {
   });
 
   it('treats regex metacharacters in the text literally', () => {
-    const m = partialLabelMatcher('a.b');
+    const m = partial('a.b');
     expect(m).not.toBeNull();
     expect(m!('xa.by')).toBe(true);
     expect(m!('xaXby')).toBe(false); // "." must match a literal dot, not "any char"

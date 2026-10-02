@@ -5,14 +5,16 @@ import { tooltips } from '../copy/tooltips';
 import { Project, ProjectSettings, ProjectPreferences } from '../types';
 import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, openSyncGuideWindow } from '../utils/tauriCommands';
 import { readProjectSettings, writeProjectPreferences } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_TOOL_SEED, randomMagmaGradient } from '../constants';
+import { DEFAULT_TOOL_SEED, randomMagmaGradient } from '../constants';
 import { buildHotkeyMap } from '../utils/annotationTools';
-import { inputToProjectPath, resolveInputPath } from '../utils/projectPaths';
+import { resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
 import ModalBackdrop from './ModalBackdrop';
+import { useProjectForm } from '../hooks/useProjectForm';
+import { projectFormFromSettings, missingProjectField, settingsFromProjectForm } from '../utils/projectForm';
 
 interface Props {
   onCreated: (project: Project) => void;
@@ -23,18 +25,7 @@ interface Props {
 
 export default function CreateProjectModal({ onCreated, onClose, createProject, onOpenExisting }: Props) {
   const [projectDir, setProjectDir] = useState('');
-  const [name, setName] = useState('');
-  const [mediaDir, setMediaDir] = useState('');
-  const [annotationDir, setAnnotationDir] = useState('');
-  const [buzzdetectDir, setBuzzdetectDir] = useState('');
-  // null = auto-detect from each CSV (the default for new projects).
-  const [filenameTimeFormat, setFilenameTimeFormat] = useState('');
-  const [filenameTimeOffsetSeparator, setFilenameTimeOffsetSeparator] = useState('');
-  const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(null);
-  const [buzzdetectTrimActivationPrefix, setBuzzdetectTrimActivationPrefix] = useState(true);
-  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(DEFAULT_OUTPUT_ROUNDING_DECIMALS);
-  const [gradientColors, setGradientColors] = useState<[string, string]>(() => randomMagmaGradient());
-  const [syncRemoteUrl, setSyncRemoteUrl] = useState('');
+  const { values: form, set: setForm } = useProjectForm(() => projectFormFromSettings(undefined, randomMagmaGradient()));
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>('keychain');
   const [syncAuthorName, setSyncAuthorName] = useState('');
@@ -47,22 +38,21 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const mediaTouchedRef = useRef(false);
   const annotationTouchedRef = useRef(false);
 
-  const resolvedMediaDir = resolveInputPath(projectDir, mediaDir);
-  const resolvedAnnotationDir = resolveInputPath(projectDir, annotationDir);
-  const resolvedBuzzdetectDir = resolveInputPath(projectDir, buzzdetectDir);
+  const resolvedMediaDir = resolveInputPath(projectDir, form.mediaDir);
+  const resolvedAnnotationDir = resolveInputPath(projectDir, form.annotationDir);
 
   useEffect(() => {
     if (!projectDir) return;
     const base = projectDir.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
-    if (!nameTouchedRef.current) setName(base);
-    if (!annotationTouchedRef.current) setAnnotationDir('annotations');
+    if (!nameTouchedRef.current) setForm({ name: base });
+    if (!annotationTouchedRef.current) setForm({ annotationDir: 'annotations' });
     if (!mediaTouchedRef.current) {
       const root = projectDir.replace(/[/\\]+$/, '');
       Promise.all([checkDirExists(root + '/media'), checkDirExists(root + '/audio')]).then(
         ([hasMedia, hasAudio]) => {
           if (mediaTouchedRef.current) return;
-          if (hasMedia) setMediaDir('media');
-          else if (hasAudio) setMediaDir('audio');
+          if (hasMedia) setForm({ mediaDir: 'media' });
+          else if (hasAudio) setForm({ mediaDir: 'audio' });
         },
       );
     }
@@ -85,9 +75,15 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
 
   const handleCreate = async () => {
     if (!projectDir) { setError(createProjectModal.errorDirRequired); return; }
-    if (!name.trim()) { setError(createProjectModal.errorNameRequired); return; }
-    if (!mediaDir) { setError(createProjectModal.errorMediaRequired); return; }
-    if (!annotationDir) { setError(createProjectModal.errorAnnotationsRequired); return; }
+    const missing = missingProjectField(form);
+    if (missing) {
+      setError({
+        name: createProjectModal.errorNameRequired,
+        media: createProjectModal.errorMediaRequired,
+        annotations: createProjectModal.errorAnnotationsRequired,
+      }[missing]);
+      return;
+    }
 
     setError('');
     setIsCreating(true);
@@ -113,26 +109,13 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
     try {
       await createDirAll(resolvedMediaDir);
       await createDirAll(resolvedAnnotationDir);
-      const normalizedSyncRemoteUrl = normalizeGitRemoteUrl(syncRemoteUrl);
+      const normalizedSyncRemoteUrl = normalizeGitRemoteUrl(form.syncRemoteUrl);
 
       const tokenFields = normalizedSyncRemoteUrl
         ? await applySyncToken(normalizedSyncRemoteUrl, syncTokenStorage, syncToken.trim() || null)
         : {};
 
-      const settings: ProjectSettings = {
-        projectName: name.trim(),
-        mediaDirectory: inputToProjectPath(projectDir, mediaDir),
-        annotationDirectory: inputToProjectPath(projectDir, annotationDir),
-        buzzdetectDirectory: buzzdetectDir ? inputToProjectPath(projectDir, buzzdetectDir) : undefined,
-        buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
-        buzzdetectTrimActivationPrefix,
-      filenameTimeFormat: filenameTimeFormat.trim() || undefined,
-        filenameTimeOffsetSeparator: filenameTimeOffsetSeparator.trim() || undefined,
-        outputFormat: 'txt',
-        outputRoundingDecimals,
-        nameGradientColors: gradientColors,
-        gitSync: normalizedSyncRemoteUrl ? { remoteUrl: normalizedSyncRemoteUrl } : undefined,
-      };
+      const settings = settingsFromProjectForm(form, projectDir, normalizedSyncRemoteUrl);
       const project = await createProject({ projectDir, settings });
 
       const prefs: ProjectPreferences = {
@@ -219,32 +202,17 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
 
             <ProjectBaseFields
               projectDir={projectDir}
-              name={name}
-              onNameInput={n => { nameTouchedRef.current = true; setName(n); }}
-              gradientColors={gradientColors}
-              onGradientChange={setGradientColors}
-              mediaDir={mediaDir}
-              onMediaDirChange={v => { mediaTouchedRef.current = true; setMediaDir(v); }}
+              values={form}
+              onChange={patch => {
+                if ('name' in patch) nameTouchedRef.current = true;
+                if ('mediaDir' in patch) mediaTouchedRef.current = true;
+                if ('annotationDir' in patch) annotationTouchedRef.current = true;
+                setForm(patch);
+              }}
               mediaDirPlaceholder={projectDir ? 'media' : '/path/to/media'}
               mediaDirNotExistMessage={createProjectModal.infoDirWillBeCreated}
-              annotationDir={annotationDir}
-              onAnnotationDirChange={v => { annotationTouchedRef.current = true; setAnnotationDir(v); }}
               annotationDirPlaceholder={projectDir ? 'annotations' : '/path/to/annotations'}
               annotationDirNotExistMessage={createProjectModal.infoDirWillBeCreated}
-              filenameTimeFormat={filenameTimeFormat}
-              onFilenameTimeFormatChange={setFilenameTimeFormat}
-              filenameTimeOffsetSeparator={filenameTimeOffsetSeparator}
-              onFilenameTimeOffsetSeparatorChange={setFilenameTimeOffsetSeparator}
-              outputRoundingDecimals={outputRoundingDecimals}
-              onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
-              buzzdetectDir={buzzdetectDir}
-              onBuzzdetectDirChange={setBuzzdetectDir}
-              buzzdetectFrameLength={buzzdetectFrameLength}
-              onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
-              buzzdetectTrimActivationPrefix={buzzdetectTrimActivationPrefix}
-              onBuzzdetectTrimActivationPrefixChange={setBuzzdetectTrimActivationPrefix}
-              syncRemoteUrl={syncRemoteUrl}
-              onSyncRemoteUrlChange={setSyncRemoteUrl}
             />
 
           </>
@@ -264,8 +232,8 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
                   <HelpCircle size={14} />
                 </button>
               </div>
-              {syncRemoteUrl ? (
-                <p className="text-gray-600 text-xs mb-4 font-mono truncate">{syncRemoteUrl}</p>
+              {form.syncRemoteUrl ? (
+                <p className="text-gray-600 text-xs mb-4 font-mono truncate">{form.syncRemoteUrl}</p>
               ) : (
                 <p className="text-gray-600 text-xs mb-4">
                   {createProjectModal.infoNoRepoConfigured}

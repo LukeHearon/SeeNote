@@ -5,16 +5,18 @@ import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
+import { DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { DateTimeFormat, previewDateTimeFormat } from '../utils/datetimeDisplay';
 import { FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
-import { inputToProjectPath, projectPathInput, resolveInputPath } from '../utils/projectPaths';
+import { resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
 import ApplicationSettingsFields from './ApplicationSettingsFields';
 import ModalBackdrop from './ModalBackdrop';
+import { useProjectForm } from '../hooks/useProjectForm';
+import { projectFormFromSettings, missingProjectField, settingsFromProjectForm } from '../utils/projectForm';
 
 type Step = 'form' | 'annotationCopyConfirm' | 'conflictConfirm';
 type SettingsTab = 'application' | 'settings' | 'preferences';
@@ -29,26 +31,7 @@ interface Props {
 }
 
 export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
-  const [name, setName] = useState(project?.settings.projectName ?? '');
-  const [mediaDir, setMediaDir] = useState(() => project ? projectPathInput(project.settings.mediaDirectory) : '');
-  const [annotationDir, setAnnotationDir] = useState(() => project ? projectPathInput(project.settings.annotationDirectory) : '');
-  const [buzzdetectDir, setBuzzdetectDir] = useState(() =>
-    project?.settings.buzzdetectDirectory ? projectPathInput(project.settings.buzzdetectDirectory) : '');
-  const [filenameTimeFormat, setFilenameTimeFormat] = useState(project?.settings.filenameTimeFormat ?? '');
-  const [filenameTimeOffsetSeparator, setFilenameTimeOffsetSeparator] = useState(project?.settings.filenameTimeOffsetSeparator ?? '');
-  const [buzzdetectFrameLength, setBuzzdetectFrameLength] = useState<number | null>(
-    project?.settings.buzzdetectFrameLength ?? null,
-  );
-  const [buzzdetectTrimActivationPrefix, setBuzzdetectTrimActivationPrefix] = useState(
-    project?.settings.buzzdetectTrimActivationPrefix ?? true,
-  );
-  const [outputRoundingDecimals, setOutputRoundingDecimals] = useState(
-    project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS,
-  );
-  const [gradientColors, setGradientColors] = useState<[string, string]>(
-    project?.settings.nameGradientColors ?? ['#e65161', '#f9c387'],
-  );
-  const [syncRemoteUrl, setSyncRemoteUrl] = useState(project?.settings.gitSync?.remoteUrl ?? '');
+  const { values: form, set: setForm } = useProjectForm(() => projectFormFromSettings(project?.settings));
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenDirty, setSyncTokenDirty] = useState(false);
   const [syncTokenSavedLength, setSyncTokenSavedLength] = useState<number | null>(null);
@@ -77,9 +60,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const resolvedMediaDir = project ? resolveInputPath(project.projectDir, mediaDir) : '';
-  const resolvedAnnotationDir = project ? resolveInputPath(project.projectDir, annotationDir) : '';
-  const resolvedBuzzdetectDir = project ? resolveInputPath(project.projectDir, buzzdetectDir) : '';
+  const resolvedMediaDir = project ? resolveInputPath(project.projectDir, form.mediaDir) : '';
+  const resolvedAnnotationDir = project ? resolveInputPath(project.projectDir, form.annotationDir) : '';
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(project ? 'settings' : 'application');
   const [focusToken, setFocusToken] = useState(false);
@@ -96,20 +78,26 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
   const handleFormSubmit = async () => {
     if (!project) { onClose(); return; }
-    if (!name.trim()) { setError('Project name is required.'); return; }
-    if (!mediaDir) { setError('Media directory is required.'); return; }
-    if (!annotationDir) { setError('Annotations directory is required.'); return; }
+    const missing = missingProjectField(form);
+    if (missing) {
+      setError({
+        name: projectSettingsModal.errorNameRequired,
+        media: projectSettingsModal.errorMediaRequired,
+        annotations: projectSettingsModal.errorAnnotationsRequired,
+      }[missing]);
+      return;
+    }
 
     setIsBusy(true);
     const mediaDirOk = await checkDirExists(resolvedMediaDir);
     setIsBusy(false);
 
-    if (!mediaDirOk) { setError('Media directory does not exist.'); return; }
+    if (!mediaDirOk) { setError(projectSettingsModal.errorMediaMissing); return; }
 
     setError('');
 
     const oldUrl = initialRemoteUrlRef.current;
-    const newUrl = normalizeGitRemoteUrl(syncRemoteUrl);
+    const newUrl = normalizeGitRemoteUrl(form.syncRemoteUrl);
     const initialStorage: TokenStorage = project.preferences.gitSyncUser?.tokenStorage ?? 'keychain';
     const existingPlaintext = project.preferences.gitSyncUser?.tokenPlaintext;
     // Token-storage fields to persist in gitSyncUser preferences. Default to no token for the
@@ -150,20 +138,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
       return;
     }
 
-    const settings: ProjectSettings = {
-      ...project.settings,
-      projectName: name.trim(),
-      mediaDirectory: inputToProjectPath(project.projectDir, mediaDir),
-      annotationDirectory: inputToProjectPath(project.projectDir, annotationDir),
-      buzzdetectDirectory: buzzdetectDir ? inputToProjectPath(project.projectDir, buzzdetectDir) : undefined,
-      buzzdetectFrameLength: buzzdetectFrameLength ?? undefined,
-      buzzdetectTrimActivationPrefix,
-      filenameTimeFormat: filenameTimeFormat.trim() || undefined,
-      filenameTimeOffsetSeparator: filenameTimeOffsetSeparator.trim() || undefined,
-      outputRoundingDecimals,
-      nameGradientColors: gradientColors,
-      gitSync: newUrl ? { remoteUrl: newUrl } : undefined,
-    };
+    const settings = settingsFromProjectForm(form, project.projectDir, newUrl, project.settings);
     const preferences: ProjectPreferences = {
       ...project.preferences,
       gitSyncUser: newUrl
@@ -311,31 +286,11 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
 
               <ProjectBaseFields
                 projectDir={project.projectDir}
-                name={name}
-                onNameInput={setName}
-                gradientColors={gradientColors}
-                onGradientChange={setGradientColors}
-                mediaDir={mediaDir}
-                onMediaDirChange={setMediaDir}
-                mediaDirNotExistMessage="Directory does not exist."
-                annotationDir={annotationDir}
-                onAnnotationDirChange={setAnnotationDir}
-                annotationDirNotExistMessage="Directory does not exist yet; it will be created when the first annotation is saved."
-                filenameTimeFormat={filenameTimeFormat}
-              onFilenameTimeFormatChange={setFilenameTimeFormat}
-              filenameTimeOffsetSeparator={filenameTimeOffsetSeparator}
-              onFilenameTimeOffsetSeparatorChange={setFilenameTimeOffsetSeparator}
-              outputRoundingDecimals={outputRoundingDecimals}
-                onOutputRoundingDecimalsChange={setOutputRoundingDecimals}
-                buzzdetectDir={buzzdetectDir}
-                onBuzzdetectDirChange={setBuzzdetectDir}
-                buzzdetectFrameLength={buzzdetectFrameLength}
-                onBuzzdetectFrameLengthChange={setBuzzdetectFrameLength}
-                buzzdetectTrimActivationPrefix={buzzdetectTrimActivationPrefix}
-                onBuzzdetectTrimActivationPrefixChange={setBuzzdetectTrimActivationPrefix}
+                values={form}
+                onChange={setForm}
+                mediaDirNotExistMessage={projectSettingsModal.mediaDirMissing}
+                annotationDirNotExistMessage={projectSettingsModal.annotationDirMissing}
                 advancedDefaultOpen={!!project.buzzdetectDirectoryAbs}
-                syncRemoteUrl={syncRemoteUrl}
-                onSyncRemoteUrlChange={setSyncRemoteUrl}
                 onAddAccessToken={() => { setActiveTab('preferences'); setFocusToken(true); }}
               />
 

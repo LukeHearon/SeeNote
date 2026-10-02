@@ -1,8 +1,8 @@
 import React, { useRef, useEffect } from 'react';
 import { HelpCircle } from 'lucide-react';
 import { projectBaseFields } from '../copy/ui';
+import type { ProjectFormValues } from '../utils/projectForm';
 import { tooltips } from '../copy/tooltips';
-import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
@@ -16,75 +16,43 @@ const PREVIEW_DATE_LABEL = 'July 31, 2026 4:56 PM';
 
 interface Props {
   projectDir: string;
-  // Name + gradient
-  name: string;
-  onNameInput: (name: string) => void;
-  gradientColors: [string, string];
-  onGradientChange: (colors: [string, string]) => void;
-  // Directories
-  mediaDir: string;
-  onMediaDirChange: (v: string) => void;
+  values: ProjectFormValues;
+  onChange: (patch: Partial<ProjectFormValues>) => void;
   mediaDirPlaceholder?: string;
   mediaDirNotExistMessage: string;
-  annotationDir: string;
-  onAnnotationDirChange: (v: string) => void;
   annotationDirPlaceholder?: string;
   annotationDirNotExistMessage: string;
-  // Filename timestamp
-  filenameTimeFormat: string;
-  onFilenameTimeFormatChange: (v: string) => void;
-  filenameTimeOffsetSeparator: string;
-  onFilenameTimeOffsetSeparatorChange: (v: string) => void;
-  // Output
-  outputRoundingDecimals: number;
-  onOutputRoundingDecimalsChange: (n: number) => void;
-  // Advanced
-  buzzdetectDir: string;
-  onBuzzdetectDirChange: (v: string) => void;
-  // null = auto-detect bin width from each CSV (the default); a number
-  // overrides detection for every file.
-  buzzdetectFrameLength: number | null;
-  onBuzzdetectFrameLengthChange: (v: number | null) => void;
-  buzzdetectTrimActivationPrefix: boolean;
-  onBuzzdetectTrimActivationPrefixChange: (v: boolean) => void;
   advancedDefaultOpen?: boolean;
-  // Sync (repository URL only — user credentials live in the Preferences tab)
-  syncRemoteUrl: string;
-  onSyncRemoteUrlChange: (v: string) => void;
   onAddAccessToken?: () => void;
 }
 
 export default function ProjectBaseFields({
   projectDir,
-  name,
-  onNameInput,
-  gradientColors,
-  onGradientChange,
-  mediaDir,
-  onMediaDirChange,
+  values,
+  onChange,
   mediaDirPlaceholder,
   mediaDirNotExistMessage,
-  annotationDir,
-  onAnnotationDirChange,
   annotationDirPlaceholder,
   annotationDirNotExistMessage,
-  filenameTimeFormat,
-  onFilenameTimeFormatChange,
-  filenameTimeOffsetSeparator,
-  onFilenameTimeOffsetSeparatorChange,
-  outputRoundingDecimals,
-  onOutputRoundingDecimalsChange,
-  buzzdetectDir,
-  onBuzzdetectDirChange,
-  buzzdetectFrameLength,
-  onBuzzdetectFrameLengthChange,
-  buzzdetectTrimActivationPrefix,
-  onBuzzdetectTrimActivationPrefixChange,
   advancedDefaultOpen = false,
-  syncRemoteUrl,
-  onSyncRemoteUrlChange,
   onAddAccessToken,
 }: Props) {
+  const {
+    name, gradientColors, mediaDir, annotationDir, buzzdetectDir, filenameTimeFormat,
+    filenameTimeOffsetSeparator, outputRoundingDecimals, buzzdetectFrameLength,
+    buzzdetectTrimActivationPrefix, syncRemoteUrl,
+  } = values;
+  const onNameInput = (v: string) => onChange({ name: v });
+  const onGradientChange = (v: [string, string]) => onChange({ gradientColors: v });
+  const onMediaDirChange = (v: string) => onChange({ mediaDir: v });
+  const onAnnotationDirChange = (v: string) => onChange({ annotationDir: v });
+  const onFilenameTimeFormatChange = (v: string) => onChange({ filenameTimeFormat: v });
+  const onFilenameTimeOffsetSeparatorChange = (v: string) => onChange({ filenameTimeOffsetSeparator: v });
+  const onOutputRoundingDecimalsChange = (v: number) => onChange({ outputRoundingDecimals: v });
+  const onBuzzdetectDirChange = (v: string) => onChange({ buzzdetectDir: v });
+  const onBuzzdetectFrameLengthChange = (v: number | null) => onChange({ buzzdetectFrameLength: v });
+  const onBuzzdetectTrimActivationPrefixChange = (v: boolean) => onChange({ buzzdetectTrimActivationPrefix: v });
+  const onSyncRemoteUrlChange = (v: string) => onChange({ syncRemoteUrl: v });
   const nameRef = useRef<HTMLDivElement>(null);
 
   // Sync contentEditable when name changes externally (e.g. auto-fill from projectDir).

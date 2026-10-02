@@ -76,6 +76,12 @@ export const createProjectModal = {
 export const projectSettingsModal = {
   get title() { return getOverride('ui.projectSettingsModal.title') ?? "Project Settings"; },
   get titleApplicationOnly() { return getOverride('ui.projectSettingsModal.titleApplicationOnly') ?? "Application Settings"; },
+  get errorNameRequired() { return getOverride('ui.projectSettingsModal.errorNameRequired') ?? "Project name is required."; },
+  get errorMediaRequired() { return getOverride('ui.projectSettingsModal.errorMediaRequired') ?? "Media directory is required."; },
+  get errorAnnotationsRequired() { return getOverride('ui.projectSettingsModal.errorAnnotationsRequired') ?? "Annotations directory is required."; },
+  get errorMediaMissing() { return getOverride('ui.projectSettingsModal.errorMediaMissing') ?? "Media directory does not exist."; },
+  get mediaDirMissing() { return getOverride('ui.projectSettingsModal.mediaDirMissing') ?? "Directory does not exist."; },
+  get annotationDirMissing() { return getOverride('ui.projectSettingsModal.annotationDirMissing') ?? "Directory does not exist yet; it will be created when the first annotation is saved."; },
   get tabApplication() { return getOverride('ui.projectSettingsModal.tabApplication') ?? "Application Settings"; },
   get tabSettings() { return getOverride('ui.projectSettingsModal.tabSettings') ?? "Project Settings"; },
   get tabPreferences() { return getOverride('ui.projectSettingsModal.tabPreferences') ?? "User Preferences"; },

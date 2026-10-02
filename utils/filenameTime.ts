@@ -88,7 +88,8 @@ export function parsePattern(pattern: string): PatternPart[] {
   return parts;
 }
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** `text` as a regex that matches it literally. */
+export const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * True when `pattern` carries enough tokens to pin down a calendar date

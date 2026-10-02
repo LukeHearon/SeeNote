@@ -2,6 +2,7 @@ import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
 import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
 import { formatDateTime, DateTimeFormat } from './datetimeDisplay';
 import { formatGrouped } from './numberFormat';
+import { escapeRegExp } from './filenameTime';
 
 // Clamp `v` into the inclusive range [lo, hi]. Assumes lo <= hi.
 export const clamp = (v: number, lo: number, hi: number): number =>
@@ -340,7 +341,6 @@ export const exactLabelMatcher = (text: string): LabelMatcher => (label) => labe
 
 // Escapes regex metacharacters so `text` can be dropped into a RegExp and
 // matched literally.
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Matches a label against a regular expression. Returns null (rather than
 // throwing) if `pattern` isn't a valid regex, so callers can show an inline
@@ -358,10 +358,6 @@ const buildRegexMatcher = (pattern: string, flags = ''): LabelMatcher | null => 
 
 export const regexLabelMatcher = (pattern: string): LabelMatcher | null => buildRegexMatcher(pattern);
 
-// Matches a label if `text` occurs anywhere in it — implemented as a regex
-// match on the escaped, literal text, so it shares the same unanchored
-// matching path as regexLabelMatcher instead of a separate `.includes()`.
-export const partialLabelMatcher = (text: string): LabelMatcher | null => buildRegexMatcher(escapeRegExp(text));
 
 // Builds the matcher for the Find Label search from its independent toggles.
 // `regex` wins over `partial` when both are on (partial's escaped-literal
