@@ -532,6 +532,11 @@ export interface SyncSummary {
    * them and asks. Confirming re-runs the sync with them as `confirmedClears`.
    */
   pendingClears: string[];
+  /** Annotation files a teammate's sync emptied that this (manual) sync applied. */
+  remoteClears: string[];
+  /** Annotation files the remote no longer has but were kept: an absent file is
+   *  never treated as a deletion. The next push restores them. */
+  ignoredRemoteDeletions: string[];
   message: string;
 }
 

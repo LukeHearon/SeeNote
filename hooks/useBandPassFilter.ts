@@ -5,6 +5,7 @@ import { AudioEngine } from '../utils/AudioEngine';
 import { isFilterAvailable } from '../utils/videoPlaybackMode';
 import { ActivationStackApi } from './useActivationStack';
 import { useHotkeys } from './useHotkeys';
+import { useFlushableDebounce } from './useFlushableDebounce';
 
 export interface BandPassFilterApi {
   filterToolActive: boolean;
@@ -33,7 +34,7 @@ export interface BandPassFilterParams<Prefs extends { bandPassFilter?: BandPassF
   // Shared with AnnotationWindow's other persist effects: gates persistence off
   // until the project-change reset has run for this project id.
   prevProjectIdRef: MutableRefObject<string | null>;
-  updateProjectPreferences: (id: string, preferences: Prefs) => Promise<unknown>;
+  updateProjectPreferences: (id: string, patch: Partial<Prefs>) => Promise<unknown>;
   // Drives the F / Shift+F hotkeys' isFilterAvailable() gate — see that
   // helper's doc comment for why audio-only tracks always allow filtering
   // while Fast-mode video tracks don't.
@@ -68,6 +69,12 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
   const [filterToolActive, setFilterToolActive] = useState(false);
   const [bandPassFilter, setBandPassFilter] = useState<BandPassFilter | null>(project.preferences.bandPassFilter ?? null);
   const [filterStrength, setFilterStrength] = useState(project.preferences.bandPassFilter?.strength ?? 0.5);
+  // Render-time mirrors, so handlers can read the current value without a
+  // state updater (whose side effects would run twice under StrictMode).
+  const bandRef = useRef(bandPassFilter);
+  bandRef.current = bandPassFilter;
+  const filterToolActiveRef = useRef(filterToolActive);
+  filterToolActiveRef.current = filterToolActive;
   // Last active band saved so F can restore it after toggling off.
   const lastBandPassFilterRef = useRef<BandPassFilter | null>(null);
 
@@ -87,29 +94,26 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
     engineRef.current?.setBandPassFilter(bandPassFilter);
   }, [bandPassFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist bandPassFilter changes to the project file (debounced).
-  const filterPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Persist bandPassFilter changes to the project file (debounced; the pending
+  // write survives unmount and window close — see useFlushableDebounce).
+  const filterDebounce = useFlushableDebounce();
   useEffect(() => {
     if (prevProjectIdRef.current !== project.id) return;
-    if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
-    filterPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, bandPassFilter: bandPassFilter ?? null });
+    const id = project.id;
+    filterDebounce.schedule(() => {
+      updateProjectPreferences(id, { bandPassFilter: bandPassFilter ?? null } as Partial<Prefs>);
     }, 600);
-    return () => {
-      if (filterPersistRef.current) clearTimeout(filterPersistRef.current);
-    };
   }, [bandPassFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // `Shift+F` and the filter-tool tile: toggle filter-tool readiness ONLY. Audio
   // filtering is governed by bandPassFilter being non-null.
   const handleToggleFilterTool = useCallback(() => {
-    setFilterToolActive(prev => {
-      const next = !prev;
-      if (next) activationStack.pushIfAbsent('filterTool');
-      else activationStack.remove('filterTool');
-      return next;
-    });
+    // Read from the ref, not a state updater: the activation-stack calls are
+    // side effects, and updaters may run twice.
+    const next = !filterToolActiveRef.current;
+    setFilterToolActive(next);
+    if (next) activationStack.pushIfAbsent('filterTool');
+    else activationStack.remove('filterTool');
   }, [activationStack]);
 
   // Canonical "engage filter" path. Every code path that turns the filter on
@@ -152,10 +156,8 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
   // be restored, clears the band (disabling filtering), and pulls `filterBand`
   // out of the stack. Called by slider-to-0, Esc-on-band, and explicit disable.
   const handleDisableBandPassFilter = useCallback(() => {
-    setBandPassFilter(prev => {
-      if (prev) lastBandPassFilterRef.current = prev;
-      return null;
-    });
+    if (bandRef.current) lastBandPassFilterRef.current = bandRef.current;
+    setBandPassFilter(null);
     activationStack.remove('filterBand');
   }, [activationStack]);
 

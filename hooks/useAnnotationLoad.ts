@@ -2,10 +2,11 @@ import { useRef, useEffect } from 'react';
 import { Annotation, AnnotationTool, LoadedAnnotations, Project } from '../types';
 import { readTextFile } from '../utils/tauriCommands';
 import { parseAudacityContent, generateAudacityContent } from '../utils/helpers';
-import { persistAnnotations } from '../utils/annotationPersist';
+import {
+  annotationFileContent, persistAnnotations, persistAnnotationsIfChanged, recallDiskContent, rememberDiskContent,
+} from '../utils/annotationPersist';
 import { getLocalSyncStatus } from '../utils/tauriCommands';
-import { setMergeContent } from '../utils/annotationMerge';
-import type { PreSyncSnapshot } from './useSyncManagement';
+import { setMergeAnnotations } from '../utils/projectCommands';
 import type { AnnotationIoGate } from '../utils/annotationIoGate';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 
@@ -39,10 +40,6 @@ interface UseAnnotationLoadArgs {
   // True while a git sync/merge/checkout is running. The autosave suspends disk
   // writes while set, so a debounced write can't race the forced checkout.
   syncingRef: React.MutableRefObject<boolean>;
-  // Merge ancestor captured at sync start (or null). Present for the current
-  // track => the post-pull reload three-way-merges instead of blind-replacing.
-  // Consumed and cleared here.
-  preSyncSnapshotRef: React.MutableRefObject<PreSyncSnapshot | null>;
   // Bumped after a pull so the auto-load effect re-reads disk.
   reloadNonce: number;
   // This effect's in-flight read-and-merge is work a track switch must wait for
@@ -55,9 +52,7 @@ interface UseAnnotationLoadArgs {
 // Owns annotation disk I/O for the active track: the getAnnotationPath mapping
 // (audio dir → annotation dir, the path contract the tests pin), the debounced
 // auto-save effect, and the auto-load effect. The autosave timer ref is exposed
-// so useSyncManagement can flush a pending write before syncing. skipAutoSaveRef
-// is internal — it parks the autosave for ~500ms after a load so a fresh read
-// doesn't immediately re-write the file.
+// so useSyncManagement can flush a pending write before syncing.
 export function useAnnotationLoad({
   projectRef,
   getAnnotationPath,
@@ -75,12 +70,13 @@ export function useAnnotationLoad({
   autoSaveTimeoutRef,
   loadedAnnotationsRef,
   syncingRef,
-  preSyncSnapshotRef,
   reloadNonce,
   ioGate,
   addLog,
 }: UseAnnotationLoadArgs) {
-  const skipAutoSaveRef = useRef(false);
+  // Bumped per load, so a slower earlier read of the same track (a refresh and
+  // a post-pull reload racing) can't land after a newer one.
+  const loadGenRef = useRef(0);
 
   useEffect(() => {
     if (!trackPath || !annotationDirectory) return;
@@ -103,20 +99,24 @@ export function useAnnotationLoad({
       // reads this handle to decide whether a sync must flush first, and a
       // stale truthy handle made it flush the just-loaded state back to disk.
       autoSaveTimeoutRef.current = null;
-      if (skipAutoSaveRef.current) return;
       // Guard: bail if the track changed while we were waiting.
       if (savedTrackPath !== trackPathRef.current) return;
-      // Never write while a sync/merge/checkout is running: a write here would
-      // be clobbered by the forced checkout and then lost when the post-pull
-      // reload replaces in-memory state. Re-arm and retry until the sync ends;
-      // the reload's three-way merge then folds this edit in from memory.
-      if (syncingRef.current) {
+      // Never write while a sync/merge/checkout is running, or while the reload
+      // after it is pending: a write during the sync is reverted by its forced
+      // checkout, and one between the sync and the reload would overwrite the
+      // pulled file with the pre-pull list (and become the merge ancestor, so
+      // the teammates' changes would be dropped). Re-arm and retry; the
+      // reload's three-way merge folds this edit in from memory.
+      if (syncingRef.current || ioGate.busy) {
         autoSaveTimeoutRef.current = setTimeout(runSave, 300);
         return;
       }
       try {
         const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
-        const result = await persistAnnotations(savedAnnotPath, annotations, decimals);
+        // Skips a write that would change nothing — notably the first run after
+        // a load, which sees exactly the list just read.
+        const result = await persistAnnotationsIfChanged(savedAnnotPath, annotations, decimals);
+        if (result === 'unchanged') return;
         const cfg = projectRef.current;
         if (cfg?.settings.gitSync) {
           // Numerical (canonical record-set) comparison against HEAD, not a
@@ -163,19 +163,17 @@ export function useAnnotationLoad({
     // Snapshot identity at effect-schedule time so async resolution can verify
     // the track hasn't changed while we were awaiting I/O.
     const expectedTrackPath = trackPath;
-    // A snapshot captured for a *different* track must never merge into this
-    // one's file — drop it if the track changed since sync start.
-    if (preSyncSnapshotRef.current && preSyncSnapshotRef.current.trackPath !== expectedTrackPath) {
-      preSyncSnapshotRef.current = null;
-    }
-    // Capture the in-memory list for THIS track before disarming — the
-    // post-pull merge below needs it as "ours", and disarming is what makes it
-    // unreadable. Null when the snapshot doesn't name this track (mid-load, or
-    // a track switch), which is exactly when there is no trustworthy in-memory
-    // state and the merge must not run.
+    const gen = ++loadGenRef.current;
+    // Capture the in-memory list for THIS track before disarming — a reload of
+    // the open track (after a pull, or a refresh) merges it with disk, and
+    // disarming is what makes it unreadable. Null on a track switch or mid-load,
+    // when there is no trustworthy in-memory state and disk simply wins.
     const ours = loadedAnnotationsRef.current?.trackPath === expectedTrackPath
       ? loadedAnnotationsRef.current.annotations
       : null;
+    // The file as we last wrote or read it: the merge ancestor. Captured now,
+    // before anything below can update it.
+    const ancestor = ours !== null ? recallDiskContent(annotPath) : undefined;
     // Disarm all persistence for this track until the read completes; if the
     // read errors we stay disarmed rather than risk saving state that doesn't
     // reflect what's on disk.
@@ -184,32 +182,31 @@ export function useAnnotationLoad({
     // gate never reads idle between the request and this read.
     const endGateOp = ioGate.begin();
     ioGate.claimReloads();
+    const current = () => gen === loadGenRef.current && trackPathRef.current === expectedTrackPath;
 
     (async () => {
       try {
         const content = await readTextFile(annotPath);
-        // Drop result if the user switched tracks while we were reading.
-        if (trackPathRef.current !== expectedTrackPath) return;
+        if (!current()) return;
 
         const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
         const diskContent = content ?? '';
-        const snapshot = preSyncSnapshotRef.current;
 
         let list: Annotation[];
-        if (snapshot && snapshot.trackPath === expectedTrackPath && ours !== null) {
-          // This reload follows a sync/pull for the same track. Three-way-merge
-          // the pre-sync ancestor, our current in-memory state (which may hold
-          // an edit made *during* the sync that the checkout just clobbered on
-          // disk), and the freshly-read disk content — instead of blindly
-          // replacing state with disk. If the merge changes disk, write it back
-          // through the shared persist helper (empty => remove the file).
-          const oursContent = generateAudacityContent(ours, decimals);
-          const merged = setMergeContent(snapshot.content, oursContent, diskContent);
+        if (ours !== null && ancestor !== undefined) {
+          // A reload of the open track: the file may have changed under us (a
+          // pull's checkout, an external edit) while memory may hold an edit
+          // that never reached disk (made during the sync, or inside the
+          // autosave debounce). Three-way-merge them against what the file held
+          // when we last wrote or read it — the same merge a sync uses — rather
+          // than letting either side replace the other.
+          const merged = await setMergeAnnotations(ancestor, generateAudacityContent(ours, decimals), diskContent);
+          if (!current()) return;
           list = merged ? parseAudacityContent(merged, annotationToolsRef.current) : [];
           if (merged !== diskContent) {
             await persistAnnotations(annotPath, list, decimals);
+            if (!current()) return;
           }
-          preSyncSnapshotRef.current = null;
         } else {
           // An empty/missing file loads as [] — applied like any other result so
           // stale in-memory annotations can't survive a pull that emptied the
@@ -217,7 +214,9 @@ export function useAnnotationLoad({
           list = content ? parseAudacityContent(content, annotationToolsRef.current) : [];
         }
 
-        skipAutoSaveRef.current = true;
+        // What the file now holds as far as persistence is concerned, so the
+        // autosave that sees this list skips its no-op write.
+        rememberDiskContent(annotPath, annotationFileContent(list, decimals));
         setAnnotations(list);
         annotationsHistoryRef.current = [list];
         historyIndexRef.current = 0;
@@ -229,7 +228,6 @@ export function useAnnotationLoad({
         // pushed to the whole team.
         loadedAnnotationsRef.current = { trackPath: expectedTrackPath, annotations: list };
         if (list.length > 0) addLog(`Loaded ${list.length} annotations`);
-        setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
       } catch (err) {
         addLog(`Error loading annotations: ${err}`, 'error');
       } finally {
@@ -238,8 +236,4 @@ export function useAnnotationLoad({
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackPath, annotationDirectory, currentDirectory, reloadNonce]);
-
-  return {
-    skipAutoSaveRef,
-  };
 }

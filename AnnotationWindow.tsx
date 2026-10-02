@@ -24,6 +24,7 @@ import { isInsideDir, joinPath } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
+import { preferencesPatch, type UpdateProjectPreferences } from './utils/projectPreferences';
 import { AnnotationIoGate } from './utils/annotationIoGate';
 import { resolveVideoElementUrl } from './utils/videoUrl';
 import { createViewportStore } from './utils/viewportStore';
@@ -41,7 +42,7 @@ import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hook
 import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
-import { useSyncManagement, type PreSyncSnapshot } from './hooks/useSyncManagement';
+import { useSyncManagement, INCOMING_CLEARS_PREFIX } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
 import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
@@ -77,7 +78,7 @@ export interface AnnotationWindowProps {
   project: Project;
   onClose: () => void;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
-  updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
+  updateProjectPreferences: UpdateProjectPreferences;
   touchLastOpened: (id: string) => void;
 }
 
@@ -146,14 +147,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // The single source of truth for annotation persistence: which track is
   // hydrated AND that track's annotations, as one atomic value (see
   // LoadedAnnotations in types.ts). Null means "nothing may be written".
-  // Every disk writer — the debounced autosave, useSyncManagement's flush, and
-  // the merge ancestor — reads the track and the list from here together, so
+  // Every disk writer — the debounced autosave and useSyncManagement's flush —
+  // reads the track and the list from here together, so
   // none of them can pair a real track with a stale or placeholder list.
   const loadedAnnotationsRef = useRef<LoadedAnnotations | null>(null);
-  // Merge ancestor for the post-pull reload: the exact annotation state flushed
-  // at sync start. Written by useSyncManagement, consumed/cleared by
-  // useAnnotationLoad's three-way merge. Owned here, shared by both.
-  const preSyncSnapshotRef = useRef<PreSyncSnapshot | null>(null);
   // Sync/reload work a track switch must wait for before it flushes the old
   // track. Shared by useSyncManagement, useAnnotationLoad and handleOpenTrack.
   const [ioGate] = useState(() => new AnnotationIoGate());
@@ -1064,7 +1061,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // doesn't come through here.)
   const handleEnteredFolderChange = useCallback((path: string | null) => {
     updateProjectPreferences(project.id, {
-      ...project.preferences,
       enteredFolderPath: path ?? undefined,
       ...(shuffleMode ? { shuffleMode: false } : {}),
     });
@@ -1206,7 +1202,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     autoSaveTimeoutRef,
     trackPathRef,
     loadedAnnotationsRef,
-    preSyncSnapshotRef,
     ioGate,
     addLog,
   });
@@ -1258,7 +1253,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     autoSaveTimeoutRef,
     loadedAnnotationsRef,
     syncingRef,
-    preSyncSnapshotRef,
     reloadNonce: reloadNonce + annotationReloadNonce,
     ioGate,
     addLog,
@@ -1618,7 +1612,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       setShowProjectSettings(false);
       return;
     }
-    await updateProjectPreferences(project.id, updatedPreferences);
+    // Only what the modal actually changed: it holds a copy of the preferences from
+    // when it opened, and writing all of it back would revert anything the debounced
+    // persisters (UI layout, filter, tool hotkeys) saved in the meantime.
+    await updateProjectPreferences(project.id, preferencesPatch(project.preferences, updatedPreferences));
     loadAnnotationTools(updated);
     setVideoMode(migrateVideoMode(updated.preferences.uiSettings?.videoMode));
     if (mediaDirChanged) {
@@ -1652,14 +1649,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   const handleToggleFileFilter = useCallback(() => {
     updateProjectPreferences(project.id, {
-      ...project.preferences,
       fileFilter: nextFileFilter(project.preferences.fileFilter ?? 'all'),
     });
   }, [project, updateProjectPreferences]);
 
   const handleToggleBuzzdetectFilter = useCallback(() => {
     updateProjectPreferences(project.id, {
-      ...project.preferences,
       buzzdetectFileFilter: nextFileFilter(project.preferences.buzzdetectFileFilter ?? 'all'),
     });
   }, [project, updateProjectPreferences]);
@@ -1674,15 +1669,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   }, []);
 
   const handleFindLabelUseRegexChange = useCallback((useRegex: boolean) => {
-    updateProjectPreferences(project.id, { ...project.preferences, findLabelUseRegex: useRegex });
+    updateProjectPreferences(project.id, { findLabelUseRegex: useRegex });
   }, [project, updateProjectPreferences]);
 
   const handleFindLabelPartialChange = useCallback((partial: boolean) => {
-    updateProjectPreferences(project.id, { ...project.preferences, findLabelPartialMatch: partial });
+    updateProjectPreferences(project.id, { findLabelPartialMatch: partial });
   }, [project, updateProjectPreferences]);
 
   const handleFindLabelCaseSensitiveChange = useCallback((caseSensitive: boolean) => {
-    updateProjectPreferences(project.id, { ...project.preferences, findLabelCaseSensitive: caseSensitive });
+    updateProjectPreferences(project.id, { findLabelCaseSensitive: caseSensitive });
   }, [project, updateProjectPreferences]);
 
   const handleRevealInFinder = useCallback((path: string) => {
@@ -2400,7 +2395,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           <div className="flex items-start justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-100">
               {syncError
-                ? (syncError.includes('AUTH_FAILED:') ? annotationWindow.syncFailedAuth : annotationWindow.syncFailed)
+                ? (syncError.includes('AUTH_FAILED:') ? annotationWindow.syncFailedAuth
+                  : syncError.includes(INCOMING_CLEARS_PREFIX) ? annotationWindow.autoPullBlocked
+                  : annotationWindow.syncFailed)
                 : syncIsAutoPull ? annotationWindow.autoPullComplete : annotationWindow.syncComplete}
             </h3>
             <button
@@ -2412,7 +2409,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           </div>
           {syncError ? (
             <p className="text-xs text-red-400 mt-2 whitespace-pre-wrap">
-              {syncError.replace('AUTH_FAILED:', '').trim()}
+              {syncError.replace('AUTH_FAILED:', '').replace(INCOMING_CLEARS_PREFIX, '').trim()}
             </p>
           ) : syncSummary && (
             <div className="text-xs text-slate-300 mt-2 space-y-1">
@@ -2463,6 +2460,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   ))}
                 </ul>
               )}
+              {([
+                [syncSummary.remoteClears, annotationWindow.remoteClearsApplied],
+                [syncSummary.ignoredRemoteDeletions, annotationWindow.remoteDeletionsKept],
+              ] as const).map(([paths, label]) => paths.length > 0 && (
+                <div key={label} className="mt-2">
+                  <p className="text-amber-200">{label}</p>
+                  <ul className="max-h-24 overflow-y-auto space-y-0.5">
+                    {paths.map(p => <li key={p} className="font-mono text-[10px] text-amber-100/80 truncate">{p}</li>)}
+                  </ul>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -2546,8 +2554,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             onToggleFileFilter: handleToggleFileFilter,
             buzzdetectFilter: project?.preferences.buzzdetectFileFilter ?? 'all',
             onToggleBuzzdetectFilter: handleToggleBuzzdetectFilter,
-            onClearFileFilter: () => updateProjectPreferences(project.id, { ...project.preferences, fileFilter: 'all' }),
-            onClearBuzzdetectFilter: () => updateProjectPreferences(project.id, { ...project.preferences, buzzdetectFileFilter: 'all' }),
+            onClearFileFilter: () => updateProjectPreferences(project.id, { fileFilter: 'all' }),
+            onClearBuzzdetectFilter: () => updateProjectPreferences(project.id, { buzzdetectFileFilter: 'all' }),
             onRefreshFileTree: refreshFileTree,
             onRevealInFinder: handleRevealInFinder,
             onRevealAnnotations: handleRevealAnnotations,

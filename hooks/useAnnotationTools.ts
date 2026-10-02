@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Annotation, AnnotationTool, Project, ProjectPreferences } from '../types';
+import { Annotation, AnnotationTool, Project } from '../types';
+import type { UpdateProjectPreferences } from '../utils/projectPreferences';
 import { HOTKEY_COLORS } from '../constants';
 import { generateId, colorForLabel, exactLabelMatcher } from '../utils/helpers';
 import {
@@ -20,7 +21,7 @@ interface UseAnnotationToolsArgs {
   // Shared with the project-tool persistence guard so a project switch doesn't
   // overwrite folders with stale tools. Owned by AnnotationWindow.
   prevProjectIdRef: React.MutableRefObject<string | null>;
-  updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
+  updateProjectPreferences: UpdateProjectPreferences;
   addLog: (msg: string, type?: 'info' | 'error') => void;
   examplePlayer: ReturnType<typeof useExamplePlayer>;
   // Annotation list ownership stays in AnnotationWindow; rename/delete/reorder
@@ -155,7 +156,6 @@ export function useAnnotationTools({
         addLog(`Error saving annotation tools: ${err}`, 'error');
       }
       updateProjectPreferences(proj.id, {
-        ...proj.preferences,
         toolHotkeys: buildHotkeyMap(annotationTools),
       });
     }, 500);

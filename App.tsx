@@ -49,8 +49,8 @@ export default function App() {
   );
 
   const updateActiveProjectPreferences = useCallback(
-    async (id: string, preferences: ProjectPreferences): Promise<Project | undefined> => {
-      const updated = await updateProjectPreferences(id, preferences);
+    async (id: string, patch: Partial<ProjectPreferences>): Promise<Project | undefined> => {
+      const updated = await updateProjectPreferences(id, patch);
       if (updated) setActiveProject(prev => (prev && prev.id === updated.id ? updated : prev));
       return updated;
     },
