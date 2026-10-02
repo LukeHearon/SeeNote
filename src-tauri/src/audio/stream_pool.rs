@@ -38,10 +38,13 @@
 //! ── Staleness ────────────────────────────────────────────────────────────────
 //! A pooled stream holds an open handle and buffered container state, so it
 //! would keep serving the old content if the file were rewritten underneath it.
-//! Idle streams are therefore dropped after `POOL_TTL`, keeping any such window
-//! short, and the pool is capped so it cannot accumulate handles.
+//! Each stream remembers the file's (mtime, length) from when it was opened and
+//! is discarded at checkout if the file no longer matches. Idle streams are also
+//! dropped after `POOL_TTL`, and the pool is capped so it cannot accumulate
+//! handles.
 
-use super::decoder::PcmStream;
+use super::decoder::{file_stamp, FileStamp, PcmStream};
+use super::lock;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -83,6 +86,8 @@ const MAX_PATHS: usize = 3;
 struct Idle {
     stream: PcmStream,
     last_used: Instant,
+    /// Identity of the file when the stream was opened.
+    stamp: Option<FileStamp>,
 }
 
 type Pool = HashMap<String, Vec<Idle>>;
@@ -92,19 +97,29 @@ fn pool() -> &'static Mutex<Pool> {
     POOL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn reap(pool: &mut Pool) {
+/// Remove expired streams, returning them so the caller can drop them AFTER
+/// releasing the pool lock — dropping an ffmpeg-backed stream kills and waits
+/// on a child process, which must not happen while every other request is
+/// blocked on the pool.
+#[must_use]
+fn reap(pool: &mut Pool) -> Vec<Idle> {
     let now = Instant::now();
+    let mut expired = Vec::new();
     for streams in pool.values_mut() {
-        streams.retain(|idle| {
-            let ttl = if idle.stream.is_subprocess_backed() {
-                POOL_TTL_SUBPROCESS
-            } else {
-                POOL_TTL
-            };
-            now.duration_since(idle.last_used) < ttl
-        });
+        let (keep, gone): (Vec<Idle>, Vec<Idle>) =
+            std::mem::take(streams).into_iter().partition(|idle| {
+                let ttl = if idle.stream.is_subprocess_backed() {
+                    POOL_TTL_SUBPROCESS
+                } else {
+                    POOL_TTL
+                };
+                now.duration_since(idle.last_used) < ttl
+            });
+        *streams = keep;
+        expired.extend(gone);
     }
     pool.retain(|_, streams| !streams.is_empty());
+    expired
 }
 
 /// A checked-out stream that returns itself to the pool when dropped.
@@ -115,6 +130,7 @@ fn reap(pool: &mut Pool) {
 pub struct PooledStream {
     path: String,
     stream: Option<PcmStream>,
+    stamp: Option<FileStamp>,
 }
 
 impl Deref for PooledStream {
@@ -133,32 +149,35 @@ impl DerefMut for PooledStream {
 impl Drop for PooledStream {
     fn drop(&mut self) {
         let Some(stream) = self.stream.take() else { return };
-        let Ok(mut pool) = pool().lock() else { return };
-        reap(&mut pool);
+        // Everything evicted below is dropped after the lock is released.
+        let mut evicted: Vec<Idle> = Vec::new();
+        {
+            let mut pool = lock(pool());
+            evicted.extend(reap(&mut pool));
 
-        let entry = pool.entry(self.path.clone()).or_default();
-        entry.push(Idle { stream, last_used: Instant::now() });
-        // Keep the most recently used; a stream that keeps losing the race for
-        // reuse is the least useful one to hold a handle for.
-        if entry.len() > MAX_STREAMS_PER_PATH {
-            entry.remove(0);
-        }
+            let entry = pool.entry(self.path.clone()).or_default();
+            entry.push(Idle { stream, last_used: Instant::now(), stamp: self.stamp });
+            // Keep the most recently used; a stream that keeps losing the race for
+            // reuse is the least useful one to hold a handle for.
+            if entry.len() > MAX_STREAMS_PER_PATH {
+                evicted.push(entry.remove(0));
+            }
 
-        // Bound total files. Evict whichever path was least recently returned to.
-        while pool.len() > MAX_PATHS {
-            let victim = pool
-                .iter()
-                .max_by_key(|(_, streams)| {
-                    streams.iter().map(|i| i.last_used).min().unwrap_or_else(Instant::now)
-                })
-                .map(|(path, _)| path.clone());
-            match victim {
-                Some(path) => {
-                    pool.remove(&path);
+            // Bound total files. Evict whichever path was least recently returned to.
+            while pool.len() > MAX_PATHS {
+                let victim = pool
+                    .iter()
+                    .max_by_key(|(_, streams)| {
+                        streams.iter().map(|i| i.last_used).min().unwrap_or_else(Instant::now)
+                    })
+                    .map(|(path, _)| path.clone());
+                match victim.and_then(|path| pool.remove(&path)) {
+                    Some(streams) => evicted.extend(streams),
+                    None => break,
                 }
-                None => break,
             }
         }
+        drop(evicted);
     }
 }
 
@@ -169,7 +188,10 @@ impl Drop for PooledStream {
 /// only affects how much audio is decoded and discarded on the way, never where
 /// the stream lands.
 pub fn acquire(path: &str, start_sec: f64, margin_sec: f64) -> Result<PooledStream> {
-    let reused = take_forward_candidate(path, start_sec);
+    // Stamped before anything is opened: a file rewritten mid-open then fails
+    // the match at the next checkout rather than being trusted.
+    let stamp = file_stamp(path);
+    let reused = take_forward_candidate(path, start_sec, stamp);
 
     let stream = match reused {
         Some(mut stream) => {
@@ -188,15 +210,47 @@ pub fn acquire(path: &str, start_sec: f64, margin_sec: f64) -> Result<PooledStre
         None => PcmStream::open(path, start_sec)?,
     };
 
-    Ok(PooledStream { path: path.to_string(), stream: Some(stream) })
+    Ok(PooledStream { path: path.to_string(), stream: Some(stream), stamp })
 }
 
 /// Remove and return the idle stream for `path` that is closest to `start_sec`
 /// without being past it — the one whose forward seek scans the least.
-fn take_forward_candidate(path: &str, start_sec: f64) -> Option<PcmStream> {
-    let mut pool = pool().lock().ok()?;
-    reap(&mut pool);
+///
+/// Streams opened when the file looked different (`stamp`) are discarded rather
+/// than offered: they would keep serving the old bytes.
+fn take_forward_candidate(
+    path: &str,
+    start_sec: f64,
+    stamp: Option<FileStamp>,
+) -> Option<PcmStream> {
+    let mut stale: Vec<Idle> = Vec::new();
+    let mut expired: Vec<Idle> = Vec::new();
+    let found = {
+        let mut pool = lock(pool());
+        expired.extend(reap(&mut pool));
+        take_candidate_locked(&mut pool, path, start_sec, stamp, &mut stale)
+    };
+    // Dropped outside the lock (ffmpeg-backed streams block on child exit).
+    drop(expired);
+    drop(stale);
+    found
+}
+
+fn take_candidate_locked(
+    pool: &mut Pool,
+    path: &str,
+    start_sec: f64,
+    stamp: Option<FileStamp>,
+    stale: &mut Vec<Idle>,
+) -> Option<PcmStream> {
     let streams = pool.get_mut(path)?;
+
+    // A file we cannot stat (None) matches nothing: no reuse without proof.
+    let (fresh, old): (Vec<Idle>, Vec<Idle>) = std::mem::take(streams)
+        .into_iter()
+        .partition(|idle| stamp.is_some() && idle.stamp == stamp);
+    *streams = fresh;
+    stale.extend(old);
 
     let best = streams
         .iter()
@@ -208,51 +262,34 @@ fn take_forward_candidate(path: &str, start_sec: f64) -> Option<PcmStream> {
                 .partial_cmp(&b.stream.position_secs())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(i, _)| i)?;
+        .map(|(i, _)| i);
 
-    let idle = streams.remove(best);
+    let result = best.map(|i| streams.remove(i).stream);
     if streams.is_empty() {
         pool.remove(path);
     }
-    Some(idle.stream)
+    result
+}
+
+/// Serializes tests that use the (process-global) pool: one test's `clear()`
+/// or its paths' eviction must not land in the middle of another's.
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static GUARD: Mutex<()> = Mutex::new(());
+    lock(&GUARD)
 }
 
 /// Drop every pooled stream. Used by tests that need a cold pool.
 #[cfg(test)]
 pub fn clear() {
-    if let Ok(mut pool) = pool().lock() {
-        pool.clear();
-    }
+    lock(pool()).clear();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::wav::write_ramp_wav;
 
-    /// Mono 16-bit WAV ramp, so a stream's position is verifiable from the
-    /// samples it returns.
-    fn write_ramp_wav(name: &str, sample_rate: u32, n_frames: usize) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(name);
-        let data_bytes = (n_frames * 2) as u32;
-        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_bytes.to_le_bytes());
-        for i in 0..n_frames {
-            wav.extend_from_slice(&((i % 30000) as i16).to_le_bytes());
-        }
-        std::fs::write(&path, wav).expect("write ramp wav");
-        path
-    }
 
     fn ramp_value(i: usize) -> f32 {
         (i % 30000) as f32 / 32768.0
@@ -262,6 +299,7 @@ mod tests {
     /// returns must be the ones at the requested time.
     #[test]
     fn reused_streams_land_where_a_fresh_open_would() {
+        let _guard = test_guard();
         clear();
         let sr = 8000u32;
         let path = write_ramp_wav("seenote_pool_positions.wav", sr, 80_000);
@@ -302,6 +340,7 @@ mod tests {
     #[test]
     #[ignore]
     fn pooled_mp3_streams_land_where_a_fresh_open_would() {
+        let _guard = test_guard();
         clear();
         let p = "../local/test.mp3";
 
@@ -333,6 +372,7 @@ mod tests {
     /// exists to avoid.
     #[test]
     fn only_streams_positioned_before_the_target_are_reused() {
+        let _guard = test_guard();
         clear();
         let sr = 8000u32;
         let path = write_ramp_wav("seenote_pool_forward_only.wav", sr, 80_000);
@@ -344,9 +384,9 @@ mod tests {
             let _ = stream.read(8).expect("read");
         }
         // A target before it must not take that stream...
-        assert!(take_forward_candidate(p, 1.0).is_none());
+        assert!(take_forward_candidate(p, 1.0, file_stamp(p)).is_none());
         // ...but one after it may.
-        let candidate = take_forward_candidate(p, 7.0);
+        let candidate = take_forward_candidate(p, 7.0, file_stamp(p));
         assert!(candidate.is_some());
         assert!(candidate.unwrap().position_secs() <= 7.0);
 
@@ -354,8 +394,41 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A stream opened before the file was rewritten must never be handed out:
+    /// it would keep serving the old bytes.
+    #[test]
+    fn streams_for_a_rewritten_file_are_discarded() {
+        let _guard = test_guard();
+        clear();
+        let sr = 8000u32;
+        let path = write_ramp_wav("seenote_pool_stale.wav", sr, 80_000);
+        let p = path.to_str().unwrap();
+
+        {
+            let mut stream = acquire(p, 1.0, 0.05).expect("acquire");
+            let _ = stream.read(8).expect("read");
+        }
+        // Unchanged file: reusable.
+        let reused = take_forward_candidate(p, 2.0, file_stamp(p));
+        assert!(reused.is_some());
+        drop(reused);
+        clear();
+
+        {
+            let _ = acquire(p, 1.0, 0.05).expect("acquire");
+        }
+        // Rewrite with a different length, as an edit in another program would.
+        write_ramp_wav("seenote_pool_stale.wav", sr, 40_000);
+        assert!(take_forward_candidate(p, 2.0, file_stamp(p)).is_none());
+        assert!(lock(pool()).get(p).is_none(), "stale streams should be evicted");
+
+        clear();
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn pool_is_bounded_per_path() {
+        let _guard = test_guard();
         clear();
         let sr = 8000u32;
         let path = write_ramp_wav("seenote_pool_bounded.wav", sr, 80_000);
@@ -367,7 +440,7 @@ mod tests {
             .collect();
         drop(held);
 
-        let count = pool().lock().unwrap().get(p).map(|v| v.len()).unwrap_or(0);
+        let count = lock(pool()).get(p).map(|v| v.len()).unwrap_or(0);
         assert_eq!(count, MAX_STREAMS_PER_PATH);
 
         clear();

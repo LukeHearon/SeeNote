@@ -43,9 +43,6 @@ interface AnnotationOverlayProps {
   playheadFollowsAnnotationStartRef: React.MutableRefObject<boolean>;
   getPointerTime: (e: React.MouseEvent) => number;
   onSelectAnnotation: (id: string | null) => void;
-  // Enter in the label editor: full deselect (clears the bound annotation and
-  // its selection region too), matching the window-level Enter shortcut.
-  onDeselectAnnotation?: () => void;
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onBoundAnnotationChange: (id: string | null) => void;
@@ -85,6 +82,12 @@ const PENCIL_INSET = 20; // matches the removed `right-5` (1.25rem)
 const DELETE_NATURAL_INSET = -12; // matches the removed `-right-3` (-0.75rem)
 const DELETE_PINNED_INSET = 12;
 
+// Narrower than this (content px), an annotation is a sliver nobody can aim at,
+// so — unless it is selected, bound or being edited — it mounts as one inert
+// element instead of the full box (two resize handles, label, pencil, delete
+// button and six event handlers). Zoomed far out a view holds thousands.
+const MIN_INTERACTIVE_WIDTH = 2;
+
 // Which of an annotation's children need a scroll-dependent position fix-up
 // each frame (see the pinning note on `syncScroll`).
 type PinnedKind = 'label' | 'dropdown' | 'pencil' | 'delete';
@@ -101,7 +104,8 @@ interface AnnotationEls {
 
 interface VisibleAnnotation {
   ann: AnnotationWithLayer;
-  // Content-space pixels: time * pixelsPerSecond, independent of scroll.
+  // Content-space pixels: time * pixelsPerSecond, independent of scroll and of
+  // the layer's anchor (which only the layout `left` subtracts).
   startX: number;
   endX: number;
   width: number;
@@ -187,7 +191,6 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   playheadFollowsAnnotationStartRef,
   getPointerTime,
   onSelectAnnotation,
-  onDeselectAnnotation,
   onAnnotationsChange,
   onAnnotationsCommit,
   onBoundAnnotationChange,
@@ -203,15 +206,6 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 }) => {
   const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
 
-  // Cull anchor: the scroll position the currently-mounted set was chosen for.
-  // Mounted range is [anchor - w, anchor + 2w], so the anchor can go stale by
-  // half a viewport before the visible span could reach an edge of it. Advancing
-  // it is the ONLY React render a scroll causes, and it happens roughly once per
-  // half-viewport scrolled rather than once per playback tick.
-  const [cullAnchor, setCullAnchor] = useState(() => scrollLeftRef.current);
-  const cullAnchorRef = useRef(cullAnchor);
-  cullAnchorRef.current = cullAnchor;
-
   const overlayWidth = containerWidth || 1000;
   const containerWidthRef = useRef(overlayWidth);
   containerWidthRef.current = overlayWidth;
@@ -221,23 +215,9 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   const selRef = useRef({ selStartX, selEndX });
   selRef.current = { selStartX, selEndX };
 
-  const visible = useMemo<VisibleAnnotation[]>(() => {
-    const rangeMin = cullAnchor - overlayWidth;
-    const rangeMax = cullAnchor + 2 * overlayWidth;
-    const out: VisibleAnnotation[] = [];
-    for (const ann of layeredAnnotations) {
-      const startX = ann.start * pixelsPerSecond;
-      const endX = ann.end * pixelsPerSecond;
-      if (endX < rangeMin || startX > rangeMax) continue;
-      out.push({ ann, startX, endX, width: endX - startX });
-    }
-    return out;
-  }, [layeredAnnotations, pixelsPerSecond, cullAnchor, overlayWidth]);
   // Ref mirror so the per-frame sync reads the current geometry without being
-  // rebuilt. Assigned during render (like the mirrors above) so it is already
-  // fresh when the layer hook's effect re-pins after this commit.
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
+  // rebuilt.
+  const visibleRef = useRef<VisibleAnnotation[]>([]);
 
   // Element registry for the per-frame pin fix-ups. Ref callbacks are cached per
   // (id, kind) so a re-render doesn't detach and re-attach every node.
@@ -260,7 +240,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
 
   // The shared layer transform carries every box; this is the remainder — the
   // handful of elements whose placement is pinned to a viewport edge (the label's
-  // screen-left pin, the hover buttons' screen-right pin), plus the cull anchor.
+  // screen-left pin, the hover buttons' screen-right pin).
   // Each gets a style write only when its pinned value actually changed.
   const syncPins = useCallback((scrollLeft: number, scale: number) => {
     const cw = containerWidthRef.current;
@@ -279,6 +259,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
     // every steady state, which is to say during all of playback and scrolling.
     const inverse = scale === 1 ? '' : `scaleX(${1 / scale})`;
     for (const v of visibleRef.current) {
+      // Pins only matter where they can be seen. An off-screen box is repinned
+      // by the first sync after it scrolls into view (and a freshly mounted one
+      // is pinned at render), so the mounted-but-distant ones cost nothing here.
+      if (v.endX * scale - scrollLeft < 0 || v.startX * scale - scrollLeft > cw) continue;
       const rec = elsRef.current.get(v.ann.id);
       if (!rec) continue;
       const scaled = scale === 1 ? v : { startX: v.startX * scale, endX: v.endX * scale };
@@ -313,17 +297,36 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         if (right !== rec.deleteRight) { rec.deleteRight = right; del.style.right = `${right}px`; }
       }
     }
-
-    if (Math.abs(scrollLeft - cullAnchorRef.current) > cw * 0.5) {
-      cullAnchorRef.current = scrollLeft;
-      setCullAnchor(scrollLeft);
-    }
   }, [inputRefs]);
 
+  // The layer's anchor doubles as the cull anchor: the scroll position the
+  // mounted set was chosen for. Mounted range is [anchor - w, anchor + 2w], so
+  // the anchor can go stale by half a viewport before the visible span could
+  // reach an edge of it — which is exactly when the layer re-anchors. That
+  // re-render is the ONLY React render a scroll causes, roughly once per
+  // half-viewport scrolled rather than once per playback tick.
   const layer = useScrollTransformLayer(scrollSync, scrollLeftRef, syncPins, {
     livePpsRef: pixelsPerSecondRef,
     layoutPps: pixelsPerSecond,
-  });
+  }, overlayWidth * 0.5);
+  const cullAnchor = layer.anchor;
+
+  const visible = useMemo<VisibleAnnotation[]>(() => {
+    const rangeMin = cullAnchor - overlayWidth;
+    const rangeMax = cullAnchor + 2 * overlayWidth;
+    const out: VisibleAnnotation[] = [];
+    for (const ann of layeredAnnotations) {
+      const startX = ann.start * pixelsPerSecond;
+      const endX = ann.end * pixelsPerSecond;
+      if (endX < rangeMin || startX > rangeMax) continue;
+      out.push({ ann, startX, endX, width: endX - startX });
+    }
+    return out;
+  }, [layeredAnnotations, pixelsPerSecond, cullAnchor, overlayWidth]);
+  // Assigned during render (like the mirrors above) so it is already fresh when
+  // the layer hook's effect re-pins after this commit.
+  visibleRef.current = visible;
+
 
   // Drop registry entries for annotations that just unmounted. No dep array:
   // the mounted set can change on any render.
@@ -387,7 +390,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
       >
       {visible.map((v) => {
         const annotation = v.ann;
-        const { startX: left, width } = v;
+        // Relative to the layer's anchor, so it stays small however far into the
+        // file the box is (see useScrollTransformLayer).
+        const left = v.startX - layer.anchor;
+        const { width } = v;
         const isSelected = selectedAnnotationId === annotation.id;
         const isBound = boundAnnotationId === annotation.id;
 
@@ -396,6 +402,26 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         const baseColor = annotation.color || "#ffffff";
         const isCustomAnnotation = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
         const styleVars = annotationColorStyle(baseColor, isSelected);
+
+        if (width < MIN_INTERACTIVE_WIDTH && !isSelected && !isBound && editingInputId !== annotation.id) {
+          // Inert: clicks fall through to the bare spectrogram, where a sliver
+          // this thin would have been a seek anyway.
+          return (
+            <div
+              key={annotation.id}
+              className="absolute rounded pointer-events-none"
+              style={{
+                left: `${left}px`,
+                width: `${MIN_INTERACTIVE_WIDTH}px`,
+                top: `${top}px`,
+                height: `${ANNOTATION_BOX_HEIGHT}px`,
+                border: `1px solid ${styleVars.borderColor}`,
+                backgroundColor: styleVars.bgColor,
+                opacity: hideLabels ? 0.2 : 1,
+              }}
+            />
+          );
+        }
 
         const isHovered = hoveredAnnotationId === annotation.id;
 

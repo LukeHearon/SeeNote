@@ -182,6 +182,15 @@ const TIME_THROTTLE_MS = 50;
  * Nothing is published while no guide window is listening, so the cost when
  * help is closed is one equality check per render.
  */
+const MAX_LOGS_SENT = 200;
+
+function shallowEqual(a: LiveSnapshot, b: LiveSnapshot): boolean {
+  for (const k of Object.keys(a) as (keyof LiveSnapshot)[]) {
+    if (!Object.is(a[k], b[k])) return false;
+  }
+  return Object.keys(a).length === Object.keys(b).length;
+}
+
 export function useLiveHost(
   snapshot: LiveSnapshot,
   handlers: LiveHandlers,
@@ -199,16 +208,26 @@ export function useLiveHost(
   snapshotRef.current = snapshot;
 
   const lastSentRef = useRef<string | null>(null);
+  const lastSnapshotRef = useRef<LiveSnapshot | null>(null);
   const lastHelloRef = useRef(0);
   const lastTimePostRef = useRef(0);
 
   const connected = () => Date.now() - lastHelloRef.current < PRESENCE_TIMEOUT_MS;
 
   const publish = (force: boolean) => {
-    const serialized = JSON.stringify(snapshotRef.current);
+    const snap = snapshotRef.current;
+    // Fast path: every field identical to the last one sent (arrays keep their
+    // identity until they change), so nothing is serialized at all.
+    if (!force && lastSnapshotRef.current && shallowEqual(snap, lastSnapshotRef.current)) return;
+    lastSnapshotRef.current = snap;
+    // The guide only shows the tail of the log; the full list grows all session.
+    const sent = snap.debugLogs.length > MAX_LOGS_SENT
+      ? { ...snap, debugLogs: snap.debugLogs.slice(-MAX_LOGS_SENT) }
+      : snap;
+    const serialized = JSON.stringify(sent);
     if (!force && serialized === lastSentRef.current) return;
     lastSentRef.current = serialized;
-    post({ type: 'state', snapshot: snapshotRef.current });
+    post({ type: 'state', snapshot: sent });
   };
 
   useEffect(() => subscribe(msg => {
@@ -228,8 +247,8 @@ export function useLiveHost(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
 
-  // Publish on change. Runs every render of the host; the equality check keeps
-  // that to a JSON.stringify of ~20 scalars, and only while a guide is open.
+  // Publish on change. Runs every render of the host, only while a guide is
+  // open; the shallow check skips serialization when nothing changed.
   useEffect(() => {
     if (connected()) publish(false);
   });

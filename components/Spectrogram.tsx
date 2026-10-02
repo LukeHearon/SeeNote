@@ -1,34 +1,35 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
-import { bandExtentY, freqToY, freqAxisTicks, formatFreqHz } from '../utils/audioProcessing';
-import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
-import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
-import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
+import { bandExtentY } from '../utils/audioProcessing';
+import { previewLayerIndex } from '../utils/previewLayer';
+import { calculateAnnotationLayers } from '../utils/helpers';
+import type { DateTimeFormat } from '../utils/datetimeDisplay';
 import type { TimeDisplayUnit } from '../utils/helpers';
 import { spanBetween } from '../utils/selectionExtend';
-import { timeToX, maxScroll as computeMaxScroll, centerScrollLeft, reconcileZoomProp } from '../utils/viewportTransform';
+import { timeToX, centerScrollLeft, reconcileZoomProp } from '../utils/viewportTransform';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import {
-  MIN_SEGMENT_JOIN_PX,
   Timeline,
   identityTimeline,
   minSegmentDuration,
   segmentJoins,
 } from '../utils/subsetTimeline';
-import { mergeStops, prevStop, nextStop } from '../utils/jumpStops';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
-import { MIN_ZOOM_SEC, Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
-import { wheelZoomFactor, isGestureContinuation } from '../utils/zoomGesture';
-import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
+import { Y_AXIS_WIDTH, DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import SelectionHandles from './spectrogram/SelectionHandles';
 import AnnotationResizeLine from './spectrogram/AnnotationResizeLine';
 import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
+import { paintGutter, paintFrequencyTicks, paintSubsetJoins } from './spectrogram/canvasPainters';
+import { paintSelectionShade, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
-import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
+import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
+import { useAnnotationJumps } from '../hooks/useAnnotationJumps';
+import { useSpectrogramZoomPan } from '../hooks/useSpectrogramZoomPan';
+import { DIAG_SCROLL, diag } from '../utils/scrollDiag';
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 import ContextMenu from './ContextMenu';
@@ -36,7 +37,6 @@ import ContextMenu from './ContextMenu';
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
-  cacheVersion: number;
   // Playback time arrives via a ref-based pub/sub store (not a prop) so a
   // playback tick redraws the canvas imperatively without re-rendering the tree.
   currentTimeStore: CurrentTimeStore;
@@ -83,8 +83,6 @@ interface SpectrogramProps {
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
-  // Full deselect used by the label editor's Enter key (see AnnotationOverlay).
-  onDeselectAnnotation?: () => void;
   onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
@@ -144,28 +142,6 @@ export interface SpectrogramHandle {
   focusAnnotationInput: (id: string) => void;
 }
 
-// How close a keyboard-walked edge may get to the frame before the view pans
-// to keep it in sight.
-const REVEAL_MARGIN_PX = 48;
-
-// Flip to true to trace everything that can move the view sideways: every
-// scroll write (tagged with its source), every ResizeObserver notification with
-// the exact widths involved, every wheel event, every zoom-prop change, and a
-// 250ms heartbeat of the live geometry. Kept because this file has now grown
-// two separate self-sustaining scroll loops (the "violent jitter" oscillation
-// and the compounding resize rescale), and the source tags are what identify
-// them; the heartbeat separates "something keeps writing scroll" from "scroll
-// is still but the render drifts". Same idea as DIAG_FRAME_TIMING.
-const DIAG_SCROLL = false;
-const diagT0 = typeof performance !== 'undefined' ? performance.now() : 0;
-// Cap so a long session can't fill the console with megabytes of trace.
-let diagCount = 0;
-const diag = (msg: string) => {
-  if (!DIAG_SCROLL || diagCount > 3000) return;
-  diagCount++;
-  // eslint-disable-next-line no-console
-  console.log(`[scrolldiag +${((performance.now() - diagT0) / 1000).toFixed(3)}s] ${msg}`);
-};
 
 // The scroll clamp (40%-of-viewport overrun past the end) lives in
 // utils/viewportTransform as `maxScroll`, imported here as `computeMaxScroll`
@@ -175,7 +151,6 @@ const diag = (msg: string) => {
 const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
   sampleRate,
-  cacheVersion,
   currentTimeStore,
   duration,
   timeline,
@@ -201,7 +176,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onAnnotationsChange,
   onAnnotationsCommit,
   onSelectAnnotation,
-  onDeselectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
   onZoomChange,
@@ -253,7 +227,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // (the "violent jitter" bug). Every scroll write must go through setScroll.
   const setScroll = useCallback((v: number, _source: string = '?') => {
     if (DIAG_SCROLL && Math.abs(v - scrollLeftRef.current) > 0.0001) {
-      diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
+      if (DIAG_SCROLL) diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
     }
     scrollLeftRef.current = v;
     // Every layer's geometry is a function of scrollLeft, and all three read it
@@ -278,8 +252,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const lastManualScrollRef = useRef(0);
 
   // Custom cursor position (relative to the spectrogram container)
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
-  const [suppressCustomCursor, setSuppressCustomCursor] = useState(false);
+  // The tool cursor follows the pointer by direct style writes, not React state:
+  // a state update per mousemove re-rendered the whole spectrogram. It hides
+  // over elements that show their own cursor (handles, buttons), decided when
+  // the pointer enters an element rather than on every move.
+  const toolCursorRef = useRef<HTMLDivElement>(null);
+  const toolCursorStateRef = useRef({ inside: false, suppressed: false });
+  const applyToolCursorVisibility = () => {
+    const el = toolCursorRef.current;
+    const st = toolCursorStateRef.current;
+    if (el) el.style.display = st.inside && !st.suppressed ? 'block' : 'none';
+  };
+  const moveToolCursor = (e: React.MouseEvent) => {
+    const el = toolCursorRef.current;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!el || !rect) return;
+    el.style.left = `${e.clientX - rect.left}px`;
+    el.style.top = `${e.clientY - rect.top}px`;
+    toolCursorStateRef.current.inside = true;
+    applyToolCursorVisibility();
+  };
 
   // Hovered annotation id for hover effects (delete button, pencil icon)
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
@@ -328,6 +320,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Dirty flag: set whenever draw/drawYAxis deps change so the rAF loop only
   // calls the expensive spectrogram render when the background actually changed.
   const drawDirtyRef = useRef(true);
+  // The annotations' layer assignment as of the last render, for the overlay's
+  // annotation-box preview.
+  const layeredAnnotationsRef = useRef<AnnotationWithLayer[]>([]);
   const drawRef = useRef<() => void>(() => {});
   const drawYAxisRef = useRef<() => void>(() => {});
   // The frequency gutter is a function of the frequency settings and the
@@ -372,6 +367,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // that rounding turn the resize handler's scroll rescale into a small
   // constant multiplier instead of an identity.
   const [containerWidth, setContainerWidth] = useState(0);
+  // State (not a clientHeight read during render) so a height-only resize
+  // re-renders the filter handles at the new frequency positions.
+  const [containerHeight, setContainerHeight] = useState(0);
   // Live mirror, read from the rAF loop (which publishes the viewport) and by
   // the scroll diagnostics.
   const containerWidthRef = useRef(0);
@@ -424,7 +422,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const lastPublishedZoomRef = useRef<number | null>(null);
   if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
       prevZoomInputsRef.current.containerWidth !== containerWidth) {
-    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
+    if (DIAG_SCROLL) diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
     prevZoomInputsRef.current = { zoomSec, containerWidth };
     // The observer's own last width wins over the (equally late-committable)
     // state mirror.
@@ -461,7 +459,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     creatingAnnotation,
     creatingSelection,
     creatingFilter,
-    dragStart,
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
@@ -480,8 +477,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef,
     durationRef,
     setScroll,
-    pixelsPerSecond,
-    duration,
     timelineRef,
     annotations,
     selection,
@@ -502,8 +497,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     onEditAnnotationText: focusAnnotationInput,
     onBandPassFilterChange,
     onBandPassFilterDrawn,
-    setCursorPos,
-    setSuppressCustomCursor,
     lastManualScrollRef,
     isAltHeldRef: altHeldRef,
     onContextMenu: (clientX, clientY) => setContextMenuPos({ x: clientX, y: clientY }),
@@ -584,8 +577,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const containerWidth = containerSizeRef.current.width || containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
-          const targetScroll = t * pps - containerWidth / 2;
-          setScroll(Math.max(0, targetScroll), 'autoScroll');
+          setScroll(centerScrollLeft(t, pps, containerWidth, duration), 'autoScroll');
       };
       autoScroll();
       return currentTimeStore.subscribe(autoScroll);
@@ -598,7 +590,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const { draw } = useChunkRenderer({
     chunkCache,
     sampleRate,
-    cacheVersion,
+    onChunkArrived: () => { drawDirtyRef.current = true; },
     scrollLeftRef,
     pixelsPerSecondRef,
     pixelsPerSecond,
@@ -639,6 +631,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const startTime = scrollLeft_live / pixelsPerSecond_live;
     const timePerPixel = 1 / pixelsPerSecond_live;
     const endTime = startTime + (width * timePerPixel);
+    const toX = (t: number) => timeToX(t, scrollLeft_live, pixelsPerSecond_live);
 
     // 1. Selection region darkening / annotation-being-made preview — draw
     // FIRST so other elements render on top. Only show creating-selection
@@ -664,43 +657,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const previewingAnnotationLabel = activeSelection !== null && activeAnnotationTool !== null && boundAnnotationId === null;
 
     if (activeSelection) {
-      const selStartX = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
-      const selEndX = Math.min(width, timeToX(activeSelection.end, scrollLeft_live, pixelsPerSecond_live));
-
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-      // Left dark region
-      if (selStartX > 0) {
-        ctx.fillRect(0, 0, selStartX, height);
-      }
-      // Right dark region
-      if (selEndX < width) {
-        ctx.fillRect(selEndX, 0, width - selEndX, height);
-      }
-    }
-
-    // 1a. Every selection gets a thin dotted line down its middle — a spine
-    // marking what it covers, and the only thing a span still being swept out
-    // has to show for itself (no handles, no cursor). With a band-pass band up
-    // it runs down the middle of the band instead of the canvas, so the two
-    // read as the one region the audio is being taken from.
-    if (activeSelection) {
-      const x0 = Math.max(0, timeToX(activeSelection.start, scrollLeft_live, pixelsPerSecond_live));
-      const x1 = Math.min(width, timeToX(activeSelection.end, scrollLeft_live, pixelsPerSecond_live));
       const band = bandPassFilter
         ? bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale)
         : null;
-      const midY = band ? (band.yTop + band.yBottom) / 2 : height / 2;
-      if (x1 > x0) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 4]);
-        ctx.beginPath();
-        ctx.moveTo(x0, midY);
-        ctx.lineTo(x1, midY);
-        ctx.stroke();
-        ctx.restore();
-      }
+      paintSelectionShade(ctx, toX(activeSelection.start), toX(activeSelection.end), width, height, band);
     }
 
     // 1a-ii. Preview of the annotation box this span will become — mouse-drag,
@@ -711,157 +671,33 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // real committed box (AnnotationOverlay) — border, background, rounded
     // corners, height, and vertical stacking layer — just not interactive.
     if (previewingAnnotationLabel && activeAnnotationTool) {
-      const x0 = Math.max(0, timeToX(activeSelection!.start, scrollLeft_live, pixelsPerSecond_live));
-      const x1 = Math.min(width, timeToX(activeSelection!.end, scrollLeft_live, pixelsPerSecond_live));
-      if (x1 > x0) {
-        const withPreview = calculateAnnotationLayers([
-          ...annotations,
-          { id: '__preview__', start: activeSelection!.start, end: activeSelection!.end, text: '' },
-        ]);
-        const layerIndex = withPreview.find(a => a.id === '__preview__')?.layerIndex ?? 0;
-        const boxTop = annotationBoxTop(layerIndex);
-        const style = annotationColorStyle(activeAnnotationTool.color, false);
-        const r = 4;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(x0 + r, boxTop);
-        ctx.lineTo(x1 - r, boxTop);
-        ctx.arcTo(x1, boxTop, x1, boxTop + r, r);
-        ctx.lineTo(x1, boxTop + ANNOTATION_BOX_HEIGHT - r);
-        ctx.arcTo(x1, boxTop + ANNOTATION_BOX_HEIGHT, x1 - r, boxTop + ANNOTATION_BOX_HEIGHT, r);
-        ctx.lineTo(x0 + r, boxTop + ANNOTATION_BOX_HEIGHT);
-        ctx.arcTo(x0, boxTop + ANNOTATION_BOX_HEIGHT, x0, boxTop + ANNOTATION_BOX_HEIGHT - r, r);
-        ctx.lineTo(x0, boxTop + r);
-        ctx.arcTo(x0, boxTop, x0 + r, boxTop, r);
-        ctx.closePath();
-        ctx.fillStyle = style.bgColor;
-        ctx.fill();
-        ctx.strokeStyle = style.borderColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        if (x1 - x0 > 30) {
-          ctx.font = 'bold 12px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.shadowColor = 'black';
-          ctx.shadowBlur = 2;
-          ctx.shadowOffsetY = 1;
-          ctx.fillStyle = '#ffffff';
-          ctx.fillText(
-            activeAnnotationTool.key === '0' ? 'Custom' : activeAnnotationTool.text,
-            x0 + 8,
-            boxTop + ANNOTATION_BOX_HEIGHT / 2,
-          );
-        }
-        ctx.restore();
-      }
+      // Same layer the committed box would get, without re-layering every
+      // annotation each frame of a sweep (see previewLayerIndex).
+      paintAnnotationPreview(
+        ctx, toX(activeSelection!.start), toX(activeSelection!.end), width,
+        previewLayerIndex(layeredAnnotationsRef.current, activeSelection!.start), activeAnnotationTool,
+      );
     }
 
     // 1b. Draw subset segment joins — the seams where the display axis skips
     // from the end of one kept span to the start of the next. Dashed and
     // distinct from the playhead/ruler so a cut reads as a splice, not a marker.
-    if (subsetJoins.length > 0 && minSegmentSec * pixelsPerSecond_live >= MIN_SEGMENT_JOIN_PX) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.55)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      for (const t of subsetJoins) {
-        const x = timeToX(t, scrollLeft_live, pixelsPerSecond_live);
-        if (x < 0 || x > width) continue;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
+    paintSubsetJoins(ctx, subsetJoins, minSegmentSec, scrollLeft_live, pixelsPerSecond_live, width, height);
 
-    // 2. Draw Playhead Line
-    const playheadX = timeToX(currentTime, scrollLeft_live, pixelsPerSecond_live);
-    if (playheadX >= 0 && playheadX <= width) {
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.lineWidth = 2;
-        ctx.moveTo(playheadX, 0);
-        ctx.lineTo(playheadX, height);
-        ctx.stroke();
-    }
+    paintPlayhead(ctx, toX(currentTime), width, height);
 
-    // 3. Draw Time Ruler
-    // Choose tick spacing from the stable configured pixelsPerSecond (derived
-    // from zoomSec), NOT from the live clientWidth. The latter fluctuates by
-    // sub-pixel amounts during playback/panning, which at round zoom levels
-    // can flip the chosen step — making labels flicker in and out.
-    const timeRange = zoomSec;
-    // Datetime ticks land on wall-clock boundaries (the hour, the minute) and
-    // carry wider labels, so both the spacing and the tick positions differ
-    // from the elapsed-time ruler's multiples-of-step-from-zero.
-    const datetimeRuler = timeDisplayUnit === 'datetime' && trackStartDate !== null;
-    const timeStep = chooseTimeStep(pixelsPerSecond, datetimeRuler ? DATETIME_LABEL_SPACING_PX : undefined);
+    paintTimeRuler(ctx, {
+      width, height, scrollLeft: scrollLeft_live, pixelsPerSecond: pixelsPerSecond_live,
+      // Tick spacing from the stable configured pixelsPerSecond (derived from
+      // zoomSec), NOT the live one, which fluctuates by sub-pixel amounts during
+      // playback/panning and at round zoom levels can flip the chosen step —
+      // making labels flicker in and out.
+      stepPixelsPerSecond: pixelsPerSecond,
+      startTime, endTime, duration, zoomSec,
+      timeline: timelineRef.current, timeDisplayUnit, trackStartDate, dateTimeFormat,
+    });
 
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textBaseline = 'bottom';
-
-    // Ticks are labelled in SOURCE time: under a subset the display axis says
-    // nothing about where in the file you are, so the ruler is built per kept
-    // span from that span's own file times (see utils/timeAxis). Identity
-    // timeline → the same ticks as before, labelled with themselves.
-    //
-    // Under a subset each tick sits at a segment's START, so its label is
-    // left-aligned to the tick line rather than centered on it — centering
-    // would make the label read as if it spanned both sides of the cut.
-    const tickEndTime = duration > 0 ? Math.min(endTime, duration) : endTime;
-    // Wall-clock ticks only land on clock boundaries when the axis runs
-    // continuously; under a subset the display axis is spliced, so ticks come
-    // from the timeline (one per segment start) and are simply *labelled* as
-    // datetimes. Either way each tick carries the source time its label reads.
-    const ticks: RulerTick[] = datetimeRuler && timelineRef.current.identity
-      ? datetimeTicks(trackStartDate, Math.max(startTime, 0), tickEndTime, timeStep).map(s => ({ disp: s, src: s }))
-      : rulerTicks(timelineRef.current, startTime, tickEndTime, timeStep, pixelsPerSecond_live,
-          datetimeRuler ? DATETIME_LABEL_SPACING_PX : undefined);
-    const labelAlign = rulerLabelAlign(timelineRef.current);
-    ctx.textAlign = labelAlign;
-
-    // Only labels actually drawn feed the "what changed since the last label"
-    // logic, so scrolling never leaves a view whose first label lacks its date.
-    let prevLabelled: number | null = null;
-    for (const tick of ticks) {
-        const x = timeToX(tick.disp, scrollLeft_live, pixelsPerSecond_live);
-        if (x < 0 || x > width) continue;
-        ctx.beginPath();
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 2;
-        ctx.moveTo(x, height);
-        ctx.lineTo(x, height - 8);
-        ctx.stroke();
-
-        const timeStr = datetimeRuler
-          ? formatDatetimeRulerLabel(trackStartDate, tick.src, prevLabelled, timeStep, dateTimeFormat)
-          : formatRulerTime(tick.src, timeStep, timeRange, timeDisplayUnit === 'seconds');
-        prevLabelled = tick.src;
-        // The leading full-date label is wide enough to hang off the left edge;
-        // nudge it back on-canvas rather than letting it clip.
-        let labelX = labelAlign === 'left' ? x + 3 : x;
-        if (datetimeRuler && labelAlign === 'center') {
-          labelX = Math.max(labelX, ctx.measureText(timeStr).width / 2 + 2);
-        }
-        ctx.strokeStyle = 'black';
-        ctx.lineWidth = 3;
-        ctx.strokeText(timeStr, labelX, height - 10);
-        ctx.fillStyle = 'white';
-        ctx.fillText(timeStr, labelX, height - 10);
-    }
-
-    // 5. Draw ident text at top of spectrogram
-    if (ident) {
-      ctx.font = 'bold 12px monospace';
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(ident, 8, 6);
-    }
+    if (ident) paintIdent(ctx, ident);
 
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
@@ -907,29 +743,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // For video tracks in Fast mode the filter has no effect; in Mixed mode without
     // a selection the video element's audio track plays instead of AudioEngine.
     const filterInactive = !isAudioTrack && (videoMode === 'fast' || (videoMode === 'mixed' && !selection));
-    if (filterBand && !filterInactive) {
-      const darkAlpha = 0.65 * filterBand.strength;
-      ctx.fillStyle = `rgba(0, 0, 0, ${darkAlpha})`;
-      if (filterBand.yTop > 0) {
-        ctx.fillRect(0, 0, width, filterBand.yTop);
-      }
-      if (filterBand.yBottom < height) {
-        ctx.fillRect(0, filterBand.yBottom, width, height - filterBand.yBottom);
-      }
-      ctx.strokeStyle = '#60a5fa';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
-      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
-      ctx.stroke();
-    } else if (filterBand && !isAudioTrack && videoMode === 'mixed' && !selection) {
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, filterBand.yTop); ctx.lineTo(width, filterBand.yTop);
-      ctx.moveTo(0, filterBand.yBottom); ctx.lineTo(width, filterBand.yBottom);
-      ctx.stroke();
-    }
+    // Mixed mode outside a selection: the filter will apply again once there is
+    // one, so its edges stay visible.
+    const dormant = !isAudioTrack && videoMode === 'mixed' && !selection;
+    if (filterBand) paintFilterBand(ctx, filterBand, width, height, !filterInactive ? 'active' : dormant ? 'dormant' : 'hidden');
 
     ctx.restore();
   }, [creatingFilter, bandPassFilter, videoMode, isAudioTrack, selection, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
@@ -938,61 +755,11 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const drawYAxis = useCallback(() => {
     const canvas = yAxisCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // The gutter is a fixed CSS width; only its height follows the container.
-    const { dpr, width, height } = syncCanvasBitmap(
-      canvas, Y_AXIS_WIDTH, containerSizeRef.current.height);
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-    ctx.fillRect(0, 0, width, height);
-
-    // Right border line
-    ctx.beginPath();
-    ctx.moveTo(width - 1, 0);
-    ctx.lineTo(width - 1, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-
-    let lastLabelY: number | null = null;
-    const MIN_LABEL_SPACING = 13;
     // The min/max frequency boxes (FrequencyAxisInputs) are docked over the top
     // and bottom of the gutter and already show the endpoint values, so the
     // canvas skips any tick that would land under them.
-    const EDGE_RESERVED = 24;
-
-    const renderTick = (freq: number) => {
-      // Use the shared freq→y mapping so axis labels stay in exact lockstep
-      // with the spectrogram renderer (same function, no drift).
-      const y = freqToY(freq, height, settings.minFreq, settings.maxFreq, settings.frequencyScale);
-
-      if (y < EDGE_RESERVED || y > height - EDGE_RESERVED) return;
-      if (lastLabelY !== null && Math.abs(y - lastLabelY) < MIN_LABEL_SPACING) return;
-      lastLabelY = y;
-
-      ctx.beginPath();
-      ctx.moveTo(width - 5, y);
-      ctx.lineTo(width - 1, y);
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.stroke();
-
-      ctx.fillText(formatFreqHz(freq), width - 7, y);
-    };
-
-    for (const freq of freqAxisTicks(settings.minFreq, settings.maxFreq, settings.frequencyScale)) {
-      renderTick(freq);
-    }
-    ctx.restore();
+    paintGutter(canvas, containerSizeRef.current.height, 'spectrogram', (ctx, width, height) =>
+      paintFrequencyTicks(ctx, width, height, settings, 24));
   }, [settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Keep drawRef/drawYAxisRef current and mark dirty whenever the spectrogram
@@ -1055,21 +822,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // still ticks at 50Hz; only the background stopped repainting for nothing.
 
   useEffect(() => {
-    let lastTs = performance.now();
     const tick = () => {
-      // Frame-gap detector: a healthy 60fps loop ticks every ~16.7ms. A gap well
-      // over that means the previous frame's work (or a GC pause / React relayout)
-      // blew the budget — i.e. a real dropped frame, which is what a playback hitch
-      // would be. Logged only while playing so idle/background throttling is quiet.
-      if (DIAG_FRAME_TIMING) {
-        const now = performance.now();
-        const gap = now - lastTs;
-        lastTs = now;
-        if (isPlayingRef.current && gap > 24) {
-          // eslint-disable-next-line no-console
-          console.warn(`[frametiming] frame gap ${gap.toFixed(1)}ms (target ~16.7)`);
-        }
-      }
       if (drawDirtyRef.current) {
         drawRef.current();
         drawDirtyRef.current = false;
@@ -1128,7 +881,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const id = window.setInterval(() => {
       const now = scrollLeftRef.current;
       if (Math.abs(now - last) < 0.0001) return;
-      diag(`beat   scroll=${now.toFixed(2)} (moved ${(now - last).toFixed(3)}) t0=${(now / (pixelsPerSecondRef.current || 1)).toFixed(4)}s pps=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current} clientWidth=${containerRef.current?.clientWidth} playing=${isPlayingRef.current} dragging=${isAnyDragActiveRef.current}`);
+      if (DIAG_SCROLL) diag(`beat   scroll=${now.toFixed(2)} (moved ${(now - last).toFixed(3)}) t0=${(now / (pixelsPerSecondRef.current || 1)).toFixed(4)}s pps=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current} clientWidth=${containerRef.current?.clientWidth} playing=${isPlayingRef.current} dragging=${isAnyDragActiveRef.current}`);
       last = now;
     }, 250);
     return () => window.clearInterval(id);
@@ -1157,7 +910,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         // needs a repaint is lost by returning here.
         if (newWidth === containerSizeRef.current.width &&
             newHeight === containerSizeRef.current.height) return;
-        diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
+        if (DIAG_SCROLL) diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
         // Preserve the left-edge time across resize: scrollLeft is in pixels and
         // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
         // the visible time range unless we rescale scrollLeft proportionally.
@@ -1185,6 +938,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
         lastObservedWidthRef.current = newWidth;
         setContainerWidth(newWidth);
+        setContainerHeight(newHeight);
         // Publish the new box; each draw sizes its own bitmap from it. Repaint
         // every layer immediately rather than waiting a frame for the rAF loop's
         // dirty flags — a resized bitmap comes back cleared.
@@ -1193,6 +947,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawOverlayRef.current();
         drawFilterOverlayRef.current();
         drawYAxisRef.current();
+        // Just drawn with the new geometry: the flags setScroll raised would
+        // otherwise repaint all four again on the next frame.
+        drawDirtyRef.current = false;
+        overlayDirtyRef.current = false;
+        filterOverlayDirtyRef.current = false;
+        yAxisDirtyRef.current = false;
       }
     });
 
@@ -1214,218 +974,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }), []);
 
   // --- Annotation navigation ---
-
-  // Annotation starts plus, under a subset, the segment joins.
-  const jumpStops = useMemo(() => mergeStops(annotations.map(a => a.start), subsetJoins), [annotations, subsetJoins]);
-
-  const scrollToAnnotation = useCallback((annotStart: number) => {
-    if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
-    const targetScrollLeft = (annotStart * pixelsPerSecond) - (containerWidth * 0.25);
-    setScroll(Math.max(0, targetScrollLeft), 'scrollToAnnotation');
-  }, [pixelsPerSecond, setScroll]);
-
-  const goToPrevAnnotation = useCallback(() => {
-    if (selection !== null) {
-      const t = currentTimeStore.get();
-      if (Math.abs(t - selection.start) <= 0.05) {
-        // Second press: already at selection start — clear selection and fall through to prev annotation
-        onSelectionChange(null);
-        onBoundAnnotationChange(null);
-      } else {
-        // First press: jump to selection start
-        onSeek(selection.start);
-        scrollToAnnotation(selection.start);
-        return;
-      }
-    }
-    const prev = prevStop(jumpStops, currentTimeStore.get());
-    onSeek(prev);
-    scrollToAnnotation(prev);
-  }, [jumpStops, currentTimeStore, onSeek, scrollToAnnotation, selection, onSelectionChange, onBoundAnnotationChange]);
-
-  const goToNextAnnotation = useCallback(() => {
-    // Any active selection (free or bound): jump to selection end
-    if (selection !== null) {
-      onSeek(selection.end);
-      scrollToAnnotation(selection.end);
-      return;
-    }
-    const next = nextStop(jumpStops, currentTimeStore.get(), duration);
-    onSeek(next);
-    scrollToAnnotation(next);
-  }, [jumpStops, currentTimeStore, duration, onSeek, scrollToAnnotation, selection]);
-
-  // Track start/end: unlike prev/next annotation, these always clear any
-  // active selection/binding rather than jumping to its edge first — they're
-  // an unconditional "go to the absolute start/end" action.
-  const goToTrackStart = useCallback(() => {
-    onSeek(0);
-    scrollToAnnotation(0);
-    onSelectionChange(null);
-    onBoundAnnotationChange(null);
-  }, [onSeek, scrollToAnnotation, onSelectionChange, onBoundAnnotationChange]);
-
-  const goToTrackEnd = useCallback(() => {
-    onSeek(duration);
-    scrollToAnnotation(duration);
-    onSelectionChange(null);
-    onBoundAnnotationChange(null);
-  }, [onSeek, scrollToAnnotation, duration, onSelectionChange, onBoundAnnotationChange]);
-
-  const scrollToTime = useCallback((time: number) => {
-    if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
-    setScroll(centerScrollLeft(time, pixelsPerSecond, containerWidth, duration), 'scrollToTime');
-  }, [pixelsPerSecond, duration, setScroll]);
-
-  // Minimal pan: bring `time` inside the window, keeping a margin so the edge
-  // being walked never sits flush against the frame. Does nothing while it's
-  // already comfortably in view — this follows a keyboard-driven edge the way
-  // auto-pan follows a dragged one, and a centering scroll on every step would
-  // make the whole spectrogram slide under a still cursor.
-  const revealTime = useCallback((time: number) => {
-    if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
-    const pps = pixelsPerSecondRef.current || pixelsPerSecond;
-    const margin = Math.min(REVEAL_MARGIN_PX, containerWidth / 4);
-    const x = time * pps - scrollLeftRef.current;
-    let target = scrollLeftRef.current;
-    if (x < margin) target = time * pps - margin;
-    else if (x > containerWidth - margin) target = time * pps - (containerWidth - margin);
-    else return;
-    const clamped = clamp(target, 0, computeMaxScroll(duration, pps, containerWidth));
-    if (Math.abs(clamped - scrollLeftRef.current) > 0.01) setScroll(clamped, 'revealTime');
-  }, [pixelsPerSecond, duration, setScroll]);
-
-  // Recenter the playhead in the visible window without changing zoom.
-  const recenterPlayhead = useCallback(() => {
-    scrollToTime(currentTimeStore.get());
-  }, [scrollToTime, currentTimeStore]);
-
-  // Escape handling lives in AnnotationWindow (universal activation-stack
-  // unwind). When `Esc` pops `selection`, AnnotationWindow also clears
-  // boundAnnotationId, so this component no longer registers an Esc binding.
-
-
-  const applyWheel = useCallback((deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => {
-    diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
-    if (ctrlKey || metaKey) {
-      if (!containerRef.current) return;
-      // Trackpad inertia tails deliver horizontal-only events (deltaY === 0).
-      // `deltaY > 0 ? 1 : -1` would treat every one of those as a zoom-in step,
-      // making the view zoom by itself while Ctrl is held after a pan gesture.
-      if (deltaY === 0) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const mouseX = clientX - rect.left;
-      // Zoom off the LIVE zoom (ref), not the `zoomSec` prop. A pinch fires a
-      // dense burst of wheel events — dozens before React commits the new prop —
-      // so every event in the burst would read the same stale base zoom while
-      // `scrollLeftRef` is already at the newly written scroll. The anchor time
-      // derived from that mismatched pair is garbage, which is what made pinch
-      // zoom jump around at random. A mouse wheel never showed it: its notches
-      // are far enough apart that the prop has always caught up.
-      const liveZoomSec = zoomSecRef.current || zoomSec;
-      // `containerWidth` (the ResizeObserver's fractional content-box width),
-      // NOT clientWidth: this is where pixelsPerSecondRef gets written, and it
-      // has to agree exactly with the pps the resize handler derives, or the
-      // two disagree by the integer rounding for as long as the zoom lasts.
-      const currentPps = containerWidth / liveZoomSec;
-      // One timestamp decides both how big this event's step is and whether the
-      // parent hears about it now or on the next frame — an event that follows
-      // its predecessor within the gap is part of a pinch either way. Sizing
-      // lives in utils/zoomGesture.ts (a mid-pinch event and a WebKit mouse
-      // notch are the same magnitude, so continuity is what separates them).
-      const nowMs = performance.now();
-      const inGesture = isGestureContinuation(nowMs, lastZoomEventRef.current);
-      lastZoomEventRef.current = nowMs;
-      const zoomFactor = wheelZoomFactor(deltaY, inGesture);
-      const direction = deltaY > 0 ? 1 : -1;
-      let newZoomSec = liveZoomSec * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-      newZoomSec = Math.max(MIN_ZOOM_SEC, Math.min(newZoomSec, duration ? duration * 1.4 : 86400));
-      const newPixelsPerSecond = containerWidth / newZoomSec;
-      // Locked to the playhead: the playhead is the anchor, and it stays
-      // centred — matching where the auto-scroll effect parks it — regardless
-      // of where the pointer is. Otherwise anchor the time under the pointer.
-      let newScrollLeft: number;
-      if (playheadLocked) {
-        newScrollLeft = currentTimeStore.get() * newPixelsPerSecond - containerWidth / 2;
-      } else {
-        const timeAtMouse = (scrollLeftRef.current + mouseX) / currentPps;
-        newScrollLeft = (timeAtMouse * newPixelsPerSecond) - mouseX;
-      }
-      const maxScroll = computeMaxScroll(duration, newPixelsPerSecond, containerWidth);
-      newScrollLeft = clamp(newScrollLeft, 0, maxScroll);
-      // Write zoom and scroll together: the rAF draw reads both live, and a pair
-      // from different zoom levels resolves to the wrong region for that frame.
-      // onZoomChange only reaches us as a prop on a later commit.
-      pixelsPerSecondRef.current = newPixelsPerSecond;
-      zoomSecRef.current = newZoomSec;
-      setScroll(newScrollLeft, 'zoom');
-      // Publishing to the parent is a render of the whole spectrogram subtree.
-      // A mouse notch stands alone, so it publishes here and React commits
-      // before the frame paints — no lag, no overlay compensation, exactly as
-      // before. A pinch fires 4-5 events per frame, and publishing each one
-      // both re-rendered that many times and let the prop fall a whole pile of
-      // steps behind the refs, which is what drove the overlay's scale
-      // compensation up to a visible stretch. Inside a burst the publish is
-      // deferred to the rAF flush, so the prop is at most one frame and one
-      // step behind.
-      if (inGesture) {
-        pendingZoomPublishRef.current = true;
-      } else {
-        pendingZoomPublishRef.current = false;
-        publishZoom(newZoomSec);
-      }
-    } else {
-      // While locked-to-playhead and playing, the auto-scroll effect below
-      // recenters on every playback tick and would immediately undo a manual
-      // pan anyway. Applying it regardless still publishes the transient
-      // scroll through the viewport store, which the buzzdetect panel's
-      // independent rAF loop can catch and draw before auto-scroll corrects
-      // it — a visible jiggle there even though the spectrogram itself never
-      // appears to move. Skip the pan outright so nothing transient publishes.
-      if (playheadLocked && isPlaying) return;
-      const panAmount = deltaY + deltaX;
-      const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
-      lastManualScrollRef.current = Date.now();
-      setScroll(clamp(scrollLeftRef.current + panAmount, 0, maxScroll), 'wheel');
-    }
-  }, [zoomSec, duration, pixelsPerSecond, containerWidth, publishZoom, playheadLocked, isPlaying, currentTimeStore]);
-
-  // Native and non-passive: React's own wheel listener is passive, so an
-  // `onWheel` prop cannot preventDefault the webview's ctrl+wheel page zoom.
-  // See hooks/useNonPassiveWheel.
-  useNonPassiveWheel(containerRef, (e) => {
-    if (e.ctrlKey || e.metaKey) e.preventDefault();
-    applyWheel(e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.clientX);
+  const { goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd } = useAnnotationJumps({
+    annotations, subsetJoins, selection, duration, currentTimeStore,
+    containerRef, containerSizeRef, pixelsPerSecondRef, durationRef, setScroll,
+    onSeek, onSelectionChange, onBoundAnnotationChange,
   });
 
-  const zoomToRange = useCallback((startTime: number, endTime: number) => {
-    if (!containerRef.current) return;
-    // Same width source as applyWheel and the resize handler — see containerWidth.
-    const newZoomSec = Math.max(MIN_ZOOM_SEC, endTime - startTime);
-    const newPps = containerWidth / newZoomSec;
-    const maxScroll = computeMaxScroll(duration, newPps, containerWidth);
-    // See applyWheel: zoom and scroll must reach the live refs together.
-    pixelsPerSecondRef.current = newPps;
-    zoomSecRef.current = newZoomSec;
-    setScroll(clamp(startTime * newPps, 0, maxScroll), 'zoomToRange');
-    publishZoom(newZoomSec);
-  }, [duration, containerWidth, publishZoom, setScroll]);
-
-  // Button/hotkey zoom is a discrete notch by definition — clear the gesture
-  // clock so a held-down mod+= (key repeat can be faster than the gesture gap)
-  // isn't mistaken for a pinch and priced at a fraction of a step.
-  const zoomStep = useCallback((deltaY: number) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    lastZoomEventRef.current = 0;
-    applyWheel(0, deltaY, true, false, rect.left + rect.width / 2);
-  }, [applyWheel]);
-
-  const zoomIn = useCallback(() => zoomStep(-100), [zoomStep]);
-  const zoomOut = useCallback(() => zoomStep(100), [zoomStep]);
+  const { scrollToTime, revealTime, recenterPlayhead, applyWheel, zoomToRange, zoomIn, zoomOut } = useSpectrogramZoomPan({
+    containerRef, containerWidth, duration, zoomSec, zoomSecRef, scrollLeftRef, pixelsPerSecondRef,
+    lastZoomEventRef, pendingZoomPublishRef, lastManualScrollRef, publishZoom, setScroll,
+    playheadLocked, isPlaying, currentTimeStore,
+  });
 
   useImperativeHandle(ref, () => ({
     goToPrevAnnotation,
@@ -1444,6 +1003,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut, focusAnnotationInput]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
+  layeredAnnotationsRef.current = layeredAnnotations;
 
   // Stable identity for the memoised AnnotationOverlay: getPointerTime is a plain
   // function rebuilt every render (it closes over scrollLeft), so passing it
@@ -1471,10 +1031,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           ref={containerRef}
           className="relative flex-1 h-full overflow-hidden cursor-none"
           onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
+          onMouseMove={e => { moveToolCursor(e); handleMouseMove(e); }}
+          onMouseOver={e => {
+            toolCursorStateRef.current.suppressed = window.getComputedStyle(e.target as Element).cursor !== 'none';
+            applyToolCursorVisibility();
+          }}
           onMouseUp={handleMouseUp}
           onMouseLeave={() => {
-            setCursorPos(null);
+            toolCursorStateRef.current.inside = false;
+            applyToolCursorVisibility();
             // Don't terminate the drag — window mouseup handler cleans up when the button is released.
             // Only end non-drag interactions (e.g. right-click pan) on leave.
             if (!isAnyDragActiveRef.current) handleMouseUp();
@@ -1562,7 +1127,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            playheadFollowsAnnotationStartRef={playheadFollowsAnnotationStartRef}
            getPointerTime={stableGetPointerTime}
            onSelectAnnotation={onSelectAnnotation}
-           onDeselectAnnotation={onDeselectAnnotation}
            onAnnotationsChange={onAnnotationsChange}
            onAnnotationsCommit={onAnnotationsCommit}
            onBoundAnnotationChange={onBoundAnnotationChange}
@@ -1606,7 +1170,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            bandPassFilter={bandPassFilter}
            creatingFilter={creatingFilter}
            settings={settings}
-           containerHeight={containerRef.current?.clientHeight ?? 0}
+           containerHeight={containerHeight}
            onBeginResize={setResizingFilterEdge}
          />
       </div>
@@ -1624,14 +1188,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           annotation tools (time-axis drags), horizontal for the filter tool
           (frequency-axis drags). High-contrast white fill with 1px dark
           outline for readability over bright spectrogram regions. */}
-      {cursorPos && !suppressCustomCursor && (() => {
+      {(() => {
         const isFilter = topTool === 'filterTool';
         const w = isFilter ? 24 : 2;
         const h = isFilter ? 2 : 24;
         return (
           <div
             className="absolute pointer-events-none"
-            style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
+            ref={toolCursorRef}
+            style={{ display: 'none', zIndex: 40, transform: 'translate(-50%, -50%)' }}
           >
             <div
               style={{

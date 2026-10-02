@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type React from 'react';
 import type { ScrollSyncHub } from '../utils/scrollSyncHub';
 
@@ -34,20 +34,31 @@ const scaleOf = (contentScale?: ContentScale): number => {
   return live / contentScale.layoutPps;
 };
 
-// scaleX about the content origin, so a child at content x lands at x*scale.
-const transformFor = (scrollLeft: number, scale: number): string =>
-  `translate3d(${-scrollLeft}px, 0, 0)` + (scale === 1 ? '' : ` scaleX(${scale})`);
+// A child laid out at content x (minus the anchor) lands at x*scale; the anchor
+// goes back in through the translate, so it cancels: screen = t*livePps - scroll.
+const transformFor = (scrollLeft: number, scale: number, anchor: number): string =>
+  `translate3d(${scale * anchor - scrollLeft}px, 0, 0)` + (scale === 1 ? '' : ` scaleX(${scale})`);
 
 /**
  * Makes one HTML overlay layer scroll on the rAF clock instead of on React
  * commits (see `utils/scrollSyncHub.ts` for why).
  *
- * The layer lays its children out in content pixels — `time * pixelsPerSecond`,
- * no scroll term — attaches the returned `ref`/`style` to its wrapper element,
- * and this hook translates that wrapper once per frame from Spectrogram's rAF
- * loop. `onSync` is for the leftovers that genuinely depend on the scroll
- * position (edge pinning, cull windows); it runs in the same frame, and takes
- * the frame's content scale so pinned children can undo it (see ContentScale).
+ * The layer lays its children out at `time * pixelsPerSecond - anchor`, attaches
+ * the returned `ref`/`style` to its wrapper element, and this hook translates
+ * that wrapper once per frame from Spectrogram's rAF loop. `onSync` is for the
+ * leftovers that genuinely depend on the scroll position (edge pinning); it runs
+ * in the same frame, and takes the frame's content scale so pinned children can
+ * undo it (see ContentScale).
+ *
+ * The anchor is why the layout values stay small. Laid out at plain
+ * `time * pps`, a 10 hour file at 1s zoom puts children at ~3.6e7 px, past
+ * where WebKit's layout (fixed-point, ~3.3e7 px) stops being exact: boxes and
+ * handles drift off the canvas. The anchor is a scroll position near the
+ * viewport, folded into the wrapper's transform, so children sit within a
+ * couple of viewports of the origin at any zoom. It is React state: crossing
+ * `reanchorPx` of scroll (or a zoom change) re-renders the layer once with the
+ * new anchor, exactly like the annotation overlay's cull window used to. Lay
+ * children out with `x - layer.anchor`.
  *
  * The registration effect deliberately has no dep array: it re-runs after every
  * render so a fresh commit is re-synced immediately rather than a frame later.
@@ -57,13 +68,31 @@ export function useScrollTransformLayer(
   scrollLeftRef: React.MutableRefObject<number>,
   onSync?: (scrollLeft: number, scale: number) => void,
   contentScale?: ContentScale,
-): { ref: React.RefObject<HTMLDivElement>; style: React.CSSProperties } {
+  /** Scroll distance from the anchor that triggers a re-anchor. */
+  reanchorPx = 2000,
+): { ref: React.RefObject<HTMLDivElement>; style: React.CSSProperties; anchor: number } {
   const ref = useRef<HTMLDivElement>(null);
   const lastRef = useRef({ scrollLeft: NaN, scale: NaN });
   const onSyncRef = useRef(onSync);
   onSyncRef.current = onSync;
   const contentScaleRef = useRef(contentScale);
   contentScaleRef.current = contentScale;
+  const reanchorRef = useRef(reanchorPx);
+  reanchorRef.current = reanchorPx;
+
+  // The anchor, and the layout zoom it was chosen at: a scroll offset means
+  // something else at another zoom, so a zoom change picks a fresh one.
+  const layoutPps = contentScale?.layoutPps ?? 0;
+  const [anchorState, setAnchorState] = useState(() => ({ anchor: scrollLeftRef.current, pps: layoutPps }));
+  let anchor = anchorState.anchor;
+  if (anchorState.pps !== layoutPps) {
+    anchor = scrollLeftRef.current;
+    setAnchorState({ anchor, pps: layoutPps });
+  }
+  // Read by the per-frame sync, assigned during render so it always names the
+  // anchor the children in the DOM were laid out against.
+  const anchorRef = useRef(anchor);
+  anchorRef.current = anchor;
 
   const sync = useCallback((scrollLeft: number, force = false) => {
     const scale = scaleOf(contentScaleRef.current);
@@ -72,8 +101,14 @@ export function useScrollTransformLayer(
     last.scrollLeft = scrollLeft;
     last.scale = scale;
     const el = ref.current;
-    if (el) el.style.transform = transformFor(scrollLeft, scale);
+    if (el) el.style.transform = transformFor(scrollLeft, scale, anchorRef.current);
     onSyncRef.current?.(scrollLeft, scale);
+    if (Math.abs(scrollLeft - anchorRef.current) > reanchorRef.current) {
+      // Not written to anchorRef here: until the render lands, the children in
+      // the DOM are still laid out against the old anchor, and the transform
+      // must keep agreeing with them.
+      setAnchorState(prev => ({ anchor: scrollLeft, pps: prev.pps }));
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -86,9 +121,10 @@ export function useScrollTransformLayer(
     ref,
     // First paint (before the layout effect runs) already sits in the right place.
     style: {
-      transform: transformFor(scrollLeftRef.current, scaleOf(contentScale)),
+      transform: transformFor(scrollLeftRef.current, scaleOf(contentScale), anchor),
       transformOrigin: '0 0',
       willChange: 'transform',
     },
+    anchor,
   };
 }

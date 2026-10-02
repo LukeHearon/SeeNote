@@ -81,7 +81,7 @@ export default function VideoZoomLayer({
     return () => window.removeEventListener('pointerdown', handler);
   }, [expandedAdjust]);
 
-  // Change 4: track container height to detect minimap/button overlap.
+  // Track container height to detect minimap/button overlap.
   const [containerH, setContainerH] = useState(0);
   useEffect(() => {
     const el = rootRef.current;
@@ -164,7 +164,7 @@ export default function VideoZoomLayer({
     onViewportChange(viewportFromDragRect(viewport, content, m));
   }, [boxRect, marquee, haveDims, frameW, frameH, viewport, onViewportChange]);
 
-  // Change 2: Escape cancels an in-progress marquee drag.
+  // Escape cancels an in-progress marquee drag.
   useEffect(() => {
     if (!marquee) return;
     const handler = (e: KeyboardEvent) => {
@@ -252,7 +252,7 @@ export default function VideoZoomLayer({
     height: `${region.h * 100}%`,
   };
 
-  // Change 4: 7 buttons × 36 px + 6 gaps × 8 px + 8 px top padding = 296 px.
+  // 7 buttons × 36 px + 6 gaps × 8 px + 8 px top padding = 296 px.
   const STRIP_H = 7 * 36 + 6 * 8 + 8;
   const shouldWrapButtons = zoomed && containerH > 0 && containerH < STRIP_H + miniH + 24;
 
@@ -338,78 +338,47 @@ export default function VideoZoomLayer({
         >
           <Maximize2 size={18} />
         </button>
-        <div className="relative" ref={expandedAdjust === 'brightness' ? adjustRef : undefined}>
-          <button
-            type="button"
-            title={tooltips.brightness}
-            aria-pressed={expandedAdjust === 'brightness'}
-            onClick={() => setExpandedAdjust(v => (v === 'brightness' ? null : 'brightness'))}
-            className={`${btn} ${
-              expandedAdjust === 'brightness' || brightness !== ADJUST_DEFAULT
-                ? 'bg-[#e65161] border-[#e65161] text-white'
-                : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
-            }`}
-          >
-            <Sun size={18} />
-          </button>
-          {expandedAdjust === 'brightness' && (
-            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/90 backdrop-blur-sm px-3 py-2 pointer-events-auto shadow-lg">
-              <input
-                type="range"
-                min={ADJUST_MIN}
-                max={ADJUST_MAX}
-                value={brightness}
-                onChange={e => onBrightnessChange(Number(e.target.value))}
-                className="w-32 accent-[#e65161]"
-              />
-              <button
-                type="button"
-                title={tooltips.resetAdjust}
-                disabled={brightness === ADJUST_DEFAULT}
-                onClick={() => onBrightnessChange(ADJUST_DEFAULT)}
-                className="text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
-              >
-                <RotateCcw size={14} />
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="relative" ref={expandedAdjust === 'contrast' ? adjustRef : undefined}>
-          <button
-            type="button"
-            title={tooltips.contrast}
-            aria-pressed={expandedAdjust === 'contrast'}
-            onClick={() => setExpandedAdjust(v => (v === 'contrast' ? null : 'contrast'))}
-            className={`${btn} ${
-              expandedAdjust === 'contrast' || contrast !== ADJUST_DEFAULT
-                ? 'bg-[#e65161] border-[#e65161] text-white'
-                : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
-            }`}
-          >
-            <Contrast size={18} />
-          </button>
-          {expandedAdjust === 'contrast' && (
-            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/90 backdrop-blur-sm px-3 py-2 pointer-events-auto shadow-lg">
-              <input
-                type="range"
-                min={ADJUST_MIN}
-                max={ADJUST_MAX}
-                value={contrast}
-                onChange={e => onContrastChange(Number(e.target.value))}
-                className="w-32 accent-[#e65161]"
-              />
-              <button
-                type="button"
-                title={tooltips.resetAdjust}
-                disabled={contrast === ADJUST_DEFAULT}
-                onClick={() => onContrastChange(ADJUST_DEFAULT)}
-                className="text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
-              >
-                <RotateCcw size={14} />
-              </button>
-            </div>
-          )}
-        </div>
+        {([
+          { kind: 'brightness', value: brightness, onChange: onBrightnessChange, title: tooltips.brightness, Icon: Sun },
+          { kind: 'contrast', value: contrast, onChange: onContrastChange, title: tooltips.contrast, Icon: Contrast },
+        ] as const).map(({ kind, value, onChange, title, Icon }) => (
+          <div key={kind} className="relative" ref={expandedAdjust === kind ? adjustRef : undefined}>
+            <button
+              type="button"
+              title={title}
+              aria-pressed={expandedAdjust === kind}
+              onClick={() => setExpandedAdjust(v => (v === kind ? null : kind))}
+              className={`${btn} ${
+                expandedAdjust === kind || value !== ADJUST_DEFAULT
+                  ? 'bg-[#e65161] border-[#e65161] text-white'
+                  : 'bg-slate-800/80 border-slate-600 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              <Icon size={18} />
+            </button>
+            {expandedAdjust === kind && (
+              <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/90 backdrop-blur-sm px-3 py-2 pointer-events-auto shadow-lg">
+                <input
+                  type="range"
+                  min={ADJUST_MIN}
+                  max={ADJUST_MAX}
+                  value={value}
+                  onChange={e => onChange(Number(e.target.value))}
+                  className="w-32 accent-[#e65161]"
+                />
+                <button
+                  type="button"
+                  title={tooltips.resetAdjust}
+                  disabled={value === ADJUST_DEFAULT}
+                  onClick={() => onChange(ADJUST_DEFAULT)}
+                  className="text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
+                >
+                  <RotateCcw size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       {/* Bottom-right minimap viewfinder — drag to pan. */}

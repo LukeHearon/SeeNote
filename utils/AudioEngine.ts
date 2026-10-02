@@ -81,9 +81,11 @@ import { BandPassFilter, PlaybackTransport } from '../types';
 import { clamp } from './helpers';
 import { TimeStretchEngine } from './TimeStretchEngine';
 import { PcmCache, PcmCacheSlice } from './PcmCache';
-import { deinterleave } from './pcm';
+import { deinterleave, deinterleaveInto, PCM_CHUNK_DURATION_SEC } from './pcm';
 import { BandPassFilterGraph } from './BandPassFilterGraph';
 import { Timeline, identityTimeline } from './subsetTimeline';
+import { mediaTimeAt, ctxTimeAtMedia } from './audio/playbackClock';
+import { AudioClockDiagnostics, outputLatencySec } from './audio/AudioClockDiagnostics';
 
 export interface AudioEngineCallbacks {
   /** Called on every animation frame during playback with the current media time. */
@@ -126,8 +128,6 @@ interface ScheduledNode {
   naturalCtxEnd: number;
 }
 
-/** How many frames to fetch per IPC call (~1 second of audio). */
-const CHUNK_DURATION_SEC = 1.0;
 /** How many seconds of audio to keep scheduled ahead of the play position. */
 const HORIZON_SEC = 4.0;
 /** How long to sleep (ms) when the buffer is full before checking again. */
@@ -150,22 +150,6 @@ const UNDERRUN_LEAD_SEC = 0.02;
  *  decode does not. See the span-advance in _prefetchLoop. */
 const GAP_READ_THROUGH_SEC = 2.0;
 
-/** Grace period added to the render check's due time (see _armRenderCheck), on
- *  top of the reported output latency, before the device is judged late. */
-const RENDER_CHECK_MARGIN_SEC = 0.25;
-/** How far the device may trail `ctx.currentTime`, beyond the latency it
- *  reports, before the render check logs. Sized to sit well above normal jitter
- *  so the line means something when it appears. */
-const RENDER_LAG_ALERT_SEC = 0.15;
-/** How long after the first sample is due to be audible the latency probe
- *  samples the output clock (see _armLatencyProbe). Long enough for the device
- *  to have settled into steady state, short enough to land inside a short
- *  selection's play. */
-const LATENCY_PROBE_DELAY_SEC = 0.2;
-/** Smallest change in reported output latency worth a log line. Below this it's
- *  measurement noise; above it, the audio device or its buffer size changed
- *  under us, which moves the delay before sound. */
-const LATENCY_CHANGE_LOG_SEC = 0.005;
 /** How long after playback stops the idle context is closed.
  *
  * On macOS/WKWebView an app left idle in the background comes back with its
@@ -185,18 +169,6 @@ const IDLE_REBUILD_MS = 30000;
  *  but leaves the same audio unit in place, so it prevents the drift without
  *  repairing a context that has already drifted. */
 const IDLE_SUSPEND_MS = 5000;
-/** Shortest stop worth an idle-gap line (see _logIdleGap). Below this the two
- *  clocks can't have parted by anything that matters. */
-const IDLE_GAP_LOG_MIN_SEC = 1;
-/** How often the playback clock monitor samples (see _startClockDriftMonitor).
- *  Short enough that a one-second selection still produces a line. */
-const CLOCK_DRIFT_SAMPLE_MS = 500;
-/** Wall time that must pass before the monitor's first line: below this the
- *  numbers are dominated by the sample interval itself. */
-const CLOCK_DRIFT_FIRST_LOG_SEC = 0.9;
-/** Additional drift or timer overshoot (seconds) beyond the last logged figure
- *  worth another line. */
-const CLOCK_DRIFT_LOG_STEP_SEC = 0.1;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
@@ -228,6 +200,12 @@ export class AudioEngine implements PlaybackTransport {
   // TimeStretchEngine.
   private playbackSpeed = 1.0;
   private timeStretch = new TimeStretchEngine();
+  /** Media seconds per ctx second the current play really delivers: the stretch
+   *  engine's effective speed (see TimeStretchEngine.effectiveSpeed), fixed at
+   *  play(). All media-time math uses this, never `playbackSpeed`. */
+  private playRate = 1.0;
+  /** Whether the current play() runs the stretch engines (speed != 1). */
+  private playStretching = false;
 
   private filePath: string | null = null;
   private fileSampleRate = 44100;
@@ -243,6 +221,7 @@ export class AudioEngine implements PlaybackTransport {
   // `playId` is incremented on every play() / _cancelPlayback(). Async
   // functions capture the current id and bail out if it no longer matches.
   private playId = 0;
+  private playRequested = false;    // play() called and not yet paused/ended/cancelled
   private isPlayingState = false;   // true once first sample emitted
   private onPlayingFired = false;   // guard so onPlaying fires exactly once
   private pausedAt = 0;             // last known media position while paused
@@ -278,33 +257,9 @@ export class AudioEngine implements PlaybackTransport {
   private chunksScheduled = 0;
   private slowDecodeTimer: ReturnType<typeof setInterval> | null = null;
   private playStartedAtMs = 0;
-  /** One-shot timer armed by the first scheduled chunk (see _armRenderCheck). */
-  private renderCheckTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Last output latency reported to the log, so a change is only logged once.
-   *  Negative until the first sample. */
-  private lastLoggedLatencySec = -1;
-  /** One-shot timer armed alongside the render check (see _armLatencyProbe). */
-  private latencyProbeTimer: ReturnType<typeof setTimeout> | null = null;
   /** One-shot timer that rebuilds or suspends the context once idle
    *  (see _armIdleAction). */
   private idleActionTimer: ReturnType<typeof setTimeout> | null = null;
-  /** ctx.currentTime and wall time as of the last stop, so the next play can
-   *  measure what the two clocks did while nothing was playing. Null when
-   *  there is no gap to measure (fresh context, or already reported). */
-  private idleCtxStamp: number | null = null;
-  private idleWallStampMs = 0;
-  /** Repeating timer comparing the context clock to the wall clock during a
-   *  play (see _startClockDriftMonitor), with the origins it measures from. */
-  private driftTimer: ReturnType<typeof setInterval> | null = null;
-  private driftCtxOrigin = 0;
-  private driftWallOriginMs = 0;
-  private driftLastLoggedSec = 0;
-  /** Hardware sample rate of the default output device as of the most recent
-   *  context creation, from a throwaway context opened without a `sampleRate`
-   *  option. Null until first probed; 0 if the probe failed with nothing
-   *  previously measured. Never treated as still true for the next context —
-   *  see _probeDeviceSampleRate. */
-  private deviceSampleRate: number | null = null;
 
   private callbacks: AudioEngineCallbacks;
 
@@ -318,6 +273,9 @@ export class AudioEngine implements PlaybackTransport {
    * reference to any more, so nothing can ever pause or close it. Every entry
    * point that could start or resume audio checks this first. */
   private disposed = false;
+  /** Bumped by every loadFile(); a load that finds it changed is stale and must
+   *  not apply its result over a newer one's. */
+  private loadId = 0;
 
   // ── PCM replay cache ────────────────────────────────────────────────────────
   // Decoded PCM for preloaded regions. On a cache hit, play() bypasses all
@@ -325,6 +283,13 @@ export class AudioEngine implements PlaybackTransport {
   // PcmCache, which holds its own `preloadId` generation token (distinct from
   // this.playId).
   private pcmCache = new PcmCache((msg, type) => this._log(msg, type));
+
+  private diag = new AudioClockDiagnostics({
+    ctx: () => this.ctx,
+    playId: () => this.playId,
+    filterDelaySec: () => this.filterGraph.getDelaySec(),
+    log: (msg, type) => this._log(msg, type),
+  });
 
   private _log(msg: string, type: 'info' | 'error' = 'info'): void {
     this.callbacks.onDebugLog?.(`[audio] ${msg}`, type);
@@ -346,22 +311,27 @@ export class AudioEngine implements PlaybackTransport {
     path: string,
   ): Promise<{ sampleRate: number; channels: number; durationSec: number }> {
     if (this.disposed) throw new Error('AudioEngine.loadFile after dispose()');
+    const myLoadId = ++this.loadId;
     this._cancelPlayback();
+    // Nothing plays between here and the new file's metadata arriving: a play()
+    // in that window would otherwise stream the OLD file.
+    this.filePath = null;
 
-    // Close any existing context (switching files)
-    if (this.ctx) {
-      await this.ctx.close().catch(() => {});
-      this.ctx = null;
-      this.gainNode = null;
-      this.limiterNode = null;
-      this._teardownFilterGraph();
-    }
-
+    // Close any existing context (switching files). Detached before the await so
+    // a play() that lands during it builds its own context rather than having it
+    // nulled out from under it afterwards.
+    const old = this._detachContext();
     this.pcmCache.clear();  // also cancels any ongoing preload from the previous file
+    await old?.close().catch(() => {});
 
     const info = await getFileInfo(path);
     // Disposed while the metadata IPC was in flight — do not re-arm the engine.
     if (this.disposed) throw new Error('AudioEngine disposed while loading');
+    // A newer loadFile() owns the engine now; hand back this file's info without
+    // applying it.
+    if (myLoadId !== this.loadId) {
+      return { sampleRate: info.sample_rate, channels: info.channels, durationSec: info.duration_secs };
+    }
     this.filePath = path;
     this.fileSampleRate = info.sample_rate;
     this.fileChannels = info.channels;
@@ -387,7 +357,7 @@ export class AudioEngine implements PlaybackTransport {
    * lie about what's being heard.
    */
   setTimeline(timeline: Timeline): void {
-    const wasPlaying = this.isPlayingState;
+    const wasActive = this.playRequested;
     this.timeline = timeline;
     this._cancelPlayback();
     // Park the cursors at a position the new timeline can express.
@@ -395,7 +365,7 @@ export class AudioEngine implements PlaybackTransport {
     this.pausedAt = t;
     this.pausedAtSched = t;
     this.pcmCache.cancelPreload();
-    if (wasPlaying) this.callbacks.onPaused();
+    if (wasActive) this.callbacks.onPaused();
   }
 
   /** The display duration currently in effect (the whole file when no subset). */
@@ -409,10 +379,13 @@ export class AudioEngine implements PlaybackTransport {
    * AudioContext is created — or resumed — in a valid user gesture context.
    */
   play(startSec: number, endSec?: number): void {
-    if (this.disposed || !this.filePath) return;
+    if (this.disposed) return;
+    // Bailing paths report onPaused so a caller that raised its buffering state
+    // for this play doesn't strand it.
+    if (!this.filePath) { this.callbacks.onPaused(); return; }
     // A subset that kept nothing has no spans and so no audio to play. Bail
     // before the prefetch loop tries to resolve a position on an empty axis.
-    if (this.timeline.spans.length === 0) return;
+    if (this.timeline.spans.length === 0) { this.callbacks.onPaused(); return; }
 
     // Stamped here, at the top, so every "Nms after play" line below measures
     // from the call — including the cache-hit path, which returns before the
@@ -463,8 +436,7 @@ export class AudioEngine implements PlaybackTransport {
           `AudioEngine: ${this.fileSampleRate} Hz not supported, using ${this.ctx.sampleRate} Hz`,
         );
       }
-      this._recordDeviceSampleRate(forceFileRate ? 0 : this.ctx.sampleRate);
-      this.idleCtxStamp = null;  // new clock — nothing to compare against
+      this.diag.onContextCreated(forceFileRate ? 0 : this.ctx.sampleRate);
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = this._currentGain;
       this.limiterNode = this.ctx.createDynamicsCompressor();
@@ -480,24 +452,30 @@ export class AudioEngine implements PlaybackTransport {
       // (and so the playhead) advancing on some implementations while nothing
       // reaches the speakers. Logged for the whole life of the context, not just
       // during a play, since the transition often lands between two plays.
-      this.ctx.addEventListener('statechange', () => {
-        this._log(`ctx.state -> ${this.ctx?.state ?? 'closed'}`);
+      // Bound to this context, not read off `this.ctx`: after an idle rebuild the
+      // field names a different context by the time this one reports 'closed'.
+      const created = this.ctx;
+      created.addEventListener('statechange', () => {
+        this._log(`ctx.state -> ${created.state}${this.ctx === created ? '' : ' (superseded)'}`);
       });
-    } else if (this.ctx.state === 'suspended') {
-      // Either the idle suspend fired (see _armIdleAction, 'suspend' mode) or
-      // the context was suspended under us. Scheduling proceeds regardless:
-      // ctx.currentTime is frozen until it resumes, so everything anchored to it
-      // stays consistent, exactly as on the first play of a new context.
-      this.ctx.resume().catch(() => {});
     }
+    // A fresh context may start suspended when it wasn't created inside the
+    // gesture (a play kicked off by a timer or an awaited preroll); an idle
+    // suspend or an OS interruption leaves an old one suspended too. Scheduling
+    // proceeds regardless — ctx.currentTime is frozen until it resumes, so
+    // everything anchored to it stays consistent.
+    if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
 
     // ── Initialise the appropriate stretch engine ─────────────────────────────
     // Phase vocoder for slowdowns, SoundTouch (WSOLA) for speedups. Each engine
     // is allocated lazily and reset on every play() so internal buffers start clean.
     this.timeStretch.setSpeed(this.playbackSpeed);
-    this.timeStretch.reset();
+    this.timeStretch.reset(this.fileChannels);
+    this.playStretching = this.playbackSpeed !== 1.0;
+    this.playRate = this.timeStretch.effectiveSpeed;
 
     const myPlayId = ++this.playId;
+    this.playRequested = true;
     this.isPlayingState = false;
     this.onPlayingFired = false;
     this.pausedAt = startSec;       // keep pausedAt in sync so getMediaTime() is correct during buffering
@@ -515,8 +493,8 @@ export class AudioEngine implements PlaybackTransport {
       + `speed=${this.playbackSpeed.toFixed(2)}x ctx.sr=${this.ctx.sampleRate} file.sr=${this.fileSampleRate} ch=${this.fileChannels} ctx.state=${this.ctx.state}`,
     );
 
-    this._logOutputLatency();
-    this._logIdleGap();
+    this.diag.logOutputLatency();
+    this.diag.logIdleGap();
 
     // ── PCM cache fast path ───────────────────────────────────────────────────
     // For bounded plays, skip Rust IPC entirely if we have cached decoded PCM
@@ -572,6 +550,10 @@ export class AudioEngine implements PlaybackTransport {
 
   get isPlaying(): boolean { return this.isPlayingState; }
 
+  /** True from play() until it is paused, ended or cancelled — including the
+   *  buffering window before the first sample (when `isPlaying` is still false). */
+  get isActive(): boolean { return this.playRequested; }
+
   /**
    * Where a resume must start so no audio is repeated or skipped.
    *
@@ -585,7 +567,7 @@ export class AudioEngine implements PlaybackTransport {
    * L from its own anchor.
    */
   getResumeTime(): number {
-    return this.isPlayingState ? this._computeMediaTime(false) : this.pausedAtSched;
+    return this._hasStarted() ? this._computeMediaTime(false) : this.pausedAtSched;
   }
 
   /**
@@ -634,6 +616,9 @@ export class AudioEngine implements PlaybackTransport {
     }
     this._log(`endSec cleared; continuing from ${this.schedCursor.toFixed(3)}s `
       + `(${((tail.ctxEnd - this.ctx.currentTime) * 1000).toFixed(0)}ms of scheduled audio in hand)`);
+    // The tail chunk's stretcher was flushed (see TimeStretchEngine.stretch);
+    // continuing needs a fresh one.
+    if (this.playStretching) this.timeStretch.reset(this.fileChannels);
     this._prefetchLoop(this.playId, tail.ctxEnd);
   }
 
@@ -671,11 +656,14 @@ export class AudioEngine implements PlaybackTransport {
   setPlaybackSpeed(speed: number): void {
     const next = clamp(speed, 0.25, 4.0);
     if (Math.abs(next - this.playbackSpeed) < 0.001) return;
-    const wasPlaying = this.isPlayingState;
-    const resumeFrom = wasPlaying ? this._computeMediaTime() : this.pausedAt;
+    // Active, not just audible: a play still buffering has anchored its time
+    // origin (or will) at the old speed, so it must restart as well. While
+    // buffering _computeMediaTime() reports the play's start, which is right.
+    const wasActive = this.playRequested;
+    const resumeFrom = this._computeMediaTime();
     const resumeEnd = this.endSec;
     this.playbackSpeed = next;
-    if (wasPlaying) {
+    if (wasActive) {
       this.play(resumeFrom, resumeEnd ?? undefined);
     }
   }
@@ -708,13 +696,7 @@ export class AudioEngine implements PlaybackTransport {
   async restart(): Promise<void> {
     if (this.disposed) return;
     this._cancelPlayback();
-    if (this.ctx) {
-      await this.ctx.close().catch(() => {});
-      this.ctx = null;
-      this.gainNode = null;
-      this.limiterNode = null;
-      this._teardownFilterGraph();
-    }
+    await this._detachContext()?.close().catch(() => {});
   }
 
   /** Fully tear down the engine. Call on component unmount. Irreversible —
@@ -723,13 +705,7 @@ export class AudioEngine implements PlaybackTransport {
     this.disposed = true;
     this._cancelPlayback();
     this.pcmCache.cancelPreload();
-    if (this.ctx) {
-      this.ctx.close().catch(() => {});
-      this.ctx = null;
-    }
-    this.gainNode = null;
-    this.limiterNode = null;
-    this._teardownFilterGraph();
+    this._detachContext()?.close().catch(() => {});
     this.timeStretch.dispose();
     this.filePath = null;
   }
@@ -785,236 +761,22 @@ export class AudioEngine implements PlaybackTransport {
    * reported (no correction, original behaviour).
    */
   private _outputLatencySec(): number {
-    const ctx = this.ctx;
-    if (!ctx) return 0;
-    const ol = (ctx as { outputLatency?: number }).outputLatency;
-    if (typeof ol === 'number' && isFinite(ol) && ol > 0) return ol;
-    const bl = ctx.baseLatency;
-    if (typeof bl === 'number' && isFinite(bl) && bl > 0) return bl;
-    return 0;
+    return outputLatencySec(this.ctx);
   }
 
-  /**
-   * Note the output device's rate, taken from the context we just opened at it,
-   * and log a change since the last one. `rate` is 0 when we deliberately opened
-   * at the file's rate instead (the A/B flag), in which case the context tells
-   * us nothing about the device and the last reading stands.
-   *
-   * This used to be a *probe*: a throwaway AudioContext opened with no
-   * `sampleRate` option, read, and closed, whose rate was then named explicitly
-   * when constructing the real one. That is two AudioContexts alive at once —
-   * `close()` is async and was not awaited (it cannot be; the real context has
-   * to be constructed inside the user gesture) — so CoreAudio was picking an IO
-   * configuration for our real context while a second one was still tearing
-   * down. A race at exactly the moment the output path's buffering is decided,
-   * whose outcome then holds for the whole life of the context, is a strong
-   * candidate for the intermittent "playhead runs ahead of the sound" reports:
-   * bad for every play in one session, fine for every play in the next.
-   *
-   * Constructing with no options gets the same rate with no second context, so
-   * there is nothing left to race.
-   */
-  private _recordDeviceSampleRate(rate: number): void {
-    if (rate <= 0) return;
-    const prev = this.deviceSampleRate;
-    this.deviceSampleRate = rate;
-    if (prev !== null && prev !== rate) {
-      this._log(`output device rate changed ${prev}Hz -> ${rate}Hz`);
-    }
-  }
 
-  /**
-   * Log what the output side actually did, shortly after the first sample was
-   * due to be audible. Unconditional — unlike _logOutputLatency and the render
-   * check, both of which stay silent when the browser reports a small latency,
-   * which is precisely the case where sound is late and nothing explains it.
-   *
-   * Prints the reported latency next to the measured one. `getOutputTimestamp()`
-   * gives the context position actually played out, so `currentTime - contextTime`
-   * is the real distance between scheduling and hearing. When that measurement
-   * is much larger than `outputLatency`, the playhead compensation — which trusts
-   * `outputLatency` — is short by the difference, and the cursor runs ahead of
-   * the sound by exactly that much.
-   */
-  private _armLatencyProbe(firstCtxStart: number, myPlayId: number): void {
-    if (this.latencyProbeTimer !== null) clearTimeout(this.latencyProbeTimer);
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const dueInSec = firstCtxStart - ctx.currentTime + LATENCY_PROBE_DELAY_SEC;
-    this.latencyProbeTimer = setTimeout(() => {
-      this.latencyProbeTimer = null;
-      if (this.playId !== myPlayId || !this.ctx) return;
-      const c = this.ctx as AudioContext & { outputLatency?: number };
-      const ol = typeof c.outputLatency === 'number' ? `${(c.outputLatency * 1000).toFixed(1)}ms` : 'n/a';
-      const bl = typeof c.baseLatency === 'number' ? `${(c.baseLatency * 1000).toFixed(1)}ms` : 'n/a';
-      const measured = this._renderLagSec();
-      const dev = this.deviceSampleRate ?? 0;
-      // An exact 0 means getOutputTimestamp() handed back contextTime ===
-      // currentTime, which WKWebView does whatever the device is doing. Marked,
-      // because read as a measurement it says "no real latency" and is the one
-      // reading here that cannot say that.
-      const measuredStr = measured === null ? 'unavailable'
-        : measured === 0 ? '0.0ms (contextTime===currentTime; not a real reading)'
-        : `${(measured * 1000).toFixed(1)}ms`;
-      this._log(
-        `latency probe: reported out=${ol} base=${bl} — `
-        + `measured(getOutputTimestamp)=${measuredStr} — `
-        + `compensating ${(this._outputLatencySec() * 1000).toFixed(1)}ms out `
-        + `+ ${(this.filterGraph.getDelaySec() * 1000).toFixed(1)}ms filter — `
-        + `ctx.sr=${this.ctx.sampleRate} device.sr=${dev || 'unknown'}`,
-      );
-    }, Math.max(0, dueInSec * 1000));
-  }
 
-  /**
-   * Watch the two clocks that can put a delay between an action and the sound,
-   * for the length of a play. One timer, two independent measurements:
-   *
-   * - **ctx vs wall.** `ctx.currentTime` is supposed to be the audio device's
-   *   clock. If it instead advances on a render thread outrunning the device —
-   *   what an output path with a growing FIFO looks like from inside the page —
-   *   it gains on `performance.now()`, and every sample we schedule lands that
-   *   much further behind the speakers. `getOutputTimestamp()` is the API for
-   *   this and WKWebView answers it with zero lag; two independent clocks can't
-   *   be faked the same way.
-   * - **Timer overshoot.** How late this interval fires against its own period,
-   *   i.e. how far behind the event loop is running. A main thread backed up by
-   *   a second delays the keypress, the scheduling and the playhead together —
-   *   which sounds exactly like output latency but isn't, and is the reading
-   *   that tells the two apart.
-   *
-   * A healthy play holds both within a few ms.
-   */
-  private _startClockDriftMonitor(myPlayId: number): void {
-    this._stopClockDriftMonitor();
-    const ctx = this.ctx;
-    if (!ctx) return;
-    this.driftCtxOrigin = ctx.currentTime;
-    this.driftWallOriginMs = performance.now();
-    this.driftLastLoggedSec = 0;
-    let firstLogged = false;
-    let lastTickMs = this.driftWallOriginMs;
-    let maxOvershootSec = 0;
-    this.driftTimer = setInterval(() => {
-      if (this.playId !== myPlayId || !this.ctx) { this._stopClockDriftMonitor(); return; }
-      const nowMs = performance.now();
-      const overshootSec = (nowMs - lastTickMs - CLOCK_DRIFT_SAMPLE_MS) / 1000;
-      lastTickMs = nowMs;
-      if (overshootSec > maxOvershootSec) maxOvershootSec = overshootSec;
-      const ctxElapsed = this.ctx.currentTime - this.driftCtxOrigin;
-      const wallElapsed = (nowMs - this.driftWallOriginMs) / 1000;
-      if (wallElapsed <= 0) return;
-      const excess = ctxElapsed - wallElapsed;
-      const worst = Math.max(Math.abs(excess), maxOvershootSec);
-      const worthLogging = worst >= this.driftLastLoggedSec + CLOCK_DRIFT_LOG_STEP_SEC;
-      if (!worthLogging && (firstLogged || wallElapsed < CLOCK_DRIFT_FIRST_LOG_SEC)) return;
-      firstLogged = true;
-      if (worthLogging) this.driftLastLoggedSec = worst;
-      this._log(
-        `clocks: ctx +${ctxElapsed.toFixed(3)}s vs wall +${wallElapsed.toFixed(3)}s `
-        + `— ctx ${excess >= 0 ? 'ahead' : 'behind'} by ${Math.abs(excess * 1000).toFixed(0)}ms `
-        + `— event loop worst overshoot ${(maxOvershootSec * 1000).toFixed(0)}ms `
-        + `— filter delay ${(this.filterGraph.getDelaySec() * 1000).toFixed(0)}ms`,
-      );
-    }, CLOCK_DRIFT_SAMPLE_MS);
-  }
 
-  private _stopClockDriftMonitor(): void {
-    if (this.driftTimer !== null) {
-      clearInterval(this.driftTimer);
-      this.driftTimer = null;
-    }
-  }
 
-  /**
-   * Log the output latency when it is high enough to perceptibly desync the
-   * playhead (>20ms) or when it has changed since the last line. The change
-   * case matters more than the absolute value: the delay before sound moves
-   * with it, and a device swapping under a running app (Bluetooth connecting,
-   * output switching, a buffer-size change) is otherwise invisible — including
-   * across plays, which is why `lastLoggedLatencySec` is not reset per play.
-   */
-  private _logOutputLatency(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const latencySec = this._outputLatencySec();
-    const prev = this.lastLoggedLatencySec;
-    if (Math.abs(latencySec - prev) < LATENCY_CHANGE_LOG_SEC) return;
-    const first = prev < 0;
-    // Recorded even when not logged, so a later move off a normal value still
-    // reads as a change rather than as a first observation.
-    this.lastLoggedLatencySec = latencySec;
-    if (latencySec <= 0.02 && first) return;  // normal wired output, nothing to say
 
-    const ol = (ctx as { outputLatency?: number }).outputLatency;
-    const from = first ? '' : `(was ${(prev * 1000).toFixed(0)}ms) `;
-    this._log(
-      `output latency ${(latencySec * 1000).toFixed(0)}ms ${from}`
-      + `(outLatency=${typeof ol === 'number' ? ol.toFixed(3) : 'n/a'}s baseLatency=${ctx.baseLatency?.toFixed(3) ?? 'n/a'}s) `
-      + `— playhead compensated`,
-    );
-  }
 
-  /**
-   * How far the audio device trails the context clock, in seconds, or null when
-   * the browser doesn't report it.
-   *
-   * `ctx.currentTime` advances on the render thread whether or not the hardware
-   * is pulling the buffers we hand it, and the playhead is derived from it — so
-   * a device that stalls or starts slowly shows up as a cursor marching
-   * normally across silence. `getOutputTimestamp().contextTime` is the position
-   * actually played out, so the gap between the two is the one measurement that
-   * separates "the decoder was slow" from "the audio device was".
-   */
-  private _renderLagSec(): number | null {
-    const ctx = this.ctx as (AudioContext & { getOutputTimestamp?: () => AudioTimestamp }) | null;
-    if (!ctx || typeof ctx.getOutputTimestamp !== 'function') return null;
-    let ts: AudioTimestamp;
-    try { ts = ctx.getOutputTimestamp(); } catch { return null; }
-    const played = ts?.contextTime;
-    if (typeof played !== 'number' || !isFinite(played)) return null;
-    return ctx.currentTime - played;
-  }
-
-  /**
-   * Arm a one-shot check, run shortly after the first chunk should have become
-   * audible, that the device is really consuming what was scheduled.
-   *
-   * Silent in the normal case. It exists for the report it is named after: a
-   * long delay before sound while the playhead advanced on schedule — which the
-   * existing logs cannot distinguish from a healthy play, since every one of
-   * them (first-chunk latency, underruns) measures the decode/schedule side and
-   * that side was fine.
-   */
-  private _armRenderCheck(firstCtxStart: number, myPlayId: number): void {
-    if (this.renderCheckTimer !== null) clearTimeout(this.renderCheckTimer);
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const expectedLatency = this._outputLatencySec();
-    const dueInSec = firstCtxStart - ctx.currentTime + expectedLatency + RENDER_CHECK_MARGIN_SEC;
-    this.renderCheckTimer = setTimeout(() => {
-      this.renderCheckTimer = null;
-      if (this.playId !== myPlayId || !this.ctx) return;
-      const lag = this._renderLagSec();
-      if (lag === null) return;
-      const behindSec = lag - expectedLatency;
-      if (behindSec < RENDER_LAG_ALERT_SEC) return;
-      this._log(
-        `audio device ${(behindSec * 1000).toFixed(0)}ms behind the clock `
-        + `(played out to ${(this.ctx.currentTime - lag).toFixed(3)}s, ctx at ${this.ctx.currentTime.toFixed(3)}s, `
-        + `reported latency ${(expectedLatency * 1000).toFixed(0)}ms) `
-        + `— sound is late but the playhead is not`,
-        'error',
-      );
-    }, Math.max(0, dueInSec * 1000));
-  }
 
   /**
    * @param compensated true (default) → the audible position, for the playhead.
    *   false → the scheduled position, for resuming playback (see getResumeTime).
    */
   private _computeMediaTime(compensated = true): number {
-    if (!this.ctx || !this.isPlayingState) {
+    if (!this.ctx || !this._hasStarted()) {
       // Not playing: return the last known position. Both cursors are kept in
       // sync by play() (set to startSec), _cancelPlayback() and seek() so this is
       // correct whether we're paused, between play() and first sample, or at rest.
@@ -1025,12 +787,17 @@ export class AudioEngine implements PlaybackTransport {
     // scheduled. Both are 0 when inactive/unreported.
     const lagSec = compensated ? this.filterGraph.getDelaySec() + this._outputLatencySec() : 0;
     const elapsedCtx = this.ctx.currentTime - this.playStartCtx - lagSec;
-    if (elapsedCtx < 0) return this.playStartMedia;
-    const t = Math.min(this.playStartMedia + elapsedCtx * this.playbackSpeed, this.timeline.duration);
-    // Clamp to endSec so the playhead never visually overshoots the selection
-    // end during the window between source.stop() and _cancelPlayback().
-    if (this.endSec !== null && t >= this.endSec) return this.endSec;
-    return t;
+    return mediaTimeAt(this.playStartMedia, elapsedCtx, this.playRate, this.timeline.duration, this.endSec);
+  }
+
+  /**
+   * Whether audio is past its anchor on the ctx clock. `isPlayingState` is only
+   * set from the rAF tick, which a hidden or throttled window stops while Web
+   * Audio plays straight on — so the engine's own clock is consulted too.
+   */
+  private _hasStarted(): boolean {
+    if (this.isPlayingState) return true;
+    return this.playRequested && !!this.ctx && this.playStartCtxSet && this.ctx.currentTime >= this.playStartCtx;
   }
 
   /**
@@ -1047,39 +814,6 @@ export class AudioEngine implements PlaybackTransport {
     this.filterGraph.apply(this.bandPassFilter, this.fileSampleRate);
   }
 
-  /**
-   * Report what the two clocks did while nothing was playing.
-   *
-   * Everything is scheduled against `ctx.currentTime` — `playStartCtx =
-   * ctx.currentTime + START_MARGIN_SEC`, and the same anchor in the prefetch
-   * loop. That clock advances as WebKit's render thread produces quanta, not as
-   * the device plays them.
-   *
-   * Measured across a 135.7s idle with the app in the background, a context
-   * left running came back 9.0s SHORT of wall time, and the plays that followed
-   * were about a second late and stayed late until the context was rebuilt. So
-   * the renderer falls behind the device while idle rather than running ahead
-   * of it. The same measurement in the foreground (9.0s stopped) is clean to
-   * 1ms. Within a play both clocks advance together, which is why the drift
-   * monitor — it re-origins at every play — never sees any of this.
-   *
-   * A negative figure on a context that was suspended while idle is expected
-   * and harmless: a suspended clock is frozen for the length of the gap.
-   */
-  private _logIdleGap(): void {
-    const ctxStamp = this.idleCtxStamp;
-    this.idleCtxStamp = null;
-    if (ctxStamp === null || !this.ctx) return;
-    const wallElapsed = (performance.now() - this.idleWallStampMs) / 1000;
-    if (wallElapsed < IDLE_GAP_LOG_MIN_SEC) return;
-    const ctxElapsed = this.ctx.currentTime - ctxStamp;
-    const excess = ctxElapsed - wallElapsed;
-    this._log(
-      `idle gap: stopped for ${wallElapsed.toFixed(1)}s — ctx +${ctxElapsed.toFixed(3)}s `
-      + `(${excess >= 0 ? 'gained' : 'frozen for'} ${Math.abs(excess * 1000).toFixed(0)}ms) `
-      + `— ctx.state=${this.ctx.state}`,
-    );
-  }
 
   /**
    * What to do with a context nothing is playing through: 'rebuild' (the
@@ -1087,14 +821,9 @@ export class AudioEngine implements PlaybackTransport {
    * pick one — 'off' leaves the context running while idle, which is the only
    * way to watch the drift form and so to read a real number out of the
    * idle-gap line.
-   *
-   * localStorage['seenote.audioIdleSuspend'] = 'off' is the previous build's
-   * spelling of 'off' and still works, so a debug session set up under it keeps
-   * behaving the same way.
    */
   private _idleMode(): 'rebuild' | 'suspend' | 'off' {
     try {
-      if (localStorage.getItem('seenote.audioIdleSuspend') === 'off') return 'off';
       const mode = localStorage.getItem('seenote.audioIdleMode');
       if (mode === 'rebuild' || mode === 'suspend' || mode === 'off') return mode;
     } catch { /* no storage */ }
@@ -1119,9 +848,10 @@ export class AudioEngine implements PlaybackTransport {
       this.idleActionTimer = null;
       if (this.playId !== myPlayId || this.disposed) return;
       const ctx = this.ctx;
-      if (!ctx || ctx.state !== 'running') return;
+      if (!ctx || ctx.state === 'closed') return;
       if (mode === 'suspend') {
-        ctx.suspend().catch(() => {});
+        // Only a running context has anything to suspend.
+        if (ctx.state === 'running') ctx.suspend().catch(() => {});
         return;
       }
       // Drop the context so the next play() builds a fresh one inside its own
@@ -1130,14 +860,23 @@ export class AudioEngine implements PlaybackTransport {
       // awaited: nothing holds a node once the graph is torn down. The idle
       // stamp goes with it, because a figure spanning two contexts' clocks
       // would compare origins that have nothing to do with each other.
-      this.ctx = null;
-      this.gainNode = null;
-      this.limiterNode = null;
-      this._teardownFilterGraph();
-      this.idleCtxStamp = null;
+      this._detachContext();
+      this.diag.onContextDropped();
       this._log(`idle rebuild: context closed after ${(IDLE_REBUILD_MS / 1000).toFixed(0)}s idle`);
       ctx.close().catch(() => {});
     }, mode === 'suspend' ? IDLE_SUSPEND_MS : IDLE_REBUILD_MS);
+  }
+
+  /** Drop the context and everything built on it, synchronously, and return it
+   *  for the caller to close. Callers close it without relying on `this.ctx`
+   *  afterwards, so a play() that builds a new one in the meantime is untouched. */
+  private _detachContext(): AudioContext | null {
+    const old = this.ctx;
+    this.ctx = null;
+    this.gainNode = null;
+    this.limiterNode = null;
+    this._teardownFilterGraph();
+    return old;
   }
 
   private _teardownFilterGraph(): void {
@@ -1165,36 +904,13 @@ export class AudioEngine implements PlaybackTransport {
       clearInterval(this.slowDecodeTimer);
       this.slowDecodeTimer = null;
     }
-    if (this.renderCheckTimer !== null) {
-      clearTimeout(this.renderCheckTimer);
-      this.renderCheckTimer = null;
-    }
-    if (this.latencyProbeTimer !== null) {
-      clearTimeout(this.latencyProbeTimer);
-      this.latencyProbeTimer = null;
-    }
-    this._stopClockDriftMonitor();
     this._armIdleAction();
-    // Stamp both clocks at the stop. The next play compares them: the drift
-    // monitor re-origins per play, so a context clock that gains on wall time
-    // *between* plays — the shape that would put a fixed, idle-length-sized
-    // delay into every subsequent play — is invisible to it.
-    // Only a cancel that actually stopped something starts an idle gap. play()
-    // calls this before every play, and a stamp taken there would overwrite the
-    // one from the stop we want to measure across — wall elapsed would read ~0
-    // and the line would never print. `isPlayingState` is cleared further down,
+    // Only a cancel that actually stopped something starts an idle gap (see
+    // AudioClockDiagnostics.onStop). `isPlayingState` is cleared further down,
     // and `queue` further down still, so both still describe the play being
     // cancelled here; a play cancelled while still buffering has the queue but
     // not the flag.
-    const stoppedSomething = this.isPlayingState || this.queue.length > 0;
-    if (!stoppedSomething) {
-      // Nothing was in flight: leave the existing stamp alone.
-    } else if (this.ctx && this.ctx.state === 'running') {
-      this.idleCtxStamp = this.ctx.currentTime;
-      this.idleWallStampMs = performance.now();
-    } else {
-      this.idleCtxStamp = null;
-    }
+    this.diag.onStop(this.isPlayingState || this.queue.length > 0);
 
     this._raf.stop();
 
@@ -1214,6 +930,7 @@ export class AudioEngine implements PlaybackTransport {
       closePcmStream(id).catch(() => {});
     }
 
+    this.playRequested = false;
     this.isPlayingState = false;
     this.onPlayingFired = false;
   }
@@ -1234,9 +951,9 @@ export class AudioEngine implements PlaybackTransport {
     const path = this.filePath;
     const ch = this.fileChannels;
     const sr = this.fileSampleRate;
-    const speed = this.playbackSpeed;
-    const stretching = speed !== 1.0;
-    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
+    const rate = this.playRate;
+    const stretching = this.playStretching;
+    const chunkFrames = Math.floor(PCM_CHUNK_DURATION_SEC * sr);
 
     // Open the Rust PcmStream at the playback start position (or, for a
     // continuation, at the point the in-flight audio runs out). The cursor is a
@@ -1252,30 +969,7 @@ export class AudioEngine implements PlaybackTransport {
     const spans = this.timeline.spans;
     let spanIdx = this.timeline.spanIndexAtDisplay(openAt);
 
-    // Opens a stream at a source position and installs it as the active one.
-    // Returns null on failure (callers below decide how fatal that is).
-    const openStreamAt = async (srcSec: number) => {
-      let h;
-      try {
-        h = await startPcmStream(path, srcSec);
-      } catch (err) {
-        if (this.playId !== myPlayId) return null;
-        console.error('AudioEngine: startPcmStream failed', err);
-        this._log(`startPcmStream failed: ${String(err)}`, 'error');
-        return null;
-      }
-      if (this.playId !== myPlayId) {
-        closePcmStream(h.stream_id).catch(() => {});
-        return null;
-      }
-      this._log(
-        `stream opened id=${h.stream_id} at ${srcSec.toFixed(3)}s sr=${h.sample_rate} ch=${h.channels} total_frames=${h.total_frames}`,
-      );
-      this.streamId = h.stream_id;
-      return h;
-    };
-
-    let handle = await openStreamAt(this._srcInSpan(spanIdx, openAt));
+    let handle = await this._openStreamAt(path, this._srcInSpan(spanIdx, openAt), myPlayId);
     if (!handle) {
       if (this.playId !== myPlayId) return;
       if (continueFromCtx !== undefined) {
@@ -1317,9 +1011,7 @@ export class AudioEngine implements PlaybackTransport {
 
       // Don't over-buffer: wait while we have HORIZON_SEC of audio scheduled
       // ahead of the current play position.
-      const currentMedia = this.isPlayingState
-        ? this._computeMediaTime()
-        : this.playStartMedia;
+      const currentMedia = this._computeMediaTime(false);
       const scheduledAhead = this.schedCursor - currentMedia;
 
       if (scheduledAhead >= HORIZON_SEC) {
@@ -1371,29 +1063,17 @@ export class AudioEngine implements PlaybackTransport {
           // a dense subset can put a join every frame, so paying a seek at each
           // one is what would make playback stutter.
           if (gapSec <= GAP_READ_THROUGH_SEC) {
-            let framesToSkip = Math.round(gapSec * sr);
-            let readThrough = true;
-            while (framesToSkip > 0) {
-              let skipped;
-              try {
-                skipped = await readPcmChunk(handle.stream_id, Math.min(chunkFrames, framesToSkip));
-              } catch {
-                readThrough = false;
-                break;
-              }
-              if (this.playId !== myPlayId) return;
-              if (skipped.frames_read === 0) { readThrough = false; break; }
-              framesToSkip -= skipped.frames_read;
-            }
+            const skipped = await this._readThrough(handle.stream_id, Math.round(gapSec * sr), chunkFrames, myPlayId);
+            if (skipped === 'stale') return;
             // The stream now sits at the next span's start — same generation,
             // nothing to reopen.
-            if (readThrough) continue;
+            if (skipped === 'ok') continue;
           }
 
           const prevStreamId = handle.stream_id;
           this.streamId = null;
           closePcmStream(prevStreamId).catch(() => {});
-          const next = await openStreamAt(spans[spanIdx].srcStart);
+          const next = await this._openStreamAt(path, spans[spanIdx].srcStart, myPlayId);
           if (!next) {
             // Can't reach the next span. Let the scheduled audio drain and stop
             // there rather than cutting it off mid-word.
@@ -1411,21 +1091,14 @@ export class AudioEngine implements PlaybackTransport {
         if (stretching) {
           const tail = this.timeStretch.stretch([], 0, true);
           if (tail.outputFrames > 0) {
-            const ctxStart = expectedNextCtxStart;
-            const tailDurationSec = tail.outputFrames / sr;
-            const ctxEnd = ctxStart + tailDurationSec;
-            const ab = ctx.createBuffer(2, tail.outputFrames, sr);
-            ab.getChannelData(0).set(tail.left);
-            ab.getChannelData(1).set(tail.right);
-            const source = ctx.createBufferSource();
-            source.buffer = ab;
-            source.connect(this._filterInput ?? this.gainNode!);
-            source.start(ctxStart);
+            const ab = this._planarBuffer(ctx, tail.channels, tail.outputFrames, sr);
+            const ctxEnd = expectedNextCtxStart + tail.outputFrames / sr;
+            const source = this._startSource(ctx, ab, expectedNextCtxStart);
             this.queue.push({
               source,
               mediaStart: this.schedCursor,
               mediaEnd: this.schedCursor,
-              ctxStart,
+              ctxStart: expectedNextCtxStart,
               ctxEnd,
               naturalCtxEnd: ctxEnd,
             });
@@ -1452,10 +1125,10 @@ export class AudioEngine implements PlaybackTransport {
       // Defer setting the time origin until PCM is actually in hand. This lets
       // audio start as soon as the IPC completes, with just enough lead time
       // for sample-accurate scheduling — no fixed pre-IPC delay.
-      // The factor of `1/speed` accounts for the time-stretch: media time
-      // advances `speed` times faster than ctx time during playback.
+      // The factor of `1/rate` accounts for the time-stretch: media time
+      // advances `rate` times faster than ctx time during playback.
       if (!this.playStartCtxSet) {
-        this.playStartCtx = ctx.currentTime + START_MARGIN_SEC - (chunkMediaStart - this.playStartMedia) / speed;
+        this.playStartCtx = ctx.currentTime + START_MARGIN_SEC - (chunkMediaStart - this.playStartMedia) / rate;
         this.playStartCtxSet = true;
         expectedNextCtxStart = this.playStartCtx;
       }
@@ -1486,27 +1159,15 @@ export class AudioEngine implements PlaybackTransport {
         this.callbacks.onBufferUnderrun();
       }
 
-      // ── Build deinterleaved input for this chunk ───────────────────────────
-      const inputChannels = deinterleave(chunk.samples, inputFrames, ch);
-
-      // ── Apply time-stretch if needed and pick output channel layout ────────
-      let outputChannels: Float32Array[];
-      let outputFrames: number;
-      if (stretching) {
-        const out = this.timeStretch.stretch(inputChannels, inputFrames, isFinalChunk);
-        if (out.outputFrames === 0) {
-          // Vocoder buffered the input but hasn't accumulated a full window
-          // yet (only happens for the very first sub-window of input). Skip
-          // scheduling but advance the input cursor so we keep feeding it.
-          this.schedCursor = chunkMediaEnd;
-          continue;
-        }
-        outputChannels = [out.left, out.right];
-        outputFrames = out.outputFrames;
-      } else {
-        outputChannels = inputChannels;
-        outputFrames = inputFrames;
+      const audioBuffer = this._chunkBuffer(ctx, chunk.samples, inputFrames, ch, sr, stretching, isFinalChunk);
+      if (!audioBuffer) {
+        // The stretcher buffered the input but hasn't accumulated a full window
+        // yet (only for the very first sub-window of input). Skip scheduling but
+        // advance the input cursor so we keep feeding it.
+        this.schedCursor = chunkMediaEnd;
+        continue;
       }
+      const outputFrames = audioBuffer.length;
 
       // ── Compute context start time for this chunk's OUTPUT ─────────────────
       // For stretched audio, output ctx duration = input media duration / speed.
@@ -1517,17 +1178,7 @@ export class AudioEngine implements PlaybackTransport {
       const naturalCtxEnd = ctxStart + outputDurationSec;
       let ctxEnd = naturalCtxEnd;
 
-      // ── Build AudioBuffer ──────────────────────────────────────────────────
-      const audioBuffer = ctx.createBuffer(outputChannels.length, outputFrames, sr);
-      for (let c = 0; c < outputChannels.length; c++) {
-        audioBuffer.getChannelData(c).set(outputChannels[c]);
-      }
-
-      // ── Schedule the source node ────────────────────────────────────────────
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this._filterInput ?? this.gainNode!);
-      source.start(ctxStart);
+      const source = this._startSource(ctx, audioBuffer, ctxStart);
 
       // ── endSec stop: stop at the ctx time that maps to mediaTime = endSec ──
       // For stretched chunks, the output covers media [chunkMediaStart, chunkMediaEnd]
@@ -1535,7 +1186,7 @@ export class AudioEngine implements PlaybackTransport {
       //   ctxStart + (endSec - chunkMediaStart) / speed
       if (this.endSec !== null) {
         if (chunkMediaStart < this.endSec && chunkMediaEnd >= this.endSec) {
-          const stopCtxTime = ctxStart + (this.endSec - chunkMediaStart) / speed;
+          const stopCtxTime = ctxTimeAtMedia(ctxStart, chunkMediaStart, this.endSec, rate);
           source.stop(stopCtxTime);
           ctxEnd = stopCtxTime;
           reachedEnd = true;
@@ -1558,9 +1209,7 @@ export class AudioEngine implements PlaybackTransport {
       if (this.chunksScheduled === 1) {
         const elapsedMs = Math.round(performance.now() - this.playStartedAtMs);
         this._log(`first chunk scheduled mediaStart=${chunkMediaStart.toFixed(3)}s in=${inputFrames}f out=${outputFrames}f (${elapsedMs}ms after play)`);
-        this._armRenderCheck(ctxStart, myPlayId);
-        this._armLatencyProbe(ctxStart, myPlayId);
-        this._startClockDriftMonitor(myPlayId);
+        this.diag.onFirstAudio(ctxStart, myPlayId);
         if (this.slowDecodeTimer !== null) {
           clearInterval(this.slowDecodeTimer);
           this.slowDecodeTimer = null;
@@ -1579,6 +1228,95 @@ export class AudioEngine implements PlaybackTransport {
     // If we exited naturally (EOF or endSec), fire onEnded after the last
     // scheduled node finishes. We wait for the audio clock to pass ctxEnd.
     if (reachedEnd) await this._endAfterQueueDrains(myPlayId, myEndBoundEpoch);
+  }
+
+  /** Open a stream at a source position and install it as the active one.
+   *  Null on failure or if the play went stale (callers decide how fatal). */
+  private async _openStreamAt(
+    path: string,
+    srcSec: number,
+    myPlayId: number,
+  ): Promise<Awaited<ReturnType<typeof startPcmStream>> | null> {
+    let h;
+    try {
+      h = await startPcmStream(path, srcSec);
+    } catch (err) {
+      if (this.playId !== myPlayId) return null;
+      console.error('AudioEngine: startPcmStream failed', err);
+      this._log(`startPcmStream failed: ${String(err)}`, 'error');
+      return null;
+    }
+    if (this.playId !== myPlayId) {
+      closePcmStream(h.stream_id).catch(() => {});
+      return null;
+    }
+    this._log(
+      `stream opened id=${h.stream_id} at ${srcSec.toFixed(3)}s sr=${h.sample_rate} ch=${h.channels} total_frames=${h.total_frames}`,
+    );
+    this.streamId = h.stream_id;
+    return h;
+  }
+
+  /** Read and discard `frames` from a stream (a short gap between subset spans).
+   *  'failed' means the caller must reopen at the next span instead. */
+  private async _readThrough(
+    streamId: number,
+    frames: number,
+    chunkFrames: number,
+    myPlayId: number,
+  ): Promise<'ok' | 'failed' | 'stale'> {
+    let left = frames;
+    while (left > 0) {
+      let skipped;
+      try {
+        skipped = await readPcmChunk(streamId, Math.min(chunkFrames, left));
+      } catch {
+        return 'failed';
+      }
+      if (this.playId !== myPlayId) return 'stale';
+      if (skipped.frames_read === 0) return 'failed';
+      left -= skipped.frames_read;
+    }
+    return 'ok';
+  }
+
+  /**
+   * The AudioBuffer for one decoded chunk: through the stretcher when the play
+   * is time-stretched (null while it is still filling its first window),
+   * otherwise split straight from the interleaved IPC buffer into the buffer's
+   * channels with no intermediate arrays.
+   */
+  private _chunkBuffer(
+    ctx: AudioContext,
+    samples: Float32Array,
+    frames: number,
+    ch: number,
+    sr: number,
+    stretching: boolean,
+    isFinal: boolean,
+  ): AudioBuffer | null {
+    if (stretching) {
+      const out = this.timeStretch.stretch(deinterleave(samples, frames, ch), frames, isFinal);
+      return out.outputFrames === 0 ? null : this._planarBuffer(ctx, out.channels, out.outputFrames, sr);
+    }
+    const buffer = ctx.createBuffer(ch, frames, sr);
+    deinterleaveInto(samples, frames, Array.from({ length: ch }, (_, c) => buffer.getChannelData(c)));
+    return buffer;
+  }
+
+  private _planarBuffer(ctx: AudioContext, channels: Float32Array[], frames: number, sr: number): AudioBuffer {
+    const buffer = ctx.createBuffer(channels.length, frames, sr);
+    for (let c = 0; c < channels.length; c++) buffer.getChannelData(c).set(channels[c].subarray(0, frames));
+    return buffer;
+  }
+
+  /** Start `buffer` at `ctxStart` into the filter graph (or the master gain). */
+  private _startSource(ctx: AudioContext, buffer: AudioBuffer, ctxStart: number): AudioBufferSourceNode {
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this._filterInput ?? this.gainNode!);
+    source.start(ctxStart);
+    return source;
   }
 
   /**
@@ -1633,15 +1371,9 @@ export class AudioEngine implements PlaybackTransport {
     const sr = this.fileSampleRate;
     const { entry, startFrame, frameCount } = slice;
 
-    const audioBuffer = ctx.createBuffer(entry.channels.length, frameCount, sr);
-    for (let c = 0; c < entry.channels.length; c++) {
-      audioBuffer.getChannelData(c).set(entry.channels[c].subarray(startFrame, startFrame + frameCount));
-    }
-
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this._filterInput ?? this.gainNode!);
-    source.start(this.playStartCtx);
+    const audioBuffer = this._planarBuffer(
+      ctx, entry.channels.map(c => c.subarray(startFrame, startFrame + frameCount)), frameCount, sr);
+    const source = this._startSource(ctx, audioBuffer, this.playStartCtx);
 
     const ctxEnd = this.playStartCtx + frameCount / sr;
     this.queue.push({
@@ -1662,9 +1394,7 @@ export class AudioEngine implements PlaybackTransport {
       `cached slice scheduled ${Math.round(performance.now() - this.playStartedAtMs)}ms after play `
       + `— starts in ${((this.playStartCtx - ctx.currentTime) * 1000).toFixed(0)}ms of ctx time`,
     );
-    this._armRenderCheck(this.playStartCtx, myPlayId);
-    this._armLatencyProbe(this.playStartCtx, myPlayId);
-    this._startClockDriftMonitor(myPlayId);
+    this.diag.onFirstAudio(this.playStartCtx, myPlayId);
     // The cached slice covers exactly [startSec, endSec] and nothing follows it,
     // so the end bound is committed the moment it's scheduled.
     this.endBoundCommitted = true;
@@ -1722,7 +1452,7 @@ export class AudioEngine implements PlaybackTransport {
         this._pruneQueue();
         // Sampled per frame so a device change *during* a play is caught, not
         // just one seen at the next play().
-        this._logOutputLatency();
+        this.diag.logOutputLatency();
         const ctxNow = this.ctx.currentTime;
 
         // Fire onPlaying the first time audio is actually being emitted. Guarded

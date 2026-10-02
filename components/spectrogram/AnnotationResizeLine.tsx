@@ -42,7 +42,7 @@ const AnnotationResizeLine: React.FC<AnnotationResizeLineProps> = ({
   if (!annotation) return null;
 
   const time = resizingAnnotation!.side === 'start' ? annotation.start : annotation.end;
-  const x = time * pixelsPerSecond;
+  const x = time * pixelsPerSecond - layer.anchor;
 
   return (
     <div ref={layer.ref} className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ ...layer.style, zIndex: 15 }}>

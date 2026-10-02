@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 
 /**
  * The kinds of "layers" that can be activated. The activation stack records
@@ -32,24 +32,33 @@ export interface ActivationStackApi {
  */
 export function useActivationStack(): ActivationStackApi {
   const [stack, setStack] = useState<ActivationKind[]>([]);
+  // The ref is the source of truth, updated synchronously by every operation,
+  // so several in one tick (an Esc pop next to a selection clear) compose
+  // instead of each acting on the last rendered value. State mirrors it for
+  // rendering.
   const stackRef = useRef<ActivationKind[]>(stack);
-  stackRef.current = stack;
+  const commit = useCallback((next: ActivationKind[]) => {
+    if (next === stackRef.current) return;
+    stackRef.current = next;
+    setStack(next);
+  }, []);
 
   const pushIfAbsent = useCallback((kind: ActivationKind) => {
-    setStack(prev => (prev.includes(kind) ? prev : [...prev, kind]));
-  }, []);
+    const cur = stackRef.current;
+    if (!cur.includes(kind)) commit([...cur, kind]);
+  }, [commit]);
 
   const remove = useCallback((kind: ActivationKind) => {
-    setStack(prev => (prev.includes(kind) ? prev.filter(k => k !== kind) : prev));
-  }, []);
+    const cur = stackRef.current;
+    if (cur.includes(kind)) commit(cur.filter(k => k !== kind));
+  }, [commit]);
 
   const popTop = useCallback((): ActivationKind | null => {
     const cur = stackRef.current;
     if (cur.length === 0) return null;
-    const top = cur[cur.length - 1];
-    setStack(cur.slice(0, -1));
-    return top;
-  }, []);
+    commit(cur.slice(0, -1));
+    return cur[cur.length - 1];
+  }, [commit]);
 
   const topOf = useCallback((kinds: ActivationKind[]): ActivationKind | null => {
     const cur = stackRef.current;
@@ -59,5 +68,10 @@ export function useActivationStack(): ActivationStackApi {
     return null;
   }, []);
 
-  return { stack, pushIfAbsent, remove, popTop, topOf };
+  // Stable between stack changes, so callbacks that list the API as a
+  // dependency don't churn on every render.
+  return useMemo(
+    () => ({ stack, pushIfAbsent, remove, popTop, topOf }),
+    [stack, pushIfAbsent, remove, popTop, topOf],
+  );
 }

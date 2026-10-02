@@ -378,6 +378,10 @@ export const spectrogramView = {
 
 export const videoPane = {
   get videoDisabled() { return getOverride('ui.videoPane.videoDisabled') ?? "Video Disabled"; },
+  get warnFast() { return getOverride('ui.videoPane.warnFast') ?? "Fast mode: video plays independently — the playhead is approximate and audio filters are disabled."; },
+  get warnMixedNoSelection() { return getOverride('ui.videoPane.warnMixedNoSelection') ?? "Mixed mode: audio filters only apply inside a selection. Outside a selection the video plays independently."; },
+  get warnMixedUnsupported() { return getOverride('ui.videoPane.warnMixedUnsupported') ?? "Mixed mode: this file's format doesn't support frame-accurate playback, so the picture may not stay perfectly in sync even inside a selection."; },
+  get warnAccurateUnsupported() { return getOverride('ui.videoPane.warnAccurateUnsupported') ?? "This file's format doesn't support frame-accurate playback. The picture may not stay perfectly in sync with the audio."; },
   get switchModesHint() { return getOverride('ui.videoPane.switchModesHint') ?? "Switch modes with the picker in the bottom-left"; },
   get loadingFile() { return getOverride('ui.videoPane.loadingFile') ?? "Loading file..."; },
   get modeLabel() { return getOverride('ui.videoPane.modeLabel') ?? "MODE"; },
@@ -519,6 +523,9 @@ export const annotationWindow = {
   get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },
   get syncComplete() { return getOverride('ui.annotationWindow.syncComplete') ?? "Sync complete"; },
   get autoPullComplete() { return getOverride('ui.annotationWindow.autoPullComplete') ?? "Annotations updated"; },
+  get autoPullBlocked() { return getOverride('ui.annotationWindow.autoPullBlocked') ?? "Remote changes need a manual sync"; },
+  get remoteClearsApplied() { return getOverride('ui.annotationWindow.remoteClearsApplied') ?? "A teammate cleared these tracks:"; },
+  get remoteDeletionsKept() { return getOverride('ui.annotationWindow.remoteDeletionsKept') ?? "Kept files the remote had lost (they will be restored on the next sync):"; },
   // Shown when a sync finds annotation files that are now empty while history
   // still holds records for them. Emptying a track deletes those records for
   // every collaborator, so it is never committed without this confirmation.

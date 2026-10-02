@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Project, ProjectPreferences } from '../types';
+import { Project } from '../types';
+import type { UpdateProjectPreferences } from '../utils/projectPreferences';
 import { shuffleArray } from '../utils/helpers';
 import { isInsideDir } from '../utils/projectPaths';
 
 interface UseFileNavigationArgs {
   projectRef: React.MutableRefObject<Project>;
-  updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
+  updateProjectPreferences: UpdateProjectPreferences;
 }
 
 // Owns the loaded-track model: path/name/src, current directory, audio-vs-video,
@@ -66,7 +67,6 @@ export function useFileNavigation({
     const project = projectRef.current;
     if (project) {
       updateProjectPreferences(project.id, {
-        ...project.preferences,
         shuffleMode: true,
         enteredFolderPath: folder ?? undefined,
       });
@@ -77,7 +77,7 @@ export function useFileNavigation({
     setShuffleMode(false);
     const project = projectRef.current;
     if (project?.preferences.shuffleMode) {
-      updateProjectPreferences(project.id, { ...project.preferences, shuffleMode: false });
+      updateProjectPreferences(project.id, { shuffleMode: false });
     }
   }, [updateProjectPreferences, projectRef]);
 

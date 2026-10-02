@@ -9,7 +9,7 @@
 
 import { startPcmStream, readPcmChunk, closePcmStream } from './tauriCommands';
 import { clamp } from './helpers';
-import { deinterleaveInto } from './pcm';
+import { deinterleaveInto, PCM_CHUNK_DURATION_SEC } from './pcm';
 
 /** Cached decoded PCM for a range, keyed by (filePath, startSec, endSec). */
 export interface PcmCacheEntry {
@@ -31,15 +31,21 @@ export interface PcmCacheSlice {
   endSec: number;
 }
 
-/** How many frames to fetch per IPC call (~1 second of audio). */
-const CHUNK_DURATION_SEC = 1.0;
 /** Maximum number of preloaded regions to keep in the PCM replay cache. */
 const MAX_PCM_CACHE_ENTRIES = 8;
+/** Memory budget for all cached regions (planar f32). An hour of 48 kHz stereo
+ *  is ~1.4 GB, so a count cap alone does not bound memory. */
+const MAX_PCM_CACHE_BYTES = 256 * 1024 * 1024;
+
+function entryBytes(e: PcmCacheEntry): number {
+  return e.channels.reduce((sum, c) => sum + c.byteLength, 0);
+}
 
 export class PcmCache {
   // Decoded PCM for preloaded regions. Keyed by "filePath:startFrame:endFrame".
   private _pcmCache = new Map<string, PcmCacheEntry>();
   private _pcmCacheOrder: string[] = [];  // front = LRU (oldest)
+  private _cachedBytes = 0;
   /** Incremented on every preloadRange()/clear()/dispose(); stale preload loops exit. */
   private preloadId = 0;
 
@@ -53,6 +59,7 @@ export class PcmCache {
   clear(): void {
     this._pcmCache.clear();
     this._pcmCacheOrder = [];
+    this._cachedBytes = 0;
     this.preloadId++;
   }
 
@@ -81,12 +88,21 @@ export class PcmCache {
   ): void {
     const key = this._pcmCacheKey(filePath, fileSampleRate, start, end);
     if (this._pcmCache.has(key)) return;
-    while (this._pcmCacheOrder.length >= MAX_PCM_CACHE_ENTRIES) {
+    const entry: PcmCacheEntry = { channels, totalFrames, startSec: start, endSec: end };
+    const bytes = entryBytes(entry);
+    if (bytes > MAX_PCM_CACHE_BYTES) return;
+    while (
+      this._pcmCacheOrder.length >= MAX_PCM_CACHE_ENTRIES
+      || (this._pcmCacheOrder.length > 0 && this._cachedBytes + bytes > MAX_PCM_CACHE_BYTES)
+    ) {
       const oldest = this._pcmCacheOrder.shift()!;
+      const evicted = this._pcmCache.get(oldest);
+      if (evicted) this._cachedBytes -= entryBytes(evicted);
       this._pcmCache.delete(oldest);
     }
-    this._pcmCache.set(key, { channels, totalFrames, startSec: start, endSec: end });
+    this._pcmCache.set(key, entry);
     this._pcmCacheOrder.push(key);
+    this._cachedBytes += bytes;
   }
 
   /**
@@ -131,12 +147,14 @@ export class PcmCache {
   ): Promise<void> {
     if (endSec <= startSec) return;
     if (this.find(fileSampleRate, startSec, endSec)) return;
+    // A range larger than the whole budget could never be stored; don't decode it.
+    if ((endSec - startSec) * fileSampleRate * fileChannels * 4 > MAX_PCM_CACHE_BYTES) return;
 
     const myPreloadId = ++this.preloadId;
     const path = filePath;
     const ch = fileChannels;
     const sr = fileSampleRate;
-    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
+    const chunkFrames = Math.floor(PCM_CHUNK_DURATION_SEC * sr);
 
     let handle;
     try {
@@ -177,7 +195,7 @@ export class PcmCache {
       }
 
       if (framesToCache > 0) {
-        cacheChunks.push({ samples: chunk.samples.slice(0, framesToCache * ch), frames: framesToCache });
+        cacheChunks.push({ samples: chunk.samples.subarray(0, framesToCache * ch), frames: framesToCache });
         cacheTotalFrames += framesToCache;
       }
 

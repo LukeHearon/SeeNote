@@ -4,6 +4,9 @@ import { toAssetUrl } from '../utils/tauriCommands';
 import { VideoMode, Selection } from '../types';
 import { Timeline, sourceIntervalOf } from '../utils/subsetTimeline';
 
+/** Longest stretch of video decoded before play starts (see prerollVideo). */
+const PREROLL_MAX_SEC = 2;
+
 interface UseVideoFrameSourceArgs {
   // Track identity / mode mirrors, read inside async opens & the mode-change effect.
   trackPath: string | null;
@@ -57,15 +60,27 @@ export function useVideoFrameSource({
   // On some platforms this is the *only* place a WebCodecs failure surfaces —
   // open() already resolved successfully by the time decode() fails.
   const [frameSourceDecodeError, setFrameSourceDecodeError] = useState(false);
+  // Generation of the open/close decision. Every open captures it and, when its
+  // (async) open() resolves, closes its own source instead of installing it if
+  // the generation has moved on — a mode change, a track change or unmount in the
+  // meantime. `openingTrackRef` is the track an open is in flight for, so an
+  // effect re-run that changes nothing relevant doesn't start a second open.
+  const openGenRef = useRef(0);
+  const openingTrackRef = useRef<string | null>(null);
 
   // Pre-roll the frame-source cache so the first frame at startSec is decoded
   // before the audio engine begins emitting samples. Critical for short-selection
   // replays: without this the engine starts audio ~200ms ahead of the first
   // rendered frame, so a ~1s selection ends before most frames appear.
+  //
+  // Only the first PREROLL_MAX_SEC is awaited: a long selection in Accurate
+  // mode otherwise held the spinner until every frame was decoded (and held
+  // them all in memory). The rolling prefetch takes over from `end`.
   const prerollVideo = useCallback(async (startSec: number, endSec?: number): Promise<void> => {
     const source = frameSourceRef.current;
     if (!source) return;
-    const end = endSec ?? Math.min(startSec + 5, durationRef.current || startSec + 5);
+    const fileEnd = durationRef.current || startSec + PREROLL_MAX_SEC;
+    const end = Math.min(endSec ?? fileEnd, startSec + PREROLL_MAX_SEC, fileEnd);
     const t0 = performance.now();
     addLog(`[preroll] start ${startSec.toFixed(3)}-${end.toFixed(3)}s`);
     try { await source.ensureRange(startSec, end, 'prerollVideo'); } catch { /* canvas shows stale frame on error */ }
@@ -75,6 +90,8 @@ export function useVideoFrameSource({
 
   // Tear down frame source on unmount — VideoFrame handles hold GPU memory.
   useEffect(() => () => {
+    openGenRef.current++;
+    openingTrackRef.current = null;
     if (frameSourceRef.current) {
       frameSourceRef.current.close();
       frameSourceRef.current = null;
@@ -93,25 +110,33 @@ export function useVideoFrameSource({
   // as the expectedTrack guard and onDecoderUnsupported below — and race this
   // effect for ownership of frameSourceRef.
   useEffect(() => {
-    if (!trackPath || isAudioTrack) return;
+    if (!trackPath || isAudioTrack) {
+      openGenRef.current++;
+      openingTrackRef.current = null;
+      return;
+    }
     const wantsFrameSource =
       (videoMode === 'accurate' || videoMode === 'mixed') && canUseFrameSource(trackPath);
     const has = !!frameSourceRef.current;
 
     if (wantsFrameSource && !has) {
+      if (openingTrackRef.current === trackPath) return;  // already opening this one
       const url = toAssetUrl(trackPath);
       const expectedTrack = trackPath;
+      const gen = ++openGenRef.current;
+      openingTrackRef.current = trackPath;
       setFrameSourceDecodeError(false);
       (async () => {
         try {
           const source = new VideoFrameSource({
             onDebugLog: addLog,
             onDecoderUnsupported: () => {
-              if (trackPathRef.current === expectedTrack) setFrameSourceDecodeError(true);
+              if (trackPathRef.current === expectedTrack && gen === openGenRef.current) setFrameSourceDecodeError(true);
             },
           });
           await source.open(url);
-          if (trackPathRef.current !== expectedTrack) { source.close(); return; }
+          if (gen !== openGenRef.current || trackPathRef.current !== expectedTrack) { source.close(); return; }
+          openingTrackRef.current = null;
           frameSourceRef.current = source;
           setFrameSourceVersion(v => v + 1);
           if (videoMode === 'accurate') {
@@ -131,17 +156,25 @@ export function useVideoFrameSource({
             source.ensureRange(src.start, src.end, 'openWarmSel').catch(() => {});
           }
         } catch (err) {
+          // Let a later effect run retry (the same track, after a mode change).
+          if (gen === openGenRef.current) openingTrackRef.current = null;
           const msg = err instanceof Error ? err.message : String(err);
           addLog(`[video] frame source unavailable: ${msg}`, 'error');
         }
       })();
-    } else if (!wantsFrameSource && has) {
-      frameSourceRef.current?.close();
-      frameSourceRef.current = null;
-      setFrameSourceVersion(v => v + 1);
-      videoPrefetchEndRef.current = 0;
-      videoPrefetchBusyRef.current = false;
-      setFrameSourceDecodeError(false);
+    } else if (!wantsFrameSource) {
+      // Also invalidates an open still in flight (has === false): it would
+      // otherwise land after the mode went away and install a source nothing wants.
+      openGenRef.current++;
+      openingTrackRef.current = null;
+      if (has) {
+        frameSourceRef.current?.close();
+        frameSourceRef.current = null;
+        setFrameSourceVersion(v => v + 1);
+        videoPrefetchEndRef.current = 0;
+        videoPrefetchBusyRef.current = false;
+        setFrameSourceDecodeError(false);
+      }
     }
   }, [videoMode, trackPath, isAudioTrack, addLog, trackPathRef, durationRef, selectionRef, timelineRef]);
 

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
 use symphonia::core::codecs::registry::CodecRegistry;
+use symphonia::core::errors::{Error as SymphoniaError, SeekErrorKind};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
@@ -85,6 +86,9 @@ fn is_ffmpeg_ext(path: &str) -> bool {
 /// map is simply cleared when it overflows rather than evicted one at a time.
 const MAX_CACHED_FILE_INFO: usize = 256;
 
+/// Identity of the bytes on disk: (mtime, length).
+pub(crate) type FileStamp = (Option<SystemTime>, u64);
+
 type InfoCache = HashMap<String, (Option<SystemTime>, u64, FileInfo)>;
 
 fn info_cache() -> &'static Mutex<InfoCache> {
@@ -95,7 +99,7 @@ fn info_cache() -> &'static Mutex<InfoCache> {
 /// Identity of the bytes on disk: (mtime, length). `None` mtime on filesystems
 /// that do not report one — length alone still catches most rewrites, and the
 /// probe cost is what we are avoiding, not correctness of the file itself.
-fn file_stamp(path: &str) -> Option<(Option<SystemTime>, u64)> {
+pub(crate) fn file_stamp(path: &str) -> Option<FileStamp> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok(), meta.len()))
 }
@@ -104,11 +108,10 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
     let stamp = file_stamp(path);
 
     if let Some((mtime, len)) = stamp {
-        if let Ok(cache) = info_cache().lock() {
-            if let Some((cached_mtime, cached_len, info)) = cache.get(path) {
-                if *cached_mtime == mtime && *cached_len == len {
-                    return Ok(*info);
-                }
+        let cache = super::lock(info_cache());
+        if let Some((cached_mtime, cached_len, info)) = cache.get(path) {
+            if *cached_mtime == mtime && *cached_len == len {
+                return Ok(*info);
             }
         }
     }
@@ -121,18 +124,31 @@ pub fn get_file_info(path: &str) -> Result<FileInfo> {
 
     // A file we could not stat is still probed, just never cached.
     if let Some((mtime, len)) = stamp {
-        if let Ok(mut cache) = info_cache().lock() {
-            if cache.len() >= MAX_CACHED_FILE_INFO && !cache.contains_key(path) {
-                cache.clear();
-            }
-            cache.insert(path.to_string(), (mtime, len, info));
+        let mut cache = super::lock(info_cache());
+        if cache.len() >= MAX_CACHED_FILE_INFO && !cache.contains_key(path) {
+            cache.clear();
         }
+        cache.insert(path.to_string(), (mtime, len, info));
     }
 
     Ok(info)
 }
 
-fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
+/// A probed container with its audio track picked out — the open/probe steps
+/// `get_file_info_symphonia` and `SymphoniaStream::open` both start from.
+struct OpenedFile {
+    format: Box<dyn FormatReader>,
+    track_id: u32,
+    /// Base (pre-SBR) rate and channel count from the codec parameters.
+    sample_rate: u32,
+    channels: u16,
+    time_base: Option<TimeBase>,
+    num_frames: Option<u64>,
+    delay: u64,
+    padding: u64,
+}
+
+fn open_symphonia(path: &str) -> Result<OpenedFile> {
     let file = File::open(path).with_context(|| format!("Cannot open file: {path}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -141,11 +157,13 @@ fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
         hint.with_extension(ext);
     }
 
-    let mut format = symphonia::default::get_probe()
+    let format = symphonia::default::get_probe()
         .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
         .context("Unsupported format")?;
 
-    let (track_id, initial_sr, initial_channels, n_frames, delay, padding) = {
+    // See find_audio_track: must not rely on default_track() for MP4/MKV,
+    // where it may point at the video stream.
+    let (track_id, sample_rate, channels, time_base, num_frames, delay, padding) = {
         let track = find_audio_track(format.as_ref())
             .context("No decodable audio track found")?;
         let audio_params = track.codec_params.as_ref().and_then(|cp| cp.audio());
@@ -155,11 +173,27 @@ fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
             audio_params
                 .and_then(|p| p.channels.as_ref().map(|c| c.count() as u16))
                 .unwrap_or(1),
+            track.time_base,
             track.num_frames,
             track.delay.unwrap_or(0) as u64,
             track.padding.unwrap_or(0) as u64,
         )
     };
+
+    Ok(OpenedFile { format, track_id, sample_rate, channels, time_base, num_frames, delay, padding })
+}
+
+fn get_file_info_symphonia(path: &str) -> Result<FileInfo> {
+    let OpenedFile {
+        mut format,
+        track_id,
+        sample_rate: initial_sr,
+        channels: initial_channels,
+        num_frames: n_frames,
+        delay,
+        padding,
+        ..
+    } = open_symphonia(path)?;
 
     // Matroska/WEBM tracks commonly leave `num_frames` unset — the per-block frame
     // count isn't tallied by the demuxer — but the Segment's own Duration element
@@ -241,7 +275,7 @@ fn probe_decoded_spec(
 //
 // ── Sample-accuracy contract ──────────────────────────────────────────────────
 // `open(path, start_sec)` guarantees that the first frame returned by `read()`
-// corresponds to exactly `floor(start_sec * sample_rate)` in the file.
+// corresponds to exactly `round(start_sec * sample_rate)` in the file.
 //
 // This is achieved via the same seek-margin + first-packet timestamp tracking
 // used by `decode_audio_range`. See that function's doc comment for the full
@@ -291,38 +325,37 @@ pub struct SymphoniaStream {
     next_output_frame: u64,
 }
 
+/// Consecutive demuxer errors tolerated before giving up on a stream; bounds the
+/// loop on a reader that keeps failing without making progress.
+const MAX_CONSECUTIVE_DEMUX_ERRORS: u32 = 64;
+
+/// Frames of silence to insert so a packet that decoded after a loss starts at
+/// the position its own timestamp claims.
+///
+/// `expected` is where the stream's running count says it should begin, `pts_frame`
+/// is where the container says it does. Only a forward gap is padded, and only a
+/// plausible one (a corrupt timestamp must not allocate minutes of silence).
+fn resync_gap_frames(pts_frame: u64, expected: u64, sample_rate: u32) -> u64 {
+    let max_gap = sample_rate as u64 * 10;
+    match pts_frame.checked_sub(expected) {
+        Some(gap) if gap <= max_gap => gap,
+        _ => 0,
+    }
+}
+
 impl SymphoniaStream {
     /// Open a file and seek to just before `start_sec` using the 500ms margin
     /// + first-packet timestamp technique (see module-level doc).
     pub fn open(path: &str, start_sec: f64) -> Result<Self> {
-        let file = File::open(path).with_context(|| format!("Cannot open file: {path}"))?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-        let mut hint = Hint::new();
-        if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
-            hint.with_extension(ext);
-        }
-
-        let format = symphonia::default::get_probe()
-            .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
-            .context("Unsupported format")?;
-
-        // See find_audio_track: must not rely on default_track() for MP4/MKV,
-        // where it may point at the video stream.
-        let (track_id, initial_sr, initial_channels, time_base, delay) = {
-            let track = find_audio_track(format.as_ref())
-                .context("No decodable audio track found")?;
-            let audio_params = track.codec_params.as_ref().and_then(|cp| cp.audio());
-            (
-                track.id,
-                audio_params.and_then(|p| p.sample_rate).unwrap_or(44100),
-                audio_params
-                    .and_then(|p| p.channels.as_ref().map(|c| c.count() as u16))
-                    .unwrap_or(1),
-                track.time_base,
-                track.delay.unwrap_or(0) as u64,
-            )
-        };
+        let OpenedFile {
+            format,
+            track_id,
+            sample_rate: initial_sr,
+            channels: initial_channels,
+            time_base,
+            delay,
+            ..
+        } = open_symphonia(path)?;
 
         let decoder = {
             let track = format
@@ -391,7 +424,7 @@ impl SymphoniaStream {
     ///
     /// Errors if `start_sec` is behind the current position, which callers must
     /// treat as "not reachable from here". Landing is sample-exact: the next
-    /// `read()` returns the frame at floor(start_sec * sample_rate), the same
+    /// `read()` returns the frame at round(start_sec * sample_rate), the same
     /// guarantee `seek_to` gives.
     pub fn skip_to(&mut self, start_sec: f64) -> Result<()> {
         if !start_sec.is_finite() || start_sec < 0.0 {
@@ -406,9 +439,12 @@ impl SymphoniaStream {
             ));
         }
 
+        // Bounded chunks: read() allocates its whole request up front, and the
+        // gap here is whatever the caller asked for.
+        const SKIP_CHUNK_FRAMES: usize = 16 * 1024;
         let mut remaining = (target_frame - self.next_output_frame) as usize;
         while remaining > 0 {
-            let (_, frames_read) = self.read(remaining)?;
+            let (_, frames_read) = self.read(remaining.min(SKIP_CHUNK_FRAMES))?;
             if frames_read == 0 {
                 return Err(anyhow::anyhow!("EOF before reaching {start_sec}s"));
             }
@@ -419,7 +455,7 @@ impl SymphoniaStream {
 
     /// Reposition an already-open stream to `start_sec`, restoring the same
     /// sample-accuracy contract `open` establishes: the next `read()` returns
-    /// the frame at exactly `floor(start_sec * sample_rate)`.
+    /// the frame at exactly `round(start_sec * sample_rate)`.
     ///
     /// This is the whole reason the seek/align phase is factored out of `open`.
     /// Sampling a file at scattered positions — which is what building a coarse
@@ -476,13 +512,29 @@ impl SymphoniaStream {
         let seek_target = (start_sec - seek_margin_sec).max(0.0);
 
         if seek_target > 0.0 || !reader_is_fresh {
-            let _ = self.format.seek(
+            let sought = self.format.seek(
                 SeekMode::Accurate,
                 SeekTo::Time {
                     time: Time::try_from_secs_f64(seek_target).unwrap_or(Time::ZERO),
                     track_id: Some(self.track_id),
                 },
             );
+            match sought {
+                Ok(_) => {}
+                // A fresh reader still sits at the start of the stream, so a
+                // container that cannot seek (or cannot seek *this* way) falls
+                // back to decoding forward to the target — slow, but aligned.
+                // Out-of-range is a real answer (the target is past the end)
+                // and would only turn into a scan of the whole file.
+                Err(SymphoniaError::SeekError(kind))
+                    if reader_is_fresh && !matches!(kind, SeekErrorKind::OutOfRange) => {}
+                // A reused reader is wherever the last read left it; realigning
+                // against that would return audio from the wrong time.
+                Err(e) => {
+                    self.eof = true;
+                    return Err(anyhow::anyhow!("Seek to {seek_target}s failed: {e}"));
+                }
+            }
         }
         // The next packet is discontinuous with the last one decoded, so the
         // decoder's inter-packet state (e.g. MP3's bit reservoir / overlap-add
@@ -522,13 +574,10 @@ impl SymphoniaStream {
             // real (post-SBR) sample_rate. Fall back to the seek target if the
             // conversion overflows (implausible in practice, but calc_time can
             // return None).
-            first_abs_frame = self
-                .time_base
-                .and_then(|tb| tb.calc_time(packet.pts))
-                .map(|t| (t.as_secs_f64() * self.sample_rate as f64).round() as u64)
-                .unwrap_or_else(|| (seek_target * self.sample_rate as f64).round() as u64);
-
             decoded.copy_to_vec_interleaved::<f32>(&mut self.pending);
+            first_abs_frame = self
+                .pts_to_frame(packet.pts)
+                .unwrap_or_else(|| (seek_target * self.sample_rate as f64).round() as u64);
             eof = false;
             break;
         }
@@ -573,8 +622,22 @@ impl SymphoniaStream {
         self.next_output_frame as f64 / self.sample_rate.max(1) as f64
     }
 
+    /// A packet timestamp as a frame index at the real (post-SBR) sample rate.
+    fn pts_to_frame(&self, pts: Timestamp) -> Option<u64> {
+        self.time_base
+            .and_then(|tb| tb.calc_time(pts))
+            .map(|t| (t.as_secs_f64() * self.sample_rate as f64).round() as u64)
+    }
+
     /// Decode and buffer the next packet. Updates `abs_frame` to the packet's
-    /// starting position. Returns `false` on EOF or unrecoverable read error.
+    /// starting position. Returns `false` at end of stream; read errors other
+    /// than a truncated file are returned as `Err`.
+    ///
+    /// A packet that fails to decode, or a demuxer hiccup, loses its frames.
+    /// `abs_frame` only advances by what was actually decoded, so skipping
+    /// silently would shift every later sample earlier in time. Instead, the
+    /// next good packet's timestamp says where it really starts, and the gap is
+    /// filled with silence (see `resync_gap_frames`).
     fn fill_next_packet(&mut self) -> Result<bool> {
         // Advance abs_frame past the *full* previous packet before clearing it.
         // Using pending.len() / channels (the full packet size) is correct here
@@ -582,17 +645,38 @@ impl SymphoniaStream {
         // consumed-up-to position. pending_pos (the read cursor) is not used
         // because that would drift abs_frame by the alignment-skipped head on
         // the first packet.
-        let prev_frames = self.pending.len() / self.channels as usize;
+        let ch = self.channels.max(1) as usize;
+        let prev_frames = self.pending.len() / ch;
         self.abs_frame += prev_frames as u64;
         self.pending.clear();
         self.pending_pos = 0;
 
+        // Set once a packet has been lost since the last good one.
+        let mut lost_data = false;
+        let mut demux_errors = 0u32;
         loop {
             let packet = match self.format.next_packet() {
                 Ok(Some(p)) => p,
                 Ok(None) => return Ok(false),
-                Err(_) => return Ok(false),
+                // A file cut short mid-packet: the normal way a truncated file ends.
+                Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(false)
+                }
+                // Malformed container data: the reader resyncs on the next call.
+                Err(SymphoniaError::DecodeError(msg)) => {
+                    demux_errors += 1;
+                    if demux_errors > MAX_CONSECUTIVE_DEMUX_ERRORS {
+                        return Err(anyhow::anyhow!("Too many corrupt packets in a row: {msg}"));
+                    }
+                    lost_data = true;
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("SymphoniaStream: read error at frame {}: {e}", self.abs_frame);
+                    return Err(anyhow::anyhow!("Audio read failed: {e}"));
+                }
             };
+            demux_errors = 0;
 
             if packet.track_id != self.track_id {
                 continue;
@@ -600,7 +684,13 @@ impl SymphoniaStream {
 
             let decoded = match self.decoder.decode(&packet) {
                 Ok(d) => d,
-                Err(_) => continue,
+                Err(e) => {
+                    if matches!(e, SymphoniaError::ResetRequired) {
+                        self.decoder.reset();
+                    }
+                    lost_data = true;
+                    continue;
+                }
             };
 
             // `copy_to_vec_interleaved` resizes `pending` to fit exactly and
@@ -608,14 +698,30 @@ impl SymphoniaStream {
             // above, its capacity is reused across packets so steady-state
             // decoding stays allocation-free here, same as before.
             decoded.copy_to_vec_interleaved::<f32>(&mut self.pending);
-            return Ok(!self.pending.is_empty());
+            if self.pending.is_empty() {
+                continue; // a packet that yields no frames is not the end of the stream
+            }
+
+            if lost_data {
+                if let Some(pts_frame) = self.pts_to_frame(packet.pts) {
+                    let gap = resync_gap_frames(pts_frame, self.abs_frame, self.sample_rate);
+                    if gap > 0 {
+                        eprintln!(
+                            "SymphoniaStream: {gap} frames lost to a corrupt packet at frame {}; padding with silence",
+                            self.abs_frame
+                        );
+                        self.pending.splice(0..0, std::iter::repeat(0.0f32).take(gap as usize * ch));
+                    }
+                }
+            }
+            return Ok(true);
         }
     }
 
     /// Read up to `max_frames` interleaved f32 frames. Returns `(samples, frames_read)`.
     /// `frames_read == 0` means EOF. `samples.len() == frames_read * channels`.
     pub fn read(&mut self, max_frames: usize) -> Result<(Vec<f32>, usize)> {
-        let ch = self.channels as usize;
+        let ch = self.channels.max(1) as usize;
         let mut output: Vec<f32> = Vec::with_capacity(max_frames * ch);
 
         while output.len() / ch < max_frames {
@@ -776,8 +882,8 @@ impl PcmStream {
 ///
 /// ── Sample-accuracy contract ─────────────────────────────────────────────────
 /// The returned buffer is aligned to `start_sec` at sample resolution:
-///   output[0] corresponds to frame floor(start_sec * sample_rate)
-///   output[i] corresponds to frame floor(start_sec * sample_rate) + i
+///   output[0] corresponds to frame round(start_sec * sample_rate)
+///   output[i] corresponds to frame round(start_sec * sample_rate) + i
 ///
 /// This is guaranteed by `PcmStream`, which this function uses internally.
 /// See the `PcmStream` doc comment and the module-level comment for the full
@@ -788,6 +894,7 @@ impl PcmStream {
 /// the function returns whatever samples were available **without padding**.
 /// The caller must treat `output.len() < ceil(duration_sec * sample_rate)` as
 /// a normal end-of-file condition, not an error. No silence is appended.
+#[cfg(test)]
 pub fn decode_audio_range(
     path: &str,
     start_sec: f64,
@@ -826,578 +933,29 @@ pub fn read_mono_range(stream: &mut PcmStream, duration_sec: f64) -> (Vec<f32>, 
         if frames_read == 0 {
             break;
         }
-        // Mix down to mono by averaging all channels.
-        for frame in 0..frames_read {
-            let mut sum = 0.0f32;
-            for c in 0..ch {
-                sum += interleaved[frame * ch + c];
-            }
-            output.push(sum / ch as f32);
-        }
+        output.extend(mix_to_mono(&interleaved, ch));
     }
 
     (output, sample_rate)
 }
 
+/// Mono mixdown of interleaved samples: each frame becomes the average of its
+/// `ch` channels. The single definition of "mono" for playback-adjacent code
+/// (spectrograms, peak, `decode_audio_range`), so they all agree. `ch` is
+/// clamped to at least 1.
+pub fn mix_to_mono(interleaved: &[f32], ch: usize) -> impl Iterator<Item = f32> + '_ {
+    let ch = ch.max(1);
+    interleaved
+        .chunks_exact(ch)
+        .map(move |frame| frame.iter().fold(0.0f32, |sum, &s| sum + s) / ch as f32)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies that concatenating PcmStream chunks produces the same samples
-    /// as a single decode_audio_range call for the same range.
-    ///
-    /// Requires a real audio file at the path below. Run with:
-    ///   cargo test -- --ignored chunked_matches_oneshot
-    #[test]
-    #[ignore]
-    fn chunked_matches_oneshot() {
-        // Relative to the crate manifest dir (src-tauri), which is cargo's cwd
-        // for tests — so this is <repo>/local/test.mp3.
-        let path = "../local/test.mp3";
-        let start_sec = 1.0f64;
-        let duration_sec = 4.0f64;
-
-        let (mono_ref, sr) = decode_audio_range(path, start_sec, duration_sec)
-            .expect("decode_audio_range failed");
-
-        let mut stream = PcmStream::open(path, start_sec).expect("PcmStream::open failed");
-        assert_eq!(stream.sample_rate(), sr);
-
-        let ch = stream.channels() as usize;
-        let chunk_frames = (sr as usize) / 2; // 500ms chunks
-        let target_frames = mono_ref.len();
-        let mut mono_chunked: Vec<f32> = Vec::with_capacity(target_frames);
-
-        loop {
-            let want = (target_frames - mono_chunked.len()).min(chunk_frames);
-            if want == 0 { break; }
-            let (interleaved, frames_read) = stream.read(want).expect("read failed");
-            if frames_read == 0 { break; }
-            for frame in 0..frames_read {
-                let mut sum = 0.0f32;
-                for c in 0..ch { sum += interleaved[frame * ch + c]; }
-                mono_chunked.push(sum / ch as f32);
-            }
-        }
-
-        assert_eq!(mono_chunked.len(), mono_ref.len(), "length mismatch");
-        for (i, (a, b)) in mono_chunked.iter().zip(mono_ref.iter()).enumerate() {
-            assert!(
-                (a - b).abs() < 1e-6,
-                "sample mismatch at frame {i}: chunked={a}, oneshot={b}"
-            );
-        }
-    }
-
-    // ── Encoder-delay gate unit tests ─────────────────────────────────────────
-    //
-    // These tests exercise the overshoot-correction gate in PcmStream::read()
-    // using a synthetic PcmStream built entirely from in-memory data, so they
-    // run without any real audio file and are always-on (not #[ignore]).
-    //
-    // The gate condition is:
-    //   output.is_empty()
-    //   && next_output_frame + delay_frames == desired_start_frame   ← "first call"
-    //   && pending_frame > desired_start_frame                       ← "seek overshot"
-    //
-    // delay=0 path: desired_start_frame == next_output_frame (start_sec == 0),
-    //               seek overshoot by `gap` frames → gap frames of silence prepended.
-    //
-    // delay>0 path: desired_start_frame == start_frame_audible + delay,
-    //               same overshoot scenario.
-
-    /// Build a minimal PcmStream whose first pending[] buffer starts at
-    /// `abs_frame_start` and contains `n_frames` frames of a known ramp signal
-    /// (sample value == frame_index as f32), with `delay_frames` and
-    /// `desired_start_frame` configured so the gate fires when
-    /// `pending_frame > desired_start_frame`.
-    fn make_test_stream(
-        delay_frames: u64,
-        desired_start_frame: u64,
-        abs_frame_start: u64,
-        n_frames: usize,
-    ) -> SymphoniaStream {
-        use symphonia::core::formats::TrackType;
-
-        let channels = 1u16;
-        let sample_rate = 44100u32;
-
-        // Build a ramp: sample[i] = (abs_frame_start + i) as f32 so we can
-        // verify which frames ended up in the output.
-        let pending: Vec<f32> = (0..n_frames)
-            .map(|i| (abs_frame_start + i as u64) as f32)
-            .collect();
-
-        // next_output_frame = desired_start_frame - delay_frames  (audible coords)
-        let next_output_frame = desired_start_frame.saturating_sub(delay_frames);
-
-        // A minimal valid WAV (44 bytes, no data) used purely to obtain a real
-        // FormatReader + AudioDecoder pair to satisfy the struct's fields. The
-        // stream is pre-filled via `pending` and `eof: true`, so neither
-        // `next_packet` nor `decode` is ever called in these tests.
-        static SILENT_WAV: &[u8] = &[
-            b'R', b'I', b'F', b'F', 36,0,0,0, b'W', b'A', b'V', b'E',
-            b'f', b'm', b't', b' ', 16,0,0,0,  1,0, 1,0,
-            0x44,0xAC,0,0, 0x88,0x58,1,0, 2,0, 16,0,
-            b'd', b'a', b't', b'a',  0,0,0,0,
-        ];
-
-        fn open_silent_wav() -> Box<dyn FormatReader> {
-            use symphonia::core::io::ReadOnlySource;
-            let cursor = std::io::Cursor::new(SILENT_WAV);
-            let mss = symphonia::core::io::MediaSourceStream::new(
-                Box::new(ReadOnlySource::new(cursor)),
-                Default::default(),
-            );
-            let mut hint = symphonia::core::formats::probe::Hint::new();
-            hint.with_extension("wav");
-            symphonia::default::get_probe()
-                .probe(&hint, mss, Default::default(), Default::default())
-                .expect("probe silent wav")
-        }
-
-        SymphoniaStream {
-            // These fields are never exercised by read() in the pure in-memory path
-            // because pending is pre-filled and we won't call fill_next_packet.
-            format: open_silent_wav(),
-            decoder: {
-                let fmt = open_silent_wav();
-                let track = fmt.default_track(TrackType::Audio).expect("wav has a track");
-                let audio_params = track
-                    .codec_params
-                    .as_ref()
-                    .and_then(|cp| cp.audio())
-                    .expect("wav track has audio codec params");
-                codec_registry()
-                    .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
-                    .expect("make pcm decoder")
-            },
-            track_id: 0,
-            sample_rate,
-            channels,
-            delay_frames,
-            time_base: None,
-            desired_start_frame,
-            abs_frame: abs_frame_start,
-            pending,
-            pending_pos: 0,
-            eof: true, // pre-filled; fill_next_packet will see eof and stop
-            next_output_frame,
-        }
-    }
-
-    // ── seek_to: the sample-accuracy contract survives repositioning ─────────
-    //
-    // These use a real WAV on disk rather than the in-memory PcmStream builder
-    // above, because seek_to's whole job is the format-reader seek + realignment
-    // that the synthetic stream skips. A 16-bit ramp makes every frame
-    // self-identifying: frame i holds i, so a misaligned seek is visible in the
-    // first sample read.
-
-    /// Write a mono 16-bit WAV whose frame i holds sample value i, and return
-    /// its path. Values wrap at 30000 to stay inside i16.
-    ///
-    /// The pid keeps the path unique per test process, so two concurrent
-    /// `cargo test` runs cannot rewrite each other's fixture mid-read — which
-    /// matters most for `file_info_is_cached_but_reprobed_when_the_file_changes`,
-    /// where rewriting one path is the point of the test.
-    fn write_ramp_wav(name: &str, sample_rate: u32, n_frames: usize) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("{}_{name}", std::process::id()));
-        let data_bytes = (n_frames * 2) as u32;
-        let byte_rate = sample_rate * 2;
-        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());   // PCM
-        wav.extend_from_slice(&1u16.to_le_bytes());   // mono
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());   // block align
-        wav.extend_from_slice(&16u16.to_le_bytes());  // bits per sample
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_bytes.to_le_bytes());
-        for i in 0..n_frames {
-            wav.extend_from_slice(&((i % 30000) as i16).to_le_bytes());
-        }
-        std::fs::write(&path, wav).expect("write ramp wav");
-        path
-    }
-
-    /// f32 value symphonia yields for ramp frame `i`.
-    fn ramp_value(i: usize) -> f32 {
-        (i % 30000) as f32 / 32768.0
-    }
-
-    /// The FileInfo cache keys on the file's mtime and length, so a file
-    /// rewritten on disk must be re-probed rather than served stale — the whole
-    /// reason it validates a stamp instead of expiring on a timer.
-    #[test]
-    fn file_info_is_cached_but_reprobed_when_the_file_changes() {
-        let sr = 8000u32;
-        let path = write_ramp_wav("seenote_info_cache.wav", sr, 16_000); // 2s
-        let p = path.to_str().unwrap();
-
-        let first = get_file_info(p).expect("info");
-        assert!((first.duration_secs - 2.0).abs() < 0.01, "got {}", first.duration_secs);
-
-        // A repeat call must agree (served from cache or not, the answer is the same).
-        let cached = get_file_info(p).expect("info");
-        assert_eq!(cached.duration_secs, first.duration_secs);
-        assert_eq!(cached.sample_rate, first.sample_rate);
-
-        // Rewrite with a different length. mtime resolution can be coarse, so
-        // the length change is what this asserts on — either half of the stamp
-        // is enough to invalidate.
-        let path2 = write_ramp_wav("seenote_info_cache.wav", sr, 48_000); // 6s
-        assert_eq!(path2, path);
-        let after = get_file_info(p).expect("info");
-        assert!(
-            (after.duration_secs - 6.0).abs() < 0.01,
-            "stale duration {} after rewrite",
-            after.duration_secs
-        );
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn seek_to_lands_on_the_exact_frame() {
-        let sr = 8000u32;
-        let path = write_ramp_wav("seenote_seek_to_exact.wav", sr, 40_000);
-        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
-
-        // Forward, backward, and back to the start: every reposition must land
-        // on floor(start_sec * sample_rate), the same guarantee open() gives.
-        for start_sec in [0.0, 2.5, 1.0, 4.999, 0.0, 3.25] {
-            stream.seek_to(start_sec, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
-            let expected_frame = (start_sec * sr as f64) as usize;
-            assert_eq!(
-                stream.position_frames(),
-                expected_frame as u64,
-                "position after seek to {start_sec}s"
-            );
-            let (samples, frames_read) = stream.read(4).expect("read");
-            assert_eq!(frames_read, 4, "short read after seek to {start_sec}s");
-            for (i, &s) in samples.iter().enumerate() {
-                assert!(
-                    (s - ramp_value(expected_frame + i)).abs() < 1e-6,
-                    "seek to {start_sec}s, frame +{i}: got {s}, want {}",
-                    ramp_value(expected_frame + i)
-                );
-            }
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn seek_to_with_a_small_margin_still_lands_exactly() {
-        // The coarse spectrogram walk trades margin for throughput; the landing
-        // position must stay exact regardless of how much slack it asks for.
-        let sr = 8000u32;
-        let path = write_ramp_wav("seenote_seek_to_margin.wav", sr, 40_000);
-        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
-
-        for margin in [0.0, 0.01, 0.05, 0.5] {
-            for start_sec in [0.0, 1.234, 3.75] {
-                stream.seek_to(start_sec, margin).expect("seek");
-                let expected_frame = (start_sec * sr as f64) as usize;
-                let (samples, _) = stream.read(4).expect("read");
-                for (i, &v) in samples.iter().enumerate() {
-                    assert!(
-                        (v - ramp_value(expected_frame + i)).abs() < 1e-6,
-                        "margin {margin}, seek {start_sec}s, frame +{i}: got {v}"
-                    );
-                }
-            }
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn skip_to_lands_exactly_and_refuses_to_go_backwards() {
-        let sr = 8000u32;
-        let path = write_ramp_wav("seenote_skip_to.wav", sr, 40_000);
-        let mut stream = PcmStream::open(path.to_str().unwrap(), 0.0).expect("open");
-
-        // Forward skips of the size the stream pool uses (sub-margin gaps).
-        for start_sec in [0.05, 0.2, 0.75, 3.0] {
-            stream.skip_to(start_sec).expect("skip_to");
-            let expected_frame = (start_sec * sr as f64).round() as usize;
-            assert_eq!(stream.position_frames(), expected_frame as u64);
-            let (samples, _) = stream.read(4).expect("read");
-            for (i, &v) in samples.iter().enumerate() {
-                assert!(
-                    (v - ramp_value(expected_frame + i)).abs() < 1e-6,
-                    "skip to {start_sec}s frame +{i}: got {v}"
-                );
-            }
-        }
-
-        // Backwards is not reachable by reading; the caller must open or seek.
-        assert!(stream.skip_to(0.1).is_err());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn seek_to_matches_a_fresh_open_at_the_same_position() {
-        let sr = 8000u32;
-        let path = write_ramp_wav("seenote_seek_to_vs_open.wav", sr, 40_000);
-        let p = path.to_str().unwrap();
-
-        // The coarse spectrogram path replaced per-column re-opens with seek_to
-        // on one stream; the two must produce identical audio or coarse tiers
-        // would disagree with fine tiers about what is at a given time.
-        let mut walked = PcmStream::open(p, 0.0).expect("open");
-        for col in 0..8 {
-            let t = col as f64 * 0.6;
-            walked.seek_to(t, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
-            let (from_walk, n_walk) = walked.read(64).expect("read");
-
-            let mut fresh = PcmStream::open(p, t).expect("open");
-            let (from_open, n_open) = fresh.read(64).expect("read");
-
-            assert_eq!(n_walk, n_open, "frame count at {t}s");
-            assert_eq!(from_walk, from_open, "samples at {t}s");
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// The same guarantee, on a real MP3.
-    ///
-    /// The WAV version above proves the alignment arithmetic, but WAV seeking is
-    /// trivial — position is a byte offset. MP3 is where it can actually go
-    /// wrong: no seek index, a container seek that lands wherever it lands, an
-    /// encoder delay to skip, and a decoder that must be reset across the seek.
-    /// Playback reuses pooled streams via `seek_to`/`skip_to` (see
-    /// `audio::stream_pool` and `commands::audio::start_pcm_stream`), so a
-    /// reused stream disagreeing with a fresh open by even one frame would put
-    /// the audio at the wrong time under the playhead.
-    ///
-    /// #[ignore]d like `chunked_matches_oneshot`: needs a fixture at
-    /// `<repo>/local/test.mp3` (gitignored). Run with:
-    ///   cargo test -- --ignored seek_to_matches_a_fresh_open_on_mp3
-    #[test]
-    #[ignore]
-    fn seek_to_matches_a_fresh_open_on_mp3() {
-        let p = "../local/test.mp3";
-        let info = get_file_info(p).expect("get_file_info");
-        // Sample across the file, staying clear of the very end so every probe
-        // has a full read available.
-        let last = (info.duration_secs - 1.0).max(0.0);
-
-        let mut walked = PcmStream::open(p, 0.0).expect("open");
-        for i in 0..8 {
-            let t = last * (i as f64 / 8.0);
-            walked.seek_to(t, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
-            let (from_walk, n_walk) = walked.read(4096).expect("read");
-
-            let mut fresh = PcmStream::open(p, t).expect("open");
-            let (from_open, n_open) = fresh.read(4096).expect("read");
-
-            assert_eq!(
-                walked.position_frames(), fresh.position_frames(),
-                "position after reading at {t}s",
-            );
-            assert_eq!(n_walk, n_open, "frame count at {t}s");
-            assert_eq!(from_walk, from_open, "samples at {t}s");
-        }
-    }
-
-    /// Forward `skip_to` — the other way the pool advances a reused stream, used
-    /// when the target is already within the seek margin — must land identically.
-    ///
-    /// #[ignore]d: needs the same `<repo>/local/test.mp3` fixture.
-    #[test]
-    #[ignore]
-    fn skip_to_matches_a_fresh_open_on_mp3() {
-        let p = "../local/test.mp3";
-
-        let mut walked = PcmStream::open(p, 0.0).expect("open");
-        // Sub-margin forward hops, which is what stream_pool::acquire turns into
-        // skip_to rather than a backward seek.
-        for i in 1..8 {
-            let t = i as f64 * 0.25;
-            walked.skip_to(t).expect("skip_to");
-            let (from_skip, n_skip) = walked.read(4096).expect("read");
-
-            let mut fresh = PcmStream::open(p, t).expect("open");
-            let (from_open, n_open) = fresh.read(4096).expect("read");
-
-            assert_eq!(n_skip, n_open, "frame count at {t}s");
-            assert_eq!(from_skip, from_open, "samples at {t}s");
-        }
-    }
-
-    /// delay=0, seek overshoot of 10 frames:
-    /// The gate should prepend 10 silence frames, then copy real audio.
-    #[test]
-    fn encoder_delay_zero_with_overshoot() {
-        let gap = 10usize;
-        let desired: u64 = 100; // desired_start_frame in container coords
-        let abs_start: u64 = desired + gap as u64; // seek landed 10 frames past desired
-
-        // delay=0 → desired_start_frame == next_output_frame (start_sec=desired/sr)
-        let mut stream = make_test_stream(0, desired, abs_start, 50);
-
-        let (samples, frames_read) = stream.read(60).expect("read");
-        // First gap frames should be silence (0.0)
-        for i in 0..gap {
-            assert_eq!(
-                samples[i], 0.0,
-                "frame {i} should be silence (overshoot padding)"
-            );
-        }
-        // Remaining frames should be the ramp starting at abs_start
-        for i in gap..frames_read {
-            let expected = (abs_start + (i - gap) as u64) as f32;
-            assert_eq!(
-                samples[i], expected,
-                "frame {i}: expected ramp value {expected}, got {}",
-                samples[i]
-            );
-        }
-        // Total: gap silence + 50 ramp frames, capped at max_frames=60
-        assert_eq!(frames_read, gap + 50);
-    }
-
-    /// delay>0 (e.g. MP3-like delay of 576 frames), seek exactly at desired:
-    /// No overshoot — no silence should be prepended, and the gate should NOT
-    /// fire. All returned samples should be real audio from the ramp.
-    #[test]
-    fn encoder_delay_nonzero_no_overshoot() {
-        let delay: u64 = 576;
-        let start_audible: u64 = 44100; // 1 second into audible content
-        let desired_start_frame = start_audible + delay; // container coords
-
-        // seek lands exactly at desired_start_frame (no overshoot)
-        let abs_start: u64 = desired_start_frame;
-        let n_frames = 100usize;
-        let mut stream = make_test_stream(delay, desired_start_frame, abs_start, n_frames);
-
-        let (samples, frames_read) = stream.read(n_frames).expect("read");
-        assert_eq!(frames_read, n_frames);
-        for i in 0..frames_read {
-            let expected = (abs_start + i as u64) as f32;
-            assert_eq!(
-                samples[i], expected,
-                "frame {i}: expected {expected}, got {}",
-                samples[i]
-            );
-        }
-    }
-
-    /// delay>0, seek overshoot of 5 frames:
-    /// Gate fires; 5 frames of silence prepended, then ramp.
-    #[test]
-    fn encoder_delay_nonzero_with_overshoot() {
-        let delay: u64 = 576;
-        let start_audible: u64 = 44100;
-        let desired_start_frame = start_audible + delay;
-
-        let gap = 5usize;
-        let abs_start: u64 = desired_start_frame + gap as u64;
-        let n_frames = 50usize;
-        let mut stream = make_test_stream(delay, desired_start_frame, abs_start, n_frames);
-
-        let (samples, frames_read) = stream.read(60).expect("read");
-        for i in 0..gap {
-            assert_eq!(samples[i], 0.0, "frame {i} should be silence");
-        }
-        for i in gap..frames_read {
-            let expected = (abs_start + (i - gap) as u64) as f32;
-            assert_eq!(samples[i], expected, "frame {i}: expected {expected}");
-        }
-        assert_eq!(frames_read, gap + n_frames);
-    }
-}
+#[path = "decoder_tests.rs"]
+mod tests;
 
 #[cfg(test)]
-mod seek_bench {
-    use super::*;
-    use std::time::Instant;
-
-    /// Records the seek characteristic the coarse spectrogram path is built on:
-    /// walking a single stream FORWARD is cheap and its total cost is roughly
-    /// flat in the number of stops (the container scan resumes where it left
-    /// off), whereas re-opening per position restarts the scan from byte 0 and
-    /// costs time proportional to the depth of each seek.
-    ///
-    /// Not a unit test — it needs a long real file, so it is #[ignore]d:
-    ///   SEEK_BENCH_FILE=/path/to/long.mp3 \
-    ///     cargo test --release seek_bench -- --ignored --nocapture
-    ///
-    /// Measured on a 1GB / 49.7h MP3 (Apple silicon, local SSD):
-    ///   re-open + read, 20 scattered positions   122 ms/column
-    ///   forward seek_to, 20 positions            249 ms TOTAL
-    ///   forward seek_to, 100 positions           283 ms TOTAL
-    ///   sequential decode of the whole file      ~48 s
-    /// How expensive is a SMALL BACKWARD seek? The stream pool can only reuse a
-    /// stream positioned at or before the target, and readers routinely
-    /// overshoot the next request's start by a few tens of milliseconds, so the
-    /// answer decides whether those streams are reusable.
-    #[test]
-    #[ignore]
-    fn backward_seek_cost() {
-        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
-        let info = get_file_info(&path).expect("info");
-        let deep = info.duration_secs * 0.9;
-
-        let mut s = PcmStream::open(&path, deep).expect("open");
-        let _ = s.read(2048).expect("read");
-
-        for back in [0.05f64, 0.5, 5.0, 60.0] {
-            // Re-establish a known position, then step back by `back`.
-            s.seek_to(deep, DEFAULT_SEEK_MARGIN_SEC).expect("fwd");
-            let _ = s.read(2048).expect("read");
-            let t = Instant::now();
-            s.seek_to(deep - back, DEFAULT_SEEK_MARGIN_SEC).expect("back");
-            let _ = s.read(2048).expect("read");
-            println!("backward {back:>6}s from {deep:.0}s: {:?}", t.elapsed());
-        }
-
-        // Reference: a forward seek of the same magnitudes.
-        for fwd in [0.05f64, 0.5, 5.0, 60.0] {
-            s.seek_to(deep, DEFAULT_SEEK_MARGIN_SEC).expect("reset");
-            let _ = s.read(2048).expect("read");
-            let t = Instant::now();
-            s.seek_to(deep + fwd, DEFAULT_SEEK_MARGIN_SEC).expect("fwd");
-            let _ = s.read(2048).expect("read");
-            println!("forward  {fwd:>6}s from {deep:.0}s: {:?}", t.elapsed());
-        }
-    }
-
-    #[test]
-    #[ignore]
-    fn forward_seek_is_cheaper_than_reopen() {
-        let path = std::env::var("SEEK_BENCH_FILE").expect("set SEEK_BENCH_FILE");
-        let info = get_file_info(&path).expect("info");
-        println!("file: dur={:.0}s sr={}", info.duration_secs, info.sample_rate);
-
-        let n = 20;
-        let t = Instant::now();
-        for i in 0..n {
-            let target = info.duration_secs * (i as f64 / n as f64);
-            let mut s = PcmStream::open(&path, target).expect("open");
-            let _ = s.read(2048).expect("read");
-        }
-        let reopen = t.elapsed();
-        println!("{n} re-open+read: {reopen:?} total, {:?}/column", reopen / n as u32);
-
-        for n in [20usize, 100] {
-            let mut s = PcmStream::open(&path, 0.0).expect("open");
-            let t = Instant::now();
-            for i in 0..n {
-                let target = info.duration_secs * (i as f64 / n as f64);
-                s.seek_to(target, DEFAULT_SEEK_MARGIN_SEC).expect("seek_to");
-                let _ = s.read(2048).expect("read");
-            }
-            let total = t.elapsed();
-            println!("{n} forward seek_to on one stream: {total:?} total, {:?}/column",
-                     total / n as u32);
-        }
-    }
-}
+#[path = "decoder_bench.rs"]
+mod seek_bench;

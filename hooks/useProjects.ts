@@ -20,6 +20,7 @@ import {
   projectDirExists,
 } from '../utils/projectCommands';
 import { buildProject, basename, makeProjectPath, registryFilePath } from '../utils/projectPaths';
+import { applyPreferencesPatch } from '../utils/projectPreferences';
 
 async function resolveEntry(registry: ProjectRegistryEntry): Promise<ProjectListEntry> {
   const exists = await projectDirExists(registry.projectDir).catch(() => false);
@@ -179,20 +180,34 @@ export function useProjects() {
     return project;
   }, [persistRegistry, setBoth]);
 
-  /** Persist new preferences to a project's preferences.json and update in-memory state. */
-  const updateProjectPreferences = useCallback(async (
+  // Serialises preference writes: each one merges its patch into the latest
+  // stored preferences only when its turn comes, so concurrent writers (the
+  // debounced UI/filter/tool persisters) can't restore each other's old values.
+  const prefsQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  /**
+   * Merge a patch into a project's preferences.json and update in-memory state.
+   * Callers pass only the keys they own.
+   */
+  const updateProjectPreferences = useCallback((
     id: string,
-    preferences: ProjectPreferences,
+    patch: Partial<ProjectPreferences>,
   ): Promise<Project | undefined> => {
-    const entry = entriesRef.current.find(e => e.registry.id === id);
-    if (!entry || entry.status !== 'ok') return undefined;
-    await writeProjectPreferences(entry.registry.projectDir, preferences);
-    const project = buildProject(entry.registry, entry.project.settings, preferences);
-    const next = entriesRef.current.map(e =>
-      e.registry.id === id ? { status: 'ok' as const, registry: entry.registry, project } : e
-    );
-    setBoth(next);
-    return project;
+    const run = async (): Promise<Project | undefined> => {
+      const entry = entriesRef.current.find(e => e.registry.id === id);
+      if (!entry || entry.status !== 'ok') return undefined;
+      const preferences = applyPreferencesPatch(entry.project.preferences, patch);
+      await writeProjectPreferences(entry.registry.projectDir, preferences);
+      const project = buildProject(entry.registry, entry.project.settings, preferences);
+      const next = entriesRef.current.map(e =>
+        e.registry.id === id ? { status: 'ok' as const, registry: entry.registry, project } : e
+      );
+      setBoth(next);
+      return project;
+    };
+    const result = prefsQueueRef.current.then(run, run);
+    prefsQueueRef.current = result.catch(() => {});
+    return result;
   }, [setBoth]);
 
   /** Remove a project from the registry only — leaves files on disk untouched. */

@@ -191,8 +191,8 @@ export const copyAnnotationFiles = (
 export const revealInFileManager = (path: string): Promise<void> =>
   invoke('reveal_in_file_manager', { path });
 
-export const listAnnotationFiles = (
-  annotationDir: string,
-  outputFormat: string,
-): Promise<string[]> =>
-  invoke('list_annotation_files', { annotationDir, outputFormat });
+/** Three-way set-merge of annotation file contents — the same merge a git
+ *  sync uses (`git_sync/annotate.rs` `set_merge`), so the post-pull reload and
+ *  the sync can never disagree. */
+export const setMergeAnnotations = (ancestor: string, ours: string, theirs: string): Promise<string> =>
+  invoke('set_merge_annotations', { ancestor, ours, theirs });
