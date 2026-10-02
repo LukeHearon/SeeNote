@@ -20,11 +20,9 @@
 //!   recording always auto-merge to the union; a deliberate delete is honored;
 //!   nothing is silently dropped. This is the ONLY merge logic with a UI cost
 //!   (there is none — it never prompts). Any other conflicting file auto-
-//!   resolves favor-incoming. **This set-merge is mirrored on the TS side in
-//!   `utils/annotationMerge.ts` (`setMergeContent`)**, which runs on the
-//!   post-pull reload to fold back an edit made while the sync was in flight;
-//!   the two implementations MUST stay in lockstep, including the canonical
-//!   record-identity key (see [`set_merge`]).
+//!   resolves favor-incoming. The post-pull reload, which folds back an edit
+//!   made while the sync was in flight, calls this same merge through the
+//!   `set_merge_annotations` command, so there is one implementation.
 //! - **Commit author is a name the user typed once** — git author is just a
 //!   string, so per-user attribution works with one shared GitHub token.
 //!
@@ -41,14 +39,16 @@ mod merge;
 mod remote;
 mod repo;
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use git2::{Repository, Signature};
 use serde::Serialize;
 
 use crate::commands::shared::{walk_files, ANNOTATION_EXT};
 
-use annotate::{annotation_blobs, tree_annotation_delta};
+use annotate::{annotation_paths, tree_annotation_delta};
 use merge::merge_remote;
 use remote::{fetch, push};
 use repo::{
@@ -68,6 +68,11 @@ pub(crate) const REMOTE_NAME: &str = "origin";
 /// generic "sync failed". We can't distinguish expired from revoked at the git
 /// protocol level — both are a 401 — so the message covers both.
 pub(crate) const AUTH_ERROR_PREFIX: &str = "AUTH_FAILED:";
+
+/// Prefix on the error an auto-pull returns instead of applying a remote change
+/// that empties annotation files we hold records for (see `merge_remote`). The
+/// frontend keys on it to tell the user a manual Sync is needed.
+pub(crate) const INCOMING_CLEARS_PREFIX: &str = "INCOMING_CLEARS:";
 
 /// What changed as a result of a sync, for the non-blocking post-sync summary.
 #[derive(Serialize, Default, Debug)]
@@ -95,6 +100,12 @@ pub struct SyncSummary {
     /// records for everyone, so the UI lists these and asks first. Confirming
     /// re-runs the sync with them in `confirmed_clears`.
     pub pending_clears: Vec<String>,
+    /// Annotation files a teammate's sync emptied (a confirmed clear) that this
+    /// sync applied. Only a manual sync applies these; auto-pull refuses.
+    pub remote_clears: Vec<String>,
+    /// Annotation files the remote no longer has but we kept, because an absent
+    /// file is never treated as a deletion. The next push restores them.
+    pub ignored_remote_deletions: Vec<String>,
     /// Human-readable note for the UI (e.g. "Already up to date").
     pub message: String,
 }
@@ -190,6 +201,23 @@ pub async fn fetch_remote_status(
     .map_err(|e| format!("fetch status check panicked: {e}"))?
 }
 
+/// One lock per repo, held for every operation that reads or writes its index,
+/// refs or annotation working tree, so a manual sync, the background auto-pull
+/// and the status checks never interleave on the same repo.
+fn repo_lock(project_dir: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let key = std::fs::canonicalize(project_dir).unwrap_or_else(|_| PathBuf::from(project_dir));
+    let mut map = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(key).or_default().clone()
+}
+
+/// The annotation set-merge on its own, for the post-pull reload that folds an
+/// edit made during the sync back in (see `useAnnotationLoad`).
+#[tauri::command]
+pub fn set_merge_annotations(ancestor: String, ours: String, theirs: String) -> String {
+    annotate::set_merge(&ancestor, &ours, &theirs)
+}
+
 fn sync_blocking(
     project_dir: &str,
     annotation_dir: &str,
@@ -200,6 +228,8 @@ fn sync_blocking(
     do_push: bool,
     confirmed_clears: &[String],
 ) -> Result<SyncSummary, String> {
+    let lock = repo_lock(project_dir);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let project_path = Path::new(project_dir);
     let ann_path = Path::new(annotation_dir);
 
@@ -250,13 +280,12 @@ fn sync_blocking(
                 disk_count += 1;
             }
         });
-        // Annotation files HEAD tracks under the annotation directory (reuse
-        // annotation_blobs rather than re-walking the tree).
-        let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
+        // Annotation files HEAD tracks under the annotation directory. Path
+        // prefix by component, so `ann` doesn't also match `ann2/`.
         let tracked_count = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
-            Some(tree) => annotation_blobs(&repo, &tree)?
-                .keys()
-                .filter(|p| p.starts_with(&ann_rel_posix))
+            Some(tree) => annotation_paths(&tree)?
+                .iter()
+                .filter(|p| Path::new(p.as_str()).starts_with(&ann_rel))
                 .count(),
             None => 0,
         };
@@ -295,7 +324,7 @@ fn sync_blocking(
         .and_then(|c| c.tree().ok());
 
     // 3. Merge remote tracking branch into local (set-merge for annotations).
-    let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig)?;
+    let mut summary = merge_remote(&repo, &branch, &ann_rel, &sig, do_push)?;
     summary.pending_clears = staged.pending_clears;
 
     // A pending clear is a change the user made that we deliberately did NOT
@@ -366,6 +395,8 @@ pub(crate) fn gerr(e: git2::Error) -> String {
 }
 
 fn local_sync_status_blocking(project_dir: &str, annotation_dir: &str) -> Result<SyncStatus, String> {
+    let lock = repo_lock(project_dir);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let project_path = Path::new(project_dir);
     let ann_path = Path::new(annotation_dir);
 
@@ -391,6 +422,8 @@ fn fetch_remote_status_blocking(
     remote_url: &str,
     token: &str,
 ) -> Result<bool, String> {
+    let lock = repo_lock(project_dir);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let project_path = Path::new(project_dir);
     let repo = match Repository::open(project_path) {
         Ok(r) => r,
@@ -420,19 +453,8 @@ fn fetch_remote_status_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::shared::make_tmp_root;
     use repo::{stage_and_commit, write_gitignore};
-    use std::path::PathBuf;
-
-    fn make_tmp_root(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir()
-            .join(format!("seenote_syncguard_{tag}_{}_{nanos}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        root
-    }
 
     #[test]
     fn refuses_sync_when_annotation_dir_missing_but_files_tracked() {
