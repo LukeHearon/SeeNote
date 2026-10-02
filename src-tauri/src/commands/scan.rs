@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 use super::filesystem::classify_ext;
-use super::shared::atomic_write;
+use super::shared::{atomic_write, symlink_dir_loops};
 
 /// Files a scan matched (`files`) and, for a media scan, the other files it
 /// walked past (`others`, shown as "unsupported" in the file tree). Also the
@@ -239,7 +239,7 @@ fn walk(root: &Path, root_key: &str, st: &mut ScanState) -> std::io::Result<bool
             // per entry, which is the dominant cost on external drives).
             // Symlinks need the followed metadata to know what they point at.
             let is_dir = match entry.file_type() {
-                Ok(t) if t.is_symlink() => path.is_dir(),
+                Ok(t) if t.is_symlink() => path.is_dir() && !symlink_dir_loops(&dir, &path),
                 Ok(t) => t.is_dir(),
                 Err(_) => path.is_dir(),
             };

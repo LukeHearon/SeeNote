@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 
 use flate2::read::GzDecoder;
@@ -42,53 +42,65 @@ fn stem_of(archive_path: &Path) -> String {
         .to_string()
 }
 
-/// Top-level path component of every entry in the archive (deduplicated),
-/// read from the archive's index/headers without extracting anything.
-fn list_top_level_names(archive_path: &Path) -> Result<HashSet<String>, String> {
-    let file = File::open(archive_path).map_err(|e| e.to_string())?;
-    let mut names = HashSet::new();
+/// What the archive's index says about its top level: the distinct first path
+/// components (after dropping `.` and unsafe entries, so `./`-prefixed tars
+/// read the same as unprefixed ones), and whether any entry sits below one.
+struct TopLevel {
+    names: HashSet<String>,
+    nested: bool,
+}
+
+impl TopLevel {
+    fn note(&mut self, path: &Path, is_dir: bool) {
+        let Some(clean) = sanitize_relative(path) else { return };
+        let mut comps = clean.components();
+        let Some(first) = comps.next() else { return };
+        self.names.insert(first.as_os_str().to_string_lossy().to_string());
+        if is_dir || comps.next().is_some() {
+            self.nested = true;
+        }
+    }
+
+    /// The single folder every entry lives under, if there is exactly one.
+    /// A lone top-level *file* is not a wrapper: stripping it would lose it.
+    fn wrapper(&self) -> Option<&String> {
+        if self.nested && self.names.len() == 1 { self.names.iter().next() } else { None }
+    }
+}
+
+fn open_tar(archive_path: &Path) -> Result<tar::Archive<Box<dyn Read>>, String> {
+    let file = BufReader::new(File::open(archive_path).map_err(|e| e.to_string())?);
+    let reader: Box<dyn Read> = if is_tar_gz(archive_path) {
+        Box::new(GzDecoder::new(file))
+    } else if is_tar(archive_path) {
+        Box::new(file)
+    } else {
+        return Err(format!("unsupported archive type: {}", archive_path.display()));
+    };
+    Ok(tar::Archive::new(reader))
+}
+
+/// Read the archive's index/headers (nothing is extracted).
+fn list_top_level(archive_path: &Path) -> Result<TopLevel, String> {
+    let mut top = TopLevel { names: HashSet::new(), nested: false };
 
     if is_zip(archive_path) {
+        let file = File::open(archive_path).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
         for i in 0..zip.len() {
             let entry = zip.by_index(i).map_err(|e| e.to_string())?;
-            if let Some(first) = entry.name().split('/').next() {
-                if !first.is_empty() {
-                    names.insert(first.to_string());
-                }
-            }
-        }
-    } else if is_tar_gz(archive_path) {
-        let mut archive = tar::Archive::new(GzDecoder::new(BufReader::new(file)));
-        for entry in archive.entries().map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path().map_err(|e| e.to_string())?;
-            if let Some(first) = path.components().next() {
-                names.insert(first.as_os_str().to_string_lossy().to_string());
-            }
-        }
-    } else if is_tar(archive_path) {
-        let mut archive = tar::Archive::new(BufReader::new(file));
-        for entry in archive.entries().map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path().map_err(|e| e.to_string())?;
-            if let Some(first) = path.components().next() {
-                names.insert(first.as_os_str().to_string_lossy().to_string());
-            }
+            top.note(Path::new(entry.name()), entry.is_dir());
         }
     } else {
-        return Err(format!("unsupported archive type: {}", archive_path.display()));
+        let mut archive = open_tar(archive_path)?;
+        for entry in archive.entries().map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path().map_err(|e| e.to_string())?;
+            top.note(&path, entry.header().entry_type().is_dir());
+        }
     }
 
-    Ok(names)
-}
-
-/// True when every entry in the archive shares one top-level folder — that
-/// folder is stripped from each entry's path during extraction so the user's
-/// chosen project folder name (not the archive's own folder name) becomes the
-/// root instead.
-fn has_single_wrapper(archive_path: &Path) -> Result<bool, String> {
-    Ok(list_top_level_names(archive_path)?.len() == 1)
+    Ok(top)
 }
 
 /// Guess a project folder name from the archive: its single top-level
@@ -98,12 +110,17 @@ fn has_single_wrapper(archive_path: &Path) -> Result<bool, String> {
 #[tauri::command]
 pub async fn guess_project_folder_name(archive_path: String) -> Result<String, String> {
     let archive = PathBuf::from(&archive_path);
-    let top_level = list_top_level_names(&archive)?;
-    Ok(if top_level.len() == 1 {
-        top_level.into_iter().next().unwrap()
-    } else {
-        stem_of(&archive)
-    })
+    let top = list_top_level(&archive)?;
+    Ok(top.wrapper().cloned().unwrap_or_else(|| stem_of(&archive)))
+}
+
+/// A folder name must be one plain path component: no separators, `..`, or
+/// absolute/drive paths, so it can't escape `dest_dir`.
+fn validate_folder_name(name: &str) -> Result<(), String> {
+    let mut comps = Path::new(name).components();
+    let ok = !name.contains(['/', '\\', '\0'])
+        && matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None));
+    if ok { Ok(()) } else { Err(format!("invalid folder name '{name}'")) }
 }
 
 /// Reject any path containing `..` or an absolute-path component (root or
@@ -153,15 +170,31 @@ pub async fn extract_archive(archive_path: String, dest_dir: String, folder_name
 }
 
 fn extract_archive_blocking(archive_path: &Path, dest_dir: &Path, folder_name: &str) -> Result<String, String> {
+    validate_folder_name(folder_name)?;
     let target = dest_dir.join(folder_name);
     if target.exists() {
         return Err(format!("'{}' already exists", target.display()));
     }
-    let has_wrapper = has_single_wrapper(archive_path)?;
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let has_wrapper = list_top_level(archive_path)?.wrapper().is_some();
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    // create_dir (not _all) so a target that appeared since the check is an error
+    // rather than being merged into — and then deleted on failure.
+    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
 
-    let file = File::open(archive_path).map_err(|e| e.to_string())?;
+    match extract_into(archive_path, &target, has_wrapper) {
+        Ok(()) => Ok(target.to_string_lossy().to_string()),
+        Err(e) => {
+            // Don't leave a half-extracted project behind; the target didn't
+            // exist before this call, so removing it is safe.
+            let _ = std::fs::remove_dir_all(&target);
+            Err(e)
+        }
+    }
+}
+
+fn extract_into(archive_path: &Path, target: &Path, has_wrapper: bool) -> Result<(), String> {
     if is_zip(archive_path) {
+        let file = File::open(archive_path).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
@@ -182,15 +215,17 @@ fn extract_archive_blocking(archive_path: &Path, dest_dir: &Path, folder_name: &
                 std::io::copy(&mut entry, &mut out_file).map_err(|e| e.to_string())?;
             }
         }
-    } else if is_tar_gz(archive_path) || is_tar(archive_path) {
-        let boxed_read: Box<dyn std::io::Read> = if is_tar_gz(archive_path) {
-            Box::new(GzDecoder::new(BufReader::new(file)))
-        } else {
-            Box::new(BufReader::new(file))
-        };
-        let mut archive = tar::Archive::new(boxed_read);
+    } else {
+        let mut archive = open_tar(archive_path)?;
         for entry in archive.entries().map_err(|e| e.to_string())? {
             let mut entry = entry.map_err(|e| e.to_string())?;
+            // Only plain files and directories. Symlinks/hardlinks could point
+            // (or later entries could write through them) outside the target;
+            // devices and the like have no place in a project.
+            let kind = entry.header().entry_type();
+            if !(kind.is_file() || kind.is_dir()) {
+                continue;
+            }
             let entry_path = entry.path().map_err(|e| e.to_string())?.into_owned();
             let Some(relative) = relative_target(&entry_path, has_wrapper) else { continue };
             let out_path = target.join(&relative);
@@ -199,11 +234,8 @@ fn extract_archive_blocking(archive_path: &Path, dest_dir: &Path, folder_name: &
             }
             entry.unpack(&out_path).map_err(|e| e.to_string())?;
         }
-    } else {
-        return Err(format!("unsupported archive type: {}", archive_path.display()));
     }
-
-    Ok(target.to_string_lossy().to_string())
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -211,6 +243,7 @@ fn extract_archive_blocking(archive_path: &Path, dest_dir: &Path, folder_name: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::shared::make_tmp_root;
 
     #[test]
     fn stem_of_strips_compound_and_simple_extensions() {
@@ -241,16 +274,6 @@ mod tests {
     }
 
     // ── extraction, against real archives built on the fly ───────────────────
-
-    fn make_tmp_root(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!("seenote_archive_test_{tag}_{}_{nanos}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("create_dir_all tmp root");
-        root
-    }
 
     /// Build a zip at `zip_path` containing `entries` (relative paths, each
     /// written as a small text file).
@@ -339,7 +362,7 @@ mod tests {
         let flat = root.join("bar.zip");
         write_zip(&flat, &["audio/a.wav", "annotations/a.txt"]);
 
-        assert_eq!(list_top_level_names(&wrapped).unwrap().len(), 1);
+        assert_eq!(list_top_level(&wrapped).unwrap().wrapper().map(String::as_str), Some("foo"));
         assert_eq!(stem_of(&flat), "bar");
         std::fs::remove_dir_all(&root).ok();
     }
@@ -355,6 +378,132 @@ mod tests {
         let result = extract_archive_blocking(&archive, &dest, "foo");
 
         assert!(result.is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn dot_slash_prefixed_tar_keeps_top_level_files() {
+        let root = make_tmp_root("dotslash");
+        let archive = root.join("p.tar.gz");
+        write_tar_gz(&archive, &["./a.txt", "./b.txt", "./sub/c.txt"]);
+        let dest = root.join("dest");
+
+        extract_archive_blocking(&archive, &dest, "P").unwrap();
+
+        assert!(dest.join("P/a.txt").exists());
+        assert!(dest.join("P/b.txt").exists());
+        assert!(dest.join("P/sub/c.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn dot_slash_prefixed_wrapper_is_still_stripped() {
+        let root = make_tmp_root("dotslash_wrap");
+        let archive = root.join("p.tar.gz");
+        write_tar_gz(&archive, &["./foo/a.txt", "./foo/b.txt"]);
+        let dest = root.join("dest");
+
+        extract_archive_blocking(&archive, &dest, "P").unwrap();
+
+        assert!(dest.join("P/a.txt").exists());
+        assert!(!dest.join("P/foo").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn lone_top_level_file_is_not_treated_as_a_wrapper() {
+        let root = make_tmp_root("lonefile");
+        let archive = root.join("one.zip");
+        write_zip(&archive, &["only.txt"]);
+        let dest = root.join("dest");
+
+        extract_archive_blocking(&archive, &dest, "One").unwrap();
+
+        assert!(dest.join("One/only.txt").exists());
+        assert!(list_top_level(&archive).unwrap().wrapper().is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_symlink_entries_are_skipped() {
+        let root = make_tmp_root("symlink");
+        let archive = root.join("evil.tar");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        {
+            let mut builder = tar::Builder::new(File::create(&archive).unwrap());
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            link.set_cksum();
+            builder.append_link(&mut link, "foo/escape", outside.to_str().unwrap()).unwrap();
+            let data = b"pwned";
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "foo/escape/x.txt", &data[..]).unwrap();
+            let mut ok = tar::Header::new_gnu();
+            ok.set_size(2);
+            ok.set_mode(0o644);
+            ok.set_cksum();
+            builder.append_data(&mut ok, "foo/keep.txt", &b"hi"[..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let dest = root.join("dest");
+
+        extract_archive_blocking(&archive, &dest, "P").unwrap();
+
+        assert!(!outside.join("x.txt").exists(), "wrote through a symlink out of the target");
+        assert!(dest.join("P/keep.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn folder_name_must_be_a_single_plain_component() {
+        for bad in ["", ".", "..", "../x", "a/b", "a\\b", "/abs"] {
+            assert!(validate_folder_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(validate_folder_name("SeeNote Demo").is_ok());
+        assert!(validate_folder_name("v1.2").is_ok());
+
+        let root = make_tmp_root("badname");
+        let archive = root.join("foo.zip");
+        write_zip(&archive, &["foo/a.txt"]);
+        let dest = root.join("dest");
+        assert!(extract_archive_blocking(&archive, &dest, "../escape").is_err());
+        assert!(!root.join("escape").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn failed_extraction_removes_the_partial_directory() {
+        let root = make_tmp_root("partial");
+        let archive = root.join("bad.tar");
+        // A valid first entry, then truncation mid-second-entry.
+        {
+            let mut builder = tar::Builder::new(File::create(&archive).unwrap());
+            let mut h = tar::Header::new_gnu();
+            h.set_size(2);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "a.txt", &b"hi"[..]).unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_size(100_000);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "b.txt", &vec![7u8; 100_000][..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let len = std::fs::metadata(&archive).unwrap().len();
+        std::fs::OpenOptions::new().write(true).open(&archive).unwrap().set_len(len / 2).unwrap();
+        let dest = root.join("dest");
+
+        let result = extract_archive_blocking(&archive, &dest, "P");
+
+        assert!(result.is_err());
+        assert!(!dest.join("P").exists(), "partial extraction left behind");
         std::fs::remove_dir_all(&root).ok();
     }
 }
