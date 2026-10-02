@@ -20,7 +20,7 @@ interface SelectionHandlesProps {
 // Render selection region handles (draggable). Render-only — interaction logic
 // (the drag itself) lives in Spectrogram.tsx; this calls back via onBeginResize.
 //
-// Positioned in content pixels inside a transform layer (see
+// Positioned in content pixels (relative to the layer's anchor) inside a transform layer (see
 // `utils/scrollSyncHub.ts`), so scrolling moves them on the rAF clock rather
 // than on a React commit. Off-screen handles are clipped by the spectrogram
 // container's own overflow rather than culled here — the previous
@@ -51,8 +51,8 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
   return (
     <div ref={layer.ref} className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ ...layer.style, zIndex: 15 }}>
       {[
-        { side: 'start' as const, x: activeSelection.start * pixelsPerSecond },
-        { side: 'end' as const, x: activeSelection.end * pixelsPerSecond },
+        { side: 'start' as const, x: activeSelection.start * pixelsPerSecond - layer.anchor },
+        { side: 'end' as const, x: activeSelection.end * pixelsPerSecond - layer.anchor },
       ].map(({ side, x }) => (
         // 1px white line with a slightly wider invisible hit area
         <div

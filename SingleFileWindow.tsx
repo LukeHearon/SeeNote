@@ -189,7 +189,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   });
 
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
-  const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
+  const { bumpCacheVersion } = useChunkCacheVersion(chunkCacheRef);
 
   const spectrogramRef = useRef<SpectrogramHandle>(null);
 
@@ -762,7 +762,6 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 ref={spectrogramRef}
                 chunkCache={chunkCacheRef.current}
                 sampleRate={sampleRate}
-                cacheVersion={cacheVersion}
                 currentTimeStore={currentTimeStoreRef.current}
                 duration={displayDuration}
                 timeline={timeline}

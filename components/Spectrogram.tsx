@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
-import { Annotation, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
+import { Annotation, AnnotationWithLayer, SpectrogramSettings, AnnotationTool, Selection, BandPassFilter, VideoMode } from '../types';
 import { bandExtentY, freqToY, freqAxisTicks, formatFreqHz } from '../utils/audioProcessing';
+import { previewLayerIndex } from '../utils/previewLayer';
 import { calculateAnnotationLayers, clamp, annotationColorStyle, annotationBoxTop, ANNOTATION_BOX_HEIGHT } from '../utils/helpers';
 import { chooseTimeStep, formatRulerTime, rulerLabelAlign, rulerTicks, DATETIME_LABEL_SPACING_PX, RulerTick } from '../utils/timeAxis';
 import { datetimeTicks, formatDatetimeRulerLabel, DateTimeFormat } from '../utils/datetimeDisplay';
@@ -27,7 +28,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
-import { useChunkRenderer, DIAG_FRAME_TIMING } from '../hooks/useChunkRenderer';
+import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
@@ -36,7 +37,6 @@ import ContextMenu from './ContextMenu';
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
-  cacheVersion: number;
   // Playback time arrives via a ref-based pub/sub store (not a prop) so a
   // playback tick redraws the canvas imperatively without re-rendering the tree.
   currentTimeStore: CurrentTimeStore;
@@ -83,8 +83,6 @@ interface SpectrogramProps {
   onAnnotationsChange: (annotations: Annotation[]) => void;
   onAnnotationsCommit: (annotations: Annotation[]) => void;
   onSelectAnnotation: (id: string | null) => void;
-  // Full deselect used by the label editor's Enter key (see AnnotationOverlay).
-  onDeselectAnnotation?: () => void;
   onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onZoomChange: (newZoomSec: number) => void;
@@ -155,7 +153,8 @@ const REVEAL_MARGIN_PX = 48;
 // two separate self-sustaining scroll loops (the "violent jitter" oscillation
 // and the compounding resize rescale), and the source tags are what identify
 // them; the heartbeat separates "something keeps writing scroll" from "scroll
-// is still but the render drifts". Same idea as DIAG_FRAME_TIMING.
+// is still but the render drifts". Each call site is guarded by the constant so
+// the trace strings cost nothing when it's off.
 const DIAG_SCROLL = false;
 const diagT0 = typeof performance !== 'undefined' ? performance.now() : 0;
 // Cap so a long session can't fill the console with megabytes of trace.
@@ -175,7 +174,6 @@ const diag = (msg: string) => {
 const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   chunkCache,
   sampleRate,
-  cacheVersion,
   currentTimeStore,
   duration,
   timeline,
@@ -201,7 +199,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onAnnotationsChange,
   onAnnotationsCommit,
   onSelectAnnotation,
-  onDeselectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
   onZoomChange,
@@ -253,7 +250,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // (the "violent jitter" bug). Every scroll write must go through setScroll.
   const setScroll = useCallback((v: number, _source: string = '?') => {
     if (DIAG_SCROLL && Math.abs(v - scrollLeftRef.current) > 0.0001) {
-      diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
+      if (DIAG_SCROLL) diag(`write  ${_source.padEnd(18)} ${scrollLeftRef.current.toFixed(2)} -> ${v.toFixed(2)}  (d=${(v - scrollLeftRef.current).toFixed(3)})  ppsRef=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current}`);
     }
     scrollLeftRef.current = v;
     // Every layer's geometry is a function of scrollLeft, and all three read it
@@ -278,8 +275,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const lastManualScrollRef = useRef(0);
 
   // Custom cursor position (relative to the spectrogram container)
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
-  const [suppressCustomCursor, setSuppressCustomCursor] = useState(false);
+  // The tool cursor follows the pointer by direct style writes, not React state:
+  // a state update per mousemove re-rendered the whole spectrogram. It hides
+  // over elements that show their own cursor (handles, buttons), decided when
+  // the pointer enters an element rather than on every move.
+  const toolCursorRef = useRef<HTMLDivElement>(null);
+  const toolCursorStateRef = useRef({ inside: false, suppressed: false });
+  const applyToolCursorVisibility = () => {
+    const el = toolCursorRef.current;
+    const st = toolCursorStateRef.current;
+    if (el) el.style.display = st.inside && !st.suppressed ? 'block' : 'none';
+  };
+  const moveToolCursor = (e: React.MouseEvent) => {
+    const el = toolCursorRef.current;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!el || !rect) return;
+    el.style.left = `${e.clientX - rect.left}px`;
+    el.style.top = `${e.clientY - rect.top}px`;
+    toolCursorStateRef.current.inside = true;
+    applyToolCursorVisibility();
+  };
 
   // Hovered annotation id for hover effects (delete button, pencil icon)
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
@@ -328,6 +343,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Dirty flag: set whenever draw/drawYAxis deps change so the rAF loop only
   // calls the expensive spectrogram render when the background actually changed.
   const drawDirtyRef = useRef(true);
+  // The annotations' layer assignment as of the last render, for the overlay's
+  // annotation-box preview.
+  const layeredAnnotationsRef = useRef<AnnotationWithLayer[]>([]);
   const drawRef = useRef<() => void>(() => {});
   const drawYAxisRef = useRef<() => void>(() => {});
   // The frequency gutter is a function of the frequency settings and the
@@ -372,6 +390,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // that rounding turn the resize handler's scroll rescale into a small
   // constant multiplier instead of an identity.
   const [containerWidth, setContainerWidth] = useState(0);
+  // State (not a clientHeight read during render) so a height-only resize
+  // re-renders the filter handles at the new frequency positions.
+  const [containerHeight, setContainerHeight] = useState(0);
   // Live mirror, read from the rAF loop (which publishes the viewport) and by
   // the scroll diagnostics.
   const containerWidthRef = useRef(0);
@@ -424,7 +445,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const lastPublishedZoomRef = useRef<number | null>(null);
   if (prevZoomInputsRef.current.zoomSec !== zoomSec ||
       prevZoomInputsRef.current.containerWidth !== containerWidth) {
-    diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
+    if (DIAG_SCROLL) diag(`zoomin prop zoomSec ${prevZoomInputsRef.current.zoomSec} -> ${zoomSec}${zoomSec === lastPublishedZoomRef.current ? ' (own echo, ignored)' : ''}, containerWidth ${prevZoomInputsRef.current.containerWidth} -> ${containerWidth}; ppsRef ${pixelsPerSecondRef.current.toFixed(6)} -> ${pixelsPerSecond.toFixed(6)}`);
     prevZoomInputsRef.current = { zoomSec, containerWidth };
     // The observer's own last width wins over the (equally late-committable)
     // state mirror.
@@ -461,7 +482,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     creatingAnnotation,
     creatingSelection,
     creatingFilter,
-    dragStart,
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
@@ -480,8 +500,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     pixelsPerSecondRef,
     durationRef,
     setScroll,
-    pixelsPerSecond,
-    duration,
     timelineRef,
     annotations,
     selection,
@@ -502,8 +520,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     onEditAnnotationText: focusAnnotationInput,
     onBandPassFilterChange,
     onBandPassFilterDrawn,
-    setCursorPos,
-    setSuppressCustomCursor,
     lastManualScrollRef,
     isAltHeldRef: altHeldRef,
     onContextMenu: (clientX, clientY) => setContextMenuPos({ x: clientX, y: clientY }),
@@ -598,7 +614,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   const { draw } = useChunkRenderer({
     chunkCache,
     sampleRate,
-    cacheVersion,
+    onChunkArrived: () => { drawDirtyRef.current = true; },
     scrollLeftRef,
     pixelsPerSecondRef,
     pixelsPerSecond,
@@ -714,11 +730,9 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       const x0 = Math.max(0, timeToX(activeSelection!.start, scrollLeft_live, pixelsPerSecond_live));
       const x1 = Math.min(width, timeToX(activeSelection!.end, scrollLeft_live, pixelsPerSecond_live));
       if (x1 > x0) {
-        const withPreview = calculateAnnotationLayers([
-          ...annotations,
-          { id: '__preview__', start: activeSelection!.start, end: activeSelection!.end, text: '' },
-        ]);
-        const layerIndex = withPreview.find(a => a.id === '__preview__')?.layerIndex ?? 0;
+        // Same layer the committed box would get, without re-layering every
+        // annotation each frame of a sweep (see previewLayerIndex).
+        const layerIndex = previewLayerIndex(layeredAnnotationsRef.current, activeSelection!.start);
         const boxTop = annotationBoxTop(layerIndex);
         const style = annotationColorStyle(activeAnnotationTool.color, false);
         const r = 4;
@@ -1055,21 +1069,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // still ticks at 50Hz; only the background stopped repainting for nothing.
 
   useEffect(() => {
-    let lastTs = performance.now();
     const tick = () => {
-      // Frame-gap detector: a healthy 60fps loop ticks every ~16.7ms. A gap well
-      // over that means the previous frame's work (or a GC pause / React relayout)
-      // blew the budget — i.e. a real dropped frame, which is what a playback hitch
-      // would be. Logged only while playing so idle/background throttling is quiet.
-      if (DIAG_FRAME_TIMING) {
-        const now = performance.now();
-        const gap = now - lastTs;
-        lastTs = now;
-        if (isPlayingRef.current && gap > 24) {
-          // eslint-disable-next-line no-console
-          console.warn(`[frametiming] frame gap ${gap.toFixed(1)}ms (target ~16.7)`);
-        }
-      }
       if (drawDirtyRef.current) {
         drawRef.current();
         drawDirtyRef.current = false;
@@ -1128,7 +1128,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const id = window.setInterval(() => {
       const now = scrollLeftRef.current;
       if (Math.abs(now - last) < 0.0001) return;
-      diag(`beat   scroll=${now.toFixed(2)} (moved ${(now - last).toFixed(3)}) t0=${(now / (pixelsPerSecondRef.current || 1)).toFixed(4)}s pps=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current} clientWidth=${containerRef.current?.clientWidth} playing=${isPlayingRef.current} dragging=${isAnyDragActiveRef.current}`);
+      if (DIAG_SCROLL) diag(`beat   scroll=${now.toFixed(2)} (moved ${(now - last).toFixed(3)}) t0=${(now / (pixelsPerSecondRef.current || 1)).toFixed(4)}s pps=${pixelsPerSecondRef.current.toFixed(6)} zoomRef=${zoomSecRef.current} clientWidth=${containerRef.current?.clientWidth} playing=${isPlayingRef.current} dragging=${isAnyDragActiveRef.current}`);
       last = now;
     }, 250);
     return () => window.clearInterval(id);
@@ -1157,7 +1157,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         // needs a repaint is lost by returning here.
         if (newWidth === containerSizeRef.current.width &&
             newHeight === containerSizeRef.current.height) return;
-        diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
+        if (DIAG_SCROLL) diag(`resize contentRect.width=${width} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidthRef.current} ppsRef=${pixelsPerSecondRef.current.toFixed(6)} newPps=${(newWidth / zoomSecRef.current).toFixed(6)}`);
         // Preserve the left-edge time across resize: scrollLeft is in pixels and
         // pixelsPerSecond = containerWidth / zoomSec, so a width change would shift
         // the visible time range unless we rescale scrollLeft proportionally.
@@ -1185,6 +1185,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         }
         lastObservedWidthRef.current = newWidth;
         setContainerWidth(newWidth);
+        setContainerHeight(newHeight);
         // Publish the new box; each draw sizes its own bitmap from it. Repaint
         // every layer immediately rather than waiting a frame for the rAF loop's
         // dirty flags — a resized bitmap comes back cleared.
@@ -1193,6 +1194,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         drawOverlayRef.current();
         drawFilterOverlayRef.current();
         drawYAxisRef.current();
+        // Just drawn with the new geometry: the flags setScroll raised would
+        // otherwise repaint all four again on the next frame.
+        drawDirtyRef.current = false;
+        overlayDirtyRef.current = false;
+        filterOverlayDirtyRef.current = false;
+        yAxisDirtyRef.current = false;
       }
     });
 
@@ -1309,7 +1316,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
 
 
   const applyWheel = useCallback((deltaX: number, deltaY: number, ctrlKey: boolean, metaKey: boolean, clientX: number) => {
-    diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
+    if (DIAG_SCROLL) diag(`wheel  dx=${deltaX} dy=${deltaY} ctrl=${ctrlKey} meta=${metaKey} clientX=${clientX} zoomProp=${zoomSec} zoomRef=${zoomSecRef.current} scrollRef=${scrollLeftRef.current.toFixed(2)} clientWidth=${containerRef.current?.clientWidth} stateWidth=${containerWidth}`);
     if (ctrlKey || metaKey) {
       if (!containerRef.current) return;
       // Trackpad inertia tails deliver horizontal-only events (deltaY === 0).
@@ -1444,6 +1451,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   }), [goToPrevAnnotation, goToNextAnnotation, goToTrackStart, goToTrackEnd, scrollToTime, revealTime, commitSpan, recenterPlayhead, zoomToRange, applyWheel, zoomIn, zoomOut, focusAnnotationInput]);
 
   const layeredAnnotations = useMemo(() => calculateAnnotationLayers(annotations), [annotations]);
+  layeredAnnotationsRef.current = layeredAnnotations;
 
   // Stable identity for the memoised AnnotationOverlay: getPointerTime is a plain
   // function rebuilt every render (it closes over scrollLeft), so passing it
@@ -1471,10 +1479,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           ref={containerRef}
           className="relative flex-1 h-full overflow-hidden cursor-none"
           onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
+          onMouseMove={e => { moveToolCursor(e); handleMouseMove(e); }}
+          onMouseOver={e => {
+            toolCursorStateRef.current.suppressed = window.getComputedStyle(e.target as Element).cursor !== 'none';
+            applyToolCursorVisibility();
+          }}
           onMouseUp={handleMouseUp}
           onMouseLeave={() => {
-            setCursorPos(null);
+            toolCursorStateRef.current.inside = false;
+            applyToolCursorVisibility();
             // Don't terminate the drag — window mouseup handler cleans up when the button is released.
             // Only end non-drag interactions (e.g. right-click pan) on leave.
             if (!isAnyDragActiveRef.current) handleMouseUp();
@@ -1562,7 +1575,6 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            playheadFollowsAnnotationStartRef={playheadFollowsAnnotationStartRef}
            getPointerTime={stableGetPointerTime}
            onSelectAnnotation={onSelectAnnotation}
-           onDeselectAnnotation={onDeselectAnnotation}
            onAnnotationsChange={onAnnotationsChange}
            onAnnotationsCommit={onAnnotationsCommit}
            onBoundAnnotationChange={onBoundAnnotationChange}
@@ -1606,7 +1618,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            bandPassFilter={bandPassFilter}
            creatingFilter={creatingFilter}
            settings={settings}
-           containerHeight={containerRef.current?.clientHeight ?? 0}
+           containerHeight={containerHeight}
            onBeginResize={setResizingFilterEdge}
          />
       </div>
@@ -1624,14 +1636,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           annotation tools (time-axis drags), horizontal for the filter tool
           (frequency-axis drags). High-contrast white fill with 1px dark
           outline for readability over bright spectrogram regions. */}
-      {cursorPos && !suppressCustomCursor && (() => {
+      {(() => {
         const isFilter = topTool === 'filterTool';
         const w = isFilter ? 24 : 2;
         const h = isFilter ? 2 : 24;
         return (
           <div
             className="absolute pointer-events-none"
-            style={{ left: cursorPos.x, top: cursorPos.y, zIndex: 40, transform: 'translate(-50%, -50%)' }}
+            ref={toolCursorRef}
+            style={{ display: 'none', zIndex: 40, transform: 'translate(-50%, -50%)' }}
           >
             <div
               style={{

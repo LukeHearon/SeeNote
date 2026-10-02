@@ -1,6 +1,5 @@
 import { getSpectrogramChunkRange } from './utils/tauriCommands';
 import { buildTierLadder, TierConfig } from './constants';
-import { chunkDiag, ChunkDiagLog, ChunkRecord } from './utils/chunkDiag';
 
 export interface CachedChunk {
   data: Uint16Array;
@@ -103,6 +102,12 @@ export function chunkIndicesForRanges(
   return [...indices].sort((a, b) => a - b);
 }
 
+function sameSignature(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 export class MultiTierSpectrogramCache {
   private tiers: TierConfig[];
   private tierByNumber: Map<number, TierConfig>; // tier number -> tier config
@@ -110,6 +115,10 @@ export class MultiTierSpectrogramCache {
   // Cap concurrent Tauri IPC/FFT calls so the first chunks in view complete
   // quickly rather than all chunks competing for CPU simultaneously.
   private static readonly MAX_CONCURRENT = 4;
+  /** Fetch attempts per chunk before it is given up on until invalidate(). */
+  static readonly MAX_FETCH_ATTEMPTS = 3;
+  /** Backoff before attempt n+1 (ms): base * 2^(n-1). */
+  static readonly RETRY_BASE_MS = 1000;
   private inFlight = new Set<string>(); // "tier:chunkIdx" currently being fetched
   // MAX_CONCURRENT limits REQUESTS, not chunks: one request may cover a
   // contiguous run of chunks (see drainQueue).
@@ -125,8 +134,23 @@ export class MultiTierSpectrogramCache {
   private generationId: number = 0;
   // Per-tier LRU capacity narrowed to the subset's own footprint (setSubsetRanges).
   private capByTier = new Map<number, number>();
-  // TEMP DIAGNOSTIC — see utils/chunkDiag.ts.
-  private diagLog = new ChunkDiagLog();
+  // Bumped whenever the cached set changes (chunk stored, evicted, invalidated).
+  // Lets callers ask "did anything arrive since I last looked?" with one compare,
+  // and lets prefetchRanges/isViewportResolvedForRanges skip recomputing an
+  // answer that can't have changed.
+  private epoch = 0;
+  // Chunk-arrival subscribers (the renderer marks its draw dirty from here).
+  private listeners = new Set<() => void>();
+  // Chunks whose fetch failed: "tier:chunkIdx" -> attempts so far and when the
+  // next one is allowed. Without this a persistently failing chunk (corrupt
+  // frame, unreadable file region) was re-requested on every dirty frame.
+  private failures = new Map<string, { attempts: number; retryAt: number }>();
+  // prefetchRanges early-out: the viewport signature the queue was last built
+  // for. See viewportSignature.
+  private lastPrefetch = { tier: -1, epoch: -1, generation: -1, sig: [] as number[] };
+  private sigScratch: number[] = [];
+  // isViewportResolvedForRanges memo, same key plus the answer.
+  private lastResolved = { tier: -1, epoch: -1, sig: [] as number[], result: false };
 
   constructor(
     private readonly filePath: string,
@@ -163,17 +187,36 @@ export class MultiTierSpectrogramCache {
     }
   }
 
+  // ── Change notification ─────────────────────────────────────────────────────
+
+  /** Monotonic counter, bumped whenever the set of cached chunks changes. */
+  get version(): number {
+    return this.epoch;
+  }
+
+  /** Call `listener` whenever a chunk arrives. Returns the unsubscribe. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
   // ── Tier selection ──────────────────────────────────────────────────────────
 
   /**
    * Select the best tier for the current zoom level.
-   * Picks the coarsest tier where we have at least 1 data column per pixel.
+   * Picks the coarsest tier with at least 1 data column per CSS pixel, so
+   * `canvasWidth` is the CSS width, not the physical one. That is deliberate:
+   * the renderer resamples whatever tier is chosen onto a one-column-per-
+   * physical-pixel grid (see resolveRenderCps), and selecting by physical
+   * pixels would double the chunks fetched and decoded on a 2x display, which
+   * is the cost this app is most sensitive to on slow machines and external
+   * drives. A high-dpi display shows the tier's columns interpolated.
    * Uses hysteresis to avoid rapid tier switching at boundaries.
    */
   selectTier(visibleDuration: number, canvasWidth: number): TierConfig {
     const pixelsPerSec = canvasWidth / visibleDuration;
 
-    // Find the coarsest tier with >= 1 column per pixel
+    // Find the coarsest tier with >= 1 column per CSS pixel
     let bestIdx = this.tiers.length - 1; // default to finest
     for (let i = 0; i < this.tiers.length; i++) {
       if (this.tiers[i].colsPerSec >= pixelsPerSec) {
@@ -252,11 +295,6 @@ export class MultiTierSpectrogramCache {
     return null;
   }
 
-  /** TEMP DIAGNOSTIC: what chunkDiag recorded for a chunk, for the overlay. */
-  diagRecord(chunk: CachedChunk): ChunkRecord | undefined {
-    return this.diagLog.lookup(chunk);
-  }
-
   // ── Build-progress probes (read-only) ─────────────────────────────────────────
   // These never mutate hysteresis or LRU state, so they are safe to call from a
   // React render / draw pass to drive a "building spectrogram" indicator.
@@ -279,10 +317,19 @@ export class MultiTierSpectrogramCache {
     const tierConfig = this.tierByNumber.get(tier);
     const cache = this.caches.get(tier);
     if (!tierConfig || !cache) return false;
+    // Called once per drawn frame with an unchanged viewport almost always, so
+    // answer from the memo unless the viewport or the cached set moved.
+    const sig = this.viewportSignature(ranges, tierConfig);
+    const memo = this.lastResolved;
+    if (memo.tier === tier && memo.epoch === this.epoch && sameSignature(memo.sig, sig)) {
+      return memo.result;
+    }
     const indices = chunkIndicesForRanges(
       ranges, tierConfig.chunkDuration, this.duration, ranges.length === 1,
     );
-    return indices.every(idx => cache.has(idx));
+    const result = indices.every(idx => cache.has(idx));
+    this.lastResolved = { tier, epoch: this.epoch, sig: sig.slice(), result };
+    return result;
   }
 
   /** Single-range convenience wrapper (no subset in play). */
@@ -344,6 +391,20 @@ export class MultiTierSpectrogramCache {
     if (!tierConfig) return;
     const cache = this.caches.get(tier);
 
+    // The renderer calls this on every drawn frame. Frames over an unchanged
+    // viewport (same tier, same chunk span per range, nothing arrived or evicted
+    // since) would rebuild identical pins and an identical queue, so skip them.
+    // Not while any chunk is backing off: the retry deadline passing is a change
+    // this signature can't see.
+    const sig = this.viewportSignature(ranges, tierConfig);
+    const last = this.lastPrefetch;
+    if (this.failures.size === 0 &&
+        last.tier === tier && last.epoch === this.epoch &&
+        last.generation === this.generationId && sameSignature(last.sig, sig)) {
+      return;
+    }
+    this.lastPrefetch = { tier, epoch: this.epoch, generation: this.generationId, sig: sig.slice() };
+
     const indices = chunkIndicesForRanges(
       ranges, tierConfig.chunkDuration, this.duration, ranges.length === 1,
     );
@@ -385,8 +446,10 @@ export class MultiTierSpectrogramCache {
 
     // Replace queue with new viewport, skipping already-cached or in-flight chunks.
     // In-flight fetches continue undisturbed; stale queued items are dropped.
+    const now = Date.now();
     this.fetchQueue = ordered.filter(({ tier: t, chunkIndex }) =>
-      !cache?.has(chunkIndex) && !this.inFlight.has(`${t}:${chunkIndex}`),
+      !cache?.has(chunkIndex) && !this.inFlight.has(`${t}:${chunkIndex}`) &&
+      this.mayFetch(`${t}:${chunkIndex}`, now),
     );
 
     this.drainQueue();
@@ -398,6 +461,32 @@ export class MultiTierSpectrogramCache {
   }
 
   // ── Internal fetch/cache ────────────────────────────────────────────────────
+
+  /** False while a failed chunk is backing off, or once it has used its attempts. */
+  private mayFetch(key: string, now: number): boolean {
+    const f = this.failures.get(key);
+    if (!f) return true;
+    return f.attempts < MultiTierSpectrogramCache.MAX_FETCH_ATTEMPTS && now >= f.retryAt;
+  }
+
+  /**
+   * What the viewport needs, as numbers: per range, its first and last chunk
+   * index at this tier's grain. Two viewports with the same signature need
+   * exactly the same chunks. Written into a reused scratch array (callers copy
+   * it if they keep it) so the per-frame check allocates nothing.
+   */
+  private viewportSignature(
+    ranges: readonly { start: number; end: number }[],
+    tierConfig: TierConfig,
+  ): number[] {
+    const sig = this.sigScratch;
+    sig.length = 0;
+    const d = tierConfig.chunkDuration;
+    for (const r of ranges) {
+      sig.push(Math.floor(r.start / d), Math.floor(r.end / d));
+    }
+    return sig;
+  }
 
   private drainQueue(): void {
     while (
@@ -433,10 +522,6 @@ export class MultiTierSpectrogramCache {
     for (const key of keys) this.inFlight.add(key);
     this.activeRequests += 1;
     const generation = this.generationId;
-    if (chunkDiag.log) {
-      console.log(`[chunkDiag] request T${tier} #${firstIndex}..${firstIndex + count - 1} (hop ${tierConfig.hopSize}, ${tierConfig.chunkDuration.toFixed(3)}s/chunk)`);
-    }
-
     getSpectrogramChunkRange(
       this.filePath,
       firstIndex,
@@ -455,38 +540,43 @@ export class MultiTierSpectrogramCache {
           actualDurationSec: result.actual_duration_sec,
           sampleRate: result.sample_rate,
         };
-        if (chunkDiag.log || chunkDiag.overlay) {
-          const { rec, warnings } = this.diagLog.record(tier, chunk, chunk.data, {
-            chunkIndex: result.chunk_index,
-            chunkDuration: tierConfig.chunkDuration,
-            expectedFreqBins: this.fftSize / 2,
-            startSec: chunk.startSec,
-            nCols: chunk.nCols,
-            nFreqBins: chunk.nFreqBins,
-            actualDurationSec: chunk.actualDurationSec,
-            dataLength: chunk.data.length,
-          });
-          if (chunkDiag.log) {
-            const line = `[chunkDiag] T${tier} #${result.chunk_index} start ${chunk.startSec.toFixed(1)}s ` +
-              `${chunk.nCols}×${chunk.nFreqBins} #${rec.print} (request #${firstIndex}..${firstIndex + count - 1})`;
-            if (warnings.length) console.warn(`${line}\n  ${warnings.join('\n  ')}`);
-            else console.log(line);
-          }
-        }
         this.evictLRU(tier);
         cache.set(result.chunk_index, chunk);
+        this.failures.delete(`${tier}:${result.chunk_index}`);
+        this.epoch += 1;
         // Fires per chunk, not per request, so the view fills in progressively
         // while a multi-chunk walk is still running.
         this.onChunkLoaded();
+        this.listeners.forEach(l => l());
       },
     )
       .catch(err => {
+        // A request cancelled by invalidate() says nothing about the chunks.
+        if (this.generationId !== generation) return;
         console.error(
           `MultiTierCache: failed to fetch tier ${tier} chunks ${firstIndex}..${firstIndex + count - 1}:`,
           err,
         );
+        // Chunks of a multi-chunk request that arrived before the error are
+        // already cached; back off only the ones still missing.
+        const now = Date.now();
+        for (let i = 0; i < count; i++) {
+          const idx = firstIndex + i;
+          if (cache.has(idx)) continue;
+          const key = `${tier}:${idx}`;
+          const attempts = (this.failures.get(key)?.attempts ?? 0) + 1;
+          this.failures.set(key, {
+            attempts,
+            retryAt: now + MultiTierSpectrogramCache.RETRY_BASE_MS * 2 ** (attempts - 1),
+          });
+        }
       })
       .finally(() => {
+        // invalidate() already reset the in-flight set and the request count for
+        // the new generation; a stale request finishing late must not decrement
+        // them again (activeRequests went negative, over-admitting requests, and
+        // inFlight.delete could drop a key a newer request owns).
+        if (this.generationId !== generation) return;
         for (const key of keys) this.inFlight.delete(key);
         this.activeRequests -= 1;
         this.drainQueue();
@@ -519,8 +609,8 @@ export class MultiTierSpectrogramCache {
         if (!pinned?.has(key)) { victim = key; break; }
       }
       if (victim === undefined) return; // everything left is still being drawn
-      if (chunkDiag.log) console.log(`[chunkDiag] evict T${tier} #${victim}`);
       cache.delete(victim);
+      this.epoch += 1;
     }
   }
 
@@ -532,6 +622,8 @@ export class MultiTierSpectrogramCache {
       cache.clear();
     }
     this.inFlight.clear();
+    this.failures.clear();
+    this.epoch += 1;
     this.activeRequests = 0;
     this.fetchQueue = [];
     this.activeTierIndex = -1;

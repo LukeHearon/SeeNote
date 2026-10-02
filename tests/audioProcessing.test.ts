@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { freqToY, yToFreq, toMel, fromMel, sampleChunkColumnInto, drawSpectrogramChunk, clampFreqRange, MIN_FREQ_SPAN, formatFreqHz, parseFreqHz } from '../utils/audioProcessing';
+import { freqToY, yToFreq, toMel, fromMel, clampFreqRange, MIN_FREQ_SPAN, formatFreqHz, parseFreqHz } from '../utils/audioProcessing';
+import { sampleChunkColumnInto, drawSpectrogramChunk } from '../utils/spectrogramPixels';
+import { interpolateMagmaHex } from '../constants';
 
 const H = 500;            // canvas height
 const MIN_F = 20;
@@ -328,6 +330,41 @@ describe('drawSpectrogramChunk pixel coverage', () => {
       const j = (y * W + 3) * 4;
       expect(out[j + 3]).toBe(255);
     }
+  });
+});
+
+describe('drawSpectrogramChunk colormap', () => {
+  class FakeImageData {
+    constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+  }
+  const render = (value: number, floor: number, ceil: number) => {
+    const prev = (globalThis as any).ImageData;
+    (globalThis as any).ImageData = FakeImageData;
+    let out: number[] = [];
+    const ctx = { putImageData: (img: FakeImageData) => { out = Array.from(img.data.slice(0, 4)); } };
+    // One column, two bins, linear scale over the full range: both rows read `value`.
+    drawSpectrogramChunk(
+      ctx as unknown as CanvasRenderingContext2D,
+      new Uint16Array([value, value]), 1, 2, 1, 1,
+      0, 22050, 44100, 'linear', floor, ceil,
+    );
+    (globalThis as any).ImageData = prev;
+    return out;
+  };
+  const hexRgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+
+  it('maps the floor to the first colormap entry and the ceiling to the last', () => {
+    expect(render(0, -140, 0)).toEqual([...hexRgb(interpolateMagmaHex(0)), 255]);
+    expect(render(65535, -140, 0)).toEqual([...hexRgb(interpolateMagmaHex(1)), 255]);
+  });
+
+  it('follows the level window: a narrower window brightens the same sample', () => {
+    const wide = render(40000, -140, 0);
+    const narrow = render(40000, -100, -40);
+    expect(narrow).not.toEqual(wide);
+    // 40000/65535*140-140 = -54.6 dB: inside both windows, higher in the narrow one.
+    const lum = (c: number[]) => c[0] + c[1] + c[2];
+    expect(lum(narrow)).toBeGreaterThan(lum(wide));
   });
 });
 

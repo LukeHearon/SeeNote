@@ -1,22 +1,19 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
-import { drawSpectrogramChunk, sampleChunkColumnInto } from '../utils/audioProcessing';
+import { drawSpectrogramChunk, sampleChunkColumnInto } from '../utils/spectrogramPixels';
 import { MultiTierSpectrogramCache } from '../MultiTierSpectrogramCache';
 import { resolveRenderCps } from '../utils/viewportTransform';
 import { syncCanvasBitmap } from '../utils/canvasDpr';
 import { Timeline, sourceRangesForDisplayRange } from '../utils/subsetTimeline';
-import { chunkDiag } from '../utils/chunkDiag';
-
-// TEMP DIAGNOSTIC — logs over-budget frames and attributes heavy full redraws so
-// we can tell a real playback hitch (dropped frame) from the sampling twinkle.
-// Set to false to silence. See local/HITCH.md.
-export const DIAG_FRAME_TIMING = false;
-
 
 export interface ChunkRendererParams {
   chunkCache: MultiTierSpectrogramCache | null;
   sampleRate: number;
-  cacheVersion: number;
+  // Called whenever the cache receives a chunk, so the caller can mark the draw
+  // dirty. The renderer subscribes to the cache itself rather than taking a
+  // version counter from React state: a counter threaded down from the window
+  // re-rendered the whole tree once per frame while chunks streamed in.
+  onChunkArrived: () => void;
   // Read live from a ref (not a prop) so `draw` doesn't recreate on every scroll
   // step. During playback scrollLeft updates ~50 Hz via React state; depending on
   // it here would throttle the background redraw to that cadence and make the
@@ -70,7 +67,7 @@ export interface ChunkRendererApi {
 export function useChunkRenderer({
   chunkCache,
   sampleRate,
-  cacheVersion,
+  onChunkArrived,
   scrollLeftRef,
   pixelsPerSecondRef,
   pixelsPerSecond: pixelsPerSecondProp,
@@ -110,9 +107,10 @@ export function useChunkRenderer({
   // colsPerSec the offscreen grid was last built at. A tier change (zoom) remaps
   // every column, so it can't go incremental even if the buffer size coincides.
   const prevCpsRef = useRef<number>(-1);
-  // cacheVersion the interior dirty-fill last ran against. A bump means chunk data
-  // arrived, so the scan must run even on the frame the viewport finishes resolving
-  // (the chunk that completes it is the one that needs painting).
+  // Cache version (chunkCache.version) the interior dirty-fill last ran against.
+  // A bump means chunk data arrived, so the scan must run even on the frame the
+  // viewport finishes resolving (the chunk that completes it is the one that
+  // needs painting).
   const prevScanCacheVersionRef = useRef<number>(-1);
   // Per-column tier record of the CURRENT offscreen buffer (length tracks bbWidth):
   // 0 = column not painted (background), otherwise tier+1 of the chunk it was last
@@ -141,9 +139,14 @@ export function useChunkRenderer({
   // every frame, which would loop draw→render→draw.
   const isBuildingRef = useRef(false);
 
+  // A chunk arriving is the one thing that changes what the draw would paint
+  // without touching any of its inputs.
+  const onChunkArrivedRef = useRef(onChunkArrived);
+  onChunkArrivedRef.current = onChunkArrived;
+  useEffect(() => chunkCache?.subscribe(() => onChunkArrivedRef.current()), [chunkCache]);
+
   // Main canvas: draws spectrogram data only.
   const draw = useCallback(() => {
-    const t0 = DIAG_FRAME_TIMING ? performance.now() : 0;
     const canvas = canvasRef.current;
     let offscreen = offscreenCanvasRef.current;
     if (!canvas || !offscreen) return;
@@ -186,8 +189,8 @@ export function useChunkRenderer({
         //
         // Stage 2b (drawSpectrogramChunk in utils/audioProcessing.ts): handles
         // frequency-axis remap (linear/log/mel), contrast, brightness, and
-        // colormap. It still does no time-axis remapping — specWidth always
-        // equals the offscreen canvas width.
+        // colormap. It still does no time-axis remapping — the column count
+        // always equals the offscreen canvas width.
         //
         // Pixel ↔ time coordinate system used everywhere else in the app:
         //     time = (scrollLeft + xCss) / pixelsPerSecond
@@ -241,8 +244,26 @@ export function useChunkRenderer({
         // both edges plus the left margin above.
         const visibleDurationSec = cssWidth / pixelsPerSecond;
         const bbWidth = Math.max(1, Math.ceil(visibleDurationSec * cps) + 3);
-        const bbEndCol = bbStartCol + bbWidth;
         const bbStartTime = bbStartCol / cps;
+
+        // The chunk (and the tier it came from) that supplies absolute column
+        // `absCol`, or null when the column has no usable data. The ONE place
+        // that decides that: the dirty scan compares tiers through it and
+        // fillColumn paints from it, so a column one calls unpainted the other
+        // can't call painted (an empty chunk used to read as "painted" to the
+        // scan and as "no data" to the fill, leaving the column dirty — and
+        // repainted — every frame).
+        const lookupColumn = (absCol: number) => {
+          if (absCol < 0) return null;
+          const dispT = absCol / cps;
+          if (dispT >= duration) return null;
+          const t = timeline.toSource(dispT);
+          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
+          if (!result) return null;
+          const { chunk } = result;
+          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) return null;
+          return { chunk, tier: result.tier, t };
+        };
 
         // Fill one offscreen column's freq-bin data from the cache. `absCol` is
         // the column's absolute index on the cps grid, so everything below is a
@@ -253,14 +274,9 @@ export function useChunkRenderer({
         // colMask. Shared by the incremental and full-redraw paths so the
         // sampling math lives in exactly one place.
         const fillColumn = (absCol: number, dst: Uint16Array, dstOffset: number): number => {
-          if (absCol < 0) return 0;
-          const dispT = absCol / cps;
-          if (dispT >= duration) return 0;
-          const t = timeline.toSource(dispT);
-          const result = chunkCache.getChunkWithFallback(t, activeTier.tier);
-          if (!result) return 0;
-          const { chunk } = result;
-          if (chunk.nCols === 0 || chunk.actualDurationSec <= 0) return 0;
+          const found = lookupColumn(absCol);
+          if (!found) return 0;
+          const { chunk, t } = found;
           const chunkCps = chunk.nCols / chunk.actualDurationSec;
           // Average over a TWO-pixel window centred on the column,
           // [dispT − 0.5/cps, dispT + 1.5/cps), not the column's own 1px span.
@@ -282,7 +298,7 @@ export function useChunkRenderer({
             chunk.data, chunk.nFreqBins, chunk.nCols,
             pos, pos + 2 * colsPerPx,
           );
-          return result.tier + 1;
+          return found.tier + 1;
         };
 
         // Decide between incremental scroll update and full redraw.
@@ -297,7 +313,7 @@ export function useChunkRenderer({
         // matching what any native scrolling spectrogram (e.g. Audacity) does.
         //
         // Fall back to full redraw on: first call, seek, zoom/tier change, resize,
-        // or when new chunk data arrived (cacheVersion changed).
+        // or when new chunk data arrived (the cache's version changed).
         // Any colormap-mapping setting change (dBFS level→color range, frequency
         // bounds, or frequency scale) repaints every column, so force a one-frame
         // full redraw — the incremental path would otherwise leave interior columns
@@ -350,6 +366,7 @@ export function useChunkRenderer({
         // Whether chunk data arrived since the dirty-fill last ran. Lets the scan run
         // on the frame the viewport completes (when viewportResolved has already
         // flipped true) and skip entirely once resolved and idle.
+        const cacheVersion = chunkCache.version;
         const dataChanged = cacheVersion !== prevScanCacheVersionRef.current;
         // Cap the incremental shift at half the buffer. The path's saving is
         // O(touched cols × height) vs the full O(bbWidth×height); once the shift
@@ -364,18 +381,7 @@ export function useChunkRenderer({
         const canIncremental =
             shiftAbs <= maxIncrCols &&
             offscreenReady &&
-            !cpsChanged &&
-            !chunkDiag.fullRedraw; // TEMP DIAGNOSTIC — see utils/chunkDiag.ts
-
-        if (DIAG_FRAME_TIMING && prevStartCol !== null && !canIncremental) {
-          const why =
-            shiftAbs > maxIncrCols ? `big-jump(${columnsShifted}col)`
-            : !offscreenReady ? 'resize'
-            : cpsChanged ? 'tier-change(cps)'
-            : '?';
-          // eslint-disable-next-line no-console
-          console.warn(`[frametiming] FULL redraw of ${bbWidth} cols — ${why}`);
-        }
+            !cpsChanged;
 
         if (offscreen.width !== bbWidth) offscreen.width = bbWidth;
         if (offscreen.height !== canvas.height) offscreen.height = canvas.height;
@@ -498,16 +504,8 @@ export function useChunkRenderer({
             for (let i = 0; i <= bbWidth; i++) {
               let dirty = false;
               if (i < bbWidth) {
-                const absCol = bbStartCol + i;
-                let bestTier1 = 0;
-                if (absCol >= 0) {
-                  const dispT = absCol / cps;
-                  if (dispT < duration) {
-                    const r = chunkCache.getChunkWithFallback(timeline.toSource(dispT), activeTier.tier);
-                    if (r) bestTier1 = r.tier + 1;
-                  }
-                }
-                dirty = bestTier1 !== offTier[i];
+                const found = lookupColumn(bbStartCol + i);
+                dirty = (found ? found.tier + 1 : 0) !== offTier[i];
               }
               if (dirty) {
                 if (runStart === -1) runStart = i;
@@ -577,45 +575,6 @@ export function useChunkRenderer({
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(endXCss * dpr, 0, (cssWidth - endXCss) * dpr, canvas.height);
         }
-
-        // TEMP DIAGNOSTIC — label every chunk boundary on screen with the tier
-        // and chunk the columns come from (see utils/chunkDiag.ts).
-        if (chunkDiag.overlay) {
-          const physPerSec = pixelsPerSecond * dpr;
-          const fontPx = 11 * dpr;
-          ctx.save();
-          ctx.font = `${fontPx}px monospace`;
-          ctx.textBaseline = 'top';
-          ctx.lineWidth = dpr;
-          let prev: unknown = null;
-          let labelRow = 0;
-          for (let x = 0; x < canvas.width; x++) {
-            const dispT = startTime + x / physPerSec;
-            if (dispT >= duration) break;
-            const r = chunkCache.getChunkWithFallback(timeline.toSource(dispT), activeTier.tier);
-            const chunk = r?.chunk ?? null;
-            if (chunk === prev) continue;
-            prev = chunk;
-            if (!r) continue;
-            const rec = chunkCache.diagRecord(r.chunk);
-            const color = rec?.suspect ? '#ff3b3b' : r.tier !== activeTier.tier ? '#ffd23b' : '#3bff9d';
-            ctx.strokeStyle = color;
-            ctx.beginPath();
-            ctx.moveTo(x + 0.5, 0);
-            ctx.lineTo(x + 0.5, canvas.height);
-            ctx.stroke();
-            const label = `T${r.tier} ${r.chunk.startSec.toFixed(1)}s #${rec?.print ?? '?'}`;
-            const y = 2 * dpr + (labelRow++ % 3) * (fontPx + 3 * dpr);
-            const w = ctx.measureText(label).width;
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.fillRect(x + 2 * dpr, y - dpr, w + 4 * dpr, fontPx + 2 * dpr);
-            ctx.fillStyle = color;
-            ctx.fillText(label, x + 4 * dpr, y);
-          }
-          ctx.fillStyle = '#ffffff';
-          ctx.fillText(`active T${activeTier.tier}${chunkDiag.fullRedraw ? ' · fullRedraw' : ''}`, 4 * dpr, canvas.height - fontPx - 4 * dpr);
-          ctx.restore();
-        }
     } else if (!chunkCache && duration > 0 && !isProcessing) {
         ctx.fillStyle = '#0f172a';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -640,16 +599,7 @@ export function useChunkRenderer({
       isBuildingRef.current = building;
       setIsBuilding(building);
     }
-
-    if (DIAG_FRAME_TIMING) {
-      const dur = performance.now() - t0;
-      // 8ms = half a 60fps frame budget; a draw this heavy risks a dropped frame.
-      if (dur > 8) {
-        // eslint-disable-next-line no-console
-        console.warn(`[frametiming] draw ${dur.toFixed(1)}ms`);
-      }
-    }
-  }, [chunkCache, sampleRate, cacheVersion, scrollLeftRef, pixelsPerSecondRef, pixelsPerSecondProp, duration, timeline, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
+  }, [chunkCache, sampleRate, scrollLeftRef, pixelsPerSecondRef, pixelsPerSecondProp, duration, timeline, settings.fftSize, settings.minFreq, settings.maxFreq, settings.frequencyScale, settings.displayFloor, settings.displayCeil, isProcessing, canvasRef, offscreenCanvasRef, setIsBuilding]);
 
   return { draw };
 }

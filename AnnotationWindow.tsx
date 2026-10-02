@@ -164,7 +164,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Chunk cache ref — not state, to avoid re-renders on every chunk load
   const chunkCacheRef = useRef<MultiTierSpectrogramCache | null>(null);
-  const { cacheVersion, bumpCacheVersion } = useChunkCacheVersion();
+  const { bumpCacheVersion } = useChunkCacheVersion(chunkCacheRef);
 
   // Playback transport state (isPlaying/isBuffering/speed/volume/mute), the
   // playback-clock refs, engine refs, and the play/seek surface live in
@@ -2819,7 +2819,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 ref={spectrogramRef}
                 chunkCache={chunkCacheRef.current}
                 sampleRate={sampleRate}
-                cacheVersion={cacheVersion}
                 currentTimeStore={currentTimeStoreRef.current}
                 duration={displayDuration}
                 timeline={timeline}
@@ -2840,7 +2839,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onAnnotationsChange={handleDisplayAnnotationsChange}
                 onAnnotationsCommit={handleDisplayAnnotationsCommit}
                 onSelectAnnotation={setSelectedAnnotationId}
-                onDeselectAnnotation={deselectAnnotation}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SpectrogramSettings } from '../types';
 import { MultiTierSpectrogramCache, swapChunkCache } from '../MultiTierSpectrogramCache';
-import { drawSpectrogramChunk, freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { freqToY, freqAxisTicks } from '../utils/audioProcessing';
+import { drawSpectrogramChunk } from '../utils/spectrogramPixels';
 import { chooseTimeStep, formatRulerTime } from '../utils/timeAxis';
 import { syncCanvasBitmap, onDprChange } from '../utils/canvasDpr';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';

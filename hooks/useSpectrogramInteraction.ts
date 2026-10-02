@@ -44,8 +44,6 @@ export interface SpectrogramInteractionParams {
   pixelsPerSecondRef: React.MutableRefObject<number>;
   durationRef: React.MutableRefObject<number>;
   setScroll: (v: number, source?: string) => void;
-  pixelsPerSecond: number;
-  duration: number;
   // Display->source map, read live. Under a subset it says where the cuts are,
   // which is what keeps a drag inside one span: two runs that are adjacent on
   // screen aren't adjacent in the file, so a selection or annotation spanning
@@ -74,9 +72,6 @@ export interface SpectrogramInteractionParams {
   onEditAnnotationText: (id: string) => void;
   onBandPassFilterChange: (f: BandPassFilter | null) => void;
   onBandPassFilterDrawn: (f: BandPassFilter) => void;
-  // Cursor-tracking setters (drag triggers no re-render, but mouse-move does).
-  setCursorPos: (p: { x: number; y: number } | null) => void;
-  setSuppressCustomCursor: (v: boolean) => void;
   // Right-drag pan timestamp (shared with wheel handling).
   lastManualScrollRef: React.MutableRefObject<number>;
   // Fires on a right-click that didn't turn into a pan drag (movement stayed
@@ -96,7 +91,6 @@ export interface SpectrogramInteractionApi {
   commitSpan: (anchor: number, edge: number, quiet?: boolean) => void;
   creatingSelection: { start: number; current: number; quiet?: boolean } | null;
   creatingFilter: { y0: number; y1: number } | null;
-  dragStart: { x: number; scroll: number } | null;
   // Refs shared with AnnotationOverlay (prop contract).
   pendingAnnotationsRef: React.MutableRefObject<Annotation[]>;
   clickDownRef: React.MutableRefObject<{ x: number; y: number; annotationId: string; pointerTime: number } | null>;
@@ -122,7 +116,11 @@ export interface SpectrogramInteractionApi {
  * detection, the pending drag-intent refs, the out-of-bounds auto-pan rAF loop,
  * and the window-level mouseup / mousemove handlers.
  *
- * Pure extraction from Spectrogram.tsx — no behavior, logic, or timing change.
+ * Every horizontal drag (annotation create/resize/move, selection create/resize)
+ * is applied by ONE function, `processDragAtClientX`, which reads live state
+ * through refs. Its two callers are the container's mousemove and the auto-pan
+ * loop, so a drag means the same thing whichever of them drives it.
+ *
  * The ~mirror refs (creating/resizing/dragged + annotations/selection/bound +
  * the onChange callback refs) exist to defeat stale closures in the auto-pan
  * loop and window-level handlers, and are kept synced every render exactly as
@@ -136,8 +134,6 @@ export function useSpectrogramInteraction({
   pixelsPerSecondRef,
   durationRef,
   setScroll,
-  pixelsPerSecond,
-  duration,
   timelineRef,
   annotations,
   selection,
@@ -158,8 +154,6 @@ export function useSpectrogramInteraction({
   onEditAnnotationText,
   onBandPassFilterChange,
   onBandPassFilterDrawn,
-  setCursorPos,
-  setSuppressCustomCursor,
   lastManualScrollRef,
   isAltHeldRef,
   onContextMenu,
@@ -208,6 +202,7 @@ export function useSpectrogramInteraction({
   const selectionRef = useRef(selection);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onAnnotationsChangeRef = useRef(onAnnotationsChange);
+  const onSeekRef = useRef(onSeek);
   const mousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
   // Set to true at drag/resize initiation when the playhead is within 0.5s of
   // the annotation start, so the playhead follows the start for the whole gesture.
@@ -230,6 +225,7 @@ export function useSpectrogramInteraction({
   selectionRef.current = selection;
   onSelectionChangeRef.current = onSelectionChange;
   onAnnotationsChangeRef.current = onAnnotationsChange;
+  onSeekRef.current = onSeek;
 
   // --- Interaction Handlers ---
 
@@ -300,7 +296,7 @@ export function useSpectrogramInteraction({
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const t = xToTime(x, scrollLeftRef.current, pixelsPerSecondRef.current);
-    return clamp(t, 0, duration);
+    return clamp(t, 0, durationRef.current);
   };
 
   // Every drag is anchored somewhere — where it began, or the edge that isn't
@@ -315,12 +311,49 @@ export function useSpectrogramInteraction({
     [],
   );
 
-  // Updates drag state using only refs — safe to call from a RAF loop or window handler.
+  // Move the dragged annotation. `startFor` proposes the new start for it; the
+  // result is held inside the span the annotation is already in — both edges, so
+  // a move can't carry it across a subset cut into audio it was never over — and
+  // inside `viewport` when one is given (the pointer-driven path: auto-pan owns
+  // scrolling past the edge). The one place a drag move is applied, shared by
+  // the pointer path and the auto-pan loop so neither can skip a clamp.
+  const placeDraggedAnnotation = (
+    id: string,
+    startFor: (a: Annotation, dur: number) => number,
+    viewport?: { left: number; right: number },
+  ) => {
+    const updated = updateAnnotation(annotationsRef.current, id, a => {
+      const dur = a.end - a.start;
+      const tl = timelineRef.current;
+      const spanStart = tl.clampToSpanOfDisplay(a.start, 0);
+      const spanEnd = tl.clampToSpanOfDisplay(a.start, durationRef.current);
+      const lo = Math.max(0, spanStart, viewport ? viewport.left : 0);
+      const hi = Math.min(
+        durationRef.current - dur,
+        spanEnd - dur,
+        viewport ? viewport.right - dur : Infinity,
+      );
+      const newStart = Math.max(lo, Math.min(startFor(a, dur), Math.max(lo, hi)));
+      return { ...a, start: newStart, end: newStart + dur };
+    });
+    pendingAnnotationsRef.current = updated;
+    onAnnotationsChangeRef.current(updated);
+    const moved = updated.find(a => a.id === id);
+    if (moved) {
+      if (id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
+      if (playheadFollowsAnnotationStartRef.current) onSeekRef.current(moved.start);
+    }
+  };
+
+  // The one implementation of every horizontal drag, driven by the container's
+  // mousemove and by the auto-pan loop. Reads only refs — safe from a RAF loop
+  // or a window handler.
   const processDragAtClientX = useCallback((clientX: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
+    const pps = pixelsPerSecondRef.current;
     const rawT = clamp(
-      xToTime(clientX - rect.left, scrollLeftRef.current, pixelsPerSecondRef.current),
+      xToTime(clientX - rect.left, scrollLeftRef.current, pps),
       0,
       durationRef.current,
     );
@@ -348,27 +381,22 @@ export function useSpectrogramInteraction({
       });
       pendingAnnotationsRef.current = updated;
       onAnnotationsChangeRef.current(updated);
-      if (ra.id === boundAnnotationIdRef.current) {
-        const updated2 = updated.find(a => a.id === ra.id);
-        if (updated2) onSelectionChangeRef.current({ start: updated2.start, end: updated2.end });
+      const resized = updated.find(a => a.id === ra.id);
+      if (resized) {
+        if (ra.id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: resized.start, end: resized.end });
+        if (playheadFollowsAnnotationStartRef.current && ra.side === 'start') onSeekRef.current(resized.start);
       }
       return;
     }
 
     const da = draggedAnnotationRef.current;
     if (da) {
-      const updated = updateAnnotation(annotationsRef.current, da.id, a => {
-        const dur = a.end - a.start;
-        // Whole-annotation move: both edges must land in the span it's already
-        // in, so the pointer is held there and the far edge clamped too.
-        const tl = timelineRef.current;
-        const spanEnd = tl.clampToSpanOfDisplay(a.start, durationRef.current);
-        const spanStart = tl.clampToSpanOfDisplay(a.start, 0);
-        const newStart = clamp(held(a.start) - da.startOffset, spanStart, Math.max(spanStart, spanEnd - dur));
-        return { ...a, start: newStart, end: newStart + dur };
-      });
-      pendingAnnotationsRef.current = updated;
-      onAnnotationsChangeRef.current(updated);
+      const viewLeft = scrollLeftRef.current / pps;
+      placeDraggedAnnotation(
+        da.id,
+        a => held(a.start) - da.startOffset,
+        { left: viewLeft, right: viewLeft + rect.width / pps },
+      );
       return;
     }
 
@@ -379,7 +407,12 @@ export function useSpectrogramInteraction({
       let newEnd = sel.end;
       if (rsh === 'start') newStart = Math.min(held(sel.end), sel.end - 0.05);
       else newEnd = Math.max(held(sel.start), sel.start + 0.05);
-      onSelectionChangeRef.current({ start: newStart, end: newEnd });
+      onSelectionChangeRef.current({
+        start: newStart,
+        end: newEnd,
+        // The edge that isn't moving, so a later Shift+arrow carries on from it.
+        anchor: rsh === 'start' ? newEnd : newStart,
+      });
       if (boundAnnotationIdRef.current) {
         const updated = updateAnnotation(annotationsRef.current, boundAnnotationIdRef.current, a => ({ ...a, start: newStart, end: newEnd }));
         pendingAnnotationsRef.current = updated;
@@ -522,19 +555,10 @@ export function useSpectrogramInteraction({
             // hugging the edge as the mouse continues moving, or it freezes with a gap.
             const viewLeft = newScroll / pps;
             const viewRight = (newScroll + containerWidth) / pps;
-            const updated = updateAnnotation(annotationsRef.current, da2.id, a => {
-              const annotDur = a.end - a.start;
-              const newStart = overflow < 0
-                ? Math.max(0, viewLeft)
-                : Math.max(0, Math.min(viewRight - annotDur, dur - annotDur));
-              return { ...a, start: newStart, end: newStart + annotDur };
-            });
-            pendingAnnotationsRef.current = updated;
-            onAnnotationsChangeRef.current(updated);
-            if (da2.id === boundAnnotationIdRef.current) {
-              const moved = updated.find(a => a.id === da2.id);
-              if (moved) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
-            }
+            placeDraggedAnnotation(
+              da2.id,
+              (_a, annotDur) => (overflow < 0 ? viewLeft : viewRight - annotDur),
+            );
           } else {
             // Always drive the drag endpoint from the (clamped) pointer position while it's
             // outside the panel — even when the view is already pinned at 0/end and can't scroll
@@ -628,37 +652,20 @@ export function useSpectrogramInteraction({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     mousePosRef.current = { clientX: e.clientX, clientY: e.clientY };
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    const elUnder = document.elementFromPoint(e.clientX, e.clientY);
-    const computedCursor = elUnder ? window.getComputedStyle(elUnder).cursor : 'none';
-    setSuppressCustomCursor(computedCursor !== 'none');
 
     if (dragStart) {
       const delta = dragStart.x - e.clientX;
       const containerWidth = containerRef.current?.clientWidth || 0;
-      const maxScroll = computeMaxScroll(duration, pixelsPerSecond, containerWidth);
+      const maxScroll = computeMaxScroll(durationRef.current, pixelsPerSecondRef.current, containerWidth);
       lastManualScrollRef.current = Date.now();
       setScroll(clamp(dragStart.scroll + delta, 0, maxScroll), 'rightDragPan');
       return;
     }
 
-    if (resizingFilterEdge !== null && bandPassFilter) {
-      const canvasHeight = containerRef.current?.clientHeight ?? 0;
-      const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
-      onBandPassFilterChange(
-        resizeFilterEdge(resizingFilterEdge, e.clientY, rectY, canvasHeight, bandPassFilter, settings, sampleRate / 2),
-      );
-      return;
-    }
-
-    if (creatingFilter !== null) {
-      const rectY = containerRef.current?.getBoundingClientRect().top ?? 0;
-      const canvasHeight = containerRef.current?.clientHeight ?? 0;
-      const y = clamp(e.clientY - rectY, 0, canvasHeight);
-      setCreatingFilter({ ...creatingFilter, y1: y });
-      return;
-    }
+    // Filter drags are vertical and tracked by the window-level listener above
+    // (they must continue outside the container); doing it here too would apply
+    // every move twice.
+    if (isFilterDragActiveRef.current) return;
 
     const t = getPointerTime(e);
 
@@ -716,84 +723,7 @@ export function useSpectrogramInteraction({
       return;
     }
 
-    if (creatingAnnotation) {
-      setCreatingAnnotation({ ...creatingAnnotation, current: holdInSpan(creatingAnnotation.start, t) });
-      return;
-    }
-
-    if (creatingSelection) {
-      const ct = holdInSpan(creatingSelection.start, t);
-      setCreatingSelection({ ...creatingSelection, current: ct });
-      const liveStart = Math.min(creatingSelection.start, ct);
-      const liveEnd = Math.max(creatingSelection.start, ct);
-      onSelectionChange({ start: liveStart, end: liveEnd });
-      return;
-    }
-
-    if (resizingAnnotation) {
-      const updated = updateAnnotation(annotations, resizingAnnotation.id, a => {
-        // Anchored on the edge that isn't moving.
-        if (resizingAnnotation.side === 'start') return { ...a, start: Math.min(holdInSpan(a.end, t), a.end - 0.05) };
-        return { ...a, end: Math.max(holdInSpan(a.start, t), a.start + 0.05) };
-      });
-      pendingAnnotationsRef.current = updated;
-      onAnnotationsChange(updated);
-      const updatedAnnotation = updated.find(a => a.id === resizingAnnotation.id);
-      if (updatedAnnotation) {
-        if (resizingAnnotation.id === boundAnnotationId) onSelectionChange({ start: updatedAnnotation.start, end: updatedAnnotation.end });
-        if (playheadFollowsAnnotationStartRef.current && resizingAnnotation.side === 'start') onSeek(updatedAnnotation.start);
-      }
-      return;
-    }
-
-    if (draggedAnnotation) {
-       const pps = pixelsPerSecondRef.current;
-       const viewLeft = scrollLeftRef.current / pps;
-       const viewRight = (scrollLeftRef.current + (containerRef.current?.clientWidth ?? 0)) / pps;
-       const updated = updateAnnotation(annotations, draggedAnnotation.id, a => {
-           const dur = a.end - a.start;
-           const desired = holdInSpan(a.start, t) - draggedAnnotation.startOffset;
-           // Clamp so neither edge exits the visible viewport (auto-pan handles
-           // scrolling) — or the span it's in, so a move can't carry it across a
-           // subset cut into audio it was never over.
-           const tl = timelineRef.current;
-           const spanStart = tl.clampToSpanOfDisplay(a.start, 0);
-           const spanEnd = tl.clampToSpanOfDisplay(a.start, durationRef.current);
-           const lo = Math.max(0, viewLeft, spanStart);
-           const hi = Math.min(durationRef.current - dur, viewRight - dur, spanEnd - dur);
-           const newStart = Math.max(lo, Math.min(desired, Math.max(lo, hi)));
-           return { ...a, start: newStart, end: newStart + dur };
-       });
-       pendingAnnotationsRef.current = updated;
-       onAnnotationsChange(updated);
-       const moved = updated.find(a => a.id === draggedAnnotation.id);
-       if (moved) {
-         if (boundAnnotationId === draggedAnnotation.id) onSelectionChange({ start: moved.start, end: moved.end });
-         if (playheadFollowsAnnotationStartRef.current) onSeek(moved.start);
-       }
-       return;
-    }
-
-    if (resizingSelectionHandle && selection) {
-      let newStart = selection.start;
-      let newEnd = selection.end;
-      if (resizingSelectionHandle === 'start') {
-        newStart = Math.min(holdInSpan(selection.end, t), selection.end - 0.05);
-      } else {
-        newEnd = Math.max(holdInSpan(selection.start, t), selection.start + 0.05);
-      }
-      onSelectionChange({
-        start: newStart,
-        end: newEnd,
-        anchor: resizingSelectionHandle === 'start' ? newEnd : newStart,
-      });
-      // If there's a bound annotation, update its extent to match
-      if (boundAnnotationId) {
-        const updated = updateAnnotation(annotations, boundAnnotationId, a => ({ ...a, start: newStart, end: newEnd }));
-        pendingAnnotationsRef.current = updated;
-        onAnnotationsChange(updated);
-      }
-    }
+    processDragAtClientX(e.clientX);
   };
 
   const handleMouseUp = (e?: React.MouseEvent) => {
@@ -902,7 +832,6 @@ export function useSpectrogramInteraction({
     commitSpan,
     creatingSelection,
     creatingFilter,
-    dragStart,
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
