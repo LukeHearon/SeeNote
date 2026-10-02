@@ -199,3 +199,9 @@ export function buildProject(
       : null,
   };
 }
+
+/** Where an app-level registry file (`projects.json`, `files.json`) lives:
+ *  `{appDataDir}/.projects/{file}`. */
+export function registryFilePath(appDataDir: string, file: string): string {
+  return `${stripTrailingSep(appDataDir)}/.projects/${file}`;
+}

@@ -1,11 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { RecentFileEntry } from '../types';
 import { getAppDataDir, loadRecentFiles, saveRecentFiles } from '../utils/projectCommands';
-
-function getFilesFilePath(appDataDir: string): string {
-  const base = appDataDir.replace(/[/\\]+$/, '');
-  return base + '/.projects/files.json';
-}
+import { registryFilePath } from '../utils/projectPaths';
 
 /** Mirrors useProjects' registry pattern for single files opened outside a project. */
 export function useRecentFiles() {
@@ -36,7 +32,7 @@ export function useRecentFiles() {
     (async () => {
       try {
         const appDataDir = await getAppDataDir();
-        const filePath = getFilesFilePath(appDataDir);
+        const filePath = registryFilePath(appDataDir, 'files.json');
         filesFileRef.current = filePath;
         const loaded = await loadRecentFiles(filePath);
         loaded.sort((a, b) => b.lastOpened.localeCompare(a.lastOpened));

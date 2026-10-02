@@ -3,6 +3,7 @@ import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 import { MAGMA_MIN_T, interpolateMagmaHex } from '../constants';
 import { tooltips } from '../copy/tooltips';
+import { startDragSession } from '../utils/dragSession';
 
 interface Props {
   value: [string, string];
@@ -89,16 +90,9 @@ export default function GradientPicker({ value, onChange, minT = MAGMA_MIN_T }: 
     return `linear-gradient(to right, ${stops.join(', ')})`;
   })();
 
-  // Refs to track active drag listeners so we can remove them on unmount.
-  const activeMoveRef = useRef<((ev: MouseEvent) => void) | null>(null);
-  const activeUpRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (activeMoveRef.current) window.removeEventListener('mousemove', activeMoveRef.current);
-      if (activeUpRef.current) window.removeEventListener('mouseup', activeUpRef.current);
-    };
-  }, []);
+  // The active drag, so unmounting mid-drag detaches its listeners.
+  const cancelDragRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelDragRef.current?.(), []);
 
   // Close the color popup on outside click.
   useEffect(() => {
@@ -117,21 +111,15 @@ export default function GradientPicker({ value, onChange, minT = MAGMA_MIN_T }: 
     // Dragging reverts a handle to its magma color at the dragged position.
     if (handle === 0) setCustomStart(null);
     else setCustomEnd(null);
-    const onMove = (ev: MouseEvent) => {
-      const t = getBarT(ev.clientX);
-      if (handle === 0) setTStart(t);
-      else setTEnd(t);
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      activeMoveRef.current = null;
-      activeUpRef.current = null;
-    };
-    activeMoveRef.current = onMove;
-    activeUpRef.current = onUp;
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    cancelDragRef.current?.();
+    cancelDragRef.current = startDragSession(
+      ev => {
+        const t = getBarT(ev.clientX);
+        if (handle === 0) setTStart(t);
+        else setTEnd(t);
+      },
+      () => { cancelDragRef.current = null; },
+    );
   }, [getBarT]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, handle: 0 | 1) => {

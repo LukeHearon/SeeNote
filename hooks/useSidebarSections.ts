@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { startDragSession } from './useCollapsibleSidebar';
+import { startDragSession } from '../utils/dragSession';
 import { sectionFlexStyle } from '../utils/sidebarLayout';
 
 /** Persisted per-section layout: relative share of the stack, and collapse state. */

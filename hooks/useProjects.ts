@@ -19,12 +19,7 @@ import {
   writeProjectPreferences,
   projectDirExists,
 } from '../utils/projectCommands';
-import { buildProject, basename, makeProjectPath } from '../utils/projectPaths';
-
-function getProjectsFilePath(appDataDir: string): string {
-  const base = appDataDir.replace(/[/\\]+$/, '');
-  return base + '/.projects/projects.json';
-}
+import { buildProject, basename, makeProjectPath, registryFilePath } from '../utils/projectPaths';
 
 async function resolveEntry(registry: ProjectRegistryEntry): Promise<ProjectListEntry> {
   const exists = await projectDirExists(registry.projectDir).catch(() => false);
@@ -94,7 +89,7 @@ export function useProjects() {
     (async () => {
       try {
         const appDataDir = await getAppDataDir();
-        const filePath = getProjectsFilePath(appDataDir);
+        const filePath = registryFilePath(appDataDir, 'projects.json');
         projectsFileRef.current = filePath;
         setProjectsFilePath(filePath);
         const registry = await loadRegistry(filePath);

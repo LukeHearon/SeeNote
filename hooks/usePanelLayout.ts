@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { startDragSession, useCollapsibleSidebar } from './useCollapsibleSidebar';
+import { useCollapsibleSidebar } from './useCollapsibleSidebar';
+import { startDragSession } from '../utils/dragSession';
 import { useSidebarSections, SidebarSectionsApi, SidebarSectionsState } from './useSidebarSections';
 import { isEditableTarget } from './useHotkeys';
 

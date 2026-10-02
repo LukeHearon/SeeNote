@@ -43,6 +43,7 @@ import { baselineOffset, detectionThreshold } from '../utils/buzzdetectThreshold
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
+import { startDragSession } from '../utils/dragSession';
 
 const PAD_TOP = 12;
 const PAD_BOTTOM = 12;
@@ -1292,17 +1293,10 @@ export default function BuzzdetectPanel({
     e.preventDefault();
     const startY = e.clientY;
     const startHeight = height;
-    const onMove = (ev: MouseEvent) => {
+    startDragSession(ev => {
       // Drag up → taller.
-      const next = clamp(startHeight + (startY - ev.clientY), MIN_BUZZDETECT_PANEL_HEIGHT, MAX_BUZZDETECT_PANEL_HEIGHT);
-      onHeightChange(next);
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+      onHeightChange(clamp(startHeight + (startY - ev.clientY), MIN_BUZZDETECT_PANEL_HEIGHT, MAX_BUZZDETECT_PANEL_HEIGHT));
+    });
   };
 
   // Renders the small top-left readout for a unit: its time span, and each

@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState, RefObject } from 'react';
 import { useScrollSync } from '../hooks/useScrollSync';
+import { startDragSession } from '../utils/dragSession';
 
 const SNAP_THRESHOLD = 50;
 
@@ -47,7 +48,7 @@ export default function FileTreeScrollbar({
     const startY = e.clientY;
     const startScrollTop = containerRef.current?.scrollTop ?? 0;
 
-    const onMouseMove = (ev: MouseEvent) => {
+    startDragSession(ev => {
       const container = containerRef.current;
       if (!container) return;
       const { scrollHeight: sh, clientHeight: ch } = container;
@@ -62,13 +63,7 @@ export default function FileTreeScrollbar({
         if (Math.abs(next - snap) < SNAP_THRESHOLD) next = snap;
       }
       container.scrollTop = Math.max(0, Math.min(next, maxST));
-    };
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    });
   };
 
   const handleTrackMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {

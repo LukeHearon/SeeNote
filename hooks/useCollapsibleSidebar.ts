@@ -1,18 +1,6 @@
 import React, { useState } from 'react';
+import { startDragSession } from '../utils/dragSession';
 
-/**
- * Shared window-drag scaffold: wires a mousemove listener and a one-shot
- * mouseup that tears both down. Each handler supplies only its delta math.
- */
-export function startDragSession(onMove: (e: MouseEvent) => void): void {
-  const move = (e: MouseEvent) => onMove(e);
-  const up = () => {
-    window.removeEventListener('mousemove', move);
-    window.removeEventListener('mouseup', up);
-  };
-  window.addEventListener('mousemove', move);
-  window.addEventListener('mouseup', up);
-}
 
 export interface CollapsibleSidebarOptions {
   initialWidth: number;
