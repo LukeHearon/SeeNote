@@ -14,7 +14,7 @@ import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelI
 import { resolveLabelColor } from './utils/annotationTools';
 import { toolColorsByLabel } from './utils/neuronColors';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
-import { getFileInfo, readScanCache, clearScanCache, setScanPriorityFolder, openGithubUrl, toAssetUrl, toVideoServerUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
+import { getFileInfo, readScanCache, clearScanCache, setScanPriorityFolder, openGithubUrl, saveFileDialog, exportAudioRange } from './utils/tauriCommands';
 import type { DirScan, ScanSpec } from './utils/tauriCommands';
 import { scanDirectory, MEDIA_SCAN, ANNOTATION_SCAN, BUZZDETECT_SCAN, BUZZDETECT_SUFFIXES } from './utils/dirScan';
 import { tracksWithResults } from './utils/resultPresence';
@@ -24,7 +24,8 @@ import { isInsideDir, joinPath } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
-import { isLinux } from './utils/platform';
+import { AnnotationIoGate } from './utils/annotationIoGate';
+import { resolveVideoElementUrl } from './utils/videoUrl';
 import { createViewportStore } from './utils/viewportStore';
 import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys, digitFromEvent } from './hooks/useHotkeys';
@@ -153,6 +154,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // at sync start. Written by useSyncManagement, consumed/cleared by
   // useAnnotationLoad's three-way merge. Owned here, shared by both.
   const preSyncSnapshotRef = useRef<PreSyncSnapshot | null>(null);
+  // Sync/reload work a track switch must wait for before it flushes the old
+  // track. Shared by useSyncManagement, useAnnotationLoad and handleOpenTrack.
+  const [ioGate] = useState(() => new AnnotationIoGate());
 
   // Git sync state, the manual sync handler, and the sync-status effects live in
   // useSyncManagement (set up below, once its dependencies are declared).
@@ -743,6 +747,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       return;
     }
 
+    // Re-opening the open track (a click on its row) must be a no-op: the wipe
+    // below nulls the persistence snapshot, and setTrackPath(same) never
+    // re-triggers the load effect that would re-arm it.
+    if (absolutePath === trackPathRef.current) return;
+
     // Tear down any prior frame source — VideoFrame handles hold GPU memory.
     if (frameSourceRef.current) {
       frameSourceRef.current.close();
@@ -788,13 +797,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setIsAudioTrack(isAudio);
     setTrackName(fileName);
 
-    const assetUrl = toAssetUrl(absolutePath);
-    // On Linux, <video>/<audio> playback goes through WebKitGTK's GStreamer
-    // pipeline, which can't resolve the `asset://` scheme (see toVideoServerUrl
-    // doc comment) — serve over a local HTTP loopback there instead. macOS/Windows
-    // keep using asset:// directly. fetch()-based paths (VideoFrameSource, below)
-    // are unaffected and keep using assetUrl regardless of platform.
-    const videoElementUrl = isLinux ? await toVideoServerUrl(absolutePath) : assetUrl;
+    const videoElementUrl = await resolveVideoElementUrl(absolutePath);
     setVideoSrc(videoElementUrl);
 
     addLog(`Opening: ${fileName}`);
@@ -1204,6 +1207,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPathRef,
     loadedAnnotationsRef,
     preSyncSnapshotRef,
+    ioGate,
     addLog,
   });
   useEffect(() => { flushPendingAutosaveRef.current = flushPendingAutosave; }, [flushPendingAutosave]);
@@ -1256,6 +1260,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     syncingRef,
     preSyncSnapshotRef,
     reloadNonce: reloadNonce + annotationReloadNonce,
+    ioGate,
     addLog,
   });
 
@@ -1563,6 +1568,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const refreshAnnotations = useCallback(async () => {
     invalidateProjectLabelIndex();
     loadAnnotationTools(project);
+    ioGate.requestReload();
     setAnnotationReloadNonce(n => n + 1);
     try {
       await clearScanCache(project.annotationDirectoryAbs, ANNOTATION_SCAN).catch(() => {});
@@ -1570,7 +1576,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     } catch (err) {
       addLog(`Error refreshing annotations: ${err}`, 'error');
     }
-  }, [project, loadAnnotationTools, runAnnotationScan]);
+  }, [project, loadAnnotationTools, runAnnotationScan, ioGate]);
 
   const refreshBuzzdetect = useCallback(async () => {
     setBuzzdetectReloadNonce(n => n + 1);

@@ -6,6 +6,7 @@ import { persistAnnotations } from '../utils/annotationPersist';
 import { getLocalSyncStatus } from '../utils/tauriCommands';
 import { setMergeContent } from '../utils/annotationMerge';
 import type { PreSyncSnapshot } from './useSyncManagement';
+import type { AnnotationIoGate } from '../utils/annotationIoGate';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS } from '../constants';
 
 interface UseAnnotationLoadArgs {
@@ -44,6 +45,10 @@ interface UseAnnotationLoadArgs {
   preSyncSnapshotRef: React.MutableRefObject<PreSyncSnapshot | null>;
   // Bumped after a pull so the auto-load effect re-reads disk.
   reloadNonce: number;
+  // This effect's in-flight read-and-merge is work a track switch must wait for
+  // (see utils/annotationIoGate.ts); it also claims the reload requests that
+  // asked for it to run.
+  ioGate: AnnotationIoGate;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -72,6 +77,7 @@ export function useAnnotationLoad({
   syncingRef,
   preSyncSnapshotRef,
   reloadNonce,
+  ioGate,
   addLog,
 }: UseAnnotationLoadArgs) {
   const skipAutoSaveRef = useRef(false);
@@ -174,6 +180,10 @@ export function useAnnotationLoad({
     // read errors we stay disarmed rather than risk saving state that doesn't
     // reflect what's on disk.
     loadedAnnotationsRef.current = null;
+    // Begin our own gate operation before claiming the reload requests, so the
+    // gate never reads idle between the request and this read.
+    const endGateOp = ioGate.begin();
+    ioGate.claimReloads();
 
     (async () => {
       try {
@@ -222,6 +232,8 @@ export function useAnnotationLoad({
         setTimeout(() => { skipAutoSaveRef.current = false; }, 500);
       } catch (err) {
         addLog(`Error loading annotations: ${err}`, 'error');
+      } finally {
+        endGateOp();
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps

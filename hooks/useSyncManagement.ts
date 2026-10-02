@@ -4,6 +4,7 @@ import { syncProject, pullProject, getLocalSyncStatus, fetchRemoteStatus, type S
 import { readSyncToken } from '../utils/gitSync';
 import { persistAnnotations, resolveFlushTarget } from '../utils/annotationPersist';
 import { generateAudacityContent } from '../utils/helpers';
+import type { AnnotationIoGate } from '../utils/annotationIoGate';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 
 // The exact annotation state flushed/committed at sync start, used as the
@@ -31,6 +32,9 @@ interface UseSyncManagementArgs {
   // Ancestor snapshot for the post-pull three-way merge. Written here at sync
   // start (right after the flush); read and cleared by useAnnotationLoad.
   preSyncSnapshotRef: React.MutableRefObject<PreSyncSnapshot | null>;
+  // Counts a running sync (and the reload after it) as work a track switch must
+  // wait out. See utils/annotationIoGate.ts.
+  ioGate: AnnotationIoGate;
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -47,6 +51,7 @@ export function useSyncManagement({
   trackPathRef,
   loadedAnnotationsRef,
   preSyncSnapshotRef,
+  ioGate,
   addLog,
 }: UseSyncManagementArgs) {
   const [syncing, setSyncing] = useState(false);
@@ -63,20 +68,34 @@ export function useSyncManagement({
   const [reloadNonce, setReloadNonce] = useState(0);
   // Exposed so a manual "refresh" action can force the same re-read a pull
   // triggers, without pretending a sync actually happened.
-  const bumpReloadNonce = useCallback(() => setReloadNonce(n => n + 1), []);
+  // Every reload request also tells the gate, so a track switch waits for the
+  // reload effect (which may not have run yet) instead of racing past it.
+  const requestReload = useCallback(() => {
+    ioGate.requestReload();
+    setReloadNonce(n => n + 1);
+  }, [ioGate]);
+  const bumpReloadNonce = requestReload;
 
   // The commit message the last sync ran with, so confirming a pending clear
   // re-runs the same sync rather than silently dropping a typed message.
   const lastCommitMessageRef = useRef('');
 
+  const syncGateEndRef = useRef<(() => void) | null>(null);
   const setSyncingBoth = useCallback((v: boolean) => {
     syncingRef.current = v;
     setSyncing(v);
-  }, []);
+    if (v) {
+      syncGateEndRef.current?.();
+      syncGateEndRef.current = ioGate.begin();
+    } else {
+      syncGateEndRef.current?.();
+      syncGateEndRef.current = null;
+    }
+  }, [ioGate]);
 
-  // Flush a pending debounced autosave so in-flight edits are committed to
-  // disk before a sync/pull runs. Shared by handleSync and the auto-pull path.
-  const flushPendingAutosave = useCallback(async () => {
+  // Write the pending debounced autosave (if any) right now. Used by the sync
+  // paths themselves, which already own the "sync running" state.
+  const flushNow = useCallback(async () => {
     if (!autoSaveTimeoutRef.current) return;
     clearTimeout(autoSaveTimeoutRef.current);
     autoSaveTimeoutRef.current = null;
@@ -87,6 +106,20 @@ export function useSyncManagement({
     await persistAnnotations(target.annotPath, target.annotations, projectRef.current.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getAnnotationPath]);
+
+  // Flush for callers that are about to leave the track (track switch, media
+  // directory change). Waits out any running sync and the reload after it
+  // first: writing during a sync is reverted by its forced checkout, and
+  // leaving before the post-pull reload merges would drop the edit that merge
+  // exists to keep. Loops because an edit can land (or a sync can start) while
+  // a flush is in flight; it returns only when nothing is pending or running.
+  const flushPendingAutosave = useCallback(async () => {
+    for (let i = 0; i < 5; i++) {
+      await ioGate.settle();
+      await flushNow();
+      if (!ioGate.busy && !autoSaveTimeoutRef.current) return;
+    }
+  }, [ioGate, flushNow, autoSaveTimeoutRef]);
 
   // Capture the just-flushed state as the merge ancestor: the exact content the
   // post-pull reload will diff current in-memory + disk against, so an edit made
@@ -132,7 +165,7 @@ export function useSyncManagement({
     setSyncIsAutoPull(false);
     lastCommitMessageRef.current = commitMessage;
     try {
-      await flushPendingAutosave();
+      await flushNow();
       snapshotMergeAncestor();
       const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
       if (!token) {
@@ -157,7 +190,7 @@ export function useSyncManagement({
         (summary.identsUploaded > 0
           ? ` uploaded +${summary.annotationsUploaded}/-${summary.annotationsRemovedOnPush} across ${summary.identsUploaded} file(s)` : '')
       );
-      if (summary.pulled) setReloadNonce(n => n + 1);
+      if (summary.pulled) requestReload();
       setHasLocalChanges(false);
       setHasRemoteChanges(false);
     } catch (err) {
@@ -166,7 +199,7 @@ export function useSyncManagement({
     } finally {
       setSyncingBoth(false);
     }
-  }, [flushPendingAutosave, snapshotMergeAncestor, addLog, setSyncingBoth]);
+  }, [flushNow, snapshotMergeAncestor, addLog, setSyncingBoth, requestReload]);
 
   // The user answered "yes, commit these clears": re-run the same sync with the
   // idents confirmed, so staging is allowed to commit those empty files.
@@ -185,11 +218,13 @@ export function useSyncManagement({
     if (!cfg?.remoteUrl || !annDir) return;
     if (!(projectRef.current.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES)) return;
     if (syncingRef.current) return; // a manual sync is already running
+    // Claim the sync slot before the first await: with the token read first, a
+    // manual Sync clicked in that gap ran concurrently with this pull.
+    setSyncingBoth(true);
     try {
       const token = await readSyncToken(cfg.remoteUrl, projectRef.current.preferences.gitSyncUser ?? {});
       if (!token) return;
-      setSyncingBoth(true);
-      await flushPendingAutosave();
+      await flushNow();
       snapshotMergeAncestor();
       const summary = await pullProject(
         projectRef.current.projectDir,
@@ -199,7 +234,7 @@ export function useSyncManagement({
         projectRef.current.preferences.gitSyncUser?.authorName ?? '',
       );
       if (summary.pulled) {
-        setReloadNonce(n => n + 1);
+        requestReload();
         setSyncIsAutoPull(true);
         setSyncSummary(summary);
         addLog(
@@ -214,7 +249,7 @@ export function useSyncManagement({
     } finally {
       setSyncingBoth(false);
     }
-  }, [flushPendingAutosave, snapshotMergeAncestor, addLog, setSyncingBoth]);
+  }, [flushNow, snapshotMergeAncestor, addLog, setSyncingBoth, requestReload]);
 
   // On project load: check local-only sync status, then kick off an
   // auto-pull (no-op if disabled, unconfigured, or no token yet) so the
