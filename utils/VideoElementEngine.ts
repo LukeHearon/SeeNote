@@ -14,8 +14,8 @@
  * attach(); this class never mounts or unmounts it.
  *
  * NOTE: this path violates the time-axis-synchrony invariant by design — the
- * audio is the element's own track (no band-pass filter, no pitch-preserving
- * slow-down; playbackRate changes pitch), and the playhead tracks the element's
+ * audio is the element's own track (no band-pass filter; speed changes use the
+ * browser's own time-stretch rather than ours), and the playhead tracks the element's
  * coarse currentTime rather than sample-exact PCM. AudioEngine remains the only
  * sample-accurate path (Off/Accurate/Mixed-with-selection and all audio-only files).
  */

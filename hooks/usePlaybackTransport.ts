@@ -464,8 +464,8 @@ export function usePlaybackTransport({
     videoEngineRef.current?.setGain(gain);
   }, [volume, muted]);
 
-  // Sync playback speed to both transports. AudioEngine preserves pitch; the
-  // <video> element does not (an accepted limitation of Fast mode).
+  // Sync playback speed to both transports. Both preserve pitch: AudioEngine
+  // with its own stretchers, the <video> element with the browser's.
   useEffect(() => {
     engineRef.current?.setPlaybackSpeed(playbackSpeed);
     videoEngineRef.current?.setPlaybackSpeed(playbackSpeed);
