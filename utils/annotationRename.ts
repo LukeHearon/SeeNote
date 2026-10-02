@@ -141,7 +141,9 @@ export function candidateTracks(tracks: string[], matcher: LabelMatcher): string
 
 // Rewrite every track's on-disk annotation file, renaming lines whose label
 // satisfies `matcher` to `newText`. Returns the total number of lines
-// changed. Shared by tool rename (useAnnotationTools) and the find/rename
+// changed. A track with no annotation file is skipped; any file that can't be
+// read or written makes it throw once the rest are done, naming them — the
+// rename is per-file, so a partial result must not look like success. Shared by tool rename (useAnnotationTools) and the find/rename
 // dialog — pass `exactLabelMatcher(oldText)` for an exact rename, or a
 // regex/partial matcher to rename every match to one new label.
 export async function renameLabelAcrossTracks(
@@ -151,6 +153,7 @@ export async function renameLabelAcrossTracks(
   newText: string,
 ): Promise<number> {
   let total = 0;
+  const failed: string[] = [];
   // This rewrites annotation files, so whatever the index holds for them is
   // about to be wrong.
   const candidates = candidateTracks(tracks, matcher);
@@ -159,6 +162,7 @@ export async function renameLabelAcrossTracks(
     const annotPath = getAnnotationPath(t);
     if (!annotPath) return;
     try {
+      // null: no annotation file for this track — nothing to update.
       const content = await readTextFile(annotPath);
       if (!content) return;
       const { updated, changed, count } = renameLabelInContent(content, matcher, newText);
@@ -166,10 +170,13 @@ export async function renameLabelAcrossTracks(
         await writeTextFile(annotPath, updated);
         total += count;
       }
-    } catch {
-      // No annotation file for this track — nothing to update.
+    } catch (err) {
+      failed.push(`${annotPath}: ${err}`);
     }
   }));
+  if (failed.length > 0) {
+    throw new Error(`renamed ${total} label(s), but ${failed.length} file(s) could not be updated:\n${failed.join('\n')}`);
+  }
   return total;
 }
 
@@ -187,13 +194,10 @@ export async function renameOneLabelInTrack(
   const annotPath = getAnnotationPath(trackFilePath);
   if (!annotPath) return false;
   invalidateProjectLabelIndex();
-  try {
-    const content = await readTextFile(annotPath);
-    if (!content) return false;
-    const { updated, changed } = renameOneLabelInContent(content, target, newText);
-    if (changed) await writeTextFile(annotPath, updated);
-    return changed;
-  } catch {
-    return false;
-  }
+  // null: no annotation file. Read/write errors propagate to the caller.
+  const content = await readTextFile(annotPath);
+  if (!content) return false;
+  const { updated, changed } = renameOneLabelInContent(content, target, newText);
+  if (changed) await writeTextFile(annotPath, updated);
+  return changed;
 }

@@ -1,5 +1,5 @@
 import { Annotation, AnnotationTool, AnnotationWithLayer } from '../types';
-import { saveFileDialog, writeTextFile, listDirectory } from './tauriCommands';
+import { listDirectory } from './tauriCommands';
 import { formatDateTime, DateTimeFormat } from './datetimeDisplay';
 import { formatGrouped } from './numberFormat';
 
@@ -199,35 +199,6 @@ export function shuffleArray<T>(arr: T[]): T[] {
     return out;
 }
 
-// Helper for file saving via Tauri native dialog
-const saveFile = async (
-    content: string,
-    defaultPath: string,
-    extension: string,
-) => {
-    const chosenPath = await saveFileDialog(defaultPath, [
-        { name: 'Annotation File', extensions: [extension.replace('.', '')] },
-    ]);
-    if (chosenPath) {
-        await writeTextFile(chosenPath, content);
-    }
-};
-
-// Derives the default save path next to the source file.
-// trackPath is the absolute path, e.g. "/Users/luke/audio/bird.mp3"
-const defaultSavePath = (trackPath: string | null, filename: string, suffix: string, ext: string): string => {
-    const base = stripExt(filename);
-    const outName = `${base}${suffix}${ext}`;
-    if (trackPath) {
-        // Split on either separator so this works on Windows paths too
-        const parts = trackPath.split(/[\\/]/);
-        parts.pop();
-        const dir = parts.join('/');
-        return `${dir}/${outName}`;
-    }
-    return outName;
-};
-
 // Pure content generators (no file dialog — used by auto-save and export alike).
 //
 // Precision note: annotation start/end are stored in seconds as JS floats
@@ -276,7 +247,7 @@ export const generateAudacityContent = (annotations: Annotation[], decimals: num
         .filter(isPersistableAnnotation)
         .map(a => (rawLineStillMatches(a) ? a.raw! : formatAnnotationLine(a, decimals)));
     // Sort by start time, ties broken by line text: the same order the set-merge
-    // emits (`utils/annotationMerge.ts` / `git_sync/annotate.rs`), so a merged
+    // emits (`git_sync/annotate.rs` `set_merge`), so a merged
     // file and a locally-saved one agree and neither reorders the other.
     lines.sort((x, y) => {
         const sx = startOfLine(x);
@@ -471,10 +442,6 @@ export const mergeAnnotations = (
 };
 
 // Export to Audacity TXT (Tab delimited)
-export const exportToAudacity = async (annotations: Annotation[], trackName: string, trackPath: string | null, decimals: number = 7) => {
-    const path = defaultSavePath(trackPath, trackName, '_labels', '.txt');
-    await saveFile(generateAudacityContent(annotations, decimals), path, '.txt');
-};
 
 // Walks up a filesystem path to find the first ancestor directory that actually
 // exists. Used to seed the native directory-picker dialog at the nearest valid

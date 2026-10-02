@@ -140,7 +140,8 @@ export interface DirScan {
 }
 
 /** What a scan looks for: media files, or files whose name ends in a suffix. */
-export type ScanSpec = { kind: 'media' } | { kind: 'suffixes'; suffixes: string[] };
+/** `skipEmpty` leaves out files with no records (a cleared annotation file). */
+export type ScanSpec = { kind: 'media' } | { kind: 'suffixes'; suffixes: string[]; skipEmpty?: boolean };
 
 /** Lists from the last completed scan of `path` with this spec, or null. May be stale. */
 export const readScanCache = (path: string, spec: ScanSpec): Promise<DirScan | null> =>
@@ -467,20 +468,6 @@ export interface ImportExamplesSummary {
 }
 
 /**
- * Import a directory of fully fleshed-out tool folders (same layout as
- * .seenote/annotation-tools/: {label}/tool.json + description.txt + examples/).
- * New labels are copied in (palette-colored when tool.json is absent);
- * existing labels keep their color/description and only merge example clips.
- * Idempotent: existing destination filenames are skipped.
- */
-export const importAnnotationTools = (
-  projectDir: string,
-  toolsDir: string,
-  palette: string[],
-): Promise<ImportExamplesSummary> =>
-  invoke('import_annotation_tools', { projectDir, toolsDir, palette });
-
-/**
  * Import a directory of plain example clips (one subfolder per label, each
  * holding audio files directly). Files are copied into each tool's examples/;
  * tools are created for unknown labels, colored by cycling `palette`.
@@ -539,6 +526,11 @@ export interface SyncSummary {
    * them and asks. Confirming re-runs the sync with them as `confirmedClears`.
    */
   pendingClears: string[];
+  /** Annotation files a teammate's sync emptied that this (manual) sync applied. */
+  remoteClears: string[];
+  /** Annotation files the remote no longer has but were kept: an absent file is
+   *  never treated as a deletion. The next push restores them. */
+  ignoredRemoteDeletions: string[];
   message: string;
 }
 
@@ -628,10 +620,15 @@ export function closeSyncGuideWindow(): void {
   invoke('close_sync_guide_window').catch(console.error);
 }
 
-export async function saveCopyOverrides(overrides: Record<string, string>): Promise<string> {
-  return invoke<string>('save_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
-}
-
 export async function applyCopyOverrides(overrides: Record<string, string>): Promise<string> {
   return invoke<string>('apply_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
+}
+
+/**
+ * Run `beforeClose` when the user closes this window; the window closes once it
+ * resolves. Returns an unlisten function.
+ */
+export async function onWindowCloseRequested(beforeClose: () => Promise<void>): Promise<() => void> {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().onCloseRequested(() => beforeClose());
 }

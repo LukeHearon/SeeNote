@@ -9,7 +9,8 @@ import { useProjects } from './hooks/useProjects';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
 import { useOsOpenFile } from './hooks/useOsOpenFile';
-import { listDirectory, setFfmpegPath } from './utils/tauriCommands';
+import { listDirectory, setFfmpegPath, onWindowCloseRequested } from './utils/tauriCommands';
+import { flushForExit } from './utils/exitFlush';
 import { readAppSettings } from './utils/projectCommands';
 
 export default function App() {
@@ -22,6 +23,19 @@ export default function App() {
     readAppSettings()
       .then(s => setFfmpegPath(s.ffmpegPath ?? null))
       .catch(() => {});
+  }, []);
+
+  // Closing the window must not drop a debounced save (annotations,
+  // preferences) that hasn't fired yet. Bounded, so a hung write on a dead
+  // drive can't keep the window open.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    onWindowCloseRequested(() => Promise.race([
+      flushForExit(),
+      new Promise<void>(resolve => setTimeout(resolve, 3000)),
+    ])).then(u => { if (disposed) u(); else unlisten = u; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   const {
@@ -49,8 +63,8 @@ export default function App() {
   );
 
   const updateActiveProjectPreferences = useCallback(
-    async (id: string, preferences: ProjectPreferences): Promise<Project | undefined> => {
-      const updated = await updateProjectPreferences(id, preferences);
+    async (id: string, patch: Partial<ProjectPreferences>): Promise<Project | undefined> => {
+      const updated = await updateProjectPreferences(id, patch);
       if (updated) setActiveProject(prev => (prev && prev.id === updated.id ? updated : prev));
       return updated;
     },
@@ -96,7 +110,6 @@ export default function App() {
         onClose={handleCloseProject}
         updateProjectSettings={updateActiveProjectSettings}
         updateProjectPreferences={updateActiveProjectPreferences}
-        touchLastOpened={touchLastOpened}
       />
     );
   }

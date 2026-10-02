@@ -59,14 +59,45 @@ pub async fn get_app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn load_projects(projects_file: String) -> Result<Vec<RegistryEntryRecord>, String> {
-    let path = Path::new(&projects_file);
+/// Read a registry file. A file that fails to parse is moved aside to
+/// `<name>.corrupt-<unix secs>` and treated as empty, so the next save starts a
+/// fresh registry without destroying the only copy of the old one.
+fn load_registry<T: serde::de::DeserializeOwned>(file: &str) -> Result<Vec<T>, String> {
+    let path = Path::new(file);
     if !path.exists() {
         return Ok(vec![]);
     }
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    match serde_json::from_str(&content) {
+        Ok(v) => Ok(v),
+        Err(parse_err) => {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut backup = path.as_os_str().to_owned();
+            backup.push(format!(".corrupt-{secs}"));
+            std::fs::rename(path, &backup).map_err(|e| {
+                format!("registry {file} is unreadable ({parse_err}) and could not be moved aside: {e}")
+            })?;
+            eprintln!("registry {file} unreadable ({parse_err}); moved to {}", Path::new(&backup).display());
+            Ok(vec![])
+        }
+    }
+}
+
+fn save_registry<T: Serialize>(file: &str, entries: &[T]) -> Result<(), String> {
+    let path = Path::new(file);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
+    atomic_write(path, &content)
+}
+
+#[tauri::command]
+pub async fn load_projects(projects_file: String) -> Result<Vec<RegistryEntryRecord>, String> {
+    load_registry(&projects_file)
 }
 
 #[tauri::command]
@@ -74,22 +105,12 @@ pub async fn save_projects(
     projects_file: String,
     projects: Vec<RegistryEntryRecord>,
 ) -> Result<(), String> {
-    let path = Path::new(&projects_file);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
-    atomic_write(path, &content)
+    save_registry(&projects_file, &projects)
 }
 
 #[tauri::command]
 pub async fn load_recent_files(files_file: String) -> Result<Vec<RecentFileRecord>, String> {
-    let path = Path::new(&files_file);
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    load_registry(&files_file)
 }
 
 #[tauri::command]
@@ -97,12 +118,7 @@ pub async fn save_recent_files(
     files_file: String,
     files: Vec<RecentFileRecord>,
 ) -> Result<(), String> {
-    let path = Path::new(&files_file);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(&files).map_err(|e| e.to_string())?;
-    atomic_write(path, &content)
+    save_registry(&files_file, &files)
 }
 
 /// Read `{project_dir}/.seenote/settings.json` and return its parsed JSON.
@@ -300,95 +316,24 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Annotation file existence scanning ────────────────────────────────────────
-
-/// Which tracks actually carry annotations — the list the UI paints blue and
-/// counts in the file tree. A file that exists but holds no records means the
-/// track was deliberately cleared (see persistAnnotations), which is *not*
-/// annotated, so an empty file must not count. Zero-length is the common case;
-/// a tiny file is read to catch whitespace-only leftovers, and anything larger
-/// is taken as having records without paying for a read.
-fn has_records(path: &Path) -> bool {
-    let len = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
-        Err(_) => return false,
-    };
-    if len == 0 {
-        return false;
-    }
-    if len <= 64 {
-        return match std::fs::read_to_string(path) {
-            Ok(s) => !s.trim().is_empty(),
-            Err(_) => false,
-        };
-    }
-    true
-}
-
-#[tauri::command]
-pub async fn list_annotation_files(
-    annotation_dir: String,
-    output_format: String,
-) -> Result<Vec<String>, String> {
-    let ext = match output_format.as_str() {
-        "csv" => "csv",
-        "json" => "json",
-        _ => "txt",
-    };
-    let root = Path::new(&annotation_dir);
-    if !root.exists() {
-        return Ok(vec![]);
-    }
-    let mut results = vec![];
-    scan_annotation_files(root, root, ext, &mut results);
-    Ok(results)
-}
-
-fn scan_annotation_files(dir: &Path, root: &Path, ext: &str, results: &mut Vec<String>) {
-    let dot_ext = format!(".{}", ext);
-    walk_files(dir, &mut |path| {
-        if path.extension().and_then(|e| e.to_str()) != Some(ext) {
-            return;
-        }
-        if !has_records(path) {
-            return;
-        }
-        if let Ok(rel) = path.strip_prefix(root) {
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            let rel_no_ext = if let Some(s) = rel_str.strip_suffix(&dot_ext) {
-                s.to_string()
-            } else {
-                rel_str
-            };
-            results.push(rel_no_ext);
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::shared::make_tmp_root;
 
-    // A track counts as annotated only when its file holds records. An existing
-    // but empty file means "deliberately cleared" (see persistAnnotations), and
-    // painting that track blue — or counting it in the file tree — reported
-    // annotations that don't exist.
     #[test]
-    fn scan_annotation_files_skips_files_without_records() {
-        let root = std::env::temp_dir().join(format!("seenote_scan_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("sub")).unwrap();
-        std::fs::write(root.join("has.txt"), "0.0000\t1.0000\tbee\n").unwrap();
-        std::fs::write(root.join("empty.txt"), "").unwrap();
-        std::fs::write(root.join("blank.txt"), "\n  \n").unwrap();
-        std::fs::write(root.join("sub/nested.txt"), "1.0\t2.0\twasp\n").unwrap();
-        std::fs::write(root.join("other.csv"), "1.0,2.0,wasp\n").unwrap();
-
-        let mut results = vec![];
-        scan_annotation_files(&root, &root, "txt", &mut results);
-        results.sort();
-        assert_eq!(results, vec!["has".to_string(), "sub/nested".to_string()]);
-
-        let _ = std::fs::remove_dir_all(&root);
+    fn corrupt_registry_is_moved_aside_not_lost() {
+        let root = make_tmp_root("registry");
+        let file = root.join("projects.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        let loaded: Vec<RegistryEntryRecord> = load_registry(file.to_str().unwrap()).unwrap();
+        assert!(loaded.is_empty());
+        assert!(!file.exists());
+        let backups: Vec<_> = std::fs::read_dir(&root).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("projects.json.corrupt-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "{ not json");
+        std::fs::remove_dir_all(&root).ok();
     }
 }
