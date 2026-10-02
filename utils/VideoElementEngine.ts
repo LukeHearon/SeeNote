@@ -14,8 +14,8 @@
  * attach(); this class never mounts or unmounts it.
  *
  * NOTE: this path violates the time-axis-synchrony invariant by design — the
- * audio is the element's own track (no band-pass filter, no pitch-preserving
- * slow-down; playbackRate changes pitch), and the playhead tracks the element's
+ * audio is the element's own track (no band-pass filter; speed changes use the
+ * browser's own time-stretch rather than ours), and the playhead tracks the element's
  * coarse currentTime rather than sample-exact PCM. AudioEngine remains the only
  * sample-accurate path (Off/Accurate/Mixed-with-selection and all audio-only files).
  */
@@ -109,15 +109,23 @@ export class VideoElementEngine implements PlaybackTransport {
     return this.playingState;
   }
 
+  /** The element has no buffering window of its own to report: playing is set
+   *  the moment play() is called. */
+  get isActive(): boolean {
+    return this.playingState;
+  }
+
+  /** The element's clock, except while a deferred seek is waiting for `canplay`:
+   *  then the target the user chose is where the playhead is. */
   getMediaTime(): number {
-    return this.el?.currentTime ?? 0;
+    return this.pendingSeek ?? this.el?.currentTime ?? 0;
   }
 
   /** Same as getMediaTime here: the element owns its own output pipeline, so its
    *  clock needs no latency compensation and pause/play resumes exactly. (The
    *  distinction matters only for AudioEngine — see AudioEngine.getResumeTime.) */
   getResumeTime(): number {
-    return this.el?.currentTime ?? 0;
+    return this.getMediaTime();
   }
 
   /** Drop a bounded play's stop point (e.g. the selection that set it was
@@ -132,6 +140,9 @@ export class VideoElementEngine implements PlaybackTransport {
     const el = this.el;
     if (!el) return;
     this.endSec = endSec ?? null;
+    // startSec supersedes a seek still waiting for `canplay`; left in place it
+    // would fire later and yank the playhead off this play.
+    this.pendingSeek = null;
     if (Math.abs(el.currentTime - startSec) > 0.01) el.currentTime = startSec;
     el.playbackRate = this.speed;
     el.volume = this.gain;        // 0 silences; `muted` is owned by React (VideoPlayer)

@@ -96,8 +96,11 @@ export interface AnnotationTool {
  * Signatures must stay satisfiable by both engines as-is.
  */
 export interface PlaybackTransport {
-  /** True while playback is actively running. */
+  /** True while playback is actively running (audible). */
   get isPlaying(): boolean;
+  /** True from play() until paused/ended — includes the buffering window before
+   *  `isPlaying` turns true. What a seek must check to know whether to restart. */
+  get isActive(): boolean;
   /** Current playback position in seconds (last known position while paused). */
   getMediaTime(): number;
   /**

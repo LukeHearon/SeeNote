@@ -24,9 +24,24 @@
  */
 
 const TWO_PI = 2 * Math.PI;
-const FFT_SIZE = 2048;
-const ANALYSIS_HOP = 128;
+export const FFT_SIZE = 2048;
+export const ANALYSIS_HOP = 128;
 const NUM_BINS = FFT_SIZE / 2 + 1;
+
+/** The integer synthesis hop the vocoder uses for a requested speed. */
+export function phaseVocoderHop(speed: number): number {
+  return Math.max(1, Math.round(ANALYSIS_HOP / speed));
+}
+
+/**
+ * The input/output ratio the vocoder actually produces for a requested speed.
+ * The hop is an integer, so this differs slightly from `speed` (0.75 → 0.7485);
+ * anything converting between output time and input (media) time has to use
+ * this rather than the requested speed.
+ */
+export function phaseVocoderEffectiveSpeed(speed: number): number {
+  return ANALYSIS_HOP / phaseVocoderHop(speed);
+}
 
 class FFT {
   private readonly cosTable: Float32Array;
@@ -97,8 +112,45 @@ interface ChannelState {
   outAccum: Float32Array;         // size FFT_SIZE, OLA accumulator for unfinalised output
   prevInputPhase: Float32Array;   // size NUM_BINS
   synthesisPhase: Float32Array;   // size NUM_BINS
-  outputQueue: Float32Array[];    // chunks of finalised output samples awaiting pull
-  outputQueueOffset: number;      // already-consumed samples from outputQueue[0]
+  out: FloatQueue;                // finalised output samples awaiting pull
+}
+
+/** Growable FIFO of samples: no per-frame allocation, no per-sample modulo. */
+class FloatQueue {
+  private buf = new Float32Array(FFT_SIZE * 4);
+  private head = 0;
+  private len = 0;
+
+  /** Append `n` samples from `src`, each multiplied by `gain`. */
+  push(src: Float32Array, n: number, gain: number): void {
+    if (this.head + this.len + n > this.buf.length) this.compactOrGrow(n);
+    const base = this.head + this.len;
+    const buf = this.buf;
+    for (let i = 0; i < n; i++) buf[base + i] = src[i] * gain;
+    this.len += n;
+  }
+
+  /** Move `n` samples into `dest[0..n)`. */
+  pull(dest: Float32Array, destOffset: number, n: number): void {
+    dest.set(this.buf.subarray(this.head, this.head + n), destOffset);
+    this.head += n;
+    this.len -= n;
+    if (this.len === 0) this.head = 0;
+  }
+
+  private compactOrGrow(extra: number): void {
+    const need = this.len + extra;
+    if (need <= this.buf.length / 2) {
+      this.buf.copyWithin(0, this.head, this.head + this.len);
+    } else {
+      let cap = this.buf.length;
+      while (cap < need * 2) cap *= 2;
+      const next = new Float32Array(cap);
+      next.set(this.buf.subarray(this.head, this.head + this.len));
+      this.buf = next;
+    }
+    this.head = 0;
+  }
 }
 
 export class PhaseVocoder {
@@ -106,20 +158,24 @@ export class PhaseVocoder {
   private readonly window: Float32Array;
   private readonly channels: ChannelState[] = [];
   private synthesisHop = ANALYSIS_HOP;
-  private speed = 1;
   /** Samples remaining until the next analysis frame. Starts at FFT_SIZE so we
    *  wait until the ring is full before the first frame. After that, ANALYSIS_HOP. */
   private samplesUntilFrame = FFT_SIZE;
+  /** True until the first analysis frame has been processed. */
+  private firstFrame = true;
   /** Finalised samples awaiting pull, shared count across channels (lockstep). */
   private outputAvailable = 0;
   private readonly re = new Float32Array(FFT_SIZE);
   private readonly im = new Float32Array(FFT_SIZE);
+  /** Expected phase advance of bin k over one analysis hop. */
+  private readonly expectedAdvance = new Float64Array(NUM_BINS);
 
   constructor(private readonly numChannels: number) {
     this.window = new Float32Array(FFT_SIZE);
     for (let i = 0; i < FFT_SIZE; i++) {
       this.window[i] = 0.5 * (1 - Math.cos(TWO_PI * i / FFT_SIZE));
     }
+    for (let k = 0; k < NUM_BINS; k++) this.expectedAdvance[k] = TWO_PI * k * ANALYSIS_HOP / FFT_SIZE;
     for (let c = 0; c < numChannels; c++) {
       this.channels.push(this.makeChannelState());
     }
@@ -132,19 +188,23 @@ export class PhaseVocoder {
       outAccum: new Float32Array(FFT_SIZE),
       prevInputPhase: new Float32Array(NUM_BINS),
       synthesisPhase: new Float32Array(NUM_BINS),
-      outputQueue: [],
-      outputQueueOffset: 0,
+      out: new FloatQueue(),
     };
   }
 
   setSpeed(speed: number): void {
-    this.speed = speed;
-    this.synthesisHop = Math.max(1, Math.round(ANALYSIS_HOP / speed));
+    this.synthesisHop = phaseVocoderHop(speed);
+  }
+
+  /** Input frames consumed per output frame at the current hop (see phaseVocoderEffectiveSpeed). */
+  get effectiveSpeed(): number {
+    return ANALYSIS_HOP / this.synthesisHop;
   }
 
   /** Reset all internal state. Call at the start of every play(). */
   reset(): void {
     this.samplesUntilFrame = FFT_SIZE;
+    this.firstFrame = true;
     this.outputAvailable = 0;
     for (let c = 0; c < this.numChannels; c++) {
       this.channels[c] = this.makeChannelState();
@@ -153,13 +213,23 @@ export class PhaseVocoder {
 
   /** Push input samples (deinterleaved per-channel). Triggers analysis frames as the ring fills. */
   pushInput(input: Float32Array[], numFrames: number): void {
-    for (let i = 0; i < numFrames; i++) {
+    let i = 0;
+    while (i < numFrames) {
+      // Copy up to the next analysis boundary in one run per channel.
+      const run = Math.min(numFrames - i, this.samplesUntilFrame);
       for (let c = 0; c < this.numChannels; c++) {
         const st = this.channels[c];
-        st.inputRing[st.inputWriteIdx] = input[c][i];
-        st.inputWriteIdx = (st.inputWriteIdx + 1) % FFT_SIZE;
+        const src = input[c];
+        const ring = st.inputRing;
+        let w = st.inputWriteIdx;
+        for (let k = 0; k < run; k++) {
+          ring[w] = src[i + k];
+          if (++w === FFT_SIZE) w = 0;
+        }
+        st.inputWriteIdx = w;
       }
-      this.samplesUntilFrame--;
+      i += run;
+      this.samplesUntilFrame -= run;
       if (this.samplesUntilFrame <= 0) {
         this.processFrame();
         this.samplesUntilFrame = ANALYSIS_HOP;
@@ -177,9 +247,7 @@ export class PhaseVocoder {
       const st = this.channels[c];
       // Whatever's in outAccum represents the trailing OLA sum. No more frames
       // will arrive to add to it, so emit the whole buffer as final samples.
-      const tail = new Float32Array(st.outAccum);
-      this.applyGain(tail);
-      st.outputQueue.push(tail);
+      st.out.push(st.outAccum, FFT_SIZE, this.gainComp());
       st.outAccum.fill(0);
     }
     this.outputAvailable += FFT_SIZE;
@@ -199,19 +267,7 @@ export class PhaseVocoder {
     if (want === 0) return 0;
     for (let c = 0; c < this.numChannels; c++) {
       const st = this.channels[c];
-      let written = 0;
-      while (written < want) {
-        const head = st.outputQueue[0];
-        const headRemaining = head.length - st.outputQueueOffset;
-        const take = Math.min(headRemaining, want - written);
-        output[c].set(head.subarray(st.outputQueueOffset, st.outputQueueOffset + take), written);
-        st.outputQueueOffset += take;
-        written += take;
-        if (st.outputQueueOffset >= head.length) {
-          st.outputQueue.shift();
-          st.outputQueueOffset = 0;
-        }
-      }
+      st.out.pull(output[c], 0, want);
     }
     this.outputAvailable -= want;
     return want;
@@ -220,25 +276,26 @@ export class PhaseVocoder {
   // ── Internal ────────────────────────────────────────────────────────────────
 
   /** Steady-state output gain from the double-window OLA. Compensate per-emit. */
-  private applyGain(samples: Float32Array): void {
+  private gainComp(): number {
     // ∑ hann²[n - m·H] over m equals 0.375·N/H in steady state (Hann²).
-    const gainComp = this.synthesisHop / (0.375 * FFT_SIZE);
-    for (let i = 0; i < samples.length; i++) samples[i] *= gainComp;
+    return this.synthesisHop / (0.375 * FFT_SIZE);
   }
 
   private processFrame(): void {
     const Ha = ANALYSIS_HOP;
     const Hs = this.synthesisHop;
+    const gain = this.gainComp();
 
     for (let c = 0; c < this.numChannels; c++) {
       const st = this.channels[c];
 
       // ── Analysis: read fftSize samples (oldest → newest) and apply window ──
       const start = st.inputWriteIdx;
-      for (let i = 0; i < FFT_SIZE; i++) {
-        this.re[i] = st.inputRing[(start + i) % FFT_SIZE] * this.window[i];
-        this.im[i] = 0;
-      }
+      const ring = st.inputRing;
+      const split = FFT_SIZE - start;
+      for (let i = 0; i < split; i++) this.re[i] = ring[start + i] * this.window[i];
+      for (let i = split; i < FFT_SIZE; i++) this.re[i] = ring[i - split] * this.window[i];
+      this.im.fill(0);
       this.fft.forward(this.re, this.im);
 
       // ── Per-bin phase advance, accumulate synthesis phase, reconstruct ─────
@@ -249,13 +306,17 @@ export class PhaseVocoder {
         const phase = Math.atan2(xi, xr);
 
         // Expected phase advance for bin k over Ha samples
-        const expected = TWO_PI * k * Ha / FFT_SIZE;
+        const expected = this.expectedAdvance[k];
         let dphi = phase - st.prevInputPhase[k] - expected;
         // Wrap to (-π, π]
         dphi = dphi - TWO_PI * Math.round(dphi / TWO_PI);
         // Total advance per Ha samples → scale to Hs samples
         const synthAdvance = (expected + dphi) * (Hs / Ha);
-        st.synthesisPhase[k] += synthAdvance;
+        // First frame: start the synthesis phase at the analysis phase, so the
+        // phase relationships between neighbouring bins of one partial are kept.
+        // Starting from 0 and scaling them by Hs/Ha breaks them for good.
+        if (this.firstFrame) st.synthesisPhase[k] = phase;
+        else st.synthesisPhase[k] += synthAdvance;
         st.prevInputPhase[k] = phase;
 
         this.re[k] = mag * Math.cos(st.synthesisPhase[k]);
@@ -277,16 +338,14 @@ export class PhaseVocoder {
       }
 
       // Emit the first synthesisHop samples (no further frames will touch them)
-      const emit = new Float32Array(Hs);
-      emit.set(st.outAccum.subarray(0, Hs));
-      this.applyGain(emit);
-      st.outputQueue.push(emit);
+      st.out.push(st.outAccum, Hs, gain);
 
       // Shift outAccum left by Hs and zero the freed tail
       st.outAccum.copyWithin(0, Hs);
       st.outAccum.fill(0, FFT_SIZE - Hs);
     }
 
+    this.firstFrame = false;
     this.outputAvailable += Hs;
   }
 }

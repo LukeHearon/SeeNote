@@ -47,6 +47,10 @@ import { getExt } from '../constants';
 const DEFAULT_WINDOW_BEFORE_SEC = 2;
 const DEFAULT_WINDOW_AFTER_SEC = 30;
 const MEMORY_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+/** Once over budget, evict down to this, so the full re-sort in
+ *  enforceMemoryBudget runs once per several hundred MB of new frames rather
+ *  than on every frame decoded. */
+const MEMORY_EVICT_TARGET_BYTES = MEMORY_BUDGET_BYTES * 0.85;
 // WebCodecs timestamps are microseconds; this converts seconds ↔ µs.
 const MICROS_PER_SEC = 1e6;
 
@@ -93,6 +97,9 @@ export class VideoFrameSource {
   private bytesPerFrame = 0;
   /** Current zoom/pan viewport applied by drawAt. Default = whole frame. */
   private viewport: Viewport = DEFAULT_VIEWPORT;
+  /** What the last drawAt put on screen, so an unchanged frame isn't redrawn
+   *  every animation frame while paused. */
+  private lastDrawn: { frame: VideoFrame; w: number; h: number; viewport: Viewport } | null = null;
   /** When non-null, drawAt renders the frame nearest this time instead of the
    *  live playhead — used during paused seeks so intermediate GOP frames don't
    *  flash on the canvas before the target frame is decoded. */
@@ -136,7 +143,11 @@ export class VideoFrameSource {
 
     const resp = await fetch(assetUrl);
     if (!resp.ok) throw new Error(`fetch failed: ${resp.status} ${resp.statusText}`);
-    this.rawBuffer = await resp.arrayBuffer();
+    const bytes = await resp.arrayBuffer();
+    // close() during the fetch: drop the bytes instead of resurrecting a source
+    // nobody holds.
+    if (this.closed) throw new Error('VideoFrameSource closed while opening');
+    this.rawBuffer = bytes;
 
     return new Promise((resolve, reject) => {
       const file = createFile();
@@ -411,6 +422,10 @@ export class VideoFrameSource {
     if (!frame) return;
 
     const canvas = ctx.canvas;
+    const last = this.lastDrawn;
+    if (last && last.frame === frame && last.w === canvas.width && last.h === canvas.height
+      && last.viewport === this.viewport) return;
+    this.lastDrawn = { frame, w: canvas.width, h: canvas.height, viewport: this.viewport };
     const frameW = frame.displayWidth || this.width;
     const frameH = frame.displayHeight || this.height;
     // The whole frame letterboxes into this display rect; the zoomed
@@ -619,7 +634,7 @@ export class VideoFrameSource {
       .sort((a, b) => a.key - b.key);  // ascending: lowest key evicted first
     const drop = new Set<number>();
     let i = 0;
-    while (this.approxCacheBytes > MEMORY_BUDGET_BYTES && i < idxByEvictPriority.length) {
+    while (this.approxCacheBytes > MEMORY_EVICT_TARGET_BYTES && i < idxByEvictPriority.length) {
       const frameTs = this.frameCache[idxByEvictPriority[i].i].timestamp ?? 0;
       if (frameTs >= pinnedStartMicros && frameTs <= pinnedEndMicros) {
         i++;

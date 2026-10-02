@@ -61,6 +61,9 @@ function buildButterworthCascade(
   return { hp, lp };
 }
 
+
+/** Settle time before re-measuring the wet chain's delay after a cutoff change. */
+const DELAY_MEASURE_DEBOUNCE_MS = 120;
 export class BandPassFilterGraph {
   private ctx: AudioContext | null = null;
   private _filterIn: GainNode | null = null;
@@ -128,6 +131,9 @@ export class BandPassFilterGraph {
   }
 
   teardown(): void {
+    // A rebuilt graph has a fresh dry DelayNode, so its delay must be re-measured.
+    this._clearDelayTimer();
+    this._measuredCutoffs = null;
     const all: (AudioNode | null)[] = [
       this._filterIn, this._filterDryDelay, this._filterDry,
       this._filterWet, this._filterOut,
@@ -164,21 +170,48 @@ export class BandPassFilterGraph {
     const t = this.ctx.currentTime;
     if (this.bandPassFilter) {
       const { low, high, strength } = this.bandPassFilter;
-      const safeLow = clamp(low, 20, this._fileSampleRate / 2 - 20);
-      const safeHigh = clamp(high, safeLow + 20, this._fileSampleRate / 2 - 1);
+      // The biquads run at the context's rate, which can be below the file's
+      // (the context follows the output device), so clamp to the lower Nyquist.
+      const nyquist = Math.min(this._fileSampleRate, this.ctx.sampleRate) / 2;
+      const safeLow = clamp(low, 20, nyquist - 20);
+      const safeHigh = clamp(high, safeLow + 20, nyquist - 1);
       for (const hp of this._filterHP) hp.frequency.setValueAtTime(safeLow, t);
       for (const lp of this._filterLP) lp.frequency.setValueAtTime(safeHigh, t);
       const s = clamp(strength, 0, 1);
       this._filterDry.gain.setValueAtTime(1 - s, t);
       this._filterWet.gain.setValueAtTime(s, t);
-      void this._updateFilterDelay(safeLow, safeHigh);
+      this._scheduleDelayMeasurement(safeLow, safeHigh);
     } else {
       this._filterDry.gain.setValueAtTime(1, t);
       this._filterWet.gain.setValueAtTime(0, t);
       this._filterDelaySec = 0;
       this._filterDelayMeasurementToken++;
+      this._clearDelayTimer();
+      this._measuredCutoffs = null;
       this._filterDryDelay?.delayTime.setValueAtTime(0, t);
     }
+  }
+
+  private _delayTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Cutoffs the current delay was measured for; a strength-only change keeps it. */
+  private _measuredCutoffs: { low: number; high: number } | null = null;
+
+  /** Debounced: dragging the band changes the cutoffs on every pointer move,
+   *  and each measurement is an offline render. */
+  private _scheduleDelayMeasurement(low: number, high: number): void {
+    const m = this._measuredCutoffs;
+    if (m && m.low === low && m.high === high) return;
+    this._clearDelayTimer();
+    this._delayTimer = setTimeout(() => {
+      this._delayTimer = null;
+      this._measuredCutoffs = { low, high };
+      void this._updateFilterDelay(low, high);
+    }, DELAY_MEASURE_DEBOUNCE_MS);
+  }
+
+  private _clearDelayTimer(): void {
+    if (this._delayTimer) clearTimeout(this._delayTimer);
+    this._delayTimer = null;
   }
 
   /**

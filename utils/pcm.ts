@@ -9,6 +9,9 @@
  * assumption lives in exactly one place.
  */
 
+/** PCM fetched per IPC call (~1 second of audio), by playback and preload alike. */
+export const PCM_CHUNK_DURATION_SEC = 1.0;
+
 /**
  * Split `interleaved` into `dest`, one array per channel, writing frame i of
  * channel c at `dest[c][destOffset + i]`.

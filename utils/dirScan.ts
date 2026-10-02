@@ -2,7 +2,7 @@ import { ANNOTATION_FILE_EXT } from '../constants';
 import { DirScan, ScanSpec, scanTree } from './tauriCommands';
 
 export const MEDIA_SCAN: ScanSpec = { kind: 'media' };
-export const ANNOTATION_SCAN: ScanSpec = { kind: 'suffixes', suffixes: [`.${ANNOTATION_FILE_EXT}`] };
+export const ANNOTATION_SCAN: ScanSpec = { kind: 'suffixes', suffixes: [`.${ANNOTATION_FILE_EXT}`], skipEmpty: true };
 /** buzzdetect writes `_buzzpart.csv` while a run is in progress and renames it
  *  to `_buzzdetect.csv` when done; the reader accepts either. */
 export const BUZZDETECT_SUFFIXES = ['_buzzdetect.csv', '_buzzpart.csv'];

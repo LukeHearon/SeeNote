@@ -54,16 +54,24 @@ export const audioPeak = (path: string): Promise<number> =>
 // Header layout from Rust's build_spectrogram_response (28 bytes, all little-endian):
 //   u32 n_cols, u32 n_freq_bins, f64 start_sec, f64 actual_duration_sec, u32 sample_rate
 const SPECTROGRAM_HEADER_BYTES = 28;
+// Each message in a chunk range carries a u32 grid index ahead of the blob (Rust's build_spectrogram_response).
+const RANGE_INDEX_PREFIX_BYTES = 4;
 
-function parseSpectrogramBuffer(buffer: ArrayBuffer): SpectrogramChunkResult {
-  const view = new DataView(buffer);
+/**
+ * Parse a spectrogram blob whose header starts at `byteOffset` of `buffer`.
+ * `data` is a zero-copy view over the IPC buffer (which it keeps alive). A
+ * Uint16Array needs an even byte offset: the 28-byte header and the 4-byte range
+ * prefix both keep it so.
+ */
+function parseSpectrogramBuffer(buffer: ArrayBuffer, byteOffset = 0): SpectrogramChunkResult {
+  const view = new DataView(buffer, byteOffset);
   const n_cols = view.getUint32(0, true);
   const n_freq_bins = view.getUint32(4, true);
   const start_sec = view.getFloat64(8, true);
   const actual_duration_sec = view.getFloat64(16, true);
   const sample_rate = view.getUint32(24, true);
-  // Slice the tail into a new ArrayBuffer so Uint16Array alignment is guaranteed.
-  const data = new Uint16Array(buffer.slice(SPECTROGRAM_HEADER_BYTES));
+  const dataOffset = byteOffset + SPECTROGRAM_HEADER_BYTES;
+  const data = new Uint16Array(buffer, dataOffset, (buffer.byteLength - dataOffset) >> 1);
   return { data, n_cols, n_freq_bins, start_sec, actual_duration_sec, sample_rate };
 }
 
@@ -92,9 +100,8 @@ export const getSpectrogramChunkRange = async (
 ): Promise<void> => {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (message) => {
-    // Rust prefixes each blob with a u32 grid index (build_range_message).
     const chunk_index = new DataView(message).getUint32(0, true);
-    onChunk({ chunk_index, ...parseSpectrogramBuffer(message.slice(4)) });
+    onChunk({ chunk_index, ...parseSpectrogramBuffer(message, RANGE_INDEX_PREFIX_BYTES) });
   };
   await invoke('get_spectrogram_chunk_range', {
     req: {
@@ -133,7 +140,8 @@ export interface DirScan {
 }
 
 /** What a scan looks for: media files, or files whose name ends in a suffix. */
-export type ScanSpec = { kind: 'media' } | { kind: 'suffixes'; suffixes: string[] };
+/** `skipEmpty` leaves out files with no records (a cleared annotation file). */
+export type ScanSpec = { kind: 'media' } | { kind: 'suffixes'; suffixes: string[]; skipEmpty?: boolean };
 
 /** Lists from the last completed scan of `path` with this spec, or null. May be stale. */
 export const readScanCache = (path: string, spec: ScanSpec): Promise<DirScan | null> =>
@@ -390,8 +398,8 @@ export const readPcmChunk = async (streamId: number, maxFrames: number): Promise
   const view = new DataView(buffer);
   const frames_read = view.getUint32(0, true);
   const start_frame = view.getBigUint64(4, true);
-  // Slice the tail into a new ArrayBuffer so Float32Array alignment is guaranteed.
-  const samples = new Float32Array(buffer.slice(PCM_CHUNK_HEADER_BYTES));
+  // Zero-copy view: the 12-byte header keeps the samples 4-byte aligned.
+  const samples = new Float32Array(buffer, PCM_CHUNK_HEADER_BYTES, (buffer.byteLength - PCM_CHUNK_HEADER_BYTES) >> 2);
   return { samples, frames_read, start_frame: Number(start_frame) };
 };
 
@@ -460,20 +468,6 @@ export interface ImportExamplesSummary {
 }
 
 /**
- * Import a directory of fully fleshed-out tool folders (same layout as
- * .seenote/annotation-tools/: {label}/tool.json + description.txt + examples/).
- * New labels are copied in (palette-colored when tool.json is absent);
- * existing labels keep their color/description and only merge example clips.
- * Idempotent: existing destination filenames are skipped.
- */
-export const importAnnotationTools = (
-  projectDir: string,
-  toolsDir: string,
-  palette: string[],
-): Promise<ImportExamplesSummary> =>
-  invoke('import_annotation_tools', { projectDir, toolsDir, palette });
-
-/**
  * Import a directory of plain example clips (one subfolder per label, each
  * holding audio files directly). Files are copied into each tool's examples/;
  * tools are created for unknown labels, colored by cycling `palette`.
@@ -532,6 +526,11 @@ export interface SyncSummary {
    * them and asks. Confirming re-runs the sync with them as `confirmedClears`.
    */
   pendingClears: string[];
+  /** Annotation files a teammate's sync emptied that this (manual) sync applied. */
+  remoteClears: string[];
+  /** Annotation files the remote no longer has but were kept: an absent file is
+   *  never treated as a deletion. The next push restores them. */
+  ignoredRemoteDeletions: string[];
   message: string;
 }
 
@@ -621,10 +620,15 @@ export function closeSyncGuideWindow(): void {
   invoke('close_sync_guide_window').catch(console.error);
 }
 
-export async function saveCopyOverrides(overrides: Record<string, string>): Promise<string> {
-  return invoke<string>('save_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
-}
-
 export async function applyCopyOverrides(overrides: Record<string, string>): Promise<string> {
   return invoke<string>('apply_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
+}
+
+/**
+ * Run `beforeClose` when the user closes this window; the window closes once it
+ * resolves. Returns an unlisten function.
+ */
+export async function onWindowCloseRequested(beforeClose: () => Promise<void>): Promise<() => void> {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().onCloseRequested(() => beforeClose());
 }

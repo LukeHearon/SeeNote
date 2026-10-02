@@ -4,7 +4,7 @@ import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
-import { wantsCanvasRenderer, displayVideoMode } from '../utils/videoPlaybackMode';
+import { wantsCanvasRenderer, displayVideoMode, isVideoElementTransport } from '../utils/videoPlaybackMode';
 import { useHotkeys } from '../hooks/useHotkeys';
 import type { VideoMode } from '../types';
 import { isLinux } from '../utils/platform';
@@ -107,8 +107,9 @@ export default function VideoPane({
   // The <video> element is the active sound source exactly when it's the live
   // renderer for a video file (Fast, and Mixed before a selection). Then it
   // plays its own audio and must not be muted; VideoElementEngine drives it.
-  const videoElementIsTransport =
-    !isAudioTrack && !usingCanvas && !showDisabledPlaceholder && !!videoSrc;
+  const videoElementIsTransport = isVideoElementTransport({
+    isAudioTrack, hasVideoSrc: !!videoSrc, mode: videoMode, hasSelection, hasFrameSource: !!frameSource,
+  });
 
   // Pick the warning shown in the top-left corner.
   //   fast                                 → always: "not frame-accurate"
@@ -118,15 +119,15 @@ export default function VideoPane({
   let warning: string | null = null;
   if (videoSrc && !isAudioTrack && videoMode !== 'off') {
     if (videoMode === 'fast') {
-      warning = 'Fast mode: video plays independently — the playhead is approximate and audio filters are disabled. Playback rate works (0.5–2×).';
+      warning = videoP.warnFast;
     } else if (videoMode === 'mixed') {
       if (!hasSelection) {
-        warning = 'Mixed mode: audio filters only apply inside a selection. Outside a selection the video plays independently (0.5–2× rate still works).';
+        warning = videoP.warnMixedNoSelection;
       } else if (!frameSource) {
-        warning = "Mixed mode: this file's format doesn't support frame-accurate playback, so the picture may not stay perfectly in sync even inside a selection.";
+        warning = videoP.warnMixedUnsupported;
       }
     } else if (videoMode === 'accurate' && !frameSource) {
-      warning = "This file's format doesn't support frame-accurate playback. The picture may not stay perfectly in sync with the audio.";
+      warning = videoP.warnAccurateUnsupported;
     }
   }
 
@@ -208,7 +209,7 @@ export default function VideoPane({
     if (usingCanvas && frameSource) frameSource.setViewport(viewport);
   }, [usingCanvas, frameSource, viewport]);
 
-  // Change 3b: scroll-to-pan — keep a ref so the non-reactive wheel handler
+  // Scroll-to-pan: keep a ref so the non-reactive wheel handler
   // always sees the latest viewport without re-registering the listener.
   const viewportRef = useRef(viewport);
   useEffect(() => { viewportRef.current = viewport; }, [viewport]);

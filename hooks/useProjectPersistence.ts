@@ -1,13 +1,15 @@
-import { useEffect, useRef } from 'react';
-import { Project, ProjectPreferences, SpectrogramSettings, ProjectUiSettings, VideoMode, BuzzdetectSeriesMode } from '../types';
+import { useEffect } from 'react';
+import { useFlushableDebounce } from './useFlushableDebounce';
+import { Project, SpectrogramSettings, ProjectUiSettings, VideoMode, BuzzdetectSeriesMode } from '../types';
 import type { TimeDisplayUnit, ElapsedTimeDisplayUnit } from '../utils/helpers';
+import type { UpdateProjectPreferences } from '../utils/projectPreferences';
 
 interface UseProjectPersistenceArgs {
   project: Project;
   projectRef: React.MutableRefObject<Project>;
   prevProjectIdRef: React.MutableRefObject<string | null>;
   trackPathRef: React.MutableRefObject<string | null>;
-  updateProjectPreferences: (id: string, preferences: ProjectPreferences) => Promise<Project | undefined>;
+  updateProjectPreferences: UpdateProjectPreferences;
   // Spectrogram settings persist input.
   settings: SpectrogramSettings;
   // Consolidated UI persist inputs.
@@ -83,19 +85,16 @@ export function useProjectPersistence({
   leftPanelWidth,
   findPanelWidth,
 }: UseProjectPersistenceArgs) {
-  const settingsPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const uiPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsDebounce = useFlushableDebounce();
+  const uiDebounce = useFlushableDebounce();
 
   useEffect(() => {
     if (prevProjectIdRef.current !== project.id) return;
-    if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
-    settingsPersistRef.current = setTimeout(() => {
-      if (!projectRef.current) return;
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, spectrogramSettings: settings });
+    // Id captured now: the write must not follow projectRef to a different project.
+    const id = project.id;
+    settingsDebounce.schedule(() => {
+      updateProjectPreferences(id, { spectrogramSettings: settings });
     }, 800);
-    return () => {
-      if (settingsPersistRef.current) clearTimeout(settingsPersistRef.current);
-    };
   }, [settings]);
 
   // Consolidated UI persistence — every persisted UI field flows through this
@@ -103,22 +102,24 @@ export function useProjectPersistence({
   // settling burst regardless of which slider/handle moved.
   useEffect(() => {
     if (prevProjectIdRef.current !== project.id) return;
-    if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
-    uiPersistRef.current = setTimeout(() => {
+    const id = project.id;
+    uiDebounce.schedule(() => {
       if (!projectRef.current) return;
       // Store the active track relative to the media directory so the saved
-      // value survives the user moving or renaming the project root.
+      // value survives the user moving or renaming the project root. Left out
+      // (not written as null) while no track is open: before the initial open
+      // resolves — slow on external drives — that would erase the saved track.
       const cur = trackPathRef.current;
       const audioRoot = projectRef.current.mediaDirectoryAbs;
       const activeTrackPath = cur && audioRoot && cur.startsWith(audioRoot + '/')
         ? cur.substring(audioRoot.length + 1)
-        : null;
+        : undefined;
       const uiSettings: ProjectUiSettings = {
         volume,
         playbackSpeed,
         lastDefinedSpeed,
         zoomSec,
-        activeTrackPath,
+        ...(activeTrackPath !== undefined ? { activeTrackPath } : {}),
         buzzdetectEnabled,
         buzzdetectThresholds,
         buzzdetectSubsetThresholds,
@@ -143,10 +144,7 @@ export function useProjectPersistence({
         leftPanelWidthRatio: window.innerWidth > 0 ? leftPanelWidth / window.innerWidth : undefined,
         findPanelWidthRatio: window.innerWidth > 0 ? findPanelWidth / window.innerWidth : undefined,
       };
-      updateProjectPreferences(projectRef.current.id, { ...projectRef.current.preferences, uiSettings });
+      updateProjectPreferences(id, { uiSettings });
     }, 600);
-    return () => {
-      if (uiPersistRef.current) clearTimeout(uiPersistRef.current);
-    };
   }, [volume, playbackSpeed, lastDefinedSpeed, zoomSec, trackPath, buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons, buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled, buzzdetectMinDetectionRate, buzzdetectSubsetBuffer, buzzdetectPinnedNeurons, videoMode, videoBrightness, videoContrast, playheadLocked, timeDisplayUnit, fallbackTimeDisplayUnit, filePanelCollapsed, videoCollapsed, splitRatio, sidebarSections, leftPanelWidth, findPanelWidth]);
 }
