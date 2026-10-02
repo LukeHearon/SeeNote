@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FolderOpen, HelpCircle } from 'lucide-react';
-import { createProjectModal } from '../copy/ui';
+import { createProjectModal, projectBaseFields } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { Project, ProjectSettings, ProjectPreferences } from '../types';
 import { openDirectoryDialog, checkDirExists, createDirAll, createAnnotationTool, openSyncGuideWindow } from '../utils/tauriCommands';
@@ -222,7 +222,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
           <>
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-gray-300 text-sm font-medium">Sync Settings</h3>
+                <h3 className="text-gray-300 text-sm font-medium">{projectBaseFields.syncSettingsHeading}</h3>
                 <button
                   type="button"
                   onClick={openSyncGuideWindow}

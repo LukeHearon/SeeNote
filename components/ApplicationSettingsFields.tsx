@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
-import { projectSettingsModal } from '../copy/ui';
+import { projectSettingsModal, applicationSettingsFields } from '../copy/ui';
 import { readAppSettings, writeAppSettings } from '../utils/projectCommands';
 import { detectFfmpeg, openFileDialog, setFfmpegPath as pushFfmpegPath } from '../utils/tauriCommands';
 
@@ -80,7 +80,7 @@ export default function ApplicationSettingsFields() {
           type="button"
           onClick={handleBrowse}
           className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-          title="Browse"
+          title={applicationSettingsFields.browse}
         >
           <FolderOpen size={16} />
         </button>

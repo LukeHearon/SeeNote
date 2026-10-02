@@ -12,7 +12,6 @@ import { normalizeGitRemoteUrl } from '../utils/gitSync';
 import { formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
 
 const PREVIEW_DATE = FILENAME_PREVIEW_DATE;
-const PREVIEW_DATE_LABEL = 'July 31, 2026 4:56 PM';
 
 interface Props {
   projectDir: string;
@@ -131,7 +130,7 @@ export default function ProjectBaseFields({
         {filenameTimeFormat.trim() !== '' && (
           isUsableFilenameTimePattern(filenameTimeFormat) ? (
             <p className="text-gray-500 text-xs mt-1 font-mono">
-              E.g. {PREVIEW_DATE_LABEL} → <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}.mp3</span>
+              {projectBaseFields.examplePrefix} {projectBaseFields.previewDateLabel} → <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}.mp3</span>
             </p>
           ) : (
             <p className="text-amber-500/80 text-xs mt-1">{projectBaseFields.filenameTimeIncomplete}</p>
@@ -152,7 +151,7 @@ export default function ProjectBaseFields({
         <p className="text-gray-600 text-xs mt-1">{projectBaseFields.filenameTimeOffsetHelp}</p>
         {filenameTimeOffsetSeparator.trim() !== '' && isUsableFilenameTimePattern(filenameTimeFormat) && (
           <p className="text-gray-500 text-xs mt-1 font-mono">
-            E.g. <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}{filenameTimeOffsetSeparator}52860.mp3</span>{' '}
+            {projectBaseFields.examplePrefix} <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}{filenameTimeOffsetSeparator}52860.mp3</span>{' '}
             → {new Date(PREVIEW_DATE.getTime() + (parseFilenameOffsetSeconds(`${filenameTimeOffsetSeparator}52860`, filenameTimeOffsetSeparator) ?? 0) * 1000).toLocaleString()}
           </p>
         )}

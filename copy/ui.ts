@@ -135,6 +135,8 @@ export const annotationToolEditModal = {
 };
 
 export const annotationToolsSettingsModal = {
+  get importing() { return getOverride('ui.annotationToolsSettingsModal.importing') ?? "Importing…"; },
+  get importTools() { return getOverride('ui.annotationToolsSettingsModal.importTools') ?? "Import tools"; },
   get toolNamePlaceholder() { return getOverride('ui.annotationToolsSettingsModal.toolNamePlaceholder') ?? "Add tool"; },
   get hotkeysHeading() { return getOverride('ui.annotationToolsSettingsModal.hotkeysHeading') ?? "Hotkeys"; },
   get newTool() { return getOverride('ui.annotationToolsSettingsModal.newTool') ?? "New tool"; },
@@ -197,6 +199,9 @@ export const gitSyncUserFields = {
 };
 
 export const projectBaseFields = {
+  get syncSettingsHeading() { return getOverride('ui.projectBaseFields.syncSettingsHeading') ?? "Sync Settings"; },
+  get examplePrefix() { return getOverride('ui.projectBaseFields.examplePrefix') ?? "E.g."; },
+  get previewDateLabel() { return getOverride('ui.projectBaseFields.previewDateLabel') ?? "July 31, 2026 4:56 PM"; },
   get projectNameLabel() { return getOverride('ui.projectBaseFields.projectNameLabel') ?? "Project Name"; },
   get mediaLabel() { return getOverride('ui.projectBaseFields.mediaLabel') ?? "Media"; },
   get annotationsLabel() { return getOverride('ui.projectBaseFields.annotationsLabel') ?? "Annotations"; },
@@ -447,6 +452,58 @@ export const frequencyAxisInputs = {
 };
 
 export const keyboardShortcutsView = {
+  get scPlayPause() { return getOverride('ui.keyboardShortcutsView.scPlayPause') ?? "Play / Pause"; },
+  get scToggleSpeed1Last() { return getOverride('ui.keyboardShortcutsView.scToggleSpeed1Last') ?? "Toggle speed (1× ↔ last)"; },
+  get scMuteUnmute() { return getOverride('ui.keyboardShortcutsView.scMuteUnmute') ?? "Mute / Unmute"; },
+  get scMovePlayheadBackwardAcceleratingPixel() { return getOverride('ui.keyboardShortcutsView.scMovePlayheadBackwardAcceleratingPixel') ?? "Move playhead backward (accelerating pixel nudge)"; },
+  get scMovePlayheadForwardAcceleratingPixel() { return getOverride('ui.keyboardShortcutsView.scMovePlayheadForwardAcceleratingPixel') ?? "Move playhead forward (accelerating pixel nudge)"; },
+  get scNudgeVideoForwardOneFrame() { return getOverride('ui.keyboardShortcutsView.scNudgeVideoForwardOneFrame') ?? "Nudge video forward one frame"; },
+  get scNudgeVideoBackwardOneFrame() { return getOverride('ui.keyboardShortcutsView.scNudgeVideoBackwardOneFrame') ?? "Nudge video backward one frame"; },
+  get scToggleLockPlayheadToCenter() { return getOverride('ui.keyboardShortcutsView.scToggleLockPlayheadToCenter') ?? "Toggle lock playhead to center"; },
+  get scJumpToStartOfTrack() { return getOverride('ui.keyboardShortcutsView.scJumpToStartOfTrack') ?? "Jump to start of track"; },
+  get scJumpToEndOfTrack() { return getOverride('ui.keyboardShortcutsView.scJumpToEndOfTrack') ?? "Jump to end of track"; },
+  get scExtendSelectionBackward() { return getOverride('ui.keyboardShortcutsView.scExtendSelectionBackward') ?? "Extend selection backward"; },
+  get scExtendSelectionForward() { return getOverride('ui.keyboardShortcutsView.scExtendSelectionForward') ?? "Extend selection forward"; },
+  get scSweepASelectionWhilePlaying() { return getOverride('ui.keyboardShortcutsView.scSweepASelectionWhilePlaying') ?? "Sweep a selection while playing"; },
+  get scSelectBackToStartOf() { return getOverride('ui.keyboardShortcutsView.scSelectBackToStartOf') ?? "Select back to start of track"; },
+  get scSelectOnToEndOf() { return getOverride('ui.keyboardShortcutsView.scSelectOnToEndOf') ?? "Select on to end of track"; },
+  get scJumpToPreviousAnnotationOr() { return getOverride('ui.keyboardShortcutsView.scJumpToPreviousAnnotationOr') ?? "Jump to previous annotation or subset segment"; },
+  get scJumpToNextAnnotationOr() { return getOverride('ui.keyboardShortcutsView.scJumpToNextAnnotationOr') ?? "Jump to next annotation or subset segment"; },
+  get scPreviousFindMatchWhileThe() { return getOverride('ui.keyboardShortcutsView.scPreviousFindMatchWhileThe') ?? "Previous find match (while the find panel is open)"; },
+  get scNextFindMatchWhileThe() { return getOverride('ui.keyboardShortcutsView.scNextFindMatchWhileThe') ?? "Next find match (while the find panel is open)"; },
+  get scPreviousTrack() { return getOverride('ui.keyboardShortcutsView.scPreviousTrack') ?? "Previous track"; },
+  get scNextTrack() { return getOverride('ui.keyboardShortcutsView.scNextTrack') ?? "Next track"; },
+  get scReadyAnnotationTool() { return getOverride('ui.keyboardShortcutsView.scReadyAnnotationTool') ?? "Ready annotation tool"; },
+  get scSelectionModeUnreadyTools() { return getOverride('ui.keyboardShortcutsView.scSelectionModeUnreadyTools') ?? "Selection mode (unready tools)"; },
+  get scSubsetTrackToBuzzdetectDetections() { return getOverride('ui.keyboardShortcutsView.scSubsetTrackToBuzzdetectDetections') ?? "Subset track to buzzdetect detections"; },
+  get scPlayStopExampleClipFor() { return getOverride('ui.keyboardShortcutsView.scPlayStopExampleClipFor') ?? "Play / stop example clip for active tool"; },
+  get scReadyAudioFilterTool() { return getOverride('ui.keyboardShortcutsView.scReadyAudioFilterTool') ?? "Ready audio filter tool"; },
+  get scToggleAudioFiltering() { return getOverride('ui.keyboardShortcutsView.scToggleAudioFiltering') ?? "Toggle audio filtering"; },
+  get scReadyVideoZoomTool() { return getOverride('ui.keyboardShortcutsView.scReadyVideoZoomTool') ?? "Ready video zoom tool"; },
+  get scToggleVideoZoom() { return getOverride('ui.keyboardShortcutsView.scToggleVideoZoom') ?? "Toggle video zoom"; },
+  get scZoomVideoIn() { return getOverride('ui.keyboardShortcutsView.scZoomVideoIn') ?? "Zoom video in"; },
+  get scZoomVideoOut() { return getOverride('ui.keyboardShortcutsView.scZoomVideoOut') ?? "Zoom video out"; },
+  get scUndoActivatedToolSelection() { return getOverride('ui.keyboardShortcutsView.scUndoActivatedToolSelection') ?? "Undo activated tool/selection"; },
+  get scHideAnnotationLabels() { return getOverride('ui.keyboardShortcutsView.scHideAnnotationLabels') ?? "Hide annotation labels"; },
+  get scSelectWholeTrack() { return getOverride('ui.keyboardShortcutsView.scSelectWholeTrack') ?? "Select whole track"; },
+  get scExportSelectedAudio() { return getOverride('ui.keyboardShortcutsView.scExportSelectedAudio') ?? "Export selected audio"; },
+  get scFindRenameLabelsRightHand() { return getOverride('ui.keyboardShortcutsView.scFindRenameLabelsRightHand') ?? "Find & rename labels (right-hand panel)"; },
+  get scRemoveSelectedAnnotation() { return getOverride('ui.keyboardShortcutsView.scRemoveSelectedAnnotation') ?? "Remove selected annotation"; },
+  get scDeselectAnnotationClearItsSelection() { return getOverride('ui.keyboardShortcutsView.scDeselectAnnotationClearItsSelection') ?? "Deselect annotation, clear its selection region"; },
+  get scCopySelectedAnnotation() { return getOverride('ui.keyboardShortcutsView.scCopySelectedAnnotation') ?? "Copy selected annotation"; },
+  get scPasteAnnotationAtPlayhead() { return getOverride('ui.keyboardShortcutsView.scPasteAnnotationAtPlayhead') ?? "Paste annotation at playhead"; },
+  get scBindSelectedAnnotationToA() { return getOverride('ui.keyboardShortcutsView.scBindSelectedAnnotationToA') ?? "Bind selected annotation to a hotkey and ready its tool (or ready its tool if already bound)"; },
+  get scUnassignAllAnnotationToolHotkeys() { return getOverride('ui.keyboardShortcutsView.scUnassignAllAnnotationToolHotkeys') ?? "Unassign all annotation tool hotkeys"; },
+  get scUndo() { return getOverride('ui.keyboardShortcutsView.scUndo') ?? "Undo"; },
+  get scRedo() { return getOverride('ui.keyboardShortcutsView.scRedo') ?? "Redo"; },
+  get scRedo2() { return getOverride('ui.keyboardShortcutsView.scRedo2') ?? "Redo"; },
+  get scOpenTheHelpGuide() { return getOverride('ui.keyboardShortcutsView.scOpenTheHelpGuide') ?? "Open the help guide"; },
+  get scQuickTooltipsOnHover() { return getOverride('ui.keyboardShortcutsView.scQuickTooltipsOnHover') ?? "Quick tooltips on hover"; },
+  get groupPlayback() { return getOverride('ui.keyboardShortcutsView.groupPlayback') ?? "Playback"; },
+  get groupNavigation() { return getOverride('ui.keyboardShortcutsView.groupNavigation') ?? "Navigation"; },
+  get groupTools() { return getOverride('ui.keyboardShortcutsView.groupTools') ?? "Tools"; },
+  get groupAnnotations() { return getOverride('ui.keyboardShortcutsView.groupAnnotations') ?? "Annotations"; },
+  get groupApp() { return getOverride('ui.keyboardShortcutsView.groupApp') ?? "App"; },
   get noShortcuts() { return getOverride('ui.keyboardShortcutsView.noShortcuts') ?? "No shortcuts for this key"; },
 };
 
@@ -498,4 +555,18 @@ export const singleFileWindow = {
   get importBuzzdetectFilter() { return getOverride('ui.singleFileWindow.importBuzzdetectFilter') ?? "buzzdetect results"; },
   get importBuzzdetectErrorTitle() { return getOverride('ui.singleFileWindow.importBuzzdetectErrorTitle') ?? "Could not import buzzdetect results"; },
   get importBuzzdetectErrorOk() { return getOverride('ui.singleFileWindow.importBuzzdetectErrorOk') ?? "OK"; },
+};
+
+export const timeReadout = {
+  get unitSeconds() { return getOverride('ui.timeReadout.unitSeconds') ?? "Seconds"; },
+  get unitHms() { return getOverride('ui.timeReadout.unitHms') ?? "HMS"; },
+  get unitDate() { return getOverride('ui.timeReadout.unitDate') ?? "Date"; },
+};
+
+export const applicationSettingsFields = {
+  get browse() { return getOverride('ui.applicationSettingsFields.browse') ?? "Browse"; },
+};
+
+export const helpWindow = {
+  get close() { return getOverride('ui.helpWindow.close') ?? "Close"; },
 };

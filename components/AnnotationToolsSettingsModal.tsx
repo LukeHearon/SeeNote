@@ -316,7 +316,7 @@ export default function AnnotationToolsSettingsModal({
               data-tooltip={tooltips.importToolsDir}
             >
               <FolderDown size={12} />
-              {isImporting ? 'Importing…' : 'Import tools'}
+              {isImporting ? copy.importing : copy.importTools}
             </button>
             <button onClick={onClose} className="p-0.5 rounded text-slate-400 hover:text-white transition-colors">
               <X size={16} />

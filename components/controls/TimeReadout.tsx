@@ -6,6 +6,7 @@ import { parseTimestamp } from '../../utils/timeAxis';
 import { Timeline, identityTimeline, displayOfNearestKept } from '../../utils/subsetTimeline';
 import { tooltips } from '../../copy/tooltips';
 import { useDraftField } from '../../hooks/useDraftField';
+import { timeReadout as timeReadoutCopy } from '../../copy/ui';
 
 // Live playback-time readout. Subscribes to the currentTime store and holds its
 // own state so it — and not its whole parent — re-renders per tick.
@@ -123,15 +124,15 @@ export function TimeReadout({
       {/* Unit toggle — Seconds vs HMS vs wall-clock Date, minimal highlight on
           the active side. Date is inert on a track with no parseable start. */}
       <div className="flex items-center gap-0.5" data-help-target="time-unit-toggle">
-        {unitButton('seconds', 'Seconds', tooltips.timeUnitSeconds)}
-        {unitButton('hms', 'HMS', tooltips.timeUnitHms)}
+        {unitButton('seconds', timeReadoutCopy.unitSeconds, tooltips.timeUnitSeconds)}
+        {unitButton('hms', timeReadoutCopy.unitHms, tooltips.timeUnitHms)}
         <button
           disabled={!trackStartDate}
           className={`text-[9px] leading-none px-1.5 py-0.5 rounded transition-colors ${!trackStartDate ? 'text-slate-700 cursor-default' : selectedUnit === 'datetime' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
           onClick={() => onUnitChange('datetime')}
           data-tooltip={trackStartDate ? tooltips.timeUnitDatetime : tooltips.timeUnitDatetimeUnavailable}
         >
-          Date
+          {timeReadoutCopy.unitDate}
         </button>
       </div>
     </div>

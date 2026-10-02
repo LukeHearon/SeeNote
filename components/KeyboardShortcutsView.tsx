@@ -21,88 +21,91 @@ type Group = {
   shortcuts: ShortcutEntry[];
 };
 
+// Labels and names are getters over copy/ui.ts, so copy-editor overrides
+// apply live.
 const GROUPS: Group[] = [
   {
-    name: 'Playback',
+    get name() { return copy.groupPlayback; },
     bg: 'bg-amber-600', ring: 'ring-amber-400', dot: 'bg-amber-500', text: 'text-amber-300',
     shortcuts: [
-      { codes: ['Space'], display: 'Space', label: 'Play / Pause' },
-      { codes: ['KeyR'], display: 'R', label: 'Toggle speed (1× ↔ last)' },
-      { codes: ['KeyM'], display: 'M', label: 'Mute / Unmute' },
+      { codes: ['Space'], display: 'Space', get label() { return copy.scPlayPause; } },
+      { codes: ['KeyR'], display: 'R', get label() { return copy.scToggleSpeed1Last; } },
+      { codes: ['KeyM'], display: 'M', get label() { return copy.scMuteUnmute; } },
     ],
   },
   {
-    name: 'Navigation',
+    get name() { return copy.groupNavigation; },
     bg: 'bg-sky-600', ring: 'ring-sky-400', dot: 'bg-sky-500', text: 'text-sky-300',
     shortcuts: [
-      { codes: ['ArrowLeft'], display: '←', label: 'Move playhead backward (accelerating pixel nudge)' },
-      { codes: ['ArrowRight'], display: '→', label: 'Move playhead forward (accelerating pixel nudge)' },
-      { codes: ['Comma'], display: ',', label: 'Nudge video forward one frame' },
-      { codes: ['Period'], display: '.', label: 'Nudge video backward one frame' },
-      { codes: ['KeyC'], display: 'C', label: 'Toggle lock playhead to center' },
-      { codes: ['ArrowLeft'], display: '{mod}+←', label: 'Jump to start of track' },
-      { codes: ['ArrowRight'], display: '{mod}+→', label: 'Jump to end of track' },
-      { codes: ['ArrowLeft'], display: 'Shift+←', label: 'Extend selection backward' },
-      { codes: ['ArrowRight'], display: 'Shift+→', label: 'Extend selection forward' },
-      { codes: ['ShiftLeft','ShiftRight'], display: 'Shift (hold)', label: 'Sweep a selection while playing' },
-      { codes: ['ArrowLeft'], display: '{mod}+Shift+←', label: 'Select back to start of track' },
-      { codes: ['ArrowRight'], display: '{mod}+Shift+→', label: 'Select on to end of track' },
-      { codes: ['ArrowLeft'], display: 'Alt+←', label: 'Jump to previous annotation or subset segment' },
-      { codes: ['ArrowRight'], display: 'Alt+→', label: 'Jump to next annotation or subset segment' },
-      { codes: ['ArrowUp'], display: 'Alt+↑', label: 'Previous find match (while the find panel is open)' },
-      { codes: ['ArrowDown'], display: 'Alt+↓', label: 'Next find match (while the find panel is open)' },
-      { codes: ['ArrowUp'], display: '{mod}+↑', label: 'Previous track' },
-      { codes: ['ArrowDown'], display: '{mod}+↓', label: 'Next track' },
+      { codes: ['ArrowLeft'], display: '←', get label() { return copy.scMovePlayheadBackwardAcceleratingPixel; } },
+      { codes: ['ArrowRight'], display: '→', get label() { return copy.scMovePlayheadForwardAcceleratingPixel; } },
+      { codes: ['Comma'], display: ',', get label() { return copy.scNudgeVideoForwardOneFrame; } },
+      { codes: ['Period'], display: '.', get label() { return copy.scNudgeVideoBackwardOneFrame; } },
+      { codes: ['KeyC'], display: 'C', get label() { return copy.scToggleLockPlayheadToCenter; } },
+      { codes: ['ArrowLeft'], display: '{mod}+←', get label() { return copy.scJumpToStartOfTrack; } },
+      { codes: ['ArrowRight'], display: '{mod}+→', get label() { return copy.scJumpToEndOfTrack; } },
+      { codes: ['ArrowLeft'], display: 'Shift+←', get label() { return copy.scExtendSelectionBackward; } },
+      { codes: ['ArrowRight'], display: 'Shift+→', get label() { return copy.scExtendSelectionForward; } },
+      { codes: ['ShiftLeft','ShiftRight'], display: 'Shift (hold)', get label() { return copy.scSweepASelectionWhilePlaying; } },
+      { codes: ['ArrowLeft'], display: '{mod}+Shift+←', get label() { return copy.scSelectBackToStartOf; } },
+      { codes: ['ArrowRight'], display: '{mod}+Shift+→', get label() { return copy.scSelectOnToEndOf; } },
+      { codes: ['ArrowLeft'], display: 'Alt+←', get label() { return copy.scJumpToPreviousAnnotationOr; } },
+      { codes: ['ArrowRight'], display: 'Alt+→', get label() { return copy.scJumpToNextAnnotationOr; } },
+      { codes: ['ArrowUp'], display: 'Alt+↑', get label() { return copy.scPreviousFindMatchWhileThe; } },
+      { codes: ['ArrowDown'], display: 'Alt+↓', get label() { return copy.scNextFindMatchWhileThe; } },
+      { codes: ['ArrowUp'], display: '{mod}+↑', get label() { return copy.scPreviousTrack; } },
+      { codes: ['ArrowDown'], display: '{mod}+↓', get label() { return copy.scNextTrack; } },
     ],
   },
   {
-    name: 'Tools',
+    get name() { return copy.groupTools; },
     bg: 'bg-violet-600', ring: 'ring-violet-400', dot: 'bg-violet-500', text: 'text-violet-300',
     shortcuts: [
-      { codes: ['Digit0','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'], display: '0–9', label: 'Ready annotation tool' },
-      { codes: ['KeyS'], display: 'S', label: 'Selection mode (unready tools)' },
-      { codes: ['KeyS'], display: 'Shift+S', label: 'Subset track to buzzdetect detections' },
-      { codes: ['KeyE'], display: 'E', label: 'Play / stop example clip for active tool' },
-      { codes: ['KeyF'], display: 'Shift+F', label: 'Ready audio filter tool' },
-      { codes: ['KeyF'], display: 'F', label: 'Toggle audio filtering' },
-      { codes: ['KeyZ'], display: 'Shift+Z', label: 'Ready video zoom tool' },
-      { codes: ['KeyZ'], display: 'Z', label: 'Toggle video zoom' },
-      { codes: ['Equal'], display: '= / +', label: 'Zoom video in' },
-      { codes: ['Minus'], display: '-', label: 'Zoom video out' },
-      { codes: ['Escape'], display: 'Esc', label: 'Undo activated tool/selection' },
-      { codes: ['KeyH'], display: 'H (hold)', label: 'Hide annotation labels' },
+      { codes: ['Digit0','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'], display: '0–9', get label() { return copy.scReadyAnnotationTool; } },
+      { codes: ['KeyS'], display: 'S', get label() { return copy.scSelectionModeUnreadyTools; } },
+      { codes: ['KeyS'], display: 'Shift+S', get label() { return copy.scSubsetTrackToBuzzdetectDetections; } },
+      { codes: ['KeyE'], display: 'E', get label() { return copy.scPlayStopExampleClipFor; } },
+      { codes: ['KeyF'], display: 'Shift+F', get label() { return copy.scReadyAudioFilterTool; } },
+      { codes: ['KeyF'], display: 'F', get label() { return copy.scToggleAudioFiltering; } },
+      { codes: ['KeyZ'], display: 'Shift+Z', get label() { return copy.scReadyVideoZoomTool; } },
+      { codes: ['KeyZ'], display: 'Z', get label() { return copy.scToggleVideoZoom; } },
+      { codes: ['Equal'], display: '= / +', get label() { return copy.scZoomVideoIn; } },
+      { codes: ['Minus'], display: '-', get label() { return copy.scZoomVideoOut; } },
+      { codes: ['Escape'], display: 'Esc', get label() { return copy.scUndoActivatedToolSelection; } },
+      { codes: ['KeyH'], display: 'H (hold)', get label() { return copy.scHideAnnotationLabels; } },
     ],
   },
   {
-    name: 'Annotations',
+    get name() { return copy.groupAnnotations; },
     bg: 'bg-emerald-600', ring: 'ring-emerald-400', dot: 'bg-emerald-500', text: 'text-emerald-300',
     shortcuts: [
-      { codes: ['KeyA'], display: '{mod}+A', label: 'Select whole track' },
-      { codes: ['KeyE'], display: '{mod}+Shift+E', label: 'Export selected audio' },
-      { codes: ['KeyF'], display: '{mod}+F', label: 'Find & rename labels (right-hand panel)' },
-      { codes: ['Delete','Backspace'], display: 'Del / Bksp', label: 'Remove selected annotation' },
-      { codes: ['Enter'], display: '↵', label: 'Deselect annotation, clear its selection region' },
-      { codes: ['KeyC'], display: '{mod}+C', label: 'Copy selected annotation' },
-      { codes: ['KeyV'], display: '{mod}+V', label: 'Paste annotation at playhead' },
-      { codes: ['KeyB'], display: '{mod}+B', label: 'Bind selected annotation to a hotkey and ready its tool (or ready its tool if already bound)' },
-      { codes: ['KeyB'], display: '{mod}+Shift+B', label: 'Unassign all annotation tool hotkeys' },
-      { codes: ['KeyZ'], display: '{mod}+Z', label: 'Undo' },
-      { codes: ['KeyZ'], display: '{mod}+Shift+Z', label: 'Redo' },
-      { codes: ['KeyY'], display: '{mod}+Y', label: 'Redo' },
+      { codes: ['KeyA'], display: '{mod}+A', get label() { return copy.scSelectWholeTrack; } },
+      { codes: ['KeyE'], display: '{mod}+Shift+E', get label() { return copy.scExportSelectedAudio; } },
+      { codes: ['KeyF'], display: '{mod}+F', get label() { return copy.scFindRenameLabelsRightHand; } },
+      { codes: ['Delete','Backspace'], display: 'Del / Bksp', get label() { return copy.scRemoveSelectedAnnotation; } },
+      { codes: ['Enter'], display: '↵', get label() { return copy.scDeselectAnnotationClearItsSelection; } },
+      { codes: ['KeyC'], display: '{mod}+C', get label() { return copy.scCopySelectedAnnotation; } },
+      { codes: ['KeyV'], display: '{mod}+V', get label() { return copy.scPasteAnnotationAtPlayhead; } },
+      { codes: ['KeyB'], display: '{mod}+B', get label() { return copy.scBindSelectedAnnotationToA; } },
+      { codes: ['KeyB'], display: '{mod}+Shift+B', get label() { return copy.scUnassignAllAnnotationToolHotkeys; } },
+      { codes: ['KeyZ'], display: '{mod}+Z', get label() { return copy.scUndo; } },
+      { codes: ['KeyZ'], display: '{mod}+Shift+Z', get label() { return copy.scRedo; } },
+      { codes: ['KeyY'], display: '{mod}+Y', get label() { return copy.scRedo2; } },
     ],
   },
   {
-    name: 'App',
+    get name() { return copy.groupApp; },
     bg: 'bg-slate-500', ring: 'ring-slate-300', dot: 'bg-slate-400', text: 'text-slate-300',
     shortcuts: [
-      { codes: ['F1'], display: 'F1', label: 'Open the help guide' },
-      { codes: ['Slash'], display: '? (hold)', label: 'Quick tooltips on hover' },
+      { codes: ['F1'], display: 'F1', get label() { return copy.scOpenTheHelpGuide; } },
+      { codes: ['Slash'], display: '? (hold)', get label() { return copy.scQuickTooltipsOnHover; } },
     ],
   },
 ];
 
-const ALL_SHORTCUTS = GROUPS.flatMap(g =>
-  g.shortcuts.map(s => ({ ...s, group: g }))
+// Object.create, not a spread: a spread would read the label getters once, here.
+const ALL_SHORTCUTS: (ShortcutEntry & { group: Group })[] = GROUPS.flatMap(g =>
+  g.shortcuts.map(s => Object.assign(Object.create(s) as ShortcutEntry, { group: g }))
 );
 
 // First group to claim each code — used for key color on the keyboard
@@ -411,8 +414,8 @@ function ShortcutList({
   const grouped = GROUPS.map(g => ({
     group: g,
     entries: ALL_SHORTCUTS
-      .map((s, i) => ({ ...s, index: i }))
-      .filter(s => s.group === g),
+      .map((s, i) => ({ s, index: i }))
+      .filter(e => e.s.group === g),
   }));
 
   return (
@@ -422,13 +425,13 @@ function ShortcutList({
           <div key={g.name}>
             <p className={`text-[9px] uppercase tracking-wider font-semibold mb-1.5 ${g.text}`}>{g.name}</p>
             <div className="space-y-1">
-              {entries.map(s => (
+              {entries.map(({ s, index }) => (
                 <ShortcutRow
-                  key={s.index}
+                  key={index}
                   display={s.display}
                   label={s.label}
-                  highlighted={highlightedIndex === s.index}
-                  onEnter={() => onHoverShortcut(s.index)}
+                  highlighted={highlightedIndex === index}
+                  onEnter={() => onHoverShortcut(index)}
                   onLeave={() => onHoverShortcut(null)}
                 />
               ))}

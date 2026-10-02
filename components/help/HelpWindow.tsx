@@ -6,6 +6,7 @@ import { HelpNav } from './HelpNav';
 import { HighlightOverlay } from '../HighlightOverlay';
 import TooltipLayer from '../TooltipLayer';
 import { help } from '../../copy/help';
+import { helpWindow } from '../../copy/ui';
 import { useCollapsibleSidebar } from '../../hooks/useCollapsibleSidebar';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import { onHelpMessage, postHelpMessage } from '../../utils/helpChannel';
@@ -146,7 +147,7 @@ export function HelpWindow() {
         <button
           onClick={() => closeHelpWindow()}
           className="text-slate-400 hover:text-white transition-colors p-1 rounded hover:bg-slate-700"
-          aria-label="Close"
+          aria-label={helpWindow.close}
         >
           <X size={16} />
         </button>

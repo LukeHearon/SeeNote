@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ExternalLink, HelpCircle } from 'lucide-react';
-import { projectSettingsModal } from '../copy/ui';
+import { projectSettingsModal, projectBaseFields } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
@@ -302,7 +302,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             <>
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-gray-300 text-sm font-medium">Sync Settings</h3>
+                  <h3 className="text-gray-300 text-sm font-medium">{projectBaseFields.syncSettingsHeading}</h3>
                   <button
                     type="button"
                     onClick={openSyncGuideWindow}
