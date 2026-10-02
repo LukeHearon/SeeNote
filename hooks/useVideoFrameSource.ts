@@ -4,6 +4,9 @@ import { toAssetUrl } from '../utils/tauriCommands';
 import { VideoMode, Selection } from '../types';
 import { Timeline, sourceIntervalOf } from '../utils/subsetTimeline';
 
+/** Longest stretch of video decoded before play starts (see prerollVideo). */
+const PREROLL_MAX_SEC = 2;
+
 interface UseVideoFrameSourceArgs {
   // Track identity / mode mirrors, read inside async opens & the mode-change effect.
   trackPath: string | null;
@@ -69,10 +72,15 @@ export function useVideoFrameSource({
   // before the audio engine begins emitting samples. Critical for short-selection
   // replays: without this the engine starts audio ~200ms ahead of the first
   // rendered frame, so a ~1s selection ends before most frames appear.
+  //
+  // Only the first PREROLL_MAX_SEC is awaited: a long selection in Accurate
+  // mode otherwise held the spinner until every frame was decoded (and held
+  // them all in memory). The rolling prefetch takes over from `end`.
   const prerollVideo = useCallback(async (startSec: number, endSec?: number): Promise<void> => {
     const source = frameSourceRef.current;
     if (!source) return;
-    const end = endSec ?? Math.min(startSec + 5, durationRef.current || startSec + 5);
+    const fileEnd = durationRef.current || startSec + PREROLL_MAX_SEC;
+    const end = Math.min(endSec ?? fileEnd, startSec + PREROLL_MAX_SEC, fileEnd);
     const t0 = performance.now();
     addLog(`[preroll] start ${startSec.toFixed(3)}-${end.toFixed(3)}s`);
     try { await source.ensureRange(startSec, end, 'prerollVideo'); } catch { /* canvas shows stale frame on error */ }

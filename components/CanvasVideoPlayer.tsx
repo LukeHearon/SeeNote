@@ -20,9 +20,10 @@ interface CanvasVideoPlayerProps {
  * sized to its container (CSS-driven); each rAF tick we match the backing
  * store to the displayed size and call frameSource.drawAt(ctx, t).
  *
- * Drawing every tick is cheap: frameSource.drawAt is an O(log N) cache lookup
- * plus a single drawImage. The decode pipeline runs independently in the
- * frame source.
+ * Ticking every frame is cheap: frameSource.drawAt is an O(log N) cache lookup
+ * and only draws when the frame, size or zoom changed. The container's size
+ * comes from a ResizeObserver rather than a layout read per tick. The decode
+ * pipeline runs independently in the frame source.
  */
 export default function CanvasVideoPlayer({ frameSource, getFrameTime, onDebugLog }: CanvasVideoPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -46,11 +47,13 @@ export default function CanvasVideoPlayer({ frameSource, getFrameTime, onDebugLo
     let lastW = 0;
     let lastH = 0;
     let ticks = 0;
+    let rect = container.getBoundingClientRect();
+    const ro = new ResizeObserver(() => { rect = container.getBoundingClientRect(); });
+    ro.observe(container);
 
     const tick = () => {
       // Match the canvas backing store to its displayed size (devicePixelRatio-aware).
       const dpr = window.devicePixelRatio || 1;
-      const rect = container.getBoundingClientRect();
       const targetW = Math.max(1, Math.floor(rect.width * dpr));
       const targetH = Math.max(1, Math.floor(rect.height * dpr));
       if (targetW !== lastW || targetH !== lastH) {
@@ -67,6 +70,7 @@ export default function CanvasVideoPlayer({ frameSource, getFrameTime, onDebugLo
     rAF = requestAnimationFrame(tick);
 
     return () => {
+      ro.disconnect();
       if (rAF !== null) cancelAnimationFrame(rAF);
       onDebugLog?.(`[canvasvp] rAF loop stopped after ${ticks} ticks`);
     };

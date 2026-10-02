@@ -81,7 +81,7 @@ import { BandPassFilter, PlaybackTransport } from '../types';
 import { clamp } from './helpers';
 import { TimeStretchEngine } from './TimeStretchEngine';
 import { PcmCache, PcmCacheSlice } from './PcmCache';
-import { deinterleave } from './pcm';
+import { deinterleave, deinterleaveInto, PCM_CHUNK_DURATION_SEC } from './pcm';
 import { BandPassFilterGraph } from './BandPassFilterGraph';
 import { Timeline, identityTimeline } from './subsetTimeline';
 import { mediaTimeAt, ctxTimeAtMedia } from './audio/playbackClock';
@@ -127,8 +127,6 @@ interface ScheduledNode {
   naturalCtxEnd: number;
 }
 
-/** How many frames to fetch per IPC call (~1 second of audio). */
-const CHUNK_DURATION_SEC = 1.0;
 /** How many seconds of audio to keep scheduled ahead of the play position. */
 const HORIZON_SEC = 4.0;
 /** How long to sleep (ms) when the buffer is full before checking again. */
@@ -1275,7 +1273,7 @@ export class AudioEngine implements PlaybackTransport {
     const sr = this.fileSampleRate;
     const rate = this.playRate;
     const stretching = this.playStretching;
-    const chunkFrames = Math.floor(CHUNK_DURATION_SEC * sr);
+    const chunkFrames = Math.floor(PCM_CHUNK_DURATION_SEC * sr);
 
     // Open the Rust PcmStream at the playback start position (or, for a
     // continuation, at the point the in-flight audio runs out). The cursor is a
@@ -1522,13 +1520,13 @@ export class AudioEngine implements PlaybackTransport {
         this.callbacks.onBufferUnderrun();
       }
 
-      // ── Build deinterleaved input for this chunk ───────────────────────────
-      const inputChannels = deinterleave(chunk.samples, inputFrames, ch);
-
-      // ── Apply time-stretch if needed and pick output channel layout ────────
-      let outputChannels: Float32Array[];
+      // ── Apply time-stretch if needed and build the AudioBuffer ─────────────
+      // Unstretched PCM is split straight into the buffer's channels; only the
+      // stretch path needs intermediate per-channel arrays.
+      let audioBuffer: AudioBuffer;
       let outputFrames: number;
       if (stretching) {
+        const inputChannels = deinterleave(chunk.samples, inputFrames, ch);
         const out = this.timeStretch.stretch(inputChannels, inputFrames, isFinalChunk);
         if (out.outputFrames === 0) {
           // Vocoder buffered the input but hasn't accumulated a full window
@@ -1537,11 +1535,14 @@ export class AudioEngine implements PlaybackTransport {
           this.schedCursor = chunkMediaEnd;
           continue;
         }
-        outputChannels = out.channels;
         outputFrames = out.outputFrames;
+        audioBuffer = ctx.createBuffer(out.channels.length, outputFrames, sr);
+        for (let c = 0; c < out.channels.length; c++) audioBuffer.getChannelData(c).set(out.channels[c]);
       } else {
-        outputChannels = inputChannels;
         outputFrames = inputFrames;
+        audioBuffer = ctx.createBuffer(ch, outputFrames, sr);
+        const dest = Array.from({ length: ch }, (_, c) => audioBuffer.getChannelData(c));
+        deinterleaveInto(chunk.samples, inputFrames, dest);
       }
 
       // ── Compute context start time for this chunk's OUTPUT ─────────────────
@@ -1552,12 +1553,6 @@ export class AudioEngine implements PlaybackTransport {
       const outputDurationSec = outputFrames / sr;
       const naturalCtxEnd = ctxStart + outputDurationSec;
       let ctxEnd = naturalCtxEnd;
-
-      // ── Build AudioBuffer ──────────────────────────────────────────────────
-      const audioBuffer = ctx.createBuffer(outputChannels.length, outputFrames, sr);
-      for (let c = 0; c < outputChannels.length; c++) {
-        audioBuffer.getChannelData(c).set(outputChannels[c]);
-      }
 
       // ── Schedule the source node ────────────────────────────────────────────
       const source = ctx.createBufferSource();
