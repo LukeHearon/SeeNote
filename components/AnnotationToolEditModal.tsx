@@ -5,6 +5,7 @@ import { AnnotationTool, Annotation } from '../types';
 import { HOTKEY_COLORS, SUPPORTED_AUDIO_EXTS } from '../constants';
 import { openFilesDialog } from '../utils/tauriCommands';
 import ColorSwatchPicker from './ColorSwatchPicker';
+import ModalBackdrop from './ModalBackdrop';
 
 interface Props {
   tool: AnnotationTool;
@@ -82,7 +83,7 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
+    <ModalBackdrop onDismiss={onClose} layer="nestedModal">
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-72 p-5 shadow-2xl flex flex-col gap-4">
         <div>
           <div className="flex items-center justify-between mb-1">
@@ -180,6 +181,6 @@ export default function AnnotationToolEditModal({ tool, toolIndex, annotations, 
           </div>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

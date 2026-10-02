@@ -491,3 +491,23 @@ export function nextAvailableHotkey(existingTools: Pick<AnnotationTool, 'key'>[]
   const used = new Set(existingTools.map(t => t.key));
   return HOTKEY_SLOTS.find(k => !used.has(k)) ?? null;
 }
+/**
+ * Stacking order for overlays above the app chrome. Use via `style={{ zIndex }}`
+ * (Tailwind can't see computed classes). Each tier sits over the one before it.
+ */
+export const Z = {
+  /** Modal backdrops (settings, create/open project, help-style overlays). */
+  modal: 60,
+  /** Dropdowns and popovers opened over a page or a modal body. */
+  popover: 70,
+  /** A modal opened from inside another modal. */
+  nestedModal: 80,
+  contextMenu: 100,
+  /** Confirm / message dialogs: over everything but toasts. */
+  dialog: 200,
+  toast: 300,
+  tooltip: 9999,
+} as const;
+
+/** Name gradient a new or unstyled project falls back on. */
+export const DEFAULT_NAME_GRADIENT: [string, string] = ['#e65161', '#f9c387'];

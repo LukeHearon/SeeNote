@@ -34,7 +34,8 @@ export interface HotkeyBinding {
   handler: (e: KeyboardEvent) => void;
 }
 
-function isInputLikeTarget(t: EventTarget | null): boolean {
+/** Is the event target a text-entry element (`<input>`, `<textarea>`, `<select>`, contenteditable)? */
+export function isEditableTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
   if (t.isContentEditable) return true;
   const tag = t.tagName;
@@ -88,7 +89,7 @@ export function useHotkeys(bindings: HotkeyBinding[], enabled: boolean = true): 
   useEffect(() => {
     if (!enabled) return;
     const handler = (e: KeyboardEvent) => {
-      const inEditable = isInputLikeTarget(e.target);
+      const inEditable = isEditableTarget(e.target);
       for (const b of ref.current) {
         if (!keyMatches(e, b.key)) continue;
         if (!modsMatch(e, b.mods)) continue;

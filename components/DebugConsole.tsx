@@ -6,6 +6,7 @@ import { useDiagnosticInfo } from '../hooks/useDiagnosticInfo';
 import { APP_VERSION } from '../utils/appVersion';
 import { measureLoopbackLatency, formatLoopbackResult } from '../utils/audioLoopback';
 import { chunkDiag, setChunkDiag, ChunkDiagFlags } from '../utils/chunkDiag';
+import ModalBackdrop from './ModalBackdrop';
 
 export interface DebugLog { time: string; msg: string; type: 'info' | 'error'; }
 
@@ -174,16 +175,12 @@ interface DebugConsoleProps {
 export default function DebugConsole({ open, onClose, logs }: DebugConsoleProps) {
   if (!open) return null;
   return (
-    <div
-      className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
+    <ModalBackdrop onDismiss={onClose} dismissOnBackdrop>
       <div
         className="bg-slate-800 rounded-lg shadow-xl border border-slate-700 max-w-2xl w-full h-[600px] flex flex-col p-6 relative"
-        onClick={(e) => e.stopPropagation()}
       >
         <DebugConsolePanel logs={logs} onClose={onClose} showChunkDiag />
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

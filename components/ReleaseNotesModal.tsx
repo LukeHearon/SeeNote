@@ -3,6 +3,7 @@ import { Loader2, X } from 'lucide-react';
 import { releaseNotesModal } from '../copy/ui';
 import { Block, Inline, fetchReleaseNotes, parseMarkdown } from '../utils/releaseNotes';
 import { openGithubUrl } from '../utils/tauriCommands';
+import ModalBackdrop from './ModalBackdrop';
 
 function renderInlines(inlines: Inline[]) {
   return inlines.map((node, i) => {
@@ -54,19 +55,12 @@ export default function ReleaseNotesModal({ version, fallbackNotes, onClose }: {
     return () => { cancelled = true; };
   }, [version, fallbackNotes]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const blocks = notes ? parseMarkdown(notes) : [];
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+    <ModalBackdrop onDismiss={onClose} dismissOnBackdrop>
       <div
         className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <h3 className="text-white font-semibold text-base">{releaseNotesModal.title(version)}</h3>
@@ -89,6 +83,6 @@ export default function ReleaseNotesModal({ version, fallbackNotes, onClose }: {
           )}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

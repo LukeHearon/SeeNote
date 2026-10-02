@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { annotationToolLibrary as copy } from '../copy/ui';
+import { fileManagerLabel } from '../utils/platform';
 import { tooltips } from '../copy/tooltips';
 import { X, Play, Pause } from 'lucide-react';
 import { AnnotationTool, SpectrogramSettings } from '../types';
@@ -12,6 +13,9 @@ import { basename } from '../utils/helpers';
 import ExampleSpectrogram from './ExampleSpectrogram';
 import LevelRangeSlider from './LevelRangeSlider';
 import VolumeControl from './VolumeControl';
+import { isEditableTarget } from '../hooks/useHotkeys';
+import ModalBackdrop from './ModalBackdrop';
+import ContextMenu from './ContextMenu';
 
 interface Props {
   tool: AnnotationTool;
@@ -25,8 +29,7 @@ interface Props {
   addLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
-const revealLabel = isMac ? 'Show in Finder' : 'Show in File Explorer';
+const revealLabel = copy.showIn(fileManagerLabel());
 
 /**
  * Read-only library for one annotation tool's example clips: a clip list on the
@@ -149,9 +152,7 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
         return;
       }
       if (e.key === ' ') {
-        const t = e.target as HTMLElement | null;
-        const tag = t?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+        if (isEditableTarget(e.target)) return;
         e.preventDefault();
         togglePlay();
       }
@@ -160,17 +161,8 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
     return () => document.removeEventListener('keydown', handler);
   });
 
-  // Dismiss the context menu on any outside interaction.
-  useEffect(() => {
-    if (!menu) return;
-    const dismiss = () => setMenu(null);
-    window.addEventListener('mousedown', dismiss);
-    window.addEventListener('blur', dismiss);
-    return () => { window.removeEventListener('mousedown', dismiss); window.removeEventListener('blur', dismiss); };
-  }, [menu]);
-
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <ModalBackdrop>
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-[860px] h-[600px] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <div className="flex items-center gap-2 min-w-0">
@@ -271,19 +263,13 @@ export default function AnnotationToolLibrary({ tool, initialSettings, onClose, 
 
       {/* Reveal-in-file-manager context menu */}
       {menu && (
-        <div
-          className="fixed z-[60] bg-slate-800 border border-slate-600 rounded-md shadow-xl py-1 text-xs"
-          style={{ left: menu.x, top: menu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button
-            className="block w-full text-left px-3 py-1.5 text-slate-200 hover:bg-slate-700"
-            onClick={() => { revealInFileManager(menu.path).catch(err => addLog(`${err}`, 'error')); setMenu(null); }}
-          >
-            {revealLabel}
-          </button>
-        </div>
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={[{ label: revealLabel, onSelect: () => { revealInFileManager(menu.path).catch(err => addLog(`${err}`, 'error')); } }]}
+          onClose={() => setMenu(null)}
+        />
       )}
-    </div>
+    </ModalBackdrop>
   );
 }

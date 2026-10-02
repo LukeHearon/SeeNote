@@ -1,10 +1,10 @@
 import React from 'react';
 import { AlertCircle, FolderOpen } from 'lucide-react';
 import { repairProjectModal } from '../copy/ui';
-import { openDirectoryDialog, openDirectoryDialogAt } from '../utils/tauriCommands';
+import { browseDirectoryNear } from '../utils/dirDialogs';
 import { Project, ProjectSettings } from '../types';
-import { findFirstValidAncestor } from '../utils/helpers';
 import { makeProjectPath } from '../utils/projectPaths';
+import ModalBackdrop from './ModalBackdrop';
 
 export type RepairProjectState = {
   project: Project;
@@ -23,7 +23,7 @@ function RepairProjectModal({
   onOpenProject: (p: Project) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+    <ModalBackdrop>
       <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg p-6 space-y-4">
         <div className="flex items-start gap-3">
           <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
@@ -46,8 +46,7 @@ function RepairProjectModal({
             />
             <button
               onClick={async () => {
-                const startDir = await findFirstValidAncestor(repairProject.repairedMedia);
-                const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+                const dir = await browseDirectoryNear(repairProject.repairedMedia);
                 if (dir) setRepairProject(r => r ? { ...r, repairedMedia: dir } : r);
               }}
               className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
@@ -80,7 +79,7 @@ function RepairProjectModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

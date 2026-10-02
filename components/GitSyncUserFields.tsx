@@ -1,9 +1,7 @@
 import React from 'react';
 import { gitSyncUserFields } from '../copy/ui';
+import { isMac, isWindows } from '../utils/platform';
 
-const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-const isWindows = /win/.test(ua);
-const isMac = /mac/.test(ua);
 
 export interface GitSyncUserFieldsProps {
   syncToken: string;

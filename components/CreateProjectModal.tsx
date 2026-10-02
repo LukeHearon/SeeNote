@@ -12,6 +12,7 @@ import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../uti
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
+import ModalBackdrop from './ModalBackdrop';
 
 interface Props {
   onCreated: (project: Project) => void;
@@ -154,7 +155,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <ModalBackdrop onDismiss={onClose}>
       <SettingsModalShell
         title={createProjectModal.title}
         onClose={onClose}
@@ -283,6 +284,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
           </>
         )}
       </SettingsModalShell>
-    </div>
+    </ModalBackdrop>
   );
 }

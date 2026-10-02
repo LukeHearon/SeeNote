@@ -5,6 +5,7 @@ import { openFileDialog, openDirectoryDialog, checkDirExists, guessProjectFolder
 import { basename, joinPath } from '../utils/projectPaths';
 import { openProjectModal } from '../copy/ui';
 import SettingsModalShell from './SettingsModalShell';
+import ModalBackdrop from './ModalBackdrop';
 
 interface Props {
   onClose: () => void;
@@ -75,7 +76,7 @@ export default function OpenProjectModal({ onClose, addExistingProject, onOpenPr
   const canExtract = !!archivePath && !!destDir && !!folderName && !destExists && !extracting;
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <ModalBackdrop onDismiss={onClose}>
       <SettingsModalShell
         title={openProjectModal.title}
         onClose={onClose}
@@ -162,6 +163,6 @@ export default function OpenProjectModal({ onClose, addExistingProject, onOpenPr
           </div>
         )}
       </SettingsModalShell>
-    </div>
+    </ModalBackdrop>
   );
 }

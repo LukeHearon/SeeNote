@@ -17,6 +17,7 @@ import { DateTimeFormat } from '../utils/datetimeDisplay';
 import { Timeline } from '../utils/subsetTimeline';
 import { DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { tooltips } from '../copy/tooltips';
+import ContextMenu from './ContextMenu';
 
 interface ToolbarProps {
   isPlaying: boolean;
@@ -254,20 +255,12 @@ function Toolbar({
       </div>
 
       {audioCtxMenu && onRestartAudio && (
-        <>
-          <div className="fixed inset-0 z-50" onClick={() => setAudioCtxMenu(null)} />
-          <div
-            className="fixed z-50 bg-slate-800 border border-slate-600 rounded shadow-lg py-1 min-w-[140px]"
-            style={{ left: audioCtxMenu.x, top: audioCtxMenu.y }}
-          >
-            <button
-              className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
-              onClick={() => { setAudioCtxMenu(null); onRestartAudio(); }}
-            >
-              {tooltips.restartAudio}
-            </button>
-          </div>
-        </>
+        <ContextMenu
+          x={audioCtxMenu.x}
+          y={audioCtxMenu.y}
+          items={[{ label: tooltips.restartAudio, onSelect: onRestartAudio }]}
+          onClose={() => setAudioCtxMenu(null)}
+        />
       )}
 
       {/* Time display — current time + selection fields to the right */}

@@ -185,9 +185,8 @@ export function stripExt(path: string): string {
 // Return the final path segment, splitting on either separator so this works on
 // both POSIX ("/Users/luke/bird.mp3") and Windows ("C:\\Users\\luke\\bird.mp3")
 // paths. Falls back to the whole input when there is no separator.
-export function basename(path: string): string {
-    return path.split(/[\\/]/).pop() ?? path;
-}
+// One definition of a path's last segment (trailing separators ignored).
+export { basename } from './projectPaths';
 
 // Fisher–Yates shuffle returning a NEW array; the input is never mutated.
 export function shuffleArray<T>(arr: T[]): T[] {

@@ -14,6 +14,7 @@ import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
 import ApplicationSettingsFields from './ApplicationSettingsFields';
+import ModalBackdrop from './ModalBackdrop';
 
 type Step = 'form' | 'annotationCopyConfirm' | 'conflictConfirm';
 type SettingsTab = 'application' | 'settings' | 'preferences';
@@ -254,7 +255,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <ModalBackdrop onDismiss={step === 'form' ? onClose : undefined}>
       {step === 'form' && (
         <SettingsModalShell
           title={project ? projectSettingsModal.title : projectSettingsModal.titleApplicationOnly}
@@ -457,7 +458,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
           </div>
         </div>
       )}
-    </div>
+    </ModalBackdrop>
   );
 }
 

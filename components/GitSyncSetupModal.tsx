@@ -2,6 +2,7 @@ import React from 'react';
 import { X, GitBranch, ShieldCheck } from 'lucide-react';
 import { gitSyncSetupModal } from '../copy/ui';
 import { renderInlineMarkdown } from '../utils/renderInlineMarkdown';
+import ModalBackdrop from './ModalBackdrop';
 
 interface Props {
   onClose: () => void;
@@ -108,12 +109,9 @@ export default function GitSyncSetupModal({ onClose, standalone }: Props) {
   if (standalone) return card;
 
   return (
-    <div
-      className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center p-4"
-      onMouseDown={onClose}
-    >
+    <ModalBackdrop onDismiss={onClose} dismissOnBackdrop layer="nestedModal">
       {card}
-    </div>
+    </ModalBackdrop>
   );
 }
 

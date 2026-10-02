@@ -9,6 +9,8 @@ import { isMac } from '../utils/platform';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
 import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
 import NewToolEntry from './NewToolEntry';
+import { isEditableTarget } from '../hooks/useHotkeys';
+import ModalBackdrop from './ModalBackdrop';
 
 interface Props {
   annotationTools: AnnotationTool[];
@@ -279,8 +281,7 @@ export default function AnnotationToolsSettingsModal({
       const mod = isMac ? e.metaKey : e.ctrlKey;
       if (!mod) return;
       // Let the inline "new tool" input keep native text undo while it's focused.
-      const t = e.target;
-      if (t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (isEditableTarget(e.target)) return;
       if (e.key.toLowerCase() === 'z') {
         e.preventDefault();
         e.stopPropagation();
@@ -299,7 +300,7 @@ export default function AnnotationToolsSettingsModal({
   const hasAssigned = annotationTools.some((t, i) => i !== 0 && t.key !== null);
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <ModalBackdrop onDismiss={onClose}>
       <div className={`bg-gray-900 border border-gray-700 rounded-xl h-[600px] flex flex-col relative ${hasUnassigned ? 'w-[800px]' : 'w-[640px]'}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-none">
           <span className="text-sm font-semibold text-white">{copy.settingsTitle}</span>
@@ -483,6 +484,6 @@ export default function AnnotationToolsSettingsModal({
           />
         ) : null;
       })()}
-    </div>
+    </ModalBackdrop>
   );
 }

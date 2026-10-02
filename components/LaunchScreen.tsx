@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, CheckCircle2, AlertTriangle, Download, ExternalLink, Star, Search, ScrollText } from 'lucide-react';
+import { AudioWaveform, Plus, Settings, Loader2, X, FolderOpen, FolderSearch, File, Archive, ChevronDown, AlertCircle, Download, ExternalLink, Star, Search, ScrollText } from 'lucide-react';
 import { Project, ProjectListEntry, ProjectSettings, RecentFileEntry, RelinkInfo, RelinkResolution } from '../types';
 import { revealInFileManager } from '../utils/projectCommands';
-import { openDirectoryDialog, openDirectoryDialogAt, openFileDialog } from '../utils/tauriCommands';
-import { isInsideProjectDir, basename } from '../utils/projectPaths';
-import { findFirstValidAncestor } from '../utils/helpers';
+import { openDirectoryDialog, openFileDialog } from '../utils/tauriCommands';
+import { isInsideProjectDir, basename, dirname } from '../utils/projectPaths';
+import { fileManagerLabel } from '../utils/platform';
 import { SUPPORTED_AUDIO_EXTS, SUPPORTED_VIDEO_EXTS } from '../constants';
 import { launchScreen, openProjectMenu } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
@@ -16,6 +16,10 @@ import OpenProjectModal from './OpenProjectModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 import GradientProjectName from './GradientProjectName';
 import ReleaseNotesModal from './ReleaseNotesModal';
+import RelinkDialog from './RelinkDialog';
+import ConfirmDialog from './ConfirmDialog';
+import ContextMenu from './ContextMenu';
+import { browseDirectoryNear } from '../utils/dirDialogs';
 
 interface Props {
   entries: ProjectListEntry[];
@@ -44,19 +48,6 @@ interface Props {
 type UnifiedEntry =
   | { kind: 'project'; lastOpened: string; entry: ProjectListEntry }
   | { kind: 'file'; lastOpened: string; entry: RecentFileEntry };
-
-function dirname(p: string): string {
-  const stripped = p.replace(/[/\\]+$/, '');
-  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf('\\'));
-  return idx > 0 ? stripped.slice(0, idx) : stripped.slice(0, idx + 1);
-}
-
-function fileManagerLabel(): string {
-  const plat = (typeof navigator !== 'undefined' && navigator.platform) ? navigator.platform : '';
-  if (/Mac/i.test(plat)) return 'Finder';
-  if (/Win/i.test(plat)) return 'Explorer';
-  return 'file manager';
-}
 
 export default function LaunchScreen({
   entries,
@@ -122,33 +113,12 @@ export default function LaunchScreen({
   const [relinkPrompt, setRelinkPrompt] = useState<
     (RelinkInfo & { resolve: (r: RelinkResolution) => void }) | null
   >(null);
-  // When the on-disk name disagrees, the user readies one of the two names
-  // before committing the re-link; null means no choice made yet.
-  const [readyName, setReadyName] = useState<string | null>(null);
-  // User-browsed paths for missing dirs, keyed by RelinkDirStatus.label.
-  const [dirOverrides, setDirOverrides] = useState<Record<string, string>>({});
-
   const closeRelink = (r: RelinkResolution) => {
     setRelinkPrompt(prev => {
       prev?.resolve(r);
       return null;
     });
-    setReadyName(null);
-    setDirOverrides({});
   };
-
-  const handleBrowseMissingDir = async (label: string, currentPath: string) => {
-    const startDir = await findFirstValidAncestor(currentPath).catch(() => '');
-    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
-    if (dir) setDirOverrides(prev => ({ ...prev, [label]: dir }));
-  };
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onDown = () => setContextMenu(null);
-    document.body.addEventListener('mousedown', onDown);
-    return () => document.body.removeEventListener('mousedown', onDown);
-  }, [contextMenu]);
 
   useEffect(() => {
     if (!showOpenProjectMenu) return;
@@ -193,8 +163,7 @@ export default function LaunchScreen({
   // the automatic fall-through when a clicked entry fails validation.
   const launchRelink = async (entry: ProjectListEntry) => {
     setOpenError(null);
-    const startDir = await findFirstValidAncestor(entry.registry.projectDir).catch(() => '');
-    const dir = await (startDir ? openDirectoryDialogAt(startDir) : openDirectoryDialog());
+    const dir = await browseDirectoryNear(entry.registry.projectDir);
     if (!dir) return;
     try {
       const project = await relinkProject(entry.registry.id, dir, info =>
@@ -700,21 +669,15 @@ export default function LaunchScreen({
         const entry = entries.find(e => e.registry.id === contextMenu.entryId);
         if (!entry) return null;
         return (
-          <div
-            className="absolute z-[70] bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1"
-            style={{ top: contextMenu.y, left: contextMenu.x }}
-            onMouseDown={e => e.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                revealInFileManager(entry.registry.projectDir).catch(() => {});
-                setContextMenu(null);
-              }}
-              className="block w-full text-left px-4 py-1.5 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
-            >
-              {launchScreen.showInFileManager(fmLabel)}
-            </button>
-          </div>
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={[{
+              label: launchScreen.showInFileManager(fmLabel),
+              onSelect: () => { revealInFileManager(entry.registry.projectDir).catch(() => {}); },
+            }]}
+            onClose={() => setContextMenu(null)}
+          />
         );
       })()}
 
@@ -755,182 +718,27 @@ export default function LaunchScreen({
       )}
 
       {confirmState && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4"
-          onMouseDown={() => closeConfirm(false)}
+        <ConfirmDialog
+          title={confirmState.title}
+          message={confirmState.message}
+          icon={<AlertCircle size={20} className="text-amber-400" />}
+          actions={[
+            { label: launchScreen.cancelButton, onClick: () => closeConfirm(false) },
+            { label: confirmState.confirmLabel, onClick: () => closeConfirm(true), tone: confirmState.danger ? 'danger' : 'primary' },
+          ]}
+          onDismiss={() => closeConfirm(false)}
         >
-          <div
-            className="bg-gray-800 rounded-xl border border-gray-700 shadow-2xl w-full max-w-lg p-6 space-y-4"
-            onMouseDown={e => e.stopPropagation()}
-          >
-            <div className="flex items-start gap-3">
-              <AlertCircle size={20} className="text-amber-400 flex-none mt-0.5" />
-              <div className="min-w-0">
-                <h3 className="text-white font-semibold text-base">{confirmState.title}</h3>
-                {confirmState.message && (
-                  <p className="text-gray-400 text-sm mt-1">{confirmState.message}</p>
-                )}
-              </div>
-            </div>
-
-            {confirmState.bullets && confirmState.bullets.length > 0 && (
-              <ul className="space-y-1.5 text-sm text-gray-300 list-disc pl-9">
-                {confirmState.bullets.map((b, i) => (
-                  <li key={i} className="whitespace-pre-wrap break-words">{b}</li>
-                ))}
-              </ul>
-            )}
-
-            <div className="flex gap-3 justify-end pt-2">
-              <button
-                onClick={() => closeConfirm(false)}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
-              >
-                {launchScreen.cancelButton}
-              </button>
-              <button
-                onClick={() => closeConfirm(true)}
-                className={
-                  confirmState.danger
-                    ? 'px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm transition-colors'
-                    : 'px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors'
-                }
-              >
-                {confirmState.confirmLabel}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {relinkPrompt && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4"
-          onMouseDown={() => closeRelink({ action: 'cancel' })}
-        >
-          <div
-            className="bg-gray-800 rounded-xl border border-gray-700 shadow-2xl w-full max-w-lg p-6 space-y-4"
-            onMouseDown={e => e.stopPropagation()}
-          >
-            <div className="flex items-start gap-3">
-              <FolderSearch size={20} className="text-blue-400 flex-none mt-0.5" />
-              <div className="min-w-0">
-                <h3 className="text-white font-semibold text-base">{launchScreen.relinkTitle}</h3>
-                <p className="text-gray-400 text-sm mt-1">{launchScreen.relinkMessage}</p>
-              </div>
-            </div>
-
-            <ul className="space-y-2 text-sm">
-              {relinkPrompt.dirs.map(d => {
-                const located = !!dirOverrides[d.label];
-                const resolved = d.exists || located;
-                return (
-                  <li key={d.label} className="flex items-start gap-2">
-                    {resolved
-                      ? <CheckCircle2 size={16} className="text-emerald-400 flex-none mt-0.5" />
-                      : <AlertTriangle size={16} className="text-amber-400 flex-none mt-0.5" />}
-                    <span className="min-w-0">
-                      <span className="text-gray-200">{d.label}</span>{' '}
-                      <span className={resolved ? 'text-emerald-400' : 'text-amber-400'}>
-                        {resolved ? launchScreen.statusFound : launchScreen.statusMissing}
-                      </span>
-                      <span className="block text-gray-500 text-xs break-words">
-                        {dirOverrides[d.label] ?? d.path}
-                      </span>
-                      {!d.exists && (
-                        <button
-                          onClick={() => handleBrowseMissingDir(d.label, d.path)}
-                          className="mt-1.5 flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-md transition-colors"
-                        >
-                          <FolderOpen size={13} />
-                          {launchScreen.locate}
-                        </button>
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-
-              {relinkPrompt.nameConflict && (
-                <li className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    {readyName !== null
-                      ? <CheckCircle2 size={16} className="text-emerald-400 flex-none" />
-                      : <AlertTriangle size={16} className="text-amber-400 flex-none" />}
-                    <span>
-                      <span className="text-gray-200">{launchScreen.nameLabel}</span>{' '}
-                      <span className={readyName !== null ? 'text-emerald-400' : 'text-amber-400'}>
-                        {readyName !== null ? launchScreen.nameConflictSelected : launchScreen.nameConflictDiffers}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pl-6">
-                    <button
-                      onClick={() => setReadyName(relinkPrompt.internalName)}
-                      className={
-                        'px-3 py-1 rounded-lg text-sm transition-colors ' +
-                        (readyName === relinkPrompt.internalName
-                          ? 'bg-blue-600 text-white ring-2 ring-blue-400'
-                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
-                      }
-                      data-tooltip={tooltips.keepSeeNoteName}
-                    >
-                      "{relinkPrompt.internalName}"
-                    </button>
-                    <button
-                      onClick={() => setReadyName(relinkPrompt.settingsName)}
-                      className={
-                        'px-3 py-1 rounded-lg text-sm transition-colors ' +
-                        (readyName === relinkPrompt.settingsName
-                          ? 'bg-blue-600 text-white ring-2 ring-blue-400'
-                          : 'bg-gray-700 hover:bg-gray-600 text-gray-200')
-                      }
-                      data-tooltip={tooltips.useFolderName}
-                    >
-                      "{relinkPrompt.settingsName}"
-                    </button>
-                  </div>
-                </li>
-              )}
+          {confirmState.bullets && confirmState.bullets.length > 0 && (
+            <ul className="space-y-1.5 text-sm text-gray-300 list-disc pl-9">
+              {confirmState.bullets.map((b, i) => (
+                <li key={i} className="whitespace-pre-wrap break-words">{b}</li>
+              ))}
             </ul>
-
-            <div className="flex gap-3 justify-end pt-1">
-              <button
-                onClick={() => closeRelink({ action: 'cancel' })}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm"
-              >
-                {launchScreen.cancelButton}
-              </button>
-              {(() => {
-                const requiredDirs = relinkPrompt.dirs.filter(d => d.label !== 'buzzdetect');
-                const allRequiredFound = requiredDirs.every(d => d.exists || !!dirOverrides[d.label]);
-                const nameReady = !relinkPrompt.nameConflict || readyName !== null;
-                const canRelink = allRequiredFound && nameReady;
-                return (
-                  <button
-                    disabled={!canRelink}
-                    onClick={() =>
-                      closeRelink({
-                        action: 'relink',
-                        name: relinkPrompt.nameConflict ? readyName! : relinkPrompt.settingsName,
-                        dirOverrides: Object.keys(dirOverrides).length ? dirOverrides : undefined,
-                      })
-                    }
-                    className={
-                      !canRelink
-                        ? 'px-4 py-2 bg-gray-700 text-gray-500 rounded-lg text-sm cursor-not-allowed'
-                        : 'px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors'
-                    }
-                  >
-                    {launchScreen.relinkButton}
-                  </button>
-                );
-              })()}
-
-            </div>
-          </div>
-        </div>
+          )}
+        </ConfirmDialog>
       )}
+
+      {relinkPrompt && <RelinkDialog info={relinkPrompt} onResolve={closeRelink} />}
     </div>
   );
 }

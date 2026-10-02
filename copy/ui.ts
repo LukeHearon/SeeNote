@@ -346,6 +346,7 @@ export const annotationToolLibrary = {
   get exampleClipsSubtitle() { return getOverride('ui.annotationToolLibrary.exampleClipsSubtitle') ?? "— example clips"; },
   get noExampleClips() { return getOverride('ui.annotationToolLibrary.noExampleClips') ?? "No example clips."; },
   get frequencyLabel() { return getOverride('ui.annotationToolLibrary.frequencyLabel') ?? "Frequency (Hz)"; },
+  showIn: (fileManager: string) => `Show in ${fileManager}`,
 };
 
 export const annotationOverlay = {

@@ -1,4 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
+import { Z } from '../constants';
 
 export interface ContextMenuItem {
   label: string;
@@ -48,20 +50,17 @@ export default function ContextMenu({ x, y, items, onClose, minWidth = 160 }: Co
     const onMouseDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    return () => document.removeEventListener('mousedown', onMouseDown);
   }, [onClose]);
+  // Through the shared Escape stack, so a menu opened over a modal closes alone.
+  useEscapeKey(onClose);
 
   return (
     <div
       ref={ref}
-      className="fixed z-[100] bg-slate-800 border border-slate-600 rounded-lg shadow-2xl py-1"
-      style={{ left: pos.left, top: pos.top, minWidth }}
+      className="fixed bg-slate-800 border border-slate-600 rounded-lg shadow-2xl py-1"
+      style={{ left: pos.left, top: pos.top, minWidth, zIndex: Z.contextMenu }}
     >
       {items.map((item, i) => (
         <React.Fragment key={`${item.label}-${i}`}>

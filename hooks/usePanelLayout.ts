@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { startDragSession, useCollapsibleSidebar } from './useCollapsibleSidebar';
 import { useSidebarSections, SidebarSectionsApi, SidebarSectionsState } from './useSidebarSections';
+import { isEditableTarget } from './useHotkeys';
 
 export interface PanelLayoutInitial {
   splitRatio: number;
@@ -101,15 +102,10 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
 
   // H held → hide annotation fills/text (border stays). keyup restores them.
   useEffect(() => {
-    const inInput = (t: EventTarget | null) => {
-      if (!(t instanceof HTMLElement)) return false;
-      if (t.isContentEditable) return true;
-      return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT';
-    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== 'h') return;
       if (e.repeat) return;
-      if (inInput(e.target)) return;
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
       setHideLabels(true);
     };
