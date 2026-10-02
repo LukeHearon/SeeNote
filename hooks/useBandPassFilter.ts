@@ -16,7 +16,6 @@ export interface BandPassFilterApi {
   setFilterStrength: React.Dispatch<React.SetStateAction<number>>;
   handleToggleFilterTool: () => void;
   engageBandPassFilter: (band?: BandPassFilter | null, strengthOverride?: number) => void;
-  handleToggleFilterState: () => void;
   handleDisableBandPassFilter: () => void;
   handleEnableBandPassFilter: (strength: number) => void;
   handleBandPassFilterDrawn: (f: BandPassFilter) => void;
@@ -30,7 +29,6 @@ export interface BandPassFilterParams<Prefs extends { bandPassFilter?: BandPassF
   project: { id: string; preferences: Prefs };
   engineRef: MutableRefObject<AudioEngine | null>;
   activationStack: ActivationStackApi;
-  projectRef: MutableRefObject<{ id: string; preferences: Prefs }>;
   // Shared with AnnotationWindow's other persist effects: gates persistence off
   // until the project-change reset has run for this project id.
   prevProjectIdRef: MutableRefObject<string | null>;
@@ -59,7 +57,6 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
   project,
   engineRef,
   activationStack,
-  projectRef,
   prevProjectIdRef,
   updateProjectPreferences,
   isAudioTrack,
@@ -186,7 +183,6 @@ export function useBandPassFilter<Prefs extends { bandPassFilter?: BandPassFilte
     setFilterStrength,
     handleToggleFilterTool,
     engageBandPassFilter,
-    handleToggleFilterState,
     handleDisableBandPassFilter,
     handleEnableBandPassFilter,
     handleBandPassFilterDrawn,

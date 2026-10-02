@@ -3,8 +3,10 @@ import { Annotation, AnnotationTool, LoadedAnnotations, Project } from '../types
 import { readTextFile } from '../utils/tauriCommands';
 import { parseAudacityContent, generateAudacityContent } from '../utils/helpers';
 import {
-  annotationFileContent, persistAnnotations, persistAnnotationsIfChanged, recallDiskContent, rememberDiskContent,
+  annotationFileContent, persistAnnotations, persistAnnotationsIfChanged, persistMergedWithDisk,
+  recallDiskContent, rememberDiskContent, resolveFlushTarget,
 } from '../utils/annotationPersist';
+import { registerExitFlusher } from '../utils/exitFlush';
 import { getLocalSyncStatus } from '../utils/tauriCommands';
 import { setMergeAnnotations } from '../utils/projectCommands';
 import type { AnnotationIoGate } from '../utils/annotationIoGate';
@@ -77,6 +79,36 @@ export function useAnnotationLoad({
   // Bumped per load, so a slower earlier read of the same track (a refresh and
   // a post-pull reload racing) can't land after a newer one.
   const loadGenRef = useRef(0);
+  const getAnnotationPathRef = useRef(getAnnotationPath);
+  getAnnotationPathRef.current = getAnnotationPath;
+
+  // The pending debounced write must survive leaving: the window closing, or
+  // this view unmounting (back arrow, OS open-with). Declared before the
+  // autosave effect so this cleanup runs first, while the timer is still set.
+  useEffect(() => {
+    const flushOnExit = async () => {
+      if (!autoSaveTimeoutRef.current) return;
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+      const target = resolveFlushTarget(loadedAnnotationsRef.current, trackPathRef.current, getAnnotationPathRef.current);
+      if (!target) return;
+      // Let a running sync finish first; its post-pull reload won't run once
+      // we're gone, so the write merges with what it left on disk.
+      await ioGate.settle();
+      const decimals = projectRef.current?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
+      try {
+        await persistMergedWithDisk(target.annotPath, target.annotations, decimals);
+      } catch (err) {
+        console.error('Annotation save on exit failed:', err);
+      }
+    };
+    const unregister = registerExitFlusher(flushOnExit);
+    return () => {
+      unregister();
+      flushOnExit();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!trackPath || !annotationDirectory) return;

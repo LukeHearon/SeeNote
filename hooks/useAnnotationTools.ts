@@ -243,8 +243,9 @@ export function useAnnotationTools({
 
     // Rename matching annotations in every other track's annotation file on disk.
     // The current track's file will be updated by the auto-save triggered above.
-    renameLabelAcrossTracks(allTracks.filter(t => t !== trackPath), getAnnotationPath, exactLabelMatcher(oldText), newText);
-  }, [annotationTools, allTracks, trackPath, getAnnotationPath]);
+    renameLabelAcrossTracks(allTracks.filter(t => t !== trackPath), getAnnotationPath, exactLabelMatcher(oldText), newText)
+      .catch(err => addLog(`Tool rename: ${err instanceof Error ? err.message : err}`, 'error'));
+  }, [annotationTools, allTracks, trackPath, getAnnotationPath, addLog]);
 
   const handleDeleteTool = useCallback((toolIndex: number, mode: 'unlink' | 'delete') => {
     const tool = annotationTools[toolIndex];

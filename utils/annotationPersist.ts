@@ -1,6 +1,7 @@
 import { Annotation, LoadedAnnotations } from '../types';
-import { writeTextFile, checkFileExists } from './tauriCommands';
-import { generateAudacityContent, isPersistableAnnotation } from './helpers';
+import { writeTextFile, checkFileExists, readTextFile } from './tauriCommands';
+import { setMergeAnnotations } from './projectCommands';
+import { generateAudacityContent, isPersistableAnnotation, parseAudacityContent } from './helpers';
 
 /**
  * The single write decision for an annotation file. Both the debounced autosave
@@ -145,4 +146,25 @@ export function resolveFlushTarget(
   const annotPath = getAnnotationPath(loaded.trackPath);
   if (!annotPath) return null;
   return { annotPath, annotations: loaded.annotations };
+}
+
+/**
+ * Persist a list the user is leaving behind (unmount, window close) when the
+ * file may have changed since we last wrote or read it — a pull finished, but
+ * the reload that would have merged it never will. Three-way-merges against
+ * the last known content instead of overwriting, the same way the reload does.
+ */
+export async function persistMergedWithDisk(
+  annotPath: string,
+  annotations: Annotation[],
+  decimals: number,
+): Promise<void> {
+  const ancestor = recallDiskContent(annotPath);
+  const disk = (await readTextFile(annotPath)) ?? '';
+  if (ancestor === undefined || disk === ancestor) {
+    await persistAnnotations(annotPath, annotations, decimals);
+    return;
+  }
+  const merged = await setMergeAnnotations(ancestor, annotationFileContent(annotations, decimals), disk);
+  await persistAnnotations(annotPath, merged ? parseAudacityContent(merged, []) : [], decimals);
 }

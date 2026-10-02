@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
-
-// Every live debouncer, so the window-close handler can flush them all.
-const live = new Set<() => void>();
-
-/** Run every pending debounced write now (window close). */
-export function flushAllDebouncedWrites(): void {
-  for (const flush of [...live]) flush();
-}
+import { registerExitFlusher } from '../utils/exitFlush';
 
 /**
  * A debounce whose pending write is never dropped: it runs on `flush()`,
- * on unmount (back arrow, OS open-with), and via `flushAllDebouncedWrites()`
- * when the window closes. A plain `setTimeout` + clearTimeout cleanup lost the
+ * on unmount (back arrow, OS open-with), and when the window closes (see
+ * utils/exitFlush.ts). A plain `setTimeout` + clearTimeout cleanup lost the
  * last settle of a burst whenever the user left inside the delay.
  *
  * `schedule` replaces any pending write: pass a closure over the latest values.
@@ -35,9 +28,9 @@ export function useFlushableDebounce() {
   }, [flush]);
 
   useEffect(() => {
-    live.add(flush);
+    const unregister = registerExitFlusher(flush);
     return () => {
-      live.delete(flush);
+      unregister();
       flush();
     };
   }, [flush]);

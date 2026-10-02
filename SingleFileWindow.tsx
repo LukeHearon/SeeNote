@@ -22,7 +22,6 @@ import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTi
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
-import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { createViewportStore } from './utils/viewportStore';
 import { useActivationStack } from './hooks/useActivationStack';
 import { usePanelLayout } from './hooks/usePanelLayout';
@@ -201,7 +200,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const viewportStoreRef = useRef(createViewportStore());
 
   const {
-    frameSourceRef, frameSourceVersion, setFrameSourceVersion, frameSourceDecodeError,
+    frameSourceRef, frameSourceVersion, frameSourceDecodeError,
     videoPrefetchEndRef, videoPrefetchBusyRef, preZoomExtentRef, prerollVideo,
   } = useVideoFrameSource({
     // Effective, not preferred: a subset closes the frame source outright.
@@ -240,13 +239,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const prevProjectIdRef = useRef<string | null>('single-file');
   const {
     filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter, filterStrength, setFilterStrength,
-    handleToggleFilterTool, handleToggleFilterState, handleDisableBandPassFilter,
+    handleToggleFilterTool, handleDisableBandPassFilter,
     handleEnableBandPassFilter, handleBandPassFilterDrawn,
   } = useBandPassFilter({
     project: bandPassProjectRef.current,
     engineRef,
     activationStack,
-    projectRef: bandPassProjectRef,
     prevProjectIdRef,
     updateProjectPreferences: async () => undefined,
     isAudioTrack,

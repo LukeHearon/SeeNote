@@ -6,9 +6,9 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import { Annotation, LoadedAnnotations, SpectrogramSettings, FrequencyScale, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_THRESHOLD, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, ANNOTATION_FILE_EXT, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
-import { exportToAudacity, makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
+import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
+import { DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_BUZZDETECT_PANEL_HEIGHT, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, DEFAULT_BUZZDETECT_MIN_DETECTION_RATE, DEFAULT_BUZZDETECT_SUBSET_BUFFER, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, ANNOTATION_FILE_EXT, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
 import { parseFilenameTime, suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
 import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
@@ -28,7 +28,6 @@ import { preferencesPatch, type UpdateProjectPreferences } from './utils/project
 import { AnnotationIoGate } from './utils/annotationIoGate';
 import { resolveVideoElementUrl } from './utils/videoUrl';
 import { createViewportStore } from './utils/viewportStore';
-import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { useHotkeys, digitFromEvent } from './hooks/useHotkeys';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import { useExamplePlayer } from './hooks/useExamplePlayer';
@@ -54,8 +53,6 @@ import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager } from './utils/projectCommands';
-import { AudioEngine } from './utils/AudioEngine';
-import { VideoElementEngine } from './utils/VideoElementEngine';
 import TooltipLayer from './components/TooltipLayer';
 import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
@@ -79,10 +76,9 @@ export interface AnnotationWindowProps {
   onClose: () => void;
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
   updateProjectPreferences: UpdateProjectPreferences;
-  touchLastOpened: (id: string) => void;
 }
 
-export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences, touchLastOpened }: AnnotationWindowProps) {
+export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences }: AnnotationWindowProps) {
   // Ref that stays in sync with project prop — avoids stale-closure bugs in
   // persist effects and the navigation/shuffle handlers below.
   const projectRef = useRef<Project>(project);
@@ -93,7 +89,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // stale-closure mirror refs live in useFileNavigation. Instantiated below.
   const {
     videoSrc, setVideoSrc,
-    trackName, setTrackName,
+    setTrackName,
     trackPath, setTrackPath,
     currentDirectory, setCurrentDirectory,
     isAudioTrack, setIsAudioTrack,
@@ -440,7 +436,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // args passed to usePlaybackTransport/useBandPassFilter further down.
   const {
     annotationTools,
-    setAnnotationTools,
     annotationToolsRef,
     panelEditingToolIndex,
     setPanelEditingToolIndex,
@@ -599,7 +594,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     togglePlay,
     seek,
     clearSelectionEnd,
-    activeTransport,
     getMediaTime,
     attachVideoElement,
   } = usePlaybackTransport({
@@ -658,11 +652,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => { selectionRef.current = selection; }, [selection]);
 
   // Pre-decode PCM for the selection so repeat plays are instant. AudioEngine
-  // skips the call if the range is already covered by its cache.
+  // skips the call if the range is already covered by its cache. Debounced like
+  // the video warm-up below: a drag changes the selection on every mouse move,
+  // and each uncached call opens (and cancels) a decode stream.
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine || !selection) return;
-    engine.preloadRange(selection.start, selection.end).catch(() => {});
+    const timer = setTimeout(() => {
+      engine.preloadRange(selection.start, selection.end).catch(() => {});
+    }, 150);
+    return () => clearTimeout(timer);
   }, [selection]);
 
   // Pre-decode video frames for the selection so the FIRST play is snappy too,
@@ -735,6 +734,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   });
 
   // Open a track by absolute path (called from button or file panel)
+  const openGenRef = useRef(0);
   const handleOpenTrack = useCallback(async (absolutePath: string) => {
     // Guard: never attempt to open a file whose extension we can't decode.
     // Both the tree and nav paths already filter these out; this is a belt-and-suspenders
@@ -748,6 +748,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // below nulls the persistence snapshot, and setTrackPath(same) never
     // re-triggers the load effect that would re-arm it.
     if (absolutePath === trackPathRef.current) return;
+    // A newer open supersedes this one at every await below.
+    const gen = ++openGenRef.current;
+    const superseded = () => gen !== openGenRef.current;
 
     // Tear down any prior frame source — VideoFrame handles hold GPU memory.
     if (frameSourceRef.current) {
@@ -762,6 +765,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // an edit made just before switching tracks (e.g. a tool rename cascade
     // updating annotation text/color) never reaches disk.
     await flushPendingAutosaveRef.current();
+    if (superseded()) return;
     // The track being left may have just been rewritten by that flush, so the
     // cached whole-project label index (Find & Rename) no longer matches disk.
     invalidateProjectLabelIndex();
@@ -795,6 +799,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     setTrackName(fileName);
 
     const videoElementUrl = await resolveVideoElementUrl(absolutePath);
+    if (superseded()) return;
     setVideoSrc(videoElementUrl);
 
     addLog(`Opening: ${fileName}`);
@@ -826,6 +831,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             dur = info.duration_secs;
             addLog(`File info: ${dur.toFixed(2)}s, ${sr}Hz, ${info.channels}ch`);
         }
+        if (superseded()) return;
 
         setSampleRate(sr);
         if (dur > 0) setDuration(dur);
@@ -853,6 +859,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         // that effect and orphaned whichever source lost, leaking its VideoFrame
         // handles; SingleFileWindow has always relied on the effect alone.
     } catch (err) {
+        if (superseded()) return;
         const errMsg = err instanceof Error ? err.message : String(err);
         addLog(`Error opening file: ${errMsg}`, 'error');
         // Fully clear state so stale audio/spectrogram/video from the previous
@@ -872,7 +879,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             setFrameSourceVersion(v => v + 1);
         }
     } finally {
-        setIsProcessing(false);
+        if (!superseded()) setIsProcessing(false);
     }
   }, [settings.fftSize, installChunkCache]);
 
@@ -934,12 +941,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [displayQueue, currentFileIndex, trackPath, handleOpenTrack]);
 
-  // Annotation navigation helpers (used by toolbar buttons and keyboard shortcuts)
-  const sortedAnnotations = useMemo(() => [...annotations].sort((a, b) => a.start - b.start), [annotations]);
-  // Mirror of sortedAnnotations so the playback-time subscriber can read the
-  // current list without re-subscribing on every annotation change.
-  const sortedAnnotationsRef = useRef(sortedAnnotations);
-  useEffect(() => { sortedAnnotationsRef.current = sortedAnnotations; }, [sortedAnnotations]);
   // Feed subsequent edits into the persistence snapshot, but ONLY while it
   // already names this track. useAnnotationLoad seeds it (track + freshly read
   // list, in one assignment) when the read completes; this effect just keeps
@@ -950,7 +951,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => {
     const loaded = loadedAnnotationsRef.current;
     if (loaded && loaded.trackPath === trackPath) {
-      loadedAnnotationsRef.current = { trackPath: loaded.trackPath, annotations: sortedAnnotations };
+      loadedAnnotationsRef.current = { trackPath: loaded.trackPath, annotations };
     }
     // Same question the line above asks, mirrored into state for the find dock:
     // is `annotations` this track's real list, or the placeholder [] a track
@@ -959,17 +960,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     // mid-walk. The ref itself is deliberately not state (it's on the
     // persistence path), hence the mirror.
     setAnnotationsLoadedTrack(loadedAnnotationsRef.current?.trackPath ?? null);
-  }, [sortedAnnotations, trackPath]);
-  // The same list on the display axis, for the prev/next-annotation enablement
-  // below: that's a question about what the user can navigate to on screen, and
-  // the playhead it's compared against is a display position. (The source-time
-  // ref above stays as-is — persistence and sync must see real file times.)
-  const sortedDisplayAnnotations = useMemo(
-    () => [...displayAnnotations].sort((a, b) => a.start - b.start),
-    [displayAnnotations],
-  );
-  const sortedDisplayAnnotationsRef = useRef(sortedDisplayAnnotations);
-  useEffect(() => { sortedDisplayAnnotationsRef.current = sortedDisplayAnnotations; }, [sortedDisplayAnnotations]);
+  }, [annotations, trackPath]);
+  // Earliest and latest annotation start on the display axis, for the
+  // prev/next-annotation enablement below: that's a question about what the
+  // user can navigate to on screen, and the playhead it's compared against is a
+  // display position. One linear pass per edit; the per-tick check is O(1).
+  const displayStartExtent = useMemo(() => {
+    if (displayAnnotations.length === 0) return null;
+    let min = Infinity, max = -Infinity;
+    for (const a of displayAnnotations) {
+      if (a.start < min) min = a.start;
+      if (a.start > max) max = a.start;
+    }
+    return { min, max };
+  }, [displayAnnotations]);
+  const displayStartExtentRef = useRef(displayStartExtent);
+  useEffect(() => { displayStartExtentRef.current = displayStartExtent; }, [displayStartExtent]);
 
   // Prev/next-annotation button enablement. These depend on playback time, which
   // updates ~50/sec via the currentTime store. Recomputing them through a memo
@@ -984,13 +990,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const canGoNextRef = useRef(false);
   const recomputeCanGo = useCallback(() => {
     const t = currentTimeStoreRef.current.get();
-    // The list is sorted by start, so the earliest and latest answer both
-    // questions — this runs on every playback tick, and a linear scan of every
-    // annotation twice per tick is work proportional to a number that grows all
-    // session.
-    const anns = sortedDisplayAnnotationsRef.current;
-    const prev = anns.length > 0 && anns[0].start < t - 0.05;
-    const next = anns.length > 0 && anns[anns.length - 1].start > t + 0.05;
+    // This runs on every playback tick, so it reads the precomputed extent
+    // rather than scanning the annotations.
+    const ext = displayStartExtentRef.current;
+    const prev = ext !== null && ext.min < t - 0.05;
+    const next = ext !== null && ext.max > t + 0.05;
     if (prev !== canGoPrevRef.current) { canGoPrevRef.current = prev; setCanGoPrevAnnotation(prev); }
     if (next !== canGoNextRef.current) { canGoNextRef.current = next; setCanGoNextAnnotation(next); }
   }, []);
@@ -999,7 +1003,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   useEffect(() => currentTimeStoreRef.current.subscribe(recomputeCanGo), [recomputeCanGo]);
   // Also recompute when the annotation set changes (a new/removed annotation can
   // flip enablement without the playhead moving).
-  useEffect(() => { recomputeCanGo(); }, [sortedDisplayAnnotations, recomputeCanGo]);
+  useEffect(() => { recomputeCanGo(); }, [displayStartExtent, recomputeCanGo]);
 
   // Toggle shuffle: randomise current allTracks order
 
@@ -1121,7 +1125,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     bandPassFilter, setBandPassFilter,
     filterStrength, setFilterStrength,
     handleToggleFilterTool,
-    handleToggleFilterState,
     handleDisableBandPassFilter,
     handleEnableBandPassFilter,
     handleBandPassFilterDrawn,
@@ -1129,7 +1132,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     project,
     engineRef,
     activationStack,
-    projectRef,
     prevProjectIdRef,
     updateProjectPreferences,
     isAudioTrack,
@@ -1983,13 +1985,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       }},
   ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
-  const performExport = async () => {
-      if (annotations.length === 0) return;
-      const decimals = project?.settings.outputRoundingDecimals ?? DEFAULT_OUTPUT_ROUNDING_DECIMALS;
-      await exportToAudacity(annotations, trackName, trackPath, decimals);
-      addLog('Exported annotations as TXT');
-  };
-
 
   // A bound selection carries its annotation with it, exactly as dragging the
   // selection's edges does (useSpectrogramInteraction). Keyboard extends stream
@@ -1999,20 +1994,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // ramp takes many steps per render.
   const [sweepStart, setSweepStart] = useState<number | null>(null);
 
-  const boundResizeDraftRef = useRef<Annotation[] | null>(null);
+  // Keyed to its track: a draft still settling when the track switches must
+  // not be committed onto the next track's annotations.
+  const boundResizeDraftRef = useRef<{ trackPath: string | null; list: Annotation[] } | null>(null);
   const resizeBoundAnnotationTo = useCallback((sel: Selection | null) => {
     if (!boundAnnotationId || !sel) return;
     const src = selectionToSource(sel);
-    const next = (boundResizeDraftRef.current ?? annotations).map(a =>
+    const draft = boundResizeDraftRef.current;
+    const base = draft && draft.trackPath === trackPathRef.current ? draft.list : annotations;
+    const next = base.map(a =>
       a.id === boundAnnotationId ? { ...a, start: src.start, end: src.end } : a
     );
-    boundResizeDraftRef.current = next;
+    boundResizeDraftRef.current = { trackPath: trackPathRef.current, list: next };
     setAnnotations(next);
   }, [boundAnnotationId, annotations, selectionToSource, setAnnotations]);
   const commitBoundAnnotationResize = useCallback(() => {
     const draft = boundResizeDraftRef.current;
     boundResizeDraftRef.current = null;
-    if (draft) handleAnnotationsCommit(draft);
+    if (draft && draft.trackPath === trackPathRef.current) handleAnnotationsCommit(draft.list);
   }, [handleAnnotationsCommit]);
 
   // A Shift+Arrow extend that builds a selection from scratch (nothing bound

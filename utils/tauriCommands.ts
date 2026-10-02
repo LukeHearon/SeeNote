@@ -616,3 +616,12 @@ export function closeSyncGuideWindow(): void {
 export async function applyCopyOverrides(overrides: Record<string, string>): Promise<string> {
   return invoke<string>('apply_copy_overrides', { overridesJson: JSON.stringify(overrides, null, 2) });
 }
+
+/**
+ * Run `beforeClose` when the user closes this window; the window closes once it
+ * resolves. Returns an unlisten function.
+ */
+export async function onWindowCloseRequested(beforeClose: () => Promise<void>): Promise<() => void> {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().onCloseRequested(() => beforeClose());
+}

@@ -115,12 +115,18 @@ export function useSyncManagement({
   // checkout, and leaving before the post-pull reload merges would drop the
   // edit that merge exists to keep. With nothing pending there is nothing to
   // lose, so a track switch never stalls behind a background pull.
+  // Returns only once nothing is pending, so a caller that wipes annotation
+  // state right after the await can't drop an edit made while it waited.
   const flushPendingAutosave = useCallback(async () => {
-    for (let i = 0; i < 5 && autoSaveTimeoutRef.current; i++) {
-      await ioGate.settle();
-      await flushNow();
+    for (let i = 0; i < 5; i++) {
+      if (autoSaveTimeoutRef.current) {
+        await ioGate.settle();
+        await flushNow();
+      } else {
+        await whenWritesSettled();
+      }
+      if (!autoSaveTimeoutRef.current) return;
     }
-    await whenWritesSettled();
   }, [ioGate, flushNow, autoSaveTimeoutRef]);
 
   // Sync annotations to/from the configured GitHub repo. Flushes any pending
