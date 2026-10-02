@@ -19,6 +19,24 @@ export function wantsCanvasRenderer(mode: VideoMode, hasSelection: boolean): boo
 }
 
 /**
+ * Whether the plain <video> element — not the AudioEngine — is the transport:
+ * a video file whose mode isn't Off and whose picture is NOT being drawn on the
+ * canvas (Fast, Mixed before a selection, or a canvas-wanting mode whose format
+ * has no VideoFrameSource). The one definition behind both what VideoPane
+ * renders and which engine usePlaybackTransport drives.
+ */
+export function isVideoElementTransport(o: {
+  isAudioTrack: boolean;
+  hasVideoSrc: boolean;
+  mode: VideoMode;
+  hasSelection: boolean;
+  hasFrameSource: boolean;
+}): boolean {
+  if (o.isAudioTrack || !o.hasVideoSrc || o.mode === 'off') return false;
+  return !(o.hasFrameSource && wantsCanvasRenderer(o.mode, o.hasSelection));
+}
+
+/**
  * The mode to *display* in the UI. When `mode` wants the canvas but this
  * file has no VideoFrameSource (e.g. WEBM — see VideoFrameSource's MP4/MOV-only
  * `canUseFrameSource`), playback silently falls back to the plain <video>

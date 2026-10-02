@@ -136,7 +136,11 @@ export class VideoFrameSource {
 
     const resp = await fetch(assetUrl);
     if (!resp.ok) throw new Error(`fetch failed: ${resp.status} ${resp.statusText}`);
-    this.rawBuffer = await resp.arrayBuffer();
+    const bytes = await resp.arrayBuffer();
+    // close() during the fetch: drop the bytes instead of resurrecting a source
+    // nobody holds.
+    if (this.closed) throw new Error('VideoFrameSource closed while opening');
+    this.rawBuffer = bytes;
 
     return new Promise((resolve, reject) => {
       const file = createFile();

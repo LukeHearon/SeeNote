@@ -4,7 +4,7 @@ import VideoPlayer from './VideoPlayer';
 import CanvasVideoPlayer from './CanvasVideoPlayer';
 import VideoZoomLayer from './VideoZoomLayer';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
-import { wantsCanvasRenderer, displayVideoMode } from '../utils/videoPlaybackMode';
+import { wantsCanvasRenderer, displayVideoMode, isVideoElementTransport } from '../utils/videoPlaybackMode';
 import { useHotkeys } from '../hooks/useHotkeys';
 import type { VideoMode } from '../types';
 import { isLinux } from '../utils/platform';
@@ -107,8 +107,9 @@ export default function VideoPane({
   // The <video> element is the active sound source exactly when it's the live
   // renderer for a video file (Fast, and Mixed before a selection). Then it
   // plays its own audio and must not be muted; VideoElementEngine drives it.
-  const videoElementIsTransport =
-    !isAudioTrack && !usingCanvas && !showDisabledPlaceholder && !!videoSrc;
+  const videoElementIsTransport = isVideoElementTransport({
+    isAudioTrack, hasVideoSrc: !!videoSrc, mode: videoMode, hasSelection, hasFrameSource: !!frameSource,
+  });
 
   // Pick the warning shown in the top-left corner.
   //   fast                                 → always: "not frame-accurate"

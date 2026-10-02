@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { AudioEngine } from '../utils/AudioEngine';
 import { VideoElementEngine } from '../utils/VideoElementEngine';
 import { VideoFrameSource } from '../utils/VideoFrameSource';
-import { wantsCanvasRenderer } from '../utils/videoPlaybackMode';
+import { wantsCanvasRenderer, isVideoElementTransport } from '../utils/videoPlaybackMode';
 import { createCurrentTimeStore } from '../utils/currentTimeStore';
 import { SpectrogramHandle } from '../components/Spectrogram';
 import { Selection, VideoMode, PlaybackTransport } from '../types';
@@ -156,6 +156,10 @@ export function usePlaybackTransport({
   // preroll awaits check this so stale resolutions don't start the engine
   // after the user has pressed pause or triggered a new play.
   const playTokenRef = useRef(0);
+  // True between the user asking to play and the transport actually being told
+  // to (the canvas preroll await), when `transport.isActive` is still false. A
+  // seek in that window must restart playback rather than cancel it.
+  const playPendingRef = useRef(false);
 
   // Create engine on mount, destroy on unmount
   useEffect(() => {
@@ -257,20 +261,20 @@ export function usePlaybackTransport({
     };
   }, []);
 
-  // Whether the <video> element — not the AudioEngine — is the active transport:
-  // true whenever VideoPane isn't actually rendering the canvas (Fast, Mixed
-  // before a selection, or a canvas-wanting mode whose format has no
-  // VideoFrameSource, e.g. WEBM). Must mirror VideoPane's own canvas/element
-  // choice via the shared `wantsCanvasRenderer` predicate — otherwise the
-  // rendered element and the transport driving it can disagree, leaving the
-  // <video> element mounted but never played/seeked (frozen on frame 1).
-  const usesVideoTransport = useCallback((): boolean => {
-    if (isAudioTrackRef.current || !videoSrcRef.current) return false;
-    const mode = videoModeRef.current;
-    if (mode === 'off') return false;
-    const canvasAvailable = !!frameSourceRef.current;
-    return !(canvasAvailable && wantsCanvasRenderer(mode, selectionRef.current !== null));
-  }, [isAudioTrackRef, videoSrcRef, videoModeRef, selectionRef, frameSourceRef]);
+  // Whether the <video> element — not the AudioEngine — is the active transport.
+  // The same predicate VideoPane uses to choose what to render
+  // (isVideoElementTransport): if the two disagreed, the rendered element and
+  // the transport driving it would too, leaving the <video> element mounted but
+  // never played/seeked (frozen on frame 1).
+  const usesVideoTransport = useCallback((): boolean => (
+    isVideoElementTransport({
+      isAudioTrack: isAudioTrackRef.current,
+      hasVideoSrc: !!videoSrcRef.current,
+      mode: videoModeRef.current,
+      hasSelection: selectionRef.current !== null,
+      hasFrameSource: !!frameSourceRef.current,
+    })
+  ), [isAudioTrackRef, videoSrcRef, videoModeRef, selectionRef, frameSourceRef]);
 
   // The active transport. AudioEngine and VideoElementEngine expose the same
   // play/pause/seek/getMediaTime/setGain/setPlaybackSpeed/isPlaying surface, so
@@ -311,6 +315,7 @@ export function usePlaybackTransport({
       if (isPlaying || isBuffering) {
           // Invalidate any in-flight preroll so its resolution can't start playback
           playTokenRef.current += 1;
+          playPendingRef.current = false;
           // Pause BOTH engines, not just the one activeTransport() currently
           // names. usesVideoTransport() reads frameSourceRef, which is populated
           // asynchronously (useVideoFrameSource) with nothing the transport-flip
@@ -340,7 +345,12 @@ export function usePlaybackTransport({
           startSec = 0;
           seek(0, true);
       }
+      // A paused scrub's frozen frame is released by that scrub's own completion,
+      // which the token bump below cancels — so release it here or the canvas
+      // would stay on the pre-scrub frame for the whole play.
+      frameSourceRef.current?.clearDisplayFreeze();
       setIsBuffering(true);
+      playPendingRef.current = true;
       const token = ++playTokenRef.current;
       addLog(`[togglePlay] playToken=${token} startSec=${startSec.toFixed(3)} sel=${sel ? `${sel.start.toFixed(3)}-${sel.end.toFixed(3)}` : 'none'} isAudioTrack=${isAudioTrack}`
         + (inputLagMs !== null ? ` keypress->handler=${inputLagMs.toFixed(0)}ms` : ''));
@@ -356,12 +366,15 @@ export function usePlaybackTransport({
       }
       // isPlaying is set to true only when onPlaying fires. endSec enables the
       // bounded selection stop on whichever transport is active.
+      playPendingRef.current = false;
       transport?.play(startSec, sel ? sel.end : undefined);
   }, [isPlaying, isBuffering, isAudioTrack, duration, prerollVideo, addLog, activeTransport, usesVideoTransport, examplePlayer, selectionRef, frameSourceRef, timelineRef]);
 
   const seek = useCallback(async (time: number, scrollView = false) => {
       const transport = activeTransport();
-      const wasPlaying = transport?.isPlaying ?? false;
+      // Playing OR still buffering toward it (see playPendingRef): both must
+      // restart after the seek, or the buffering spinner strands.
+      const wasPlaying = (transport?.isActive ?? false) || playPendingRef.current;
       // AudioEngine.seek() cancels its scheduled audio (we restart below if it
       // was playing); VideoElementEngine.seek() just moves currentTime and keeps
       // the element playing — so the element needs no restart.
@@ -412,16 +425,20 @@ export function usePlaybackTransport({
           if (time < durationRef.current) {
               const sel = selectionRef.current;
               setIsBuffering(true);
+              playPendingRef.current = true;
               const token = ++playTokenRef.current;
               if (frameSourceRef.current) {
                   const src = toSourceInterval(timelineRef, time, sel?.end);
                   await prerollVideo(src.start, src.end);
                   if (token !== playTokenRef.current) return;
               }
+              playPendingRef.current = false;
               engineRef.current?.play(time, sel ? sel.end : undefined);
           } else {
               // Seeked to/past end — stop cleanly rather than hanging
+              playPendingRef.current = false;
               setIsPlaying(false);
+              setIsBuffering(false);
           }
       }
   }, [isAudioTrack, prerollVideo, activeTransport, usesVideoTransport, durationRef, selectionRef, frameSourceRef, spectrogramRef, timelineRef]);
@@ -463,6 +480,7 @@ export function usePlaybackTransport({
     if (now === prevUsesVideoRef.current) return;
     prevUsesVideoRef.current = now;
     playTokenRef.current += 1;
+    playPendingRef.current = false;
     engineRef.current?.pause();
     videoEngineRef.current?.pause();
     setIsPlaying(false);
