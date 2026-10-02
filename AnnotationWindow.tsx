@@ -2526,10 +2526,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               if (c) setLeftPanelWidth(180);
               return !c;
             }),
-            onNavigatePrev: () => navigateFile('prev'),
-            onNavigateNext: () => navigateFile('next'),
-            canNavigatePrev: currentFileIndex > 0,
-            canNavigateNext: currentFileIndex < displayQueue.length - 1,
             shuffleMode,
             onStartShuffle: (folder: string) => startShuffle(folder === currentDirectory ? null : folder),
             onStopShuffle: stopShuffle,

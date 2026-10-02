@@ -1,44 +1,25 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
-import { ChevronRight, ChevronDown, ChevronLeft, ChevronsLeft, ArrowRight, Music, Film, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
+import { ChevronLeft, ChevronsLeft, Music, FolderOpen, PanelLeft, EyeOff } from 'lucide-react';
 import type { FileFilter } from '../utils/fileFilter';
-import { dirCountsFromFiles, totalCounts, DirCounts } from '../utils/fileTreeCounts';
-import { columnLayout, ColumnLayout } from '../utils/fileTreeColumns';
+import { totalCounts } from '../utils/fileTreeCounts';
+import { columnLayout } from '../utils/fileTreeColumns';
+import {
+  buildTree, filterUnderDir, flattenTree, getAllDirPaths, getAncestorPaths, toggleDirInSet, TreeNode,
+} from '../utils/fileTreeBuild';
 import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
 import SidebarSection from './SidebarSection';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
+import FileTreeScrollbar from './FileTreeScrollbar';
+import PinnedBreadcrumb, { breadcrumbInset } from './PinnedBreadcrumb';
+import { FileRow, FolderRow, NonMediaToggle, NonMediaItem, FilenameTimeInfo } from './FileRow';
 import { fileTree as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { parseFilenameTime } from '../utils/filenameTime';
-import { previewDateTimeFormat, DateTimeFormat } from '../utils/datetimeDisplay';
+import { isSupportedMediaFile } from '../constants';
+import { stripExt } from '../utils/helpers';
+import { basename, dirname } from '../utils/projectPaths';
+import { fileManagerLabel } from '../utils/platform';
 
-export interface FilenameTimeInfo {
-  pattern: string;
-  offsetSeparator?: string;
-  dateTimeFormat: DateTimeFormat;
-}
-
-/**
- * Filename tooltip, with a "(August 13, 1:00a)" second line when the name
- * matches the project's filename timestamp pattern. `displayText` is what the
- * tooltip shows (a bare name or a full path); the pattern is always matched
- * against just the basename, so a coincidental digit run in a parent
- * directory can't produce a bogus date.
- */
-function tooltipWithDate(displayText: string, name: string, info: FilenameTimeInfo): string {
-  const date = parseFilenameTime(name, info.pattern, info.offsetSeparator);
-  return date ? `${displayText}\n(${previewDateTimeFormat(info.dateTimeFormat, date)})` : displayText;
-}
-
-interface TreeNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children: TreeNode[];
-  fileCount: number; // precomputed — no recursive counting at render time
-  annotatedCount: number; // precomputed, alongside fileCount
-  buzzdetectCount: number; // precomputed: files here with buzzdetect results
-  nonMediaFiles?: string[]; // non-audio/video files directly in this dir
-}
+export type { FilenameTimeInfo };
 
 interface FileTreeProps {
   rootDirectory: string | null;
@@ -56,10 +37,6 @@ interface FileTreeProps {
   /** This section collapsed to its header within the sidebar's stack. */
   sectionCollapsed: boolean;
   onToggleSectionCollapsed: () => void;
-  onNavigatePrev: () => void;
-  onNavigateNext: () => void;
-  canNavigatePrev: boolean;
-  canNavigateNext: boolean;
   shuffleMode: boolean;
   /** Shuffle the tracks inside `folder` (entering it first if it isn't the current folder). */
   onStartShuffle: (folder: string) => void;
@@ -96,7 +73,8 @@ interface FileTreeProps {
   /**
    * Reports the header state the guide's live copy of these buttons needs, plus
    * the one action (expand/collapse) whose state lives inside this component.
-   * Called whenever `anyExpanded` flips.
+   * Called whenever `anyExpanded` flips; the action itself is stable and reads
+   * current state when invoked.
    */
   onHeaderState?: (state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => void;
 }
@@ -109,379 +87,11 @@ interface ContextMenuState {
   isAudioRoot?: boolean;
 }
 
-import { isSupportedMediaFile, SUPPORTED_AUDIO_EXTS, getExt } from '../constants';
-import { stripExt, basename } from '../utils/helpers';
-
-// OS-aware label for the system file browser
-const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
-const finderLabel = isWindows ? 'File Explorer' : 'Finder';
-
-// Overwrite every dir node's counts with the unfiltered totals so the file-tree
-// counts stay fixed regardless of the annotation / buzzdetect filters.
-function applyDirCounts(node: TreeNode, counts: Map<string, DirCounts>): void {
-  if (!node.isDir) return;
-  const c = counts.get(node.path);
-  node.fileCount = c?.total ?? 0;
-  node.annotatedCount = c?.annotated ?? 0;
-  node.buzzdetectCount = c?.buzzdetect ?? 0;
-  for (const child of node.children) applyDirCounts(child, counts);
-}
-
-/**
- * `files` is what the tree shows (after filtering); `countFiles` is the whole
- * unfiltered list the per-folder counts are taken from.
- */
-function buildTree(
-  rootDir: string,
-  files: string[],
-  nonMediaFiles: string[],
-  annotatedTracks: Set<string>,
-  buzzdetectTracks: Set<string>,
-  countFiles: string[],
-): TreeNode[] {
-  const root: TreeNode = { name: '', path: rootDir, isDir: true, children: [], fileCount: 0, annotatedCount: 0, buzzdetectCount: 0 };
-
-  for (const file of files) {
-    const rel = file.substring(rootDir.length + 1);
-    const parts = rel.split(/[\\/]/);
-
-    let node = root;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isLast = i === parts.length - 1;
-
-      if (isLast) {
-        node.children.push({ name: part, path: file, isDir: false, children: [], fileCount: 1, annotatedCount: 0, buzzdetectCount: 0 });
-      } else {
-        // Use a Map stored on the node for O(1) child lookups during tree building
-        if (!(node as any)._dirMap) (node as any)._dirMap = new Map<string, TreeNode>();
-        const dirMap = (node as any)._dirMap as Map<string, TreeNode>;
-        let child = dirMap.get(part);
-        if (!child) {
-          const dirPath = rootDir + '/' + parts.slice(0, i + 1).join('/');
-          child = { name: part, path: dirPath, isDir: true, children: [], fileCount: 0, annotatedCount: 0, buzzdetectCount: 0 };
-          dirMap.set(part, child);
-          node.children.push(child);
-        }
-        node = child;
-      }
-    }
-  }
-
-  // Counts come from the unfiltered list, so they don't move when a filter is
-  // toggled.
-  const counts = dirCountsFromFiles(rootDir, countFiles, annotatedTracks, buzzdetectTracks);
-  for (const child of root.children) applyDirCounts(child, counts);
-
-  // Attach non-media files to their containing directory nodes
-  if (nonMediaFiles.length > 0) {
-    const nonMediaByDir = new Map<string, string[]>();
-    for (const file of nonMediaFiles) {
-      const rel = file.substring(rootDir.length + 1);
-      const parts = rel.split(/[\\/]/);
-      if (parts.length <= 1) continue; // root-level, handled separately by component
-      const dirPath = rootDir + '/' + parts.slice(0, -1).join('/');
-      if (!nonMediaByDir.has(dirPath)) nonMediaByDir.set(dirPath, []);
-      nonMediaByDir.get(dirPath)!.push(file);
-    }
-    const attachNonMedia = (nodes: TreeNode[]) => {
-      for (const n of nodes) {
-        if (n.isDir) {
-          const nm = nonMediaByDir.get(n.path);
-          if (nm) n.nonMediaFiles = nm;
-          attachNonMedia(n.children);
-        }
-      }
-    };
-    attachNonMedia(root.children);
-  }
-
-  return root.children;
-}
-
-// ── Pinned breadcrumb ───────────────────────────────────────────────────────
-// One row pinned to the top of the scroll view naming the folders the topmost
-// visible row lives in, so you always know where you are in a deep tree. Only
-// worth the row if enough tracks still fit below it.
-const DEFAULT_ROW_H = 24;
-const MIN_VISIBLE_TRACKS = 3;
-
-/** Is the panel tall enough to give up a row to the breadcrumb? */
-function fitsBreadcrumb(clientHeight: number, rowH: number): boolean {
-  return rowH > 0 && clientHeight >= (MIN_VISIBLE_TRACKS + 1) * rowH;
-}
-
-/** Height of one tree row, measured off the first folder row. */
-function measureRowHeight(scroller: HTMLElement): number {
-  const firstFolder = scroller.querySelector('[data-folder-path]') as HTMLElement | null;
-  return firstFolder?.offsetHeight || DEFAULT_ROW_H;
-}
-
-/**
- * How much of the top edge the breadcrumb would cover at `scrollTop`. It only
- * shows once scrolled, so a row scrolled to the top must land this far down to
- * stay visible.
- */
-function breadcrumbInset(scroller: HTMLElement, scrollTop: number): number {
-  const rowH = measureRowHeight(scroller);
-  return scrollTop > 0 && fitsBreadcrumb(scroller.clientHeight, rowH) ? rowH : 0;
-}
-
-function getAllDirPaths(nodes: TreeNode[]): string[] {
-  const paths: string[] = [];
-  for (const node of nodes) {
-    if (node.isDir) {
-      paths.push(node.path);
-      paths.push(...getAllDirPaths(node.children));
-    }
-  }
-  return paths;
-}
-
-function getAncestorPaths(currentTrack: string | null, rootDirectory: string | null): Set<string> {
-  const paths = new Set<string>();
-  if (!currentTrack || !rootDirectory) return paths;
-  const rel = currentTrack.substring(rootDirectory.length + 1);
-  const parts = rel.split(/[\\/]/);
-  let path = rootDirectory;
-  for (let i = 0; i < parts.length - 1; i++) {
-    path += '/' + parts[i];
-    paths.add(path);
-  }
-  return paths;
-}
-
-// ── Result columns ──────────────────────────────────────────────────────────
-// Two right-aligned columns show, for each folder, how many of its tracks have
-// annotations / buzzdetect results, and for each track a pip saying whether it
-// does. They're the least important thing on a row, so they only appear when
-// the panel is wide enough to leave the name room.
-/**
- * The columns' cells for one row: a count on a folder, a pip on a track. Every
- * cell is a fixed-width slot with a faint divider on its left; the divider runs
- * unbroken down the list because rows touch, and the header's filter buttons
- * sit in slots of the same width (FilePanelHeaderButtons).
- */
-const ResultCells: React.FC<{
-  columns: ColumnLayout;
-  annotation: number | boolean;
-  buzzdetect: number | boolean;
-  total?: number;
-}> = ({ columns, annotation, buzzdetect, total }) => {
-  const slot = 'flex-none self-stretch flex items-center justify-center text-[10px] tabular-nums border-l border-slate-800';
-  const cell = (value: number | boolean, color: string, noun: string) => (
-    <span
-      className={slot}
-      style={{ width: `${columns.widthPx}px` }}
-      data-tooltip={typeof value === 'number'
-        ? `${value} of ${total ?? '?'} tracks ${noun}`
-        : value ? `Track ${noun}` : undefined}
-    >
-      {typeof value === 'number'
-        ? <span className={value > 0 ? color : 'text-slate-800'}>{value}</span>
-        : value && <span className={`w-1.5 h-1.5 rounded-full bg-current ${color}`} />}
-    </span>
-  );
-  return (
-    // One container, so a row's own gap doesn't open up between the columns.
-    <span className="flex-none self-stretch flex">
-      {columns.annotation && cell(annotation, 'text-sky-800', 'have annotations')}
-      {columns.buzzdetect && cell(buzzdetect, 'text-amber-800', 'have buzzdetect results')}
-      {/* On a track this is an empty slot, so the dividers run on unbroken. */}
-      {columns.total && (
-        <span
-          className={`${slot} text-slate-600`}
-          style={{ width: `${columns.widthPx}px` }}
-          data-tooltip={total !== undefined ? `${total} tracks` : undefined}
-        >
-          {total}
-        </span>
-      )}
-    </span>
-  );
-};
-
-interface TreeItemProps {
-  node: TreeNode;
-  currentTrack: string | null;
-  onFileSelect: (path: string) => void;
-  depth: number;
-  expandedDirs: Set<string>;
-  toggleDir: (node: TreeNode) => void;
-  annotatedTracks: Set<string>;
-  buzzdetectTracks: Set<string>;
-  columns: ColumnLayout;
-  ancestorPaths: Set<string>;
-  onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void;
-  onEnterFolder: (path: string) => void;
-  expandedNonMedia: Set<string>;
-  toggleNonMedia: (path: string) => void;
-  /** Folder this node sits in — rows report it to the pinned breadcrumb. */
-  parentPath: string;
-  filenameTimeInfo: FilenameTimeInfo;
-}
-
-const TreeItem: React.FC<TreeItemProps> = ({
-  node,
-  currentTrack,
-  onFileSelect,
-  depth,
-  expandedDirs,
-  toggleDir,
-  annotatedTracks,
-  buzzdetectTracks,
-  columns,
-  ancestorPaths,
-  onContextMenu,
-  onEnterFolder,
-  expandedNonMedia,
-  toggleNonMedia,
-  parentPath,
-  filenameTimeInfo,
-}) => {
-  if (node.isDir) {
-    const isExpanded = expandedDirs.has(node.path);
-    const isClosedAncestor = !isExpanded && ancestorPaths.has(node.path);
-    return (
-      <div>
-        <div
-          className={`relative group flex items-center w-full transition-colors ${
-            isClosedAncestor
-              ? 'bg-[#e65161]/10 hover:bg-[#e65161]/20 text-[#e65161]'
-              : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'
-          }`}
-          onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, true); }}
-          data-folder-path={node.path}
-          // The breadcrumb covers this row when it reaches the top edge, so an
-          // expanded folder stands in for itself there — that's what makes the
-          // crumb grow a level as you scroll into a folder rather than all at
-          // once when its files arrive. A collapsed folder isn't context.
-          data-crumb={isExpanded ? node.path : parentPath}
-        >
-          <button
-            onClick={() => toggleDir(node)}
-            className="flex items-center gap-1 flex-1 min-w-0 px-2 py-1 text-left"
-            style={{ paddingLeft: `${depth * 12 + 8}px` }}
-          >
-            {isExpanded
-              ? <ChevronDown size={12} className="flex-none opacity-60" />
-              : <ChevronRight size={12} className="flex-none opacity-60" />
-            }
-            <FolderOpen size={13} className={`flex-none ${isClosedAncestor ? 'text-[#e65161]/70' : 'text-slate-500 group-hover:text-slate-300'}`} />
-            <span className="text-xs truncate"><span data-name-text>{node.name}</span></span>
-          </button>
-          <ResultCells columns={columns} annotation={node.annotatedCount} buzzdetect={node.buzzdetectCount} total={node.fileCount} />
-          <button
-            onClick={(e) => { e.stopPropagation(); onEnterFolder(node.path); }}
-            className="absolute inset-y-0 right-1 flex items-center opacity-0 group-hover:opacity-100 transition-opacity"
-            data-tooltip={`Enter ${node.name}`}
-            tabIndex={-1}
-          >
-            <span className="flex items-center justify-center w-4 h-4 rounded bg-slate-700 shadow-md text-slate-300 hover:text-white hover:bg-slate-600">
-              <ArrowRight size={10} />
-            </span>
-          </button>
-        </div>
-        {isExpanded && node.children.map(child => (
-          <TreeItem
-            key={child.path}
-            node={child}
-            currentTrack={currentTrack}
-            onFileSelect={onFileSelect}
-            depth={depth + 1}
-            expandedDirs={expandedDirs}
-            toggleDir={toggleDir}
-            annotatedTracks={annotatedTracks}
-            buzzdetectTracks={buzzdetectTracks}
-            columns={columns}
-            ancestorPaths={ancestorPaths}
-            onContextMenu={onContextMenu}
-            onEnterFolder={onEnterFolder}
-            expandedNonMedia={expandedNonMedia}
-            toggleNonMedia={toggleNonMedia}
-            parentPath={node.path}
-            filenameTimeInfo={filenameTimeInfo}
-          />
-        ))}
-        {isExpanded && node.nonMediaFiles && node.nonMediaFiles.length > 0 && (
-          <div>
-            <button
-              className="flex items-center gap-1 w-full text-left text-slate-600 hover:text-slate-500 py-0.5"
-              style={{ paddingLeft: `${(depth + 1) * 12 + 8}px`, paddingRight: '8px' }}
-              onClick={() => toggleNonMedia(node.path)}
-              data-crumb={node.path}
-            >
-              <span className="text-[9px] uppercase tracking-wider opacity-50 select-none">
-                {expandedNonMedia.has(node.path) ? '▾' : '▸'} {node.nonMediaFiles.length} unsupported
-              </span>
-            </button>
-            {expandedNonMedia.has(node.path) && node.nonMediaFiles.map(filePath => {
-              const fname = filePath.split(/[\\/]/).pop() ?? filePath;
-              return (
-                <div
-                  key={filePath}
-                  className="flex items-center w-full py-px text-slate-600 opacity-40 select-none"
-                  style={{ paddingLeft: `${(depth + 1) * 12 + 22}px`, paddingRight: '8px' }}
-                  data-tooltip={fname}
-                  data-crumb={node.path}
-                >
-                  <span className="text-[10px] truncate flex-1 italic">{fname}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const isActive = node.path === currentTrack;
-  const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(node.name));
-  const hasAnnotation = annotatedTracks.has(node.path);
-  const isSupported = isSupportedMediaFile(node.path);
-
-  if (!isSupported) {
-    return (
-      <div
-        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
-        className="flex items-center gap-2 w-full py-1 text-left text-slate-600 cursor-not-allowed"
-        style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: '8px' }}
-        data-tooltip={`${node.name} (unsupported file type)`}
-        data-crumb={parentPath}
-      >
-        {isAudio
-          ? <Music size={12} className="flex-none opacity-40" />
-          : <Film size={12} className="flex-none opacity-40" />
-        }
-        <span className="text-xs truncate flex-1 italic">{node.name}</span>
-        <span className="text-[10px] flex-none opacity-70">{copy.unsupported}</span>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => onFileSelect(node.path)}
-      onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, node.path, false); }}
-      className={`flex items-center gap-2 w-full py-1 text-left transition-colors ${
-        isActive
-          ? 'bg-[#e65161]/20 text-[#e65161]'
-          : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
-      }`}
-      style={{ paddingLeft: `${depth * 12 + 22}px`, paddingRight: columns.annotation ? 0 : '8px' }}
-      data-tooltip={tooltipWithDate(node.name, node.name, filenameTimeInfo)}
-      data-active-file={isActive ? '' : undefined}
-      data-crumb={parentPath}
-    >
-      {isAudio
-        ? <Music size={12} className="flex-none opacity-70" />
-        : <Film size={12} className="flex-none opacity-70" />
-      }
-      <span className="text-xs truncate flex-1"><span data-name-text>{node.name}</span></span>
-      <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(node.path)} />
-    </button>
-  );
-};
+// Shuffle mode shows a windowed flat list around the current track.
+const SHUFFLE_WINDOW = 105;
+const FADE_ZONE = 5; // items at each edge that fade, but only when files are hidden on that side
+// Only the few rows with the longest estimated names are measured for the columns.
+const NAME_MEASURE_CANDIDATES = 6;
 
 function FileTree({
   rootDirectory,
@@ -495,10 +105,6 @@ function FileTree({
   onToggleCollapse,
   sectionCollapsed,
   onToggleSectionCollapsed,
-  onNavigatePrev,
-  onNavigateNext,
-  canNavigatePrev,
-  canNavigateNext,
   shuffleMode,
   onStartShuffle,
   onStopShuffle,
@@ -519,14 +125,22 @@ function FileTree({
   enteredFolderPath,
   onEnteredFolderChange,
   nonMediaFiles,
-  filenameTimeInfo,
+  filenameTimeInfo: filenameTimeInfoProp,
   onHeaderState,
 }: FileTreeProps) {
+  // Callers pass a fresh object each render; rows memoize on this one.
+  const { pattern, offsetSeparator, dateTimeFormat } = filenameTimeInfoProp;
+  const filenameTimeInfo = useMemo(
+    () => ({ pattern, offsetSeparator, dateTimeFormat }),
+    [pattern, offsetSeparator, dateTimeFormat],
+  );
+
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [enteredPath, setEnteredPath] = useState<string | null>(enteredFolderPath ?? null);
   const scrollToFolderRef = useRef<string | null>(null);
   const [expandedNonMedia, setExpandedNonMedia] = useState<Set<string>>(new Set());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Mirror of enteredPath, so the effect below can tell a folder change the panel
   // made itself (which arrives here as an echo) from one imposed from outside.
@@ -561,9 +175,7 @@ function FileTree({
   const goUpOne = useCallback(() => {
     if (!enteredPath || !rootDirectory) return;
     const exiting = enteredPath;
-    const sep = enteredPath.includes('\\') ? '\\' : '/';
-    const idx = enteredPath.lastIndexOf(sep);
-    const parent = idx > 0 ? enteredPath.slice(0, idx) : '';
+    const parent = dirname(enteredPath);
     // Stay inside the media root; otherwise fall back to the full root view.
     const next = parent.length > rootDirectory.length && parent.startsWith(rootDirectory) ? parent : null;
     setEnteredPath(next);
@@ -581,25 +193,17 @@ function FileTree({
   }, [onEnteredFolderChange]);
 
   const effectiveRoot = enteredPath ?? rootDirectory;
-  const effectiveFiles = useMemo(() => {
-    if (!enteredPath) return allFiles;
-    // Windows paths use `\`; accept either separator so the prefix check works
-    // regardless of which the OS returned.
-    const prefix = enteredPath.replace(/\\/g, '/') + '/';
-    return allFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
-  }, [enteredPath, allFiles]);
-
-  const effectiveTotalFiles = useMemo(() => {
-    if (!enteredPath) return allFilesUnfiltered;
-    const prefix = enteredPath.replace(/\\/g, '/') + '/';
-    return allFilesUnfiltered.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
-  }, [enteredPath, allFilesUnfiltered]);
-
+  const effectiveFiles = useMemo(
+    () => (enteredPath ? filterUnderDir(allFiles, enteredPath) : allFiles),
+    [enteredPath, allFiles],
+  );
+  const effectiveTotalFiles = useMemo(
+    () => (enteredPath ? filterUnderDir(allFilesUnfiltered, enteredPath) : allFilesUnfiltered),
+    [enteredPath, allFilesUnfiltered],
+  );
   const effectiveNonMediaFiles = useMemo(() => {
     if (!nonMediaFiles || !effectiveRoot) return [];
-    if (!enteredPath) return nonMediaFiles;
-    const prefix = enteredPath.replace(/\\/g, '/') + '/';
-    return nonMediaFiles.filter(f => f.replace(/\\/g, '/').startsWith(prefix));
+    return enteredPath ? filterUnderDir(nonMediaFiles, enteredPath) : nonMediaFiles;
   }, [enteredPath, nonMediaFiles, effectiveRoot]);
 
   const rootNonMedia = useMemo(() => {
@@ -625,6 +229,8 @@ function FileTree({
     if (effectiveFiles.length === 0 && effectiveNonMediaFiles.length === 0) return [];
     return buildTree(effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, buzzdetectTracks, effectiveTotalFiles);
   }, [effectiveRoot, effectiveFiles, effectiveNonMediaFiles, annotatedTracks, buzzdetectTracks, effectiveTotalFiles]);
+  const treeRef = useRef<TreeNode[]>(tree);
+  treeRef.current = tree;
 
   // Header count for the entered dir — the whole (unfiltered) project total, so
   // it doesn't move when a filter is toggled.
@@ -652,108 +258,58 @@ function FileTree({
   // Also auto-expand ancestors of the current file
   useEffect(() => {
     if (!currentTrack || !effectiveRoot) return;
-    const rel = currentTrack.substring(effectiveRoot.length + 1);
-    const parts = rel.split(/[\\/]/);
+    const ancestors = getAncestorPaths(currentTrack, effectiveRoot);
     setExpandedDirs(prev => {
-      const next = new Set(prev);
-      let path = effectiveRoot;
-      for (let i = 0; i < parts.length - 1; i++) {
-        path += '/' + parts[i];
-        next.add(path);
-      }
-      return next;
+      for (const p of ancestors) if (!prev.has(p)) return new Set([...prev, ...ancestors]);
+      return prev;
     });
   }, [currentTrack, effectiveRoot]);
 
-  // Opening a folder that leads down an unbranched chain (each folder holding
-  // exactly one subfolder) expands the whole chain at once, so the user isn't
-  // stuck clicking through folders that offer no actual choice.
-  const toggleDir = (node: TreeNode) => {
-    cancelPendingActiveScroll();
-    setExpandedDirs(prev => {
-      const next = new Set(prev);
-      if (next.has(node.path)) {
-        const collapseSubtree = (n: TreeNode) => {
-          next.delete(n.path);
-          for (const child of n.children) if (child.isDir) collapseSubtree(child);
-        };
-        collapseSubtree(node);
-      } else {
-        let current: TreeNode | undefined = node;
-        while (current) {
-          next.add(current.path);
-          const onlyChild = current.children.length === 1 ? current.children[0] : null;
-          current = onlyChild?.isDir ? onlyChild : undefined;
-        }
-      }
-      return next;
-    });
-  };
+  // Expanding or collapsing a folder on its own must never move the view, so
+  // user-driven toggles drop any pending scroll-to-active request (see below).
+  const pendingActiveScrollRef = useRef(true);
+  const cancelPendingActiveScroll = useCallback(() => {
+    pendingActiveScrollRef.current = false;
+  }, []);
 
-  const expandAll = () => {
+  const toggleDir = useCallback((node: TreeNode) => {
     cancelPendingActiveScroll();
-    setExpandedDirs(new Set(getAllDirPaths(tree)));
-  };
+    setExpandedDirs(prev => toggleDirInSet(prev, node));
+  }, [cancelPendingActiveScroll]);
 
-  const collapseAll = () => {
-    // Collapse everything — ancestor dirs of the active file are highlighted
-    // rather than auto-expanded, so the user still knows where it lives.
+  // Stable, and reads state when invoked, so the guide's copy (which holds the
+  // first one it was handed) never acts on a stale tree. Collapsing leaves the
+  // active file's ancestors highlighted rather than expanded.
+  const toggleExpandCollapse = useCallback(() => {
     cancelPendingActiveScroll();
-    setExpandedDirs(new Set());
-  };
+    setExpandedDirs(prev => (prev.size > 0 ? new Set() : new Set(getAllDirPaths(treeRef.current))));
+  }, [cancelPendingActiveScroll]);
 
   const isAnyExpanded = expandedDirs.size > 0;
 
-  // ── Custom scrollbar ──────────────────────────────────────────────────────
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [scrollState, setScrollState] = useState({ scrollTop: 0, scrollHeight: 1, clientHeight: 1 });
-  const [activeItemFraction, setActiveItemFraction] = useState<number | null>(null);
-  const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_H);
-  // Folder path the pinned breadcrumb names.
-  const [crumbPath, setCrumbPath] = useState<string | null>(null);
-  const activeItemFractionRef = useRef<number | null>(null);
-  const isDraggingThumb = useRef(false);
-  const thumbDragStartY = useRef(0);
-  const thumbDragStartScrollTop = useRef(0);
+  // Publish the header state upward for the guide's live copy of these buttons.
+  useEffect(() => {
+    onHeaderState?.({ anyExpanded: isAnyExpanded, toggleExpandCollapse });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAnyExpanded, toggleExpandCollapse]);
 
-  useEffect(() => { activeItemFractionRef.current = activeItemFraction; }, [activeItemFraction]);
+  // Rows on screen: the expanded tree, or the shuffle window around the current track.
+  const treeRows = useMemo(
+    () => (shuffleMode || !effectiveRoot ? [] : flattenTree(tree, effectiveRoot, expandedDirs, expandedNonMedia, rootNonMedia)),
+    [shuffleMode, tree, effectiveRoot, expandedDirs, expandedNonMedia, rootNonMedia],
+  );
+  const shuffleView = useMemo(() => {
+    if (!shuffleMode) return null;
+    const currentIdx = allFiles.indexOf(currentTrack ?? '');
+    const startIdx = Math.max(0, currentIdx >= 0 ? currentIdx - SHUFFLE_WINDOW : 0);
+    const endIdx = Math.min(allFiles.length - 1, currentIdx >= 0 ? currentIdx + SHUFFLE_WINDOW : SHUFFLE_WINDOW * 2);
+    return { startIdx, endIdx, visible: allFiles.slice(startIdx, endIdx + 1) };
+  }, [shuffleMode, allFiles, currentTrack]);
+  const ancestorPaths = useMemo(() => getAncestorPaths(currentTrack, effectiveRoot), [currentTrack, effectiveRoot]);
 
-  const syncScrollbar = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    lastScrollTopRef.current = el.scrollTop;
-    setScrollState({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
-    const activeEl = el.querySelector('[data-active-file]') as HTMLElement | null;
-    if (activeEl && el.scrollHeight > 0) {
-      const containerRect = el.getBoundingClientRect();
-      const elRect = activeEl.getBoundingClientRect();
-      const relTop = elRect.top - containerRect.top + el.scrollTop;
-      const frac = (relTop + elRect.height / 2) / el.scrollHeight;
-      setActiveItemFraction(Math.max(0, Math.min(1, frac)));
-    } else {
-      setActiveItemFraction(null);
-    }
-
-    // The breadcrumb names the context of whichever row sits at the top edge —
-    // one hit-test, rather than a rect read per folder in the tree. Each row
-    // reports that context itself (see `data-crumb`), so the crumb deepens a
-    // level each time a folder header scrolls under it.
-    const rowH = measureRowHeight(el);
-    setRowHeight(prev => (prev === rowH ? prev : rowH));
-
-    let path: string | null = null;
-    const rect = el.getBoundingClientRect();
-    if (el.scrollTop > 0 && fitsBreadcrumb(rect.height, rowH)) {
-      // The whole stack at that point, so the breadcrumb's own clickable
-      // folder names can't shadow the row beneath them.
-      for (const node of document.elementsFromPoint(rect.left + 12, rect.top + 1)) {
-        if (!el.contains(node)) continue;
-        const hit = node.closest('[data-crumb]') as HTMLElement | null;
-        if (hit) { path = hit.dataset.crumb ?? null; break; }
-      }
-    }
-    setCrumbPath(prev => (prev === path ? prev : path));
-  }, []);
+  // Changes whenever what's on screen may have changed size or position —
+  // the scrollbar and breadcrumb re-measure on it.
+  const layoutKey = useMemo(() => ({}), [treeRows, shuffleView, currentTrack]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When the active track changes, nudge the scroll so the item is visible:
   // - if it's above the viewport (or under the breadcrumb), make it the first
@@ -764,13 +320,8 @@ function FileTree({
   // the ancestor-expanding effect above is a plain effect, so it reveals the row
   // a render later. The request is therefore held in a ref and consumed on
   // whichever render first paints the row. `expandedDirs` is in the deps purely
-  // to get that retry; expanding or collapsing a folder on its own must never
-  // move the view, so user-driven toggles drop the pending request first.
-  const pendingActiveScrollRef = useRef(true);
+  // to get that retry.
   const scrolledForTrackRef = useRef<string | null>(null);
-  const cancelPendingActiveScroll = useCallback(() => {
-    pendingActiveScrollRef.current = false;
-  }, []);
   useLayoutEffect(() => {
     if (scrolledForTrackRef.current !== currentTrack) {
       scrolledForTrackRef.current = currentTrack;
@@ -794,8 +345,6 @@ function FileTree({
     }
   }, [currentTrack, expandedDirs]);
 
-  useLayoutEffect(syncScrollbar, [currentTrack, allFiles, expandedDirs, shuffleMode, syncScrollbar]);
-
   useLayoutEffect(() => {
     const path = scrollToFolderRef.current;
     if (!path) return;
@@ -804,18 +353,8 @@ function FileTree({
     if (!el) return;
     const target = el.querySelector(`[data-folder-path="${CSS.escape(path)}"]`) as HTMLElement | null;
     if (!target) return;
-    const containerRect = el.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    el.scrollTop += targetRect.top - containerRect.top;
+    el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top;
   }, [expandedDirs]);
-
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(syncScrollbar);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [syncScrollbar]);
 
   // Width available to rows, which decides whether the result columns fit.
   const [listWidth, setListWidth] = useState(0);
@@ -831,84 +370,25 @@ function FileTree({
   // own (unclipped) text. Columns only appear beside names that fit, so this
   // is what they have to leave room for. Independent of the columns themselves
   // (they sit to the right of the names), so showing one can't change it.
+  // Rows tag their name with an estimated reach, so only the few likeliest to
+  // be widest are measured rather than every row in the tree.
   const [nameNeededPx, setNameNeededPx] = useState(0);
   useLayoutEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    const names = Array.from(el.querySelectorAll<HTMLElement>('[data-name-text]'));
+    names.sort((a, b) => Number(b.dataset.nameText) - Number(a.dataset.nameText));
     const left = el.getBoundingClientRect().left;
     let max = 0;
-    el.querySelectorAll('[data-name-text]').forEach(n => {
+    for (const n of names.slice(0, NAME_MEASURE_CANDIDATES)) {
       max = Math.max(max, n.getBoundingClientRect().right - left);
-    });
+    }
     setNameNeededPx(Math.ceil(max));
-  }, [tree, expandedDirs, shuffleMode, allFiles, collapsed, sectionCollapsed]);
+  }, [layoutKey, collapsed, sectionCollapsed]);
   const columns = useMemo(
     () => columnLayout(listWidth, Math.max(rootCounts.total, 1), showBuzzdetect, nameNeededPx),
     [listWidth, rootCounts.total, showBuzzdetect, nameNeededPx],
   );
-
-  const { scrollTop, scrollHeight, clientHeight } = scrollState;
-  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
-  const showScrollbar = scrollHeight > clientHeight + 2;
-  const thumbHeight = Math.max(20, (clientHeight / scrollHeight) * clientHeight);
-  const thumbTop = maxScrollTop > 0 ? (scrollTop / maxScrollTop) * (clientHeight - thumbHeight) : 0;
-  const SNAP_THRESHOLD = 50;
-
-  const handleThumbMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isDraggingThumb.current = true;
-    thumbDragStartY.current = e.clientY;
-    thumbDragStartScrollTop.current = scrollContainerRef.current?.scrollTop ?? 0;
-
-    const onMouseMove = (ev: MouseEvent) => {
-      const container = scrollContainerRef.current;
-      if (!isDraggingThumb.current || !container) return;
-      const { scrollHeight: sh, clientHeight: ch } = container;
-      const maxST = Math.max(0, sh - ch);
-      const thumbH = Math.max(20, (ch / sh) * ch);
-      const trackH = ch - thumbH;
-      if (trackH <= 0) return;
-      let newScrollTop = thumbDragStartScrollTop.current + ((ev.clientY - thumbDragStartY.current) / trackH) * maxST;
-      const frac = activeItemFractionRef.current;
-      if (frac !== null) {
-        const snapST = Math.max(0, Math.min(frac * sh - ch / 2, maxST));
-        if (Math.abs(newScrollTop - snapST) < SNAP_THRESHOLD) newScrollTop = snapST;
-      }
-      container.scrollTop = Math.max(0, Math.min(newScrollTop, maxST));
-    };
-
-    const onMouseUp = () => {
-      isDraggingThumb.current = false;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  const handleTrackMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const track = e.currentTarget.getBoundingClientRect();
-    const frac = (e.clientY - track.top) / track.height;
-    container.scrollTop = frac * (container.scrollHeight - container.clientHeight);
-  };
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const toggleExpandCollapse = () => {
-    if (isAnyExpanded) collapseAll();
-    else expandAll();
-  };
-
-  // Publish the header state upward for the guide's live copy of these buttons.
-  // The callback closes over the current isAnyExpanded, so it is re-sent
-  // whenever that flips rather than held as a stale closure.
-  useEffect(() => {
-    onHeaderState?.({ anyExpanded: isAnyExpanded, toggleExpandCollapse });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAnyExpanded]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();
@@ -925,19 +405,14 @@ function FileTree({
     }
   }, [rootDirectory, enteredPath]);
 
-  const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : 'No folder');
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
-  // Folders between the panel root and the row under the breadcrumb, each with
-  // the path buildTree gave its node, so clicking one enters it.
-  const crumbs = useMemo(() => {
-    if (!crumbPath || !effectiveRoot || !crumbPath.startsWith(effectiveRoot)) return [];
-    const names = crumbPath.substring(effectiveRoot.length + 1).split(/[\\/]/).filter(Boolean);
-    return names.map((name, i) => ({ name, path: effectiveRoot + '/' + names.slice(0, i + 1).join('/') }));
-  }, [crumbPath, effectiveRoot]);
+  const dirName = enteredPath ? basename(enteredPath) : (rootDirectory ? basename(rootDirectory) : copy.noFolder);
 
   const menuItems = (m: ContextMenuState): ContextMenuItem[] => {
+    const manager = fileManagerLabel();
     const items: ContextMenuItem[] = [
-      { label: `Show media in ${finderLabel}`, onSelect: () => onRevealInFinder(m.path) },
+      { label: copy.showMediaIn(manager), onSelect: () => onRevealInFinder(m.path) },
     ];
     if (rootDirectory && m.path !== rootDirectory &&
         ((!m.isDir && isSupportedMediaFile(m.path)) || (m.isDir && !m.isAudioRoot))) {
@@ -964,9 +439,9 @@ function FileTree({
     }
     const showsAnnotations = (!m.isDir && annotatedTracks.has(m.path)) || (m.isDir && !m.isAudioRoot);
     if (showsAnnotations) {
-      items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: () => onRevealAnnotations(m.path) });
+      items.push({ label: copy.showAnnotationsIn(manager), onSelect: () => onRevealAnnotations(m.path) });
     } else if (m.isAudioRoot && onRevealAnnotationsRoot) {
-      items.push({ label: `Show Annotations in ${finderLabel}`, onSelect: onRevealAnnotationsRoot });
+      items.push({ label: copy.showAnnotationsIn(manager), onSelect: onRevealAnnotationsRoot });
     }
     items.push({ label: copy.refreshFileTree, onSelect: onRefreshFileTree });
     return items;
@@ -985,6 +460,48 @@ function FileTree({
       </div>
     );
   }
+
+  const renderTreeRow = (row: (typeof treeRows)[number]) => {
+    switch (row.kind) {
+      case 'dir':
+        return (
+          <FolderRow
+            key={row.key}
+            node={row.node}
+            depth={row.depth}
+            parentPath={row.parentPath}
+            expanded={row.expanded}
+            isClosedAncestor={!row.expanded && ancestorPaths.has(row.node.path)}
+            columns={columns}
+            onToggle={toggleDir}
+            onEnter={enterFolder}
+            onContextMenu={handleContextMenu}
+          />
+        );
+      case 'file':
+        return (
+          <FileRow
+            key={row.key}
+            variant="tree"
+            path={row.node.path}
+            label={row.node.name}
+            depth={row.depth}
+            parentPath={row.parentPath}
+            isActive={row.node.path === currentTrack}
+            hasAnnotation={annotatedTracks.has(row.node.path)}
+            hasBuzzdetect={buzzdetectTracks.has(row.node.path)}
+            columns={columns}
+            filenameTimeInfo={filenameTimeInfo}
+            onSelect={onFileSelect}
+            onContextMenu={handleContextMenu}
+          />
+        );
+      case 'nonMediaToggle':
+        return <NonMediaToggle key={row.key} path={row.path} count={row.count} depth={row.depth} expanded={row.expanded} onToggle={toggleNonMedia} />;
+      case 'nonMediaItem':
+        return <NonMediaItem key={row.key} filePath={row.filePath} depth={row.depth} crumb={row.crumb} />;
+    }
+  };
 
   return (
     <SidebarSection
@@ -1036,35 +553,11 @@ function FileTree({
     >
       {/* File list — inner flex row keeps the scrollbar track a true sibling, not an overlay */}
       <div className="relative flex-1 min-h-0 flex overflow-hidden bg-slate-900 select-none">
-        {/* Pinned breadcrumb — the folders the row beneath it lives in. Only the
-            folder names take the pointer; everything else passes through, and the
-            hit-test that drives it reads past them (see syncScrollbar). */}
-        {crumbs.length > 0 && (
-          <div
-            className="absolute left-0 right-2 top-0 z-30 flex items-center gap-1 px-2 bg-slate-900 border-b border-slate-700 pointer-events-none overflow-hidden"
-            style={{ height: `${rowHeight}px`, boxShadow: '0 3px 5px -2px rgba(0,0,0,0.6)' }}
-          >
-            <FolderOpen size={13} className="flex-none text-slate-500" />
-            {crumbs.map(({ name, path }, i) => (
-              <React.Fragment key={path}>
-                {i > 0 && <span className="text-[10px] text-slate-600 flex-none">/</span>}
-                <button
-                  onClick={() => enterFolder(path)}
-                  // Parents shrink first so the folder you're actually in stays legible
-                  className={`text-xs truncate pointer-events-auto hover:text-white hover:underline ${i === crumbs.length - 1 ? 'text-slate-300 flex-none max-w-full' : 'text-slate-500 min-w-0'}`}
-                  data-tooltip={`Enter ${name}`}
-                  tabIndex={-1}
-                >
-                  {name}
-                </button>
-              </React.Fragment>
-            ))}
-          </div>
-        )}
+        <PinnedBreadcrumb containerRef={scrollContainerRef} syncKey={layoutKey} root={effectiveRoot} onEnterFolder={enterFolder} />
         <div
           ref={scrollContainerRef}
           className="flex-1 min-w-0 overflow-y-scroll no-scrollbar"
-          onScroll={syncScrollbar}
+          onScroll={e => { lastScrollTopRef.current = e.currentTarget.scrollTop; }}
         >
         {!rootDirectory && (
           <div className="flex flex-col items-center justify-center h-full text-slate-600 px-4 text-center">
@@ -1107,171 +600,50 @@ function FileTree({
         )}
 
         {/* Shuffle mode: windowed flat list (±105 files around current, fade at edges only when files are hidden there) */}
-        {shuffleMode && rootDirectory && effectiveFiles.length > 0 && (() => {
-          const WINDOW = 105;
-          const FADE_ZONE = 5; // items at each edge that fade, but only when files are hidden on that side
-
-          const currentIdx = allFiles.findIndex(f => f === currentTrack);
-          const startIdx = Math.max(0, currentIdx >= 0 ? currentIdx - WINDOW : 0);
-          const endIdx = Math.min(allFiles.length - 1, currentIdx >= 0 ? currentIdx + WINDOW : WINDOW * 2);
-          const visible = allFiles.slice(startIdx, endIdx + 1);
+        {shuffleView && rootDirectory && effectiveFiles.length > 0 && (() => {
+          const { startIdx, endIdx, visible } = shuffleView;
           const hasMoreBefore = startIdx > 0;
           const hasMoreAfter = endIdx < allFiles.length - 1;
-
           return (
             <>
               {hasMoreBefore && (
-                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">
-                  ⋯ {startIdx} file{startIdx !== 1 ? 's' : ''} not shown
-                </div>
+                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">{copy.notShown(startIdx)}</div>
               )}
               {visible.map((filePath, i) => {
-                const absoluteIdx = startIdx + i;
-                const distFromTop = absoluteIdx - startIdx;
-                const distFromBottom = endIdx - absoluteIdx;
+                const distFromTop = i;
+                const distFromBottom = endIdx - (startIdx + i);
                 let opacity = 1;
-                if (hasMoreBefore && distFromTop < FADE_ZONE) {
-                  opacity = Math.min(opacity, (distFromTop + 1) / (FADE_ZONE + 1));
-                }
-                if (hasMoreAfter && distFromBottom < FADE_ZONE) {
-                  opacity = Math.min(opacity, (distFromBottom + 1) / (FADE_ZONE + 1));
-                }
-
-                const rel = filePath.substring(rootDirectory.length + 1);
-                const relNoExt = stripExt(rel);
-                const isActive = filePath === currentTrack;
-                const isAudio = SUPPORTED_AUDIO_EXTS.has(getExt(filePath));
-                const hasAnnotation = annotatedTracks.has(filePath);
-                const isSupported = isSupportedMediaFile(filePath);
-                if (!isSupported) {
-                  return (
-                    <div
-                      key={filePath}
-                      onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-slate-600 cursor-not-allowed"
-                      style={{ opacity }}
-                      data-tooltip={`${filePath} (unsupported file type)`}
-                    >
-                      {isAudio
-                        ? <Music size={12} className="flex-none opacity-40" />
-                        : <Film size={12} className="flex-none opacity-40" />
-                      }
-                      <span className="text-xs truncate flex-1 italic">{relNoExt}</span>
-                      <span className="text-[10px] flex-none opacity-70">{copy.unsupported}</span>
-                    </div>
-                  );
-                }
+                if (hasMoreBefore && distFromTop < FADE_ZONE) opacity = Math.min(opacity, (distFromTop + 1) / (FADE_ZONE + 1));
+                if (hasMoreAfter && distFromBottom < FADE_ZONE) opacity = Math.min(opacity, (distFromBottom + 1) / (FADE_ZONE + 1));
                 return (
-                  <button
+                  <FileRow
                     key={filePath}
-                    onClick={() => onFileSelect(filePath)}
-                    onContextMenu={(e) => { e.preventDefault(); handleContextMenu(e, filePath, false); }}
-                    className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
-                      isActive
-                        ? 'bg-[#e65161]/20 text-[#e65161]'
-                        : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
-                    }`}
-                    style={{ opacity, paddingRight: columns.annotation ? 0 : undefined }}
-                    data-tooltip={tooltipWithDate(filePath, basename(filePath), filenameTimeInfo)}
-                    data-active-file={isActive ? '' : undefined}
-                  >
-                    {isAudio
-                      ? <Music size={12} className="flex-none opacity-70" />
-                      : <Film size={12} className="flex-none opacity-70" />
-                    }
-                    <span className="text-xs truncate flex-1"><span data-name-text>{relNoExt}</span></span>
-                    <ResultCells columns={columns} annotation={hasAnnotation} buzzdetect={buzzdetectTracks.has(filePath)} />
-                  </button>
+                    variant="flat"
+                    path={filePath}
+                    label={stripExt(filePath.substring(rootDirectory.length + 1))}
+                    isActive={filePath === currentTrack}
+                    hasAnnotation={annotatedTracks.has(filePath)}
+                    hasBuzzdetect={buzzdetectTracks.has(filePath)}
+                    columns={columns}
+                    opacity={opacity}
+                    filenameTimeInfo={filenameTimeInfo}
+                    onSelect={onFileSelect}
+                    onContextMenu={handleContextMenu}
+                  />
                 );
               })}
               {hasMoreAfter && (
-                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">
-                  ⋯ {allFiles.length - 1 - endIdx} file{allFiles.length - 1 - endIdx !== 1 ? 's' : ''} not shown
-                </div>
+                <div className="px-3 py-1 text-[10px] text-slate-600 italic select-none">{copy.notShown(allFiles.length - 1 - endIdx)}</div>
               )}
             </>
           );
         })()}
 
         {/* Normal tree mode */}
-        {!shuffleMode && (() => {
-          const ancestorPaths = getAncestorPaths(currentTrack, effectiveRoot);
-          return (
-            <>
-              {tree.map(node => (
-                <TreeItem
-                  key={node.path}
-                  node={node}
-                  currentTrack={currentTrack}
-                  onFileSelect={onFileSelect}
-                  depth={0}
-                  expandedDirs={expandedDirs}
-                  toggleDir={toggleDir}
-                  annotatedTracks={annotatedTracks}
-                  buzzdetectTracks={buzzdetectTracks}
-                  columns={columns}
-                  ancestorPaths={ancestorPaths}
-                  onContextMenu={handleContextMenu}
-                  onEnterFolder={enterFolder}
-                  expandedNonMedia={expandedNonMedia}
-                  toggleNonMedia={toggleNonMedia}
-                  parentPath={effectiveRoot ?? ''}
-                  filenameTimeInfo={filenameTimeInfo}
-                />
-              ))}
-              {rootNonMedia.length > 0 && (
-                <div>
-                  <button
-                    className="flex items-center gap-1 w-full text-left text-slate-600 hover:text-slate-500 py-0.5 px-2"
-                    onClick={() => toggleNonMedia(effectiveRoot ?? '')}
-                  >
-                    <span className="text-[9px] uppercase tracking-wider opacity-50 select-none">
-                      {expandedNonMedia.has(effectiveRoot ?? '') ? '▾' : '▸'} {rootNonMedia.length} unsupported
-                    </span>
-                  </button>
-                  {expandedNonMedia.has(effectiveRoot ?? '') && rootNonMedia.map(filePath => {
-                    const fname = filePath.split(/[\\/]/).pop() ?? filePath;
-                    return (
-                      <div
-                        key={filePath}
-                        className="flex items-center w-full py-px pl-[22px] pr-2 text-slate-600 opacity-40 select-none"
-                        data-tooltip={fname}
-                        data-crumb={effectiveRoot ?? ''}
-                      >
-                        <span className="text-[10px] truncate flex-1 italic">{fname}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          );
-        })()}
+        {!shuffleMode && treeRows.map(renderTreeRow)}
         </div>{/* end scroll container */}
 
-        {/* Scrollbar track — always present so content is always bounded by it */}
-        <div
-          className="w-2 flex-none bg-[#1F2937] relative cursor-ns-resize"
-          onMouseDown={handleTrackMouseDown}
-        >
-          {showScrollbar && (
-            <>
-              {/* Hash below thumb */}
-              {activeItemFraction !== null && (
-                <div
-                  className="absolute inset-x-0 pointer-events-none rounded-sm"
-                  style={{ top: `${activeItemFraction * 100}%`, height: '3px', background: '#e65161', transform: 'translateY(-50%)' }}
-                />
-              )}
-              {/* Thumb on top, semi-transparent so hash shows through */}
-              <div
-                className="absolute inset-x-0 rounded-full bg-slate-600/60 hover:bg-slate-500/70 transition-colors cursor-ns-resize"
-                style={{ top: `${thumbTop}px`, height: `${thumbHeight}px` }}
-                onMouseDown={handleThumbMouseDown}
-              />
-            </>
-          )}
-        </div>
+        <FileTreeScrollbar containerRef={scrollContainerRef} syncKey={layoutKey} />
       </div>
 
       {isScanning && rootDirectory && (
@@ -1291,7 +663,7 @@ function FileTree({
           x={contextMenu.x}
           y={contextMenu.y}
           items={menuItems(contextMenu)}
-          onClose={() => setContextMenu(null)}
+          onClose={closeContextMenu}
           minWidth={180}
         />
       )}

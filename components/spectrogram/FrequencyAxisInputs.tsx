@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { SpectrogramSettings } from '../../types';
 import { clampFreqRange, formatFreqHz, parseFreqHz } from '../../utils/audioProcessing';
@@ -29,6 +29,8 @@ export default function FrequencyAxisInputs({
   // formatted label derived from props.
   const [editing, setEditing] = useState<null | 'min' | 'max'>(null);
   const [draft, setDraft] = useState('');
+  // Escape blurs the input; this tells the blur handler to discard the draft.
+  const cancelRef = useRef(false);
 
   const valueOf = (edge: 'min' | 'max') => (edge === 'min' ? minFreq : maxFreq);
   const limitOf = (edge: 'min' | 'max') => (edge === 'min' ? 0 : nyquist);
@@ -70,10 +72,14 @@ export default function FrequencyAxisInputs({
         value={display(edge)}
         onFocus={() => { setEditing(edge); setDraft(String(valueOf(edge))); }}
         onChange={e => setDraft(e.target.value)}
-        onBlur={() => { apply(edge, parseFreqHz(draft)); setEditing(null); }}
+        onBlur={() => {
+          if (!cancelRef.current) apply(edge, parseFreqHz(draft));
+          cancelRef.current = false;
+          setEditing(null);
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter') e.currentTarget.blur();
-          if (e.key === 'Escape') { setEditing(null); e.currentTarget.blur(); }
+          if (e.key === 'Escape') { cancelRef.current = true; e.currentTarget.blur(); }
           e.stopPropagation();
         }}
         className="flex-1 min-w-0 bg-transparent text-white/80 text-right pr-[7px] font-sans text-[10px] leading-none border-0 outline-none focus:text-white"

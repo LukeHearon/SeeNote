@@ -10,6 +10,14 @@ export const isMac =
 export const isLinux =
   typeof navigator !== 'undefined' && /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent);
 
+export const isWindows =
+  typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent) && !isMac;
+
+/** Name of the OS file browser: Finder on macOS, File Explorer on Windows, "file manager" elsewhere. */
+export function fileManagerLabel(): string {
+  return isMac ? 'Finder' : isWindows ? 'File Explorer' : 'file manager';
+}
+
 /** OS-appropriate label for the primary command modifier: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD_KEY_LABEL = isMac ? '⌘' : 'Ctrl';
 

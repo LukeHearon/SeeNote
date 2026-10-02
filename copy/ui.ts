@@ -414,6 +414,18 @@ export const fileTree = {
   get reshuffle() { return getOverride('ui.fileTree.reshuffle') ?? "Reshuffle this folder"; },
   get stopShuffle() { return getOverride('ui.fileTree.stopShuffle') ?? "Stop shuffling"; },
   get refreshFileTree() { return getOverride('ui.fileTree.refreshFileTree') ?? "Refresh file list"; },
+  get noFolder() { return getOverride('ui.fileTree.noFolder') ?? "No folder"; },
+  get haveAnnotations() { return getOverride('ui.fileTree.haveAnnotations') ?? "have annotations"; },
+  get haveBuzzdetect() { return getOverride('ui.fileTree.haveBuzzdetect') ?? "have buzzdetect results"; },
+  countTooltip(n: number, total: number | string, noun: string) { return getOverride('ui.fileTree.countTooltip') ?? `${n} of ${total} tracks ${noun}`; },
+  trackTooltip(noun: string) { return getOverride('ui.fileTree.trackTooltip') ?? `Track ${noun}`; },
+  totalTracksTooltip(total: number) { return getOverride('ui.fileTree.totalTracksTooltip') ?? `${total} tracks`; },
+  enterFolder(name: string) { return getOverride('ui.fileTree.enterFolder') ?? `Enter ${name}`; },
+  unsupportedFileTooltip(name: string) { return getOverride('ui.fileTree.unsupportedFileTooltip') ?? `${name} (unsupported file type)`; },
+  unsupportedCount(n: number) { return getOverride('ui.fileTree.unsupportedCount') ?? `${n} unsupported`; },
+  notShown(n: number) { return getOverride('ui.fileTree.notShown') ?? `⋯ ${n} file${n !== 1 ? 's' : ''} not shown`; },
+  showMediaIn(manager: string) { return getOverride('ui.fileTree.showMediaIn') ?? `Show media in ${manager}`; },
+  showAnnotationsIn(manager: string) { return getOverride('ui.fileTree.showAnnotationsIn') ?? `Show Annotations in ${manager}`; },
 };
 
 export const keyboardShortcutsView = {

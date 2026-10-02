@@ -48,12 +48,6 @@ export function ExampleFilePanel() {
     passesFileFilter(demoAnnotatedTracks.has(f), fileFilter)
     && passesFileFilter(demoBuzzdetectTracks.has(f), buzzdetectFilter));
 
-  const index = currentTrack ? files.indexOf(currentTrack) : -1;
-  const step = (delta: number) => {
-    const next = files[index + delta];
-    if (next) setCurrentTrack(next);
-  };
-
   return (
     <div className="w-72 h-80 rounded border border-slate-700 overflow-hidden">
       <FileTree
@@ -68,10 +62,6 @@ export function ExampleFilePanel() {
         onToggleCollapse={() => {}}
         sectionCollapsed={false}
         onToggleSectionCollapsed={() => {}}
-        onNavigatePrev={() => step(-1)}
-        onNavigateNext={() => step(1)}
-        canNavigatePrev={index > 0}
-        canNavigateNext={index >= 0 && index < files.length - 1}
         shuffleMode={shuffleMode}
         onStartShuffle={() => setShuffleMode(true)}
         onStopShuffle={() => setShuffleMode(false)}
