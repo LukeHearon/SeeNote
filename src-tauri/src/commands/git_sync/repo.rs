@@ -7,7 +7,7 @@ use git2::{Repository, Signature};
 
 use crate::commands::shared::{walk_files, ANNOTATION_EXT};
 
-use super::annotate::{annotation_blobs, line_key_set};
+use super::annotate::{line_key_set, tree_blob_text};
 use super::{gerr, DEFAULT_BRANCH, REMOTE_NAME};
 
 // ---------------------------------------------------------------------------
@@ -149,12 +149,10 @@ pub(crate) fn stage_and_commit(
     let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
     let mut pending_clears: Vec<String> = Vec::new();
 
-    // HEAD's annotation blobs (path → content), used to skip precision-only
-    // rewrites below. Empty when there are no commits yet.
-    let head_blobs = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
-        Some(tree) => annotation_blobs(repo, &tree)?,
-        None => std::collections::HashMap::new(),
-    };
+    // HEAD's tree, for looking up each file's committed content (to skip
+    // precision-only rewrites below). None when there are no commits yet.
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let head_text = |rel_posix: &str| head_tree.as_ref().and_then(|t| tree_blob_text(repo, t, rel_posix));
 
     // (a) Annotation files under the annotation directory. Annotation tools are
     //     deliberately NOT synced — each labeler maintains their own tools.
@@ -170,6 +168,7 @@ pub(crate) fn stage_and_commit(
         let content = std::fs::read_to_string(abs).unwrap_or_default();
 
         let rel_posix = rel.to_string_lossy().replace('\\', "/");
+        let head_content = head_text(&rel_posix);
 
         // An empty file means the user cleared the track. That is legitimate and
         // must sync — but it is also the only edit that destroys records for
@@ -177,9 +176,7 @@ pub(crate) fn stage_and_commit(
         // here, report the ident and leave HEAD untouched until the user
         // confirms; the confirmed ident comes back in `confirmed_clears`.
         if content.trim().is_empty() {
-            let had_records = head_blobs
-                .get(&rel_posix)
-                .is_some_and(|c| !line_key_set(c).is_empty());
+            let had_records = head_content.as_deref().is_some_and(|c| !line_key_set(c).is_empty());
             if !had_records {
                 // Nothing to clear. An empty file HEAD doesn't track carries no
                 // information, so keep it out of the repo entirely.
@@ -196,7 +193,7 @@ pub(crate) fn stage_and_commit(
         // Fix 3: skip a precision-only rewrite — the same records re-serialized
         // at a different decimal precision. Comparing canonical record sets (not
         // raw text) means `1.234` vs `1.23400` never creates a commit.
-        if let Some(head_content) = head_blobs.get(&rel_posix) {
+        if let Some(head_content) = &head_content {
             if line_key_set(&content) == line_key_set(head_content) {
                 continue;
             }
@@ -334,50 +331,36 @@ pub(crate) fn has_local_annotation_changes(
         }
     }
 
-    // Compare annotation files on disk to HEAD blobs.
-    let ann_abs = project_path.join(ann_rel);
-    let head_blobs = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
-        Some(tree) => annotation_blobs(repo, &tree)?,
-        None => {
-            // No commits yet — a file with records counts; an empty one does
-            // not (staging drops it).
-            let mut found = false;
-            walk_files(&ann_abs, &mut |p| {
-                if p.extension().and_then(|e| e.to_str()) != Some(ANNOTATION_EXT) {
-                    return;
-                }
-                if std::fs::read_to_string(p).is_ok_and(|c| !line_key_set(&c).is_empty()) {
-                    found = true;
-                }
-            });
-            return Ok(found);
-        }
-    };
-
-    let mut disk: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    walk_files(&ann_abs, &mut |p| {
-        if p.extension().and_then(|e| e.to_str()) != Some(ANNOTATION_EXT) {
-            return;
-        }
-        if let Ok(rel) = p.strip_prefix(project_path) {
-            let key = rel.to_string_lossy().replace('\\', "/");
-            if let Ok(content) = std::fs::read_to_string(p) {
-                disk.insert(key, content);
-            }
-        }
-    });
-
-    // Compare by canonical record set, not raw text, so a precision-only
-    // rewrite (same times re-serialized at a different decimal precision) does
-    // not read as a local change and light the status dot.
-    for (path, content) in &disk {
-        match head_blobs.get(path.as_str()) {
-            // Same record set — nothing to sync.
-            Some(head_content) if line_key_set(content) == line_key_set(head_content) => {}
+    // Compare annotation files on disk to HEAD. libgit2's status uses the
+    // index's stat cache, so only files whose size/mtime changed since the last
+    // commit are read — this runs after every autosave, and reading every
+    // annotation file in a large project each time is slow on external drives.
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let ann_rel_posix = ann_rel.to_string_lossy().replace('\\', "/");
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true);
+    if !ann_rel_posix.is_empty() && ann_rel_posix != "." {
+        // A host repo's own ignores could cover the annotation dir; staging
+        // adds those files by path regardless, so look at them too.
+        opts.pathspec(&ann_rel_posix).include_ignored(true).recurse_ignored_dirs(true);
+    }
+    let suffix = format!(".{ANNOTATION_EXT}");
+    let statuses = repo.statuses(Some(&mut opts)).map_err(gerr)?;
+    for entry in statuses.iter() {
+        let Some(path) = entry.path().filter(|p| p.ends_with(&suffix)) else { continue };
+        // Absent from disk is "unknown", never a change (see below).
+        let Ok(content) = std::fs::read_to_string(project_path.join(path)) else { continue };
+        let head_content = head_tree.as_ref().and_then(|t| tree_blob_text(repo, t, path));
+        // Compare by canonical record set, not raw text, so a precision-only
+        // rewrite does not read as a local change and light the status dot.
+        match head_content {
+            Some(h) if line_key_set(&content) == line_key_set(&h) => {}
             // Empty file HEAD never tracked — staging drops it, so not syncable.
             // (An empty file whose HEAD blob HAS records is the pending-clear
             // path and still counts, through the catch-all arm below.)
-            None if line_key_set(content).is_empty() => {}
+            None if line_key_set(&content).is_empty() => {}
             _ => return Ok(true),
         }
     }

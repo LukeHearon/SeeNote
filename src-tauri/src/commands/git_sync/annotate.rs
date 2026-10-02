@@ -21,9 +21,8 @@ use super::{gerr, SyncSummary};
 /// another. Keying on exact line text would read that as delete+add and churn
 /// every teammate's file; keying on the numeric value makes it a no-op.
 ///
-/// Rule (mirrored on the TS side in `utils/annotationMerge.ts` `canonicalKey` /
-/// `setMergeContent` — keep both in sync): split the line on tabs;
-/// if the first two fields parse as `f64`, the key is the bit patterns of
+/// Rule: split the line on tabs;
+/// if the first two fields parse as finite `f64`, the key is the bit patterns of
 /// (start, end) plus the untouched remainder of the line (the label and any
 /// further fields). Non-numeric lines fall back to their exact text.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -43,9 +42,13 @@ pub(crate) fn record_key(line: &str) -> RecordKey {
     let rest = fields.next().unwrap_or("");
     if let (Some(s), Some(e)) = (start, end) {
         if let (Ok(start), Ok(end)) = (s.trim().parse::<f64>(), e.trim().parse::<f64>()) {
+            if !(start.is_finite() && end.is_finite()) {
+                return RecordKey::Raw(line.to_string());
+            }
+            // `+ 0.0` folds -0 into 0, so `-0` and `0` are one record.
             return RecordKey::Timed {
-                start: start.to_bits(),
-                end: end.to_bits(),
+                start: (start + 0.0).to_bits(),
+                end: (end + 0.0).to_bits(),
                 rest: rest.to_string(),
             };
         }
@@ -136,6 +139,62 @@ fn start_of(line: &str) -> f64 {
         .unwrap_or(f64::INFINITY)
 }
 
+/// How one annotation file should be resolved in a merge, overriding whatever
+/// the textual tree merge produced. `None` leaves that result alone (only one
+/// side changed the file, so git already took the changed side).
+///
+/// - A side that dropped a file the ancestor had is never honored: an absent
+///   file is "unknown", not a deletion (see `repo::stage_and_commit`). Older
+///   clients did commit such deletions, and applying them destroyed records
+///   for the whole team, so the surviving side's content is kept.
+/// - A file changed on both sides always goes through [`set_merge`] — git's
+///   own hunk merge would otherwise interleave lines textually when the edits
+///   don't touch, duplicating a record added at two different positions.
+pub(crate) fn resolve_annotation(
+    ancestor: Option<&str>,
+    ours: Option<&str>,
+    theirs: Option<&str>,
+) -> Option<String> {
+    match (ancestor, ours, theirs) {
+        (Some(_), Some(o), None) => Some(o.to_string()),
+        (Some(_), None, Some(t)) => Some(t.to_string()),
+        (a, Some(o), Some(t)) if o != t && a.map_or(true, |a| o != a && t != a) => {
+            Some(set_merge(a.unwrap_or(""), o, t))
+        }
+        _ => None,
+    }
+}
+
+/// Annotation files the incoming side (`theirs`) removes relative to `base`,
+/// where `base` still had records in them. `deleted` are absent from theirs —
+/// never applied (see [`resolve_annotation`]); `emptied` are present but hold no
+/// records — a teammate's confirmed clear, applied only by a manual sync.
+#[derive(Default, Debug, PartialEq)]
+pub(crate) struct IncomingRemovals {
+    pub deleted: Vec<String>,
+    pub emptied: Vec<String>,
+}
+
+pub(crate) fn incoming_removals(
+    base: &HashMap<String, String>,
+    theirs: &HashMap<String, String>,
+) -> IncomingRemovals {
+    let mut out = IncomingRemovals::default();
+    let mut paths: Vec<&String> = base.keys().collect();
+    paths.sort();
+    for path in paths {
+        if line_key_set(&base[path]).is_empty() {
+            continue;
+        }
+        match theirs.get(path) {
+            None => out.deleted.push(path.clone()),
+            Some(t) if line_key_set(t).is_empty() => out.emptied.push(path.clone()),
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Summary diff
 // ---------------------------------------------------------------------------
@@ -198,6 +257,30 @@ pub(crate) fn annotation_blobs(
     Ok(map)
 }
 
+/// Repo-relative paths of every annotation blob in a tree, without reading
+/// their content.
+pub(crate) fn annotation_paths(tree: &Tree) -> Result<Vec<String>, String> {
+    let suffix = format!(".{ANNOTATION_EXT}");
+    let mut out = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            if let Some(name) = entry.name().filter(|n| n.ends_with(&suffix)) {
+                out.push(format!("{dir}{name}"));
+            }
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .map_err(gerr)?;
+    Ok(out)
+}
+
+/// Content of one blob in `tree` by repo-relative path, if present.
+pub(crate) fn tree_blob_text(repo: &Repository, tree: &Tree, path: &str) -> Option<String> {
+    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).to_string())
+}
+
 /// Count annotation lines added/removed (and files changed) between two tree states.
 /// `before` is None when there was no prior remote state (first push).
 /// Returns `(files_changed, added, removed)`.
@@ -240,7 +323,8 @@ pub(crate) fn tree_annotation_delta(
 
 #[cfg(test)]
 mod tests {
-    use super::{line_key_set, record_key, set_merge, RecordKey};
+    use super::{incoming_removals, line_key_set, record_key, resolve_annotation, set_merge, IncomingRemovals, RecordKey};
+    use std::collections::HashMap;
     use crate::commands::git_sync::auth::{is_auth_error, remote_err};
     use crate::commands::git_sync::AUTH_ERROR_PREFIX;
 
@@ -267,6 +351,51 @@ mod tests {
         let e = git2::Error::from_str("failed to resolve address for github.com");
         assert!(!is_auth_error(&e));
         assert!(!remote_err("reach the remote", &e).starts_with(AUTH_ERROR_PREFIX));
+    }
+
+    #[test]
+    fn resolve_keeps_our_file_when_theirs_deleted_it() {
+        let a = "1.0\t2.0\ta\n";
+        assert_eq!(resolve_annotation(Some(a), Some(a), None).as_deref(), Some(a));
+        assert_eq!(resolve_annotation(Some(a), None, Some(a)).as_deref(), Some(a));
+    }
+
+    #[test]
+    fn resolve_set_merges_non_conflicting_two_sided_edits() {
+        let a = "1.0\t2.0\ta\n9.0\t9.5\tz\n";
+        let o = "1.0\t2.0\ta\n3.0\t4.0\tb\n9.0\t9.5\tz\n";
+        let t = "1.0\t2.0\ta\n9.0\t9.5\tz\n10.0\t11.0\tc\n";
+        assert_eq!(
+            norm(&resolve_annotation(Some(a), Some(o), Some(t)).unwrap()),
+            vec!["1.0\t2.0\ta", "3.0\t4.0\tb", "9.0\t9.5\tz", "10.0\t11.0\tc"]
+        );
+        // add/add of one path with no ancestor: union, no duplicates.
+        assert_eq!(
+            norm(&resolve_annotation(None, Some("1\t2\tx\n"), Some("1\t2\tx\n3\t4\ty\n")).unwrap()),
+            vec!["1\t2\tx", "3\t4\ty"]
+        );
+    }
+
+    #[test]
+    fn resolve_leaves_one_sided_changes_to_git() {
+        let a = "1.0\t2.0\ta\n";
+        let o = "1.0\t2.0\ta\n3.0\t4.0\tb\n";
+        assert_eq!(resolve_annotation(Some(a), Some(o), Some(a)), None);
+        assert_eq!(resolve_annotation(Some(a), Some(a), Some(o)), None);
+        assert_eq!(resolve_annotation(Some(a), Some(o), Some(o)), None);
+    }
+
+    #[test]
+    fn incoming_removals_splits_deleted_and_emptied() {
+        let m = |kv: &[(&str, &str)]| -> HashMap<String, String> {
+            kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        let base = m(&[("a.txt", "1\t2\tx\n"), ("b.txt", "1\t2\tx\n"), ("c.txt", "1\t2\tx\n"), ("d.txt", "")]);
+        let theirs = m(&[("b.txt", ""), ("c.txt", "1\t2\tx\n3\t4\ty\n")]);
+        assert_eq!(
+            incoming_removals(&base, &theirs),
+            IncomingRemovals { deleted: vec!["a.txt".into()], emptied: vec!["b.txt".into()] }
+        );
     }
 
     #[test]

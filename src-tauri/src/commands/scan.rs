@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 use super::filesystem::classify_ext;
-use super::shared::atomic_write;
+use super::shared::{atomic_write, symlink_dir_loops};
 
 /// Files a scan matched (`files`) and, for a media scan, the other files it
 /// walked past (`others`, shown as "unsupported" in the file tree). Also the
@@ -41,8 +41,15 @@ pub enum ScanSpec {
     Media,
     /// Files whose name ends with any of `suffixes` go to `files`; nothing else
     /// is collected. Used for annotation files (`.txt`) and buzzdetect results
-    /// (`_buzzdetect.csv`, `_buzzpart.csv`).
-    Suffixes { suffixes: Vec<String> },
+    /// (`_buzzdetect.csv`, `_buzzpart.csv`). With `skip_empty`, a file holding
+    /// no records is left out: an empty annotation file means the track was
+    /// deliberately cleared, which is not "annotated".
+    #[serde(rename_all = "camelCase")]
+    Suffixes {
+        suffixes: Vec<String>,
+        #[serde(default)]
+        skip_empty: bool,
+    },
 }
 
 enum Bucket {
@@ -57,7 +64,9 @@ impl ScanSpec {
     fn tag(&self) -> String {
         match self {
             ScanSpec::Media => "media".to_string(),
-            ScanSpec::Suffixes { suffixes } => format!("sfx:{}", suffixes.join(",")),
+            ScanSpec::Suffixes { suffixes, skip_empty } => {
+                format!("sfx:{}{}", suffixes.join(","), if *skip_empty { ":nonempty" } else { "" })
+            }
         }
     }
 
@@ -67,10 +76,23 @@ impl ScanSpec {
                 let (is_audio, is_video) = classify_ext(path);
                 if is_audio || is_video { Bucket::Files } else { Bucket::Others }
             }
-            ScanSpec::Suffixes { suffixes } => {
-                if suffixes.iter().any(|s| name.ends_with(s.as_str())) { Bucket::Files } else { Bucket::Skip }
+            ScanSpec::Suffixes { suffixes, skip_empty } => {
+                let matches = suffixes.iter().any(|s| name.ends_with(s.as_str()));
+                if matches && (!skip_empty || has_records(path)) { Bucket::Files } else { Bucket::Skip }
             }
         }
+    }
+}
+
+/// Whether a result file holds anything. Zero-length is the common empty case;
+/// a tiny file is read to catch whitespace-only leftovers, and anything larger
+/// is taken as having records without paying for a read.
+fn has_records(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() == 0 => false,
+        Ok(m) if m.len() <= 64 => std::fs::read_to_string(path).is_ok_and(|s| !s.trim().is_empty()),
+        Ok(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -239,7 +261,7 @@ fn walk(root: &Path, root_key: &str, st: &mut ScanState) -> std::io::Result<bool
             // per entry, which is the dominant cost on external drives).
             // Symlinks need the followed metadata to know what they point at.
             let is_dir = match entry.file_type() {
-                Ok(t) if t.is_symlink() => path.is_dir(),
+                Ok(t) if t.is_symlink() => path.is_dir() && !symlink_dir_loops(&dir, &path),
                 Ok(t) => t.is_dir(),
                 Err(_) => path.is_dir(),
             };
@@ -399,4 +421,29 @@ pub async fn scan_tree(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::shared::make_tmp_root;
+
+    // A track counts as annotated only when its file holds records. An existing
+    // but empty file means "deliberately cleared" (see persistAnnotations), and
+    // painting that track blue reported annotations that don't exist.
+    #[test]
+    fn skip_empty_leaves_out_files_without_records() {
+        let root = make_tmp_root("scan_empty");
+        std::fs::write(root.join("has.txt"), "0.0000\t1.0000\tbee\n").unwrap();
+        std::fs::write(root.join("empty.txt"), "").unwrap();
+        std::fs::write(root.join("blank.txt"), "\n  \n").unwrap();
+        let spec = ScanSpec::Suffixes { suffixes: vec![".txt".into()], skip_empty: true };
+        let bucket = |n: &str| matches!(spec.classify(&root.join(n), n), Bucket::Files);
+        assert!(bucket("has.txt"));
+        assert!(!bucket("empty.txt"));
+        assert!(!bucket("blank.txt"));
+        let keep_all = ScanSpec::Suffixes { suffixes: vec![".txt".into()], skip_empty: false };
+        assert!(matches!(keep_all.classify(&root.join("empty.txt"), "empty.txt"), Bucket::Files));
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
