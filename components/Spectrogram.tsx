@@ -600,8 +600,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           const containerWidth = containerSizeRef.current.width || containerRef.current.clientWidth;
           const pps = pixelsPerSecondRef.current;
           if (duration * pps <= containerWidth) return;
-          const targetScroll = t * pps - containerWidth / 2;
-          setScroll(Math.max(0, targetScroll), 'autoScroll');
+          setScroll(centerScrollLeft(t, pps, containerWidth, duration), 'autoScroll');
       };
       autoScroll();
       return currentTimeStore.subscribe(autoScroll);
@@ -1225,12 +1224,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Annotation starts plus, under a subset, the segment joins.
   const jumpStops = useMemo(() => mergeStops(annotations.map(a => a.start), subsetJoins), [annotations, subsetJoins]);
 
+  // Puts the annotation a quarter of the way in, clamped like every other scroll.
+  // Live pps: during a zoom commit the prop lags the ref.
   const scrollToAnnotation = useCallback((annotStart: number) => {
     if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
-    const targetScrollLeft = (annotStart * pixelsPerSecond) - (containerWidth * 0.25);
-    setScroll(Math.max(0, targetScrollLeft), 'scrollToAnnotation');
-  }, [pixelsPerSecond, setScroll]);
+    const containerWidth = containerSizeRef.current.width || containerRef.current.clientWidth;
+    const pps = pixelsPerSecondRef.current;
+    const target = annotStart * pps - containerWidth * 0.25;
+    setScroll(clamp(target, 0, computeMaxScroll(durationRef.current, pps, containerWidth)), 'scrollToAnnotation');
+  }, [setScroll]);
 
   const goToPrevAnnotation = useCallback(() => {
     if (selection !== null) {

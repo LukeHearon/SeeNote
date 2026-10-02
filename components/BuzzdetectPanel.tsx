@@ -756,20 +756,6 @@ export default function BuzzdetectPanel({
       ctx.fillStyle = 'rgba(226, 232, 240, 0.045)';
       paintUnits(() => true);
 
-      // Selection highlight (mirrors the spectrogram's selected region).
-      if (selection) {
-        const sx = xOf(selection.start);
-        const ex = xOf(selection.end);
-        ctx.fillStyle = 'rgba(230, 81, 97, 0.14)';
-        ctx.fillRect(sx, 0, Math.max(1, ex - sx), h);
-        ctx.strokeStyle = 'rgba(230, 81, 97, 0.5)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(sx, 0); ctx.lineTo(sx, h);
-        ctx.moveTo(ex, 0); ctx.lineTo(ex, h);
-        ctx.stroke();
-      }
-
       // Subset segment joins — the same seams the spectrogram marks, drawn the
       // same way (gold, dashed), so a cut reads identically on both: a splice,
       // not a marker unique to one panel.
@@ -1064,7 +1050,7 @@ export default function BuzzdetectPanel({
     if (!strip) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(strip, (st.originScroll - scrollLeft) * dpr, 0);
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, selection, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, offsetOf, adjusting, isolatedNeurons, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, offsetOf, adjusting, isolatedNeurons, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -1072,6 +1058,10 @@ export default function BuzzdetectPanel({
   // whole data-driven canvas above (which was causing visible flicker/jank
   // during playback, and made merely moving the cursor cost as much as a pan).
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  useEffect(() => { overlayDirtyRef.current = true; }, [selection]);
+
   const drawOverlay = useCallback(() => {
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
@@ -1092,6 +1082,23 @@ export default function BuzzdetectPanel({
     // so the click target still reads clearly on top of it. Read from a ref
     // rather than state so a mousemove never re-renders the component or
     // dirties the main canvas.
+    // Selection highlight (mirrors the spectrogram's selected region). On the
+    // overlay rather than the data canvas, so dragging a selection repaints
+    // this canvas instead of rebuilding the whole strip on every move.
+    const sel = selectionRef.current;
+    if (sel) {
+      const sx = timeToX(sel.start, scrollLeft, pixelsPerSecond);
+      const ex = timeToX(sel.end, scrollLeft, pixelsPerSecond);
+      ctx.fillStyle = 'rgba(230, 81, 97, 0.14)';
+      ctx.fillRect(sx, 0, Math.max(1, ex - sx), h);
+      ctx.strokeStyle = 'rgba(230, 81, 97, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sx, 0); ctx.lineTo(sx, h);
+      ctx.moveTo(ex, 0); ctx.lineTo(ex, h);
+      ctx.stroke();
+    }
+
     const hr = hoverRangeRef.current;
     if (data && hr && hr.start >= 0 && hr.end < data.starts.length) {
       const hx = timeToX(hr.tStart, scrollLeft, pixelsPerSecond);
@@ -1115,7 +1122,7 @@ export default function BuzzdetectPanel({
 
   // Self-scheduling rAF loop, split into two dirty flags — matches the
   // spectrogram's draw/overlay split: `drawDirty` covers the expensive
-  // data-driven canvas (redrawn on data/viewport/selection/threshold changes),
+  // data-driven canvas (redrawn on data/viewport/threshold changes),
   // `overlayDirty` covers only the playhead line (redrawn every playback tick).
   // Without the split, every ~50Hz currentTime tick was re-running the full
   // canvas — including the per-frame darken-overlay scan — which is what made
@@ -1150,13 +1157,16 @@ export default function BuzzdetectPanel({
     setHoverRange(r);
   }, []);
 
-  // Redraw on spectrogram pan/zoom/resize without any React render: the store
-  // notifies, we read the new viewport at draw time. This is what keeps panning
-  // smooth while the panel is open. Panning shifts both the data canvas and the
-  // playhead, so it marks both dirty.
+  // Redraw on spectrogram pan/zoom/resize without any React render. The store is
+  // published from the end of the spectrogram's own rAF tick, so drawing right
+  // here lands in that same frame — waiting for this panel's tick would leave it
+  // a frame behind whenever its loop happens to run first. Panning shifts both
+  // the data canvas and the playhead, so both are drawn.
   useEffect(() => viewportStore.subscribe(() => {
-    drawDirtyRef.current = true;
-    overlayDirtyRef.current = true;
+    drawRef.current();
+    drawDirtyRef.current = false;
+    drawOverlayRef.current();
+    overlayDirtyRef.current = false;
   }), [viewportStore]);
   // Playback ticks only move the playhead line — no need to touch the data canvas.
   useEffect(() => currentTimeStore.subscribe(() => { overlayDirtyRef.current = true; }), [currentTimeStore]);
