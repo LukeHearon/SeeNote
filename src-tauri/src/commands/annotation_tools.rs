@@ -355,46 +355,6 @@ fn copy_examples_into(
     copy_audio_files(&files, tool_dir, summary)
 }
 
-/// Import a directory of **fully fleshed-out tool folders** — the same layout
-/// as `.seenote/annotation-tools/` itself: one `{label}/` per tool, each
-/// optionally holding `tool.json`, `description.txt`, and `examples/`.
-///
-/// New labels get their folder copied in (falling back to a cycled `palette`
-/// color when `tool.json` is absent). Labels that already exist in the project
-/// keep their color/description; only their example clips are merged. Sources
-/// are copied, never moved, and existing destination filenames are skipped.
-#[tauri::command]
-pub async fn import_annotation_tools(
-    project_dir: String,
-    tools_dir: String,
-    palette: Vec<String>,
-) -> Result<ImportExamplesSummary, String> {
-    let src_root = Path::new(&tools_dir);
-    if !src_root.is_dir() {
-        return Err(format!("tools directory not found: {tools_dir}"));
-    }
-    let root = tools_root(&project_dir);
-    let mut summary = ImportExamplesSummary::default();
-
-    for (src_dir, name) in labeled_subdirs(src_root)? {
-        let tool_dir = root.join(&name);
-        let is_new = !tool_exists(&tool_dir);
-        ensure_tool_dir(&tool_dir, &name, &palette, &mut summary)?;
-        if is_new {
-            // Source attributes win for a brand-new tool; the palette color
-            // written by ensure_tool_dir stays only when the source has none.
-            let src_color = read_color(&src_dir);
-            let src_desc = read_description(&src_dir);
-            if !src_color.is_empty() || !src_desc.is_empty() {
-                let color = if src_color.is_empty() { read_color(&tool_dir) } else { src_color };
-                write_attrs(&tool_dir, &color, &src_desc)?;
-            }
-        }
-        copy_examples_into(&src_dir.join("examples"), &tool_dir, &mut summary)?;
-    }
-    Ok(summary)
-}
-
 /// Import a directory of **plain example clips** — one `{label}/` folder per
 /// tool, each holding audio files (nested subfolders are searched and
 /// flattened; e.g. `bird_goose/clip1.mp3`).

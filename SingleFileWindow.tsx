@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Activity, ArrowLeft, Bug, ChevronDown, HelpCircle, X } from 'lucide-react';
 import VideoPane from './components/VideoPane';
+import { resolveVideoElementUrl } from './utils/videoUrl';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole from './components/DebugConsole';
@@ -16,12 +17,11 @@ import { Selection, SpectrogramSettings, VideoMode } from './types';
 import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
 import { suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
-import { getFileInfo, toAssetUrl, saveFileDialog, exportAudioRange, openFileDialog } from './utils/tauriCommands';
+import { getFileInfo, saveFileDialog, exportAudioRange, openFileDialog } from './utils/tauriCommands';
 import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
 import { showHelpPage } from './utils/helpChannel';
 import { useLiveHost } from './utils/liveBridge';
 import { isFilterAvailable } from './utils/videoPlaybackMode';
-import { createCurrentTimeStore } from './utils/currentTimeStore';
 import { createViewportStore } from './utils/viewportStore';
 import { useActivationStack } from './hooks/useActivationStack';
 import { usePanelLayout } from './hooks/usePanelLayout';
@@ -60,6 +60,8 @@ export interface SingleFileWindowProps {
 export default function SingleFileWindow({ filePath, onClose }: SingleFileWindowProps) {
   const trackName = basename(filePath);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const videoSrcRef = useRef<string | null>(null);
+  useEffect(() => { videoSrcRef.current = videoSrc; }, [videoSrc]);
   const [isAudioTrack, setIsAudioTrack] = useState(!isVideoFile(filePath));
   const [sampleRate, setSampleRate] = useState(44100);
   const [duration, setDuration] = useState(0);
@@ -198,7 +200,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const viewportStoreRef = useRef(createViewportStore());
 
   const {
-    frameSourceRef, frameSourceVersion, setFrameSourceVersion, frameSourceDecodeError,
+    frameSourceRef, frameSourceVersion, frameSourceDecodeError,
     videoPrefetchEndRef, videoPrefetchBusyRef, preZoomExtentRef, prerollVideo,
   } = useVideoFrameSource({
     // Effective, not preferred: a subset closes the frame source outright.
@@ -221,7 +223,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     // The transport runs on the DISPLAY axis, so it gets the display duration and
     // the effective video mode (see AnnotationWindow).
     isAudioTrack, isAudioTrackRef, videoMode: effectiveVideoMode, videoModeRef: effectiveVideoModeRef,
-    videoSrc, videoSrcRef: useRef(videoSrc), duration: displayDuration, durationRef: displayDurationRef,
+    videoSrc, videoSrcRef, duration: displayDuration, durationRef: displayDurationRef,
     selection, selectionRef, frameSourceRef, videoPrefetchEndRef, videoPrefetchBusyRef,
     prerollVideo, timelineRef, spectrogramRef, examplePlayer, addLog,
   });
@@ -237,13 +239,12 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const prevProjectIdRef = useRef<string | null>('single-file');
   const {
     filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter, filterStrength, setFilterStrength,
-    handleToggleFilterTool, handleToggleFilterState, handleDisableBandPassFilter,
+    handleToggleFilterTool, handleDisableBandPassFilter,
     handleEnableBandPassFilter, handleBandPassFilterDrawn,
   } = useBandPassFilter({
     project: bandPassProjectRef.current,
     engineRef,
     activationStack,
-    projectRef: bandPassProjectRef,
     prevProjectIdRef,
     updateProjectPreferences: async () => undefined,
     isAudioTrack,
@@ -265,7 +266,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     let cancelled = false;
     const isAudio = !isVideoFile(filePath);
     setIsAudioTrack(isAudio);
-    setVideoSrc(toAssetUrl(filePath));
+    resolveVideoElementUrl(filePath).then(url => { if (!cancelled) setVideoSrc(url); });
     setIsProcessing(true);
     addLog(`Opening: ${trackName}`);
 

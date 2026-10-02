@@ -436,6 +436,9 @@ export const annotationWindow = {
   get syncFailed() { return getOverride('ui.annotationWindow.syncFailed') ?? "Sync failed"; },
   get syncComplete() { return getOverride('ui.annotationWindow.syncComplete') ?? "Sync complete"; },
   get autoPullComplete() { return getOverride('ui.annotationWindow.autoPullComplete') ?? "Annotations updated"; },
+  get autoPullBlocked() { return getOverride('ui.annotationWindow.autoPullBlocked') ?? "Remote changes need a manual sync"; },
+  get remoteClearsApplied() { return getOverride('ui.annotationWindow.remoteClearsApplied') ?? "A teammate cleared these tracks:"; },
+  get remoteDeletionsKept() { return getOverride('ui.annotationWindow.remoteDeletionsKept') ?? "Kept files the remote had lost (they will be restored on the next sync):"; },
   // Shown when a sync finds annotation files that are now empty while history
   // still holds records for them. Emptying a track deletes those records for
   // every collaborator, so it is never committed without this confirmation.
