@@ -333,3 +333,5 @@ export function useAnnotationTools({
     handleRestoreToolsState,
   };
 }
+
+export type AnnotationToolsApi = ReturnType<typeof useAnnotationTools>;

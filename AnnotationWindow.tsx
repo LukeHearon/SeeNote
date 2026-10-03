@@ -6,7 +6,7 @@ import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, AnnotationTool, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
+import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
 import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { invalidateProjectLabelIndex } from './utils/annotationRename';
@@ -55,11 +55,8 @@ import DebugConsole from './components/DebugConsole';
 import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
-import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
+import ToolModals from './components/ToolModals';
 import FindLabelPanel from './components/FindLabelPanel';
-import AnnotationToolEditModal from './components/AnnotationToolEditModal';
-import AnnotationToolLibrary from './components/AnnotationToolLibrary';
-import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
 import Toolbar from './components/Toolbar';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import VideoSection from './components/VideoSection';
@@ -399,29 +396,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // usePlaybackTransport below) specifically so `libraryToolIndex` exists in
   // time to gate those hooks' own hotkey registrations — see the `enabled`
   // args passed to usePlaybackTransport/useBandPassFilter further down.
-  const {
-    annotationTools,
-    annotationToolsRef,
-    panelEditingToolIndex,
-    setPanelEditingToolIndex,
-    panelDeletingToolIndex,
-    setPanelDeletingToolIndex,
-    libraryToolIndex,
-    setLibraryToolIndex,
-    libraryPlaying,
-    setLibraryPlaying,
-    handleShowExamples,
-    loadAnnotationTools,
-    handleCreateTool,
-    handleRenameTool,
-    handleDeleteTool,
-    handlePreviewToolColor,
-    handleBindHotkey,
-    handleReorderTools,
-    handleImportExamples,
-    handleImportExamplesToTool,
-    handleRestoreToolsState,
-  } = useAnnotationTools({
+  const tools = useAnnotationTools({
     project,
     projectRef,
     prevProjectIdRef,
@@ -436,6 +411,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     trackPath,
     getAnnotationPath,
   });
+  const {
+    annotationTools, annotationToolsRef,
+    setPanelEditingToolIndex, setPanelDeletingToolIndex,
+    libraryToolIndex, libraryPlaying,
+    handleShowExamples, loadAnnotationTools, handleCreateTool, handleBindHotkey, handleReorderTools,
+  } = tools;
 
   // Neurons named like a tool draw in that tool's color and follow it.
   const toolColors = useMemo(() => toolColorsByLabel(annotationTools), [annotationTools]);
@@ -2073,83 +2054,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           onClose={() => setShowProjectSettings(false)}
         />
       )}
-      {showToolSettings && (
-        <AnnotationToolsSettingsModal
-          annotationTools={annotationTools}
-          annotations={annotations}
-          onClose={() => setShowToolSettings(false)}
-          onReorderTools={handleReorderTools}
-          onRenameTool={handleRenameTool}
-          onDeleteTool={handleDeleteTool}
-          onPreviewColor={handlePreviewToolColor}
-          onCreateTool={handleCreateTool}
-          onRestoreToolsState={handleRestoreToolsState}
-          onImportExamples={handleImportExamples}
-          onImportExamplesToTool={handleImportExamplesToTool}
-          playingExampleToolId={examplePlayer.playingToolId}
-          onPlayExample={examplePlayer.toggle}
-          onShowExamples={handleShowExamples}
-        />
-      )}
-      {panelEditingToolIndex !== null && (
-        <AnnotationToolEditModal
-          tool={annotationTools[panelEditingToolIndex]}
-          toolIndex={panelEditingToolIndex}
-          annotations={annotations}
-          annotationTools={annotationTools}
-          onClose={() => setPanelEditingToolIndex(null)}
-          onPreviewColor={handlePreviewToolColor}
-          onImportExamples={handleImportExamplesToTool}
-          onShowExamples={(idx) => { setPanelEditingToolIndex(null); handleShowExamples(idx); }}
-          onDelete={
-            panelEditingToolIndex !== 0 && annotationTools[panelEditingToolIndex]?.key !== '0'
-              ? () => { const idx = panelEditingToolIndex; setPanelEditingToolIndex(null); setPanelDeletingToolIndex(idx); }
-              : undefined
-          }
-          onSave={(text, color, description) => {
-            handleRenameTool(panelEditingToolIndex, text, color, description);
-            setPanelEditingToolIndex(null);
-          }}
-        />
-      )}
-      {panelCreatingToolText !== null && (
-        <AnnotationToolEditModal
-          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: panelCreatingToolText, color: pickNextToolColor(annotationTools) }}
-          toolIndex={-1}
-          annotations={annotations}
-          annotationTools={annotationTools}
-          isCreate
-          onClose={() => setPanelCreatingToolText(null)}
-          onSave={(text, color, description) => {
-            const key = nextAvailableHotkey(annotationTools);
-            handleCreateTool(text, color, key, description);
-            setPanelCreatingToolText(null);
-            if (key) readyTool(key);
-          }}
-        />
-      )}
-      {libraryToolIndex !== null && annotationTools[libraryToolIndex] && (
-        <AnnotationToolLibrary
-          tool={annotationTools[libraryToolIndex]}
-          initialSettings={settings}
-          addLog={addLog}
-          onPlayingChange={setLibraryPlaying}
-          onClose={() => { setLibraryPlaying(false); setLibraryToolIndex(null); }}
-        />
-      )}
-      {panelDeletingToolIndex !== null && (() => {
-        const idx = panelDeletingToolIndex;
-        const tool = annotationTools[idx];
-        const close = () => setPanelDeletingToolIndex(null);
-        return tool ? (
-          <DeleteToolConfirmDialog
-            tool={tool}
-            onClose={close}
-            onDelete={() => { handleDeleteTool(idx, 'delete'); close(); }}
-            onUnlink={() => { handleDeleteTool(idx, 'unlink'); close(); }}
-          />
-        ) : null;
-      })()}
+      <ToolModals
+        tools={tools}
+        annotations={annotations}
+        examplePlayer={examplePlayer}
+        spectrogramSettings={settings}
+        addLog={addLog}
+        showToolSettings={showToolSettings}
+        onCloseToolSettings={() => setShowToolSettings(false)}
+        creatingToolText={panelCreatingToolText}
+        onCloseCreate={() => setPanelCreatingToolText(null)}
+        readyTool={readyTool}
+      />
       <TooltipLayer />
     </div>
   );
