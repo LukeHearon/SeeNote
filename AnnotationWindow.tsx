@@ -7,9 +7,9 @@ import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
-import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit, colorForLabel, LabelMatcher } from './utils/helpers';
+import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
-import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelIndex, LabelMatch } from './utils/annotationRename';
+import { invalidateProjectLabelIndex } from './utils/annotationRename';
 import { resolveLabelColor } from './utils/annotationTools';
 import { toolColorsByLabel } from './utils/neuronColors';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
@@ -47,6 +47,7 @@ import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { useProjectScans } from './hooks/useProjectScans';
+import { useFindLabel } from './hooks/useFindLabel';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager } from './utils/projectCommands';
 import TooltipLayer from './components/TooltipLayer';
@@ -55,7 +56,7 @@ import AnnotationToolsPanel from './components/AnnotationToolsPanel';
 import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import AnnotationToolsSettingsModal from './components/AnnotationToolsSettingsModal';
-import FindLabelPanel, { RenameScope } from './components/FindLabelPanel';
+import FindLabelPanel from './components/FindLabelPanel';
 import AnnotationToolEditModal from './components/AnnotationToolEditModal';
 import AnnotationToolLibrary from './components/AnnotationToolLibrary';
 import DeleteToolConfirmDialog from './components/DeleteToolConfirmDialog';
@@ -64,6 +65,7 @@ import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSetti
 import VideoSection from './components/VideoSection';
 import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import MessageDialog from './components/MessageDialog';
+import ConfirmDialog from './components/ConfirmDialog';
 import SyncControls from './components/SyncControls';
 import SyncToast from './components/SyncToast';
 import { tooltips } from './copy/tooltips';
@@ -112,22 +114,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // this holds it and opens the create modal, pre-targeted at the next free
   // hotkey. null = modal closed.
   const [panelCreatingToolText, setPanelCreatingToolText] = useState<string | null>(null);
-  // The "Find Label" entry points ({mod}+F and the magnifying glass in the
-  // Labels palette) open the find-and-rename dock on the right. Query/scope live
-  // here (not inside the panel) so the last search is still there — and its
-  // results reappear — the next time it's opened this session. Open state is
-  // deliberately NOT persisted: the dock is summoned, and closing it is the end
-  // of it. `findLabelFocusNonce` re-focuses the query field when {mod}+F is
-  // pressed while the dock is already open.
-  const [showFindLabel, setShowFindLabel] = useState(false);
-  const [findLabelFocusNonce, setFindLabelFocusNonce] = useState(0);
-  const [findLabelQuery, setFindLabelQuery] = useState('');
-  const [findLabelScope, setFindLabelScope] = useState<RenameScope>('project');
-  const openFindLabel = useCallback(() => {
-    setShowFindLabel(true);
-    setFindLabelFocusNonce(n => n + 1);
-  }, []);
-
   // Pending-save timer for the annotation autosave. Declared here (rather than
   // alongside useSyncManagement below) so handleOpenTrack and the other
   // track-switch resets, which run earlier, can flush it before wiping
@@ -453,67 +439,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Neurons named like a tool draw in that tool's color and follow it.
   const toolColors = useMemo(() => toolColorsByLabel(annotationTools), [annotationTools]);
-
-  // Tracks Find & Rename has anything to read from: those with an annotation
-  // file on disk, plus the open track (whose annotations may be unsaved). The
-  // panel used to try every track and swallow the "no such file" errors, which
-  // on a large project is one failed read per unannotated track.
-  const annotatedSearchTracks = useMemo(
-    () => allTracks.filter(t => annotatedTracks.has(t) || t === trackPath),
-    [allTracks, annotatedTracks, trackPath],
-  );
-
-  // Find & Rename: renames every annotation whose text satisfies `matcher`
-  // (exact, partial, or regex) to `newText`, independent of any tool
-  // identity. Current track updates in memory (autosave picks it up); when
-  // scope is 'folder' or 'project', every other in-scope track's annotation
-  // file is also rewritten on disk via the shared util also used by
-  // handleRenameTool. Folder scope skips the open track if it lies outside the
-  // entered folder, just as the panel leaves it out of the results.
-  const handleFindLabelRename = useCallback(async (matcher: LabelMatcher, newText: string, scope: RenameScope): Promise<number> => {
-    const folder = project.preferences.enteredFolderPath;
-    const inScope = (t: string) => scope !== 'folder' || !folder || isInsideDir(folder, t);
-    const renameCurrent = scope !== 'folder' || (trackPath !== null && inScope(trackPath));
-    const currentCount = renameCurrent ? annotations.filter(a => matcher(a.text)).length : 0;
-    if (currentCount > 0) {
-      // newText may not belong to any tool (a one-off rename), so re-resolve
-      // its color rather than keeping the old cached one — otherwise a label
-      // renamed away from its tool would keep that tool's color instead of
-      // reverting to white.
-      const newColor = colorForLabel(newText, annotationTools);
-      setAnnotations(prev => prev.map(a => matcher(a.text) ? { ...a, text: newText, color: newColor } : a));
-    }
-    if (scope === 'track') return currentCount;
-    const otherTracks = annotatedSearchTracks.filter(t => t !== trackPath && inScope(t));
-    const diskCount = await renameLabelAcrossTracks(otherTracks, getAnnotationPath, matcher, newText);
-    return currentCount + diskCount;
-  }, [annotations, annotationTools, annotatedSearchTracks, trackPath, getAnnotationPath,
-      project.preferences.enteredFolderPath]);
-
-  // Find & Rename: "Rename selected" — renames just the one match currently
-  // selected in the panel, identified by its track, start, end, and current
-  // label rather than by matching text. The open track's copy is renamed in
-  // memory (autosave picks it up); any other track is rewritten on disk via
-  // the single-match twin of renameLabelAcrossTracks. Returns whether a match
-  // was actually renamed.
-  const handleFindLabelRenameSelected = useCallback(async (
-    targetTrackFilePath: string, match: LabelMatch, newText: string,
-  ): Promise<boolean> => {
-    if (targetTrackFilePath === trackPath) {
-      let renamed = false;
-      const newColor = colorForLabel(newText, annotationTools);
-      setAnnotations(prev => {
-        const i = prev.findIndex(a => a.text === match.label && a.start === match.start && a.end === match.end);
-        if (i === -1) return prev;
-        renamed = true;
-        const next = [...prev];
-        next[i] = { ...next[i], text: newText, color: newColor };
-        return next;
-      });
-      return renamed;
-    }
-    return renameOneLabelInTrack(targetTrackFilePath, getAnnotationPath, match, newText);
-  }, [trackPath, annotationTools, getAnnotationPath]);
 
   // Toggle the example-clip preview for a tool by id — shared by the `E`
   // hotkey path, the tools-panel chips (via liveBridge), and the annotation
@@ -975,11 +900,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Style for wall-clock datetime readouts, set in the Preferences tab.
   const dateTimeFormat = project.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT;
 
-  // Find Label "Go": target ident + the match (start/end/label) on a track
-  // that isn't currently open. Set right before handleOpenTrack fires;
-  // consumed by the effect below once that track's annotations finish loading.
-  const pendingGoToLabelRef = useRef<{ trackPath: string; ident: string } & LabelMatch | null>(null);
-
   const handleSelectionChange = useSelectionControl({
     setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource,
   });
@@ -995,50 +915,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (shuffleMode) setShuffleMode(false);
   }, [project, updateProjectPreferences, shuffleMode, setShuffleMode]);
 
-  // Select + scroll to an annotation matching `match` on the current track.
-  // Shared by the same-track and cross-track ("Go") paths so the two don't
-  // diverge on how a match is highlighted. Matches on label too (not just
-  // start/end) since a regex/partial search can return several different
-  // labels at the same or coincidentally-equal times. Binds the match the
-  // same way clicking an annotation box does — bound + selected, with an
-  // active selection around it — so it lands ready to edit or delete.
-  const goToAnnotationMatch = useCallback((match: LabelMatch) => {
-    const found = annotations.find(a => a.start === match.start && a.end === match.end && a.text === match.label);
-    if (!found) return;
-    setSelectedAnnotationId(found.id);
-    setBoundAnnotationId(found.id);
-    // The match carries source times; the view, the playhead, and the
-    // selection are all on the display axis.
-    const dStart = timeline.toDisplay(match.start);
-    const dEnd = timeline.toDisplay(match.end);
-    handleSelectionChange({ start: dStart, end: dEnd });
-    seek(dStart);
-    // Centre the match at whatever zoom the user is already working at — walking
-    // a find result list must not keep rescaling the time axis under them.
-    spectrogramRef.current?.scrollToTime((dStart + dEnd) / 2);
-  }, [annotations, seek, timeline, handleSelectionChange]);
-
-  // Find Label "Go" handler: same-track matches select + scroll immediately;
-  // matches on another track open it first, and the effect below finishes
-  // the job once its annotations have loaded.
-  const handleGoToLabelMatch = useCallback((matchIdent: string, match: LabelMatch) => {
-    if (matchIdent === ident) {
-      goToAnnotationMatch(match);
-      return;
-    }
-    const targetPath = allTracks.find(t => getIdent(t) === matchIdent);
-    if (!targetPath) return;
-    // A match outside the folder the file panel has been entered into is outside
-    // displayQueue too, which would leave {mod}+↑/↓ with no place in the list. So
-    // step the panel back out to the media root — but no further in than that. The
-    // find panel is already saying where the match lives; following it down into
-    // its folder would narrow the file browser to a subtree the user never chose.
-    const entered = project.preferences.enteredFolderPath;
-    if (entered && !isInsideDir(entered, targetPath)) handleEnteredFolderChange(null);
-    pendingGoToLabelRef.current = { trackPath: targetPath, ident: matchIdent, ...match };
-    handleOpenTrack(targetPath);
-  }, [ident, goToAnnotationMatch, allTracks, getIdent, handleOpenTrack,
-      project.preferences.enteredFolderPath, handleEnteredFolderChange]);
 
   // Band-pass filter state machine (filter tool / band / strength + engine-push
   // and persistence effects, plus its own F / Shift+F hotkeys). Needs engineRef,
@@ -1159,6 +1035,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     ioGate,
     addLog,
   });
+
+  // Hand the engine the subset's axis and bring the view onto it — see
+  // hooks/useSubsetSync.ts. Must be declared before useFindLabel —
+  // see the pending-Go effect there.
+  useTimelineSwap({
+    timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef,
+    spectrogramRef, zoomSecRef, setZoomSec,
+  });
+
+  const findLabel = useFindLabel({
+    project, updateProjectPreferences, annotations, setAnnotations, annotationsLoadedTrack, annotationTools,
+    allTracks, annotatedTracks, trackPath, ident, isProcessing, getIdent, getAnnotationPath,
+    timeline, seek, handleSelectionChange, setSelectedAnnotationId, setBoundAnnotationId, spectrogramRef,
+    handleEnteredFolderChange, handleOpenTrack, reloadNonce: reloadNonce + annotationReloadNonce,
+  });
+  const { openFindLabel } = findLabel;
 
   // Load the project's tools and files on mount. Everything else starts from
   // its useState initialiser: App keys this window on the project id, so a
@@ -1320,18 +1212,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     fileTreeHeaderRef.current = state;
     setFileTreeAnyExpanded(state.anyExpanded);
   }, []);
-
-  const handleFindLabelUseRegexChange = useCallback((useRegex: boolean) => {
-    updateProjectPreferences(project.id, { findLabelUseRegex: useRegex });
-  }, [project, updateProjectPreferences]);
-
-  const handleFindLabelPartialChange = useCallback((partial: boolean) => {
-    updateProjectPreferences(project.id, { findLabelPartialMatch: partial });
-  }, [project, updateProjectPreferences]);
-
-  const handleFindLabelCaseSensitiveChange = useCallback((caseSensitive: boolean) => {
-    updateProjectPreferences(project.id, { findLabelCaseSensitive: caseSensitive });
-  }, [project, updateProjectPreferences]);
 
   const handleRevealInFinder = useCallback((path: string) => {
     revealInFileManager(path).catch(err => addLog(`reveal_in_file_manager error: ${err}`, 'error'));
@@ -1674,35 +1554,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     enabled: libraryToolIndex === null,
   });
 
-  // Hand the engine the subset's axis and bring the view onto it — see
-  // hooks/useSubsetSync.ts. Ordering against the Find & Rename "Go" below matters.
-  useTimelineSwap({
-    timeline, displayDuration, engineRef, handleSelectionChange, seek, currentTimeRef,
-    spectrogramRef, zoomSecRef, setZoomSec,
-  });
-
-  // Finish a cross-track Find & Rename "Go": select + scroll once the target
-  // track has finished loading and its annotations are in memory.
-  //
-  // Declared *after* the timeline effect above on purpose. A track load ends
-  // with a fresh timeline, and that effect clears the selection unconditionally
-  // — so applying the Go any earlier (the moment annotations arrive, which is
-  // well before the engine reports the new file's duration) left the match
-  // bound and glowing with its selection wiped out a beat later. Waiting for
-  // `isProcessing` to fall also means the seek and zoom below run against the
-  // new file's duration rather than the outgoing track's.
-  useEffect(() => {
-    const pending = pendingGoToLabelRef.current;
-    if (!pending || isProcessing) return;
-    if (trackPath !== pending.trackPath || ident !== pending.ident) return;
-    // Hold the pending Go (rather than consuming it) until the annotation
-    // actually shows up — the load is async and may land after this effect.
-    const found = annotations.some(a => a.start === pending.start && a.end === pending.end && a.text === pending.label);
-    if (!found) return;
-    pendingGoToLabelRef.current = null;
-    goToAnnotationMatch(pending);
-  }, [annotations, ident, trackPath, isProcessing, goToAnnotationMatch]);
-
   // Called by Toolbar time-field edits to sync the bound annotation's bounds.
   const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
     if (!boundAnnotationId) return;
@@ -1842,38 +1693,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
       <HelpHighlightHost />
 
-      {/* Import-annotations conflict confirmation */}
       {pendingImport && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
-          <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-5 max-w-md mx-4">
-            <h3 className="text-sm font-semibold text-slate-100 mb-2">{annotationWindow.importConflictTitle}</h3>
-            <p className="text-xs text-slate-300 leading-relaxed mb-4">
-              This track already has {pendingImport.existing.length} annotation{pendingImport.existing.length !== 1 ? 's' : ''}.
-              Importing {pendingImport.incoming.length} from <span className="text-slate-100">{pendingImport.sourceName}</span> —
-              overwrite the existing ones, or merge (append) the new ones onto them?
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                className="px-3 py-1.5 text-xs rounded text-slate-300 hover:bg-slate-700"
-                onClick={() => setPendingImport(null)}
-              >
-                {annotationWindow.importCancel}
-              </button>
-              <button
-                className="px-3 py-1.5 text-xs rounded bg-slate-700 text-slate-100 hover:bg-slate-600"
-                onClick={() => resolveImport('overwrite')}
-              >
-                {annotationWindow.importOverwrite}
-              </button>
-              <button
-                className="px-3 py-1.5 text-xs rounded bg-[#e65161] text-white hover:bg-[#e65161]/80"
-                onClick={() => resolveImport('merge')}
-              >
-                {annotationWindow.importMerge}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={annotationWindow.importConflictTitle}
+          message={annotationWindow.importConflictMessage(pendingImport.existing.length, pendingImport.incoming.length, pendingImport.sourceName)}
+          actions={[
+            { label: annotationWindow.importCancel, onClick: () => setPendingImport(null) },
+            { label: annotationWindow.importOverwrite, onClick: () => resolveImport('overwrite') },
+            { label: annotationWindow.importMerge, onClick: () => resolveImport('merge'), tone: 'primary' },
+          ]}
+          onDismiss={() => setPendingImport(null)}
+        />
       )}
 
       {/* Import parse error */}
@@ -2221,7 +2051,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
             back on its own. It lives in the layout row (rather than floating)
             because the user navigates between its matches with the spectrogram
             still in view. */}
-        {showFindLabel && (
+        {findLabel.showFindLabel && (
           <div
             className="flex-none bg-slate-900 border-l border-slate-700 flex flex-col h-full relative"
             style={{ width: findPanelWidth }}
@@ -2232,32 +2062,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               style={{ left: '-6px', width: '6px' }}
               onMouseDown={handleFindPanelWidthDrag}
             />
-            <FindLabelPanel
-              annotations={annotations}
-              annotationTools={annotationTools}
-              allTracks={annotatedSearchTracks}
-              trackPath={trackPath}
-              folderPath={project.preferences.enteredFolderPath ?? null}
-              annotationsLoaded={trackPath !== null && annotationsLoadedTrack === trackPath}
-              getAnnotationPath={getAnnotationPath}
-              getIdent={getIdent}
-              useRegex={project.preferences.findLabelUseRegex ?? false}
-              onUseRegexChange={handleFindLabelUseRegexChange}
-              partial={project.preferences.findLabelPartialMatch ?? false}
-              onPartialChange={handleFindLabelPartialChange}
-              caseSensitive={project.preferences.findLabelCaseSensitive ?? false}
-              onCaseSensitiveChange={handleFindLabelCaseSensitiveChange}
-              query={findLabelQuery}
-              onQueryChange={setFindLabelQuery}
-              scope={findLabelScope}
-              onScopeChange={setFindLabelScope}
-              focusNonce={findLabelFocusNonce}
-              reloadNonce={reloadNonce + annotationReloadNonce}
-              onClose={() => setShowFindLabel(false)}
-              onGo={handleGoToLabelMatch}
-              onRename={handleFindLabelRename}
-              onRenameSelected={handleFindLabelRenameSelected}
-            />
+            <FindLabelPanel {...findLabel.panelProps} />
           </div>
         )}
       </div>

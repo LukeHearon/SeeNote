@@ -544,6 +544,8 @@ export const annotationWindow = {
   get importCancel() { return getOverride('ui.annotationWindow.importCancel') ?? "Cancel"; },
   get importOverwrite() { return getOverride('ui.annotationWindow.importOverwrite') ?? "Overwrite"; },
   get importMerge() { return getOverride('ui.annotationWindow.importMerge') ?? "Merge"; },
+  importConflictMessage: (existing: number, incoming: number, source: string) =>
+    `This track already has ${existing} annotation${existing !== 1 ? 's' : ''}. Importing ${incoming} from ${source} — overwrite the existing ones, or merge (append) the new ones onto them?`,
   get importOk() { return getOverride('ui.annotationWindow.importOk') ?? "OK"; },
   // Spectrogram settings panel
   get freqHeader() { return getOverride('ui.annotationWindow.freqHeader') ?? "Frequency (Hz)"; },
