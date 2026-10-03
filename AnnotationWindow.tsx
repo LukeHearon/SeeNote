@@ -57,7 +57,7 @@ import SidebarStack from './components/SidebarStack';
 import CollapsedToolsRail from './components/CollapsedToolsRail';
 import ToolModals from './components/ToolModals';
 import FindLabelPanel from './components/FindLabelPanel';
-import Toolbar from './components/Toolbar';
+import TransportToolbar from './components/TransportToolbar';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import VideoSection from './components/VideoSection';
 import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
@@ -498,12 +498,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const {
     isPlaying, setIsPlaying,
     setIsBuffering, isBuffering,
-    playbackSpeed, setPlaybackSpeed,
-    lastDefinedSpeed, setLastDefinedSpeed,
-    volume, setVolume,
-    muted, setMuted,
-    playheadLocked, togglePlayheadLock,
-    timeDisplayUnit, fallbackTimeDisplayUnit, chooseTimeDisplayUnit,
+    playbackSpeed,
+    lastDefinedSpeed,
+    volume,
+    playheadLocked,
+    timeDisplayUnit, fallbackTimeDisplayUnit,
     engineRef,
     videoEngineRef,
     currentTimeRef,
@@ -914,10 +913,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const {
     filterToolActive, setFilterToolActive,
     bandPassFilter, setBandPassFilter,
-    filterStrength, setFilterStrength,
-    handleToggleFilterTool,
-    handleDisableBandPassFilter,
-    handleEnableBandPassFilter,
     handleBandPassFilterDrawn,
   } = filter;
 
@@ -1890,47 +1885,24 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 </div>
              )}
 
-             <Toolbar
-               isPlaying={isPlaying}
+             <TransportToolbar
+               transport={transport}
+               filter={filter}
                isBuffering={isBuffering || exampleAudioActive}
                videoSrc={videoSrc}
-               currentTimeStore={currentTimeStoreRef.current}
                duration={displayDuration}
                selection={selection}
-               volume={volume}
-               muted={muted}
                canGoPrevAnnotation={canGoPrevAnnotation}
                canGoNextAnnotation={canGoNextAnnotation}
                spectrogramRef={spectrogramRef}
-               setVolume={setVolume}
-               setMuted={setMuted}
-               onPlay={togglePlay}
-               onSeek={seek}
                onSelectionChange={handleSelectionChange}
                onAnnotationBoundsChange={handleToolbarAnnotationBoundsChange}
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
-               playbackSpeed={playbackSpeed}
-               setPlaybackSpeed={setPlaybackSpeed}
-               lastDefinedSpeed={lastDefinedSpeed}
-               setLastDefinedSpeed={setLastDefinedSpeed}
-               filterToolActive={filterToolActive}
-               onToggleFilterTool={handleToggleFilterTool}
-               bandPassFilter={bandPassFilter}
-               setBandPassFilter={setBandPassFilter}
-               onDisableBandPassFilter={handleDisableBandPassFilter}
-               onEnableBandPassFilter={handleEnableBandPassFilter}
-               filterStrength={filterStrength}
-               setFilterStrength={setFilterStrength}
                videoMode={effectiveVideoMode}
                isAudioTrack={isAudioTrack}
-               onRestartAudio={() => { engineRef.current?.restart(); }}
-               playheadLocked={playheadLocked}
-               onTogglePlayheadLock={togglePlayheadLock}
                timeDisplayUnit={shownTimeUnit}
-               selectedTimeDisplayUnit={timeDisplayUnit}
-               onTimeDisplayUnitChange={chooseTimeDisplayUnit}
                trackStartDate={trackStartDate}
                dateTimeFormat={dateTimeFormat}
                timeline={timeline}

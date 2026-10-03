@@ -19,7 +19,7 @@ import { DEFAULT_DATE_TIME_FORMAT } from '../constants';
 import { tooltips } from '../copy/tooltips';
 import ContextMenu from './ContextMenu';
 
-interface ToolbarProps {
+export interface ToolbarProps {
   isPlaying: boolean;
   isBuffering: boolean;
   videoSrc: string | null;

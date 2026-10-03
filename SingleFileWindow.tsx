@@ -5,7 +5,7 @@ import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole, { type DebugLog } from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import Toolbar from './components/Toolbar';
+import TransportToolbar from './components/TransportToolbar';
 import VideoSection from './components/VideoSection';
 import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import SidebarStack from './components/SidebarStack';
@@ -193,9 +193,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     prerollVideo, timelineRef, spectrogramRef, examplePlayer, addLog,
   });
   const {
-    isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
-    volume, setVolume, muted, setMuted, playheadLocked, togglePlayheadLock,
-    timeDisplayUnit, setTimeDisplayUnit,
+    isPlaying, isBuffering,
+    playheadLocked,
+    timeDisplayUnit,
     engineRef, currentTimeRef, currentTimeStoreRef,
     togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
   } = transport;
@@ -219,9 +219,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     videoMode: effectiveVideoMode,
   });
   const {
-    filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter, filterStrength, setFilterStrength,
-    handleToggleFilterTool, handleDisableBandPassFilter,
-    handleEnableBandPassFilter, handleBandPassFilterDrawn,
+    filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter,
+    handleBandPassFilterDrawn,
   } = filter;
 
   // Builds the spectrogram chunk cache (opening the file, changing the FFT size,
@@ -481,45 +480,23 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               </div>
             )}
 
-            <Toolbar
-              isPlaying={isPlaying}
+            <TransportToolbar
+              transport={transport}
+              filter={filter}
               isBuffering={isBuffering}
               videoSrc={videoSrc}
-              currentTimeStore={currentTimeStoreRef.current}
               duration={displayDuration}
               selection={selection}
-              volume={volume}
-              muted={muted}
               canGoPrevAnnotation={false}
               canGoNextAnnotation={false}
               spectrogramRef={spectrogramRef}
-              setVolume={setVolume}
-              setMuted={setMuted}
-              onPlay={togglePlay}
-              onSeek={seek}
               onSelectionChange={handleSelectionChange}
               onBoundAnnotationChange={setBoundAnnotationId}
               showSettings={showSettings}
               onToggleSettings={() => setShowSettings(s => !s)}
-              playbackSpeed={playbackSpeed}
-              setPlaybackSpeed={setPlaybackSpeed}
-              lastDefinedSpeed={lastDefinedSpeed}
-              setLastDefinedSpeed={setLastDefinedSpeed}
-              filterToolActive={filterToolActive}
-              onToggleFilterTool={handleToggleFilterTool}
-              bandPassFilter={bandPassFilter}
-              setBandPassFilter={setBandPassFilter}
-              onDisableBandPassFilter={handleDisableBandPassFilter}
-              onEnableBandPassFilter={handleEnableBandPassFilter}
-              filterStrength={filterStrength}
-              setFilterStrength={setFilterStrength}
               videoMode={effectiveVideoMode}
               isAudioTrack={isAudioTrack}
-              onRestartAudio={() => { engineRef.current?.restart(); }}
-              playheadLocked={playheadLocked}
-              onTogglePlayheadLock={togglePlayheadLock}
               timeDisplayUnit={timeDisplayUnit}
-              onTimeDisplayUnitChange={setTimeDisplayUnit}
               timeline={timeline}
             />
 
