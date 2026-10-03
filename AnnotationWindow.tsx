@@ -3,14 +3,12 @@ import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import { Annotation, AnnotationTool, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
+import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
-import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
+import { stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
 import { invalidateProjectLabelIndex } from './utils/annotationRename';
-import { resolveLabelColor } from './utils/annotationTools';
 import { toolColorsByLabel } from './utils/neuronColors';
-import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
 import { nextFileFilter, passesFileFilter } from './utils/fileFilter';
 import { isInsideDir } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
@@ -45,6 +43,7 @@ import { useShiftSweep } from './hooks/useShiftSweep';
 import { useSpectrogramZoomHotkeys } from './hooks/useSpectrogramZoomHotkeys';
 import { useAnnotationLoad } from './hooks/useAnnotationLoad';
 import { useProjectScans } from './hooks/useProjectScans';
+import { useAnnotationCommands } from './hooks/useAnnotationCommands';
 import { useFindLabel } from './hooks/useFindLabel';
 import { MultiTierSpectrogramCache, swapChunkCache } from './MultiTierSpectrogramCache';
 import { revealInFileManager } from './utils/projectCommands';
@@ -168,9 +167,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     handleAnnotationsCommit,
   } = useAnnotationHistory(setAnnotations);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-  // Label + span (source seconds) yanked by Mod+C, replayed by Mod+V at the
-  // playhead. Persists across track switches (AnnotationWindow stays mounted).
-  const annotationClipboardRef = useRef<{ text: string; color?: string; duration: number } | null>(null);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -180,12 +176,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Annotation currently bound to the selection region (null = free selection or no selection)
   const [boundAnnotationId, setBoundAnnotationId] = useState<string | null>(null);
-
-  // Per-session text buffer for annotation tool reassignment, keyed by hotkey
-  // digit ('0' = Custom): saves the label held under each tool while an
-  // annotation is bound, so switching back to a prior tool restores the
-  // previously-entered text. Cleared when the bound annotation is deselected.
-  const reassignBufferRef = useRef<Record<string, string>>({});
 
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
   const spectrogramRef = useRef<SpectrogramHandle>(null);
@@ -566,20 +556,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }, 150);
     return () => clearTimeout(timer);
   }, [selection, isAudioTrack, selectionToSource, frameSourceRef]);
-
-  // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
-  useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
-
-  // If the bound annotation was deleted by an external path (e.g. empty-text
-  // auto-delete on blur), clean up the tool state so handleToolActivate doesn't
-  // get stuck in the bound-annotation branch with a missing target.
-  useEffect(() => {
-    if (boundAnnotationId !== null && !annotations.some(a => a.id === boundAnnotationId)) {
-      setBoundAnnotationId(null);
-      setActiveToolKey(null);
-      activationStack.remove('annotationTool');
-    }
-  }, [annotations, boundAnnotationId, activationStack]);
 
   // Clear the saved pre-zoom extent on every track change. trackPathRef mirroring
   // lives in useFileNavigation; preZoomExtentRef is owned by useVideoFrameSource,
@@ -1212,161 +1188,22 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
-  // Enter the annotation-tool layer: push its activation-stack entry and drop
-  // the filter tool. The three side effects that always accompany readying a
-  // tool, in one place.
-  const enterAnnotationToolLayer = useCallback(() => {
-      activationStack.pushIfAbsent('annotationTool');
-      setFilterToolActive(false);
-      activationStack.remove('filterTool');
-  }, [activationStack]);
-
-  // Ready a tool by key, unconditionally (no toggle-off, no selection/bound
-  // side effects). Used when a tool has just been added from the palette.
-  const readyTool = useCallback((key: string) => {
-      setActiveToolKey(key);
-      enterAnnotationToolLayer();
-  }, [enterAnnotationToolLayer]);
-
-  // Commit a new annotation and leave it selected and bound — the end state of
-  // every way of making one (a tool key over a selection, Mod+A, a keyboard
-  // extend, paste).
-  const addBoundAnnotation = useCallback((a: Annotation) => {
-      handleAnnotationsCommit([...annotations, a]);
-      setSelectedAnnotationId(a.id);
-      setBoundAnnotationId(a.id);
-  }, [annotations, handleAnnotationsCommit]);
-  // A new annotation from `tool` spanning a display-time selection.
-  const addToolAnnotation = useCallback((tool: AnnotationTool, span: Selection) => {
-      const src = selectionToSource(span);
-      addBoundAnnotation(makeAnnotationFromTool(tool, src.start, src.end));
-  }, [selectionToSource, addBoundAnnotation]);
-
-  // Shared handler for activating an annotation tool by key — used by both
-  // number hotkeys and palette clicks. Also manages the `annotationTool` entry
-  // in the activation stack: pushIfAbsent on activate, remove when this
-  // call toggles the tool off (same key pressed twice).
-  const handleToolActivate = useCallback((key: string) => {
-      const tool = annotationTools.find(t => t.key === key);
-      if (!tool) return;
-      const isCustom = tool.key === '0';
-      if (boundAnnotationId !== null) {
-          const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
-          if (currentAnnotation) {
-              // The annotation's current owner is whichever defined tool shares
-              // its label; if none, it's a Custom label (bucket '0'). Stash its
-              // text under that owner so toggling back restores what was typed.
-              const currentOwner = annotationTools.find(t => t.key !== '0' && t.text === currentAnnotation.text);
-              reassignBufferRef.current = {
-                  ...reassignBufferRef.current,
-                  [currentOwner?.key ?? '0']: currentAnnotation.text,
-              };
-              const savedText = reassignBufferRef.current[tool.key ?? ''];
-              // Custom has no canonical text to reassign to, so with nothing
-              // buffered yet, keep the annotation's current text — pressing 0
-              // should hand the existing label to Custom for editing, not blank it.
-              const newText = savedText !== undefined ? savedText : (isCustom ? currentAnnotation.text : tool.text);
-              // A restored Custom text can coincidentally match a defined tool's
-              // label; resolveLabelColor adopts that tool's color instead of the
-              // generic Custom color (falls back to `tool.color` either way).
-              const updated = annotations.map(a => a.id === boundAnnotationId
-                  ? { ...a, text: newText, color: resolveLabelColor(newText, annotationTools, tool.color) }
-                  : a
-              );
-              handleAnnotationsCommit(updated);
-              setActiveToolKey(key);
-              enterAnnotationToolLayer();
-              if (isCustom) {
-                  setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
-              }
-          }
-      } else if (activeToolKey === null && selection !== null) {
-          addToolAnnotation(tool, selection);
-          setActiveToolKey(key);
-          enterAnnotationToolLayer();
-      } else if (activeToolKey === key) {
-          setActiveToolKey(null);
-          activationStack.remove('annotationTool');
-      } else {
-          readyTool(key);
-      }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, addToolAnnotation, enterAnnotationToolLayer, readyTool]);
-
-  // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
-  // render's state (the bindings array is read from a ref refreshed each render),
-  // so we don't need to manage a dep list here.
-  const selectAllOrAnnotateFullTrack = () => {
-      if (displayDuration <= 0) return;
-      const span = selectAllSpanAt(currentTimeRef.current);
-      if (activeToolKey !== null) {
-          const tool = annotationTools.find(t => t.key === activeToolKey);
-          if (tool) {
-              addToolAnnotation(tool, span);
-              handleSelectionChange(span);
-          }
-      } else {
-          handleSelectionChange(span);
-      }
-  };
-  // Enter — deselect the current annotation, dropping the audio selection
-  // region that selecting it created. No-op when nothing is selected.
-  const deselectAnnotation = () => {
-      if (selectedAnnotationId === null) return;
-      setSelectedAnnotationId(null);
-      setBoundAnnotationId(null);
-      handleSelectionChange(null);
-  };
-  const deleteSelectedAnnotation = () => {
-      if (!selectedAnnotationId) return;
-      handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
-      const wasBound = selectedAnnotationId === boundAnnotationId;
-      setSelectedAnnotationId(null);
-      if (wasBound) {
-          handleSelectionChange(null);
-          setBoundAnnotationId(null);
-      }
-  };
-  // Mod+C — yank the selected annotation's label and span. Mod+V then recreates
-  // that annotation starting at the playhead, its end trimmed to the track (or,
-  // under a subset, to the segment the playhead sits in).
-  const copyActiveAnnotation = () => {
-      const ann = annotations.find(a => a.id === selectedAnnotationId)
-          ?? annotations.find(a => a.id === boundAnnotationId);
-      if (!ann) return;
-      annotationClipboardRef.current = { text: ann.text, color: ann.color, duration: ann.end - ann.start };
-  };
-  // Mod+B — bind the selected annotation's label to the next free hotkey,
-  // creating a tool for it if none carries that label yet. If the label already
-  // sits on a hotkey, just ready that tool instead. Same bind action as the
-  // annotation context menu's "Bind to hotkey".
-  const bindSelectedAnnotationToHotkey = () => {
-      const ann = annotations.find(a => a.id === selectedAnnotationId);
-      if (!ann) return;
-      const existing = annotationMatchingTool(ann, annotationTools);
-      if (existing?.key != null) {
-          readyTool(existing.key);
-          return;
-      }
-      const key = bindAnnotationToHotkey(ann, annotationTools, {
-          onBindHotkey: handleBindHotkey,
-          onCreateTool: handleCreateTool,
-      });
-      // Ready the freshly bound tool so it's immediately usable.
-      if (key) readyTool(key);
-  };
-  const pasteAnnotationAtPlayhead = () => {
-      const clip = annotationClipboardRef.current;
-      if (!clip || displayDuration <= 0) return;
-      const startD = Math.max(0, Math.min(currentTimeRef.current, displayDuration));
-      const endD = Math.min(timeline.clampToSpanOfDisplay(startD, startD + clip.duration), displayDuration);
-      if (endD <= startD) return;
-      const src = selectionToSource({ start: startD, end: endD });
-      const color = resolveLabelColor(clip.text, annotationTools, clip.color ?? '#ffffff');
-      // With the selection region on the pasted span — the same end state as
-      // creating an annotation from a drag or a tool key.
-      addBoundAnnotation(makeAnnotationFromLabel(clip.text, color, src.start, src.end));
-      handleSelectionChange({ start: startD, end: endD });
-  };
+  // Everything that creates, edits or deletes annotations from the keyboard,
+  // the palette or the toolbar. See hooks/useAnnotationCommands.ts.
+  const {
+    readyTool, selectMode, handleToolActivate,
+    selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
+    copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
+    resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
+  } = useAnnotationCommands({
+    annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
+    activeToolKey, setActiveToolKey, selection, selectionRef,
+    boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId,
+    activationStack, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
+    currentTimeRef, trackPathRef, seek, handleSelectionChange, spectrogramRef,
+    handleBindHotkey, handleCreateTool,
+  });
+  const [sweepStart, setSweepStart] = useState<number | null>(null);
 
   // Export the current selection's audio (spectrogram's right-click menu and
   // Mod+Shift+E), named after the project's filename-timestamp scheme.
@@ -1406,10 +1243,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // `S`: select tool (no annotation tool readied). Stack-equivalent to
       // removing the `annotationTool` entry — does not touch selection, filter
       // tool, or band.
-      { key: 's', handler: () => {
-          setActiveToolKey(null);
-          activationStack.remove('annotationTool');
-      }},
+      { key: 's', handler: selectMode },
       // `Shift+S`: subset the track to the ticked neurons' detections, and
       // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
       // be nothing to subset by.
@@ -1448,53 +1282,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   ], libraryToolIndex === null);  // disabled while the example library modal owns the keyboard
 
 
-  // A bound selection carries its annotation with it, exactly as dragging the
-  // selection's edges does (useSpectrogramInteraction). Keyboard extends stream
-  // through `setAnnotations` and land in undo history once, when the burst
-  // settles — otherwise every keypress in a held run would be its own undo step.
-  // The draft ref carries the run: `annotations` is a render-old snapshot, and a
-  // ramp takes many steps per render.
-  const [sweepStart, setSweepStart] = useState<number | null>(null);
-
-  // Keyed to its track: a draft still settling when the track switches must
-  // not be committed onto the next track's annotations.
-  const boundResizeDraftRef = useRef<{ trackPath: string | null; list: Annotation[] } | null>(null);
-  const resizeBoundAnnotationTo = useCallback((sel: Selection | null) => {
-    if (!boundAnnotationId || !sel) return;
-    const src = selectionToSource(sel);
-    const draft = boundResizeDraftRef.current;
-    const base = draft && draft.trackPath === trackPathRef.current ? draft.list : annotations;
-    const next = base.map(a =>
-      a.id === boundAnnotationId ? { ...a, start: src.start, end: src.end } : a
-    );
-    boundResizeDraftRef.current = { trackPath: trackPathRef.current, list: next };
-    setAnnotations(next);
-  }, [boundAnnotationId, annotations, selectionToSource, setAnnotations]);
-  const commitBoundAnnotationResize = useCallback(() => {
-    const draft = boundResizeDraftRef.current;
-    boundResizeDraftRef.current = null;
-    if (draft && draft.trackPath === trackPathRef.current) handleAnnotationsCommit(draft.list);
-  }, [handleAnnotationsCommit]);
-
-  // A Shift+Arrow extend that builds a selection from scratch (nothing bound
-  // yet) has no annotation to resize, so resizeBoundAnnotationTo is a no-op
-  // through the whole gesture — mirroring a mouse drag, which stays a bare
-  // selection until release. On settle, if a tool is readied, promote the
-  // finished span into a new annotation from that tool, exactly as releasing
-  // the mouse with a tool readied would (useSpectrogramInteraction's
-  // commitNewAnnotation). An already-bound annotation just gets its resize
-  // committed, as before.
-  const handleExtendSettled = useCallback(() => {
-    if (boundAnnotationId === null && activeToolKey !== null && selectionRef.current) {
-      const tool = annotationTools.find(t => t.key === activeToolKey);
-      if (tool) {
-        addToolAnnotation(tool, selectionRef.current);
-        return;
-      }
-    }
-    commitBoundAnnotationResize();
-  }, [boundAnnotationId, activeToolKey, annotationTools, selectionRef, addToolAnnotation, commitBoundAnnotationResize]);
-
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
   // selection wrapper above, which is defined after that hook runs.
@@ -1525,21 +1312,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     onSweepStartChange: setSweepStart,
     enabled: libraryToolIndex === null,
   });
-
-  // Called by Toolbar time-field edits to sync the bound annotation's bounds.
-  const handleToolbarAnnotationBoundsChange = useCallback((start: number, end: number) => {
-    if (!boundAnnotationId) return;
-    const old = annotations.find(a => a.id === boundAnnotationId);
-    // Both times here are display; `old.start` is source, so the comparison is
-    // made on the display axis the playhead is also on.
-    if (old && Math.abs(currentTimeRef.current - timeline.toDisplay(old.start)) <= 0.5) {
-      seek(start, false);
-    }
-    // Same resize the keyboard extend makes, committed immediately — a typed
-    // edit is a single deliberate change, not a run of them.
-    resizeBoundAnnotationTo({ start, end });
-    commitBoundAnnotationResize();
-  }, [boundAnnotationId, annotations, seek, timeline, resizeBoundAnnotationTo, commitBoundAnnotationResize]);
 
   useWindowLiveHost({
     transport, filter, buzzdetect, subset,
@@ -1574,7 +1346,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       toggleFileFilter: handleToggleFileFilter,
       toggleBuzzdetectFilter: handleToggleBuzzdetectFilter,
       activateTool: handleToolActivate,
-      activateSelectMode: () => { setActiveToolKey(null); activationStack.remove('annotationTool'); },
+      activateSelectMode: selectMode,
       openToolSettings: () => setShowToolSettings(true),
       openFindLabel,
       editTool: setPanelEditingToolIndex,
@@ -1721,7 +1493,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   annotationTools={annotationTools}
                   activeToolKey={activeToolKey}
                   onToolActivate={handleToolActivate}
-                  onSelectModeActivate={() => { setActiveToolKey(null); activationStack.remove('annotationTool'); }}
+                  onSelectModeActivate={selectMode}
                   onOpenSettings={() => setShowToolSettings(true)}
                   onOpenFindLabel={openFindLabel}
                   onEditTool={setPanelEditingToolIndex}
