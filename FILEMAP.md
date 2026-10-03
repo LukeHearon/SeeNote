@@ -3,7 +3,7 @@
 Quick reference for agents. One phrase per file.
 
 ## Entrypoints
-- `AnnotationWindow.tsx` — thin app orchestrator; wires together state and the hooks below (persistence, sync, playback, tools, navigation), owns top-level layout
+- `AnnotationWindow.tsx` — project window orchestrator; wires together state and the hooks below (persistence, sync, playback, tools, navigation, scans, find, editing commands), owns top-level layout. Keyed on project id, so state initialises from the project
 - `SingleFileWindow.tsx` — lean viewer for one file opened without a project; buzzdetect results are imported by hand (header button) and drive the neuron palette, panel and subset through the same hooks as AnnotationWindow
 - `App.tsx` — top-level router: launch screen → project selection → AnnotationWindow
 - `index.tsx` / `main.tsx` — Vite/React mount point
@@ -23,6 +23,18 @@ Quick reference for agents. One phrase per file.
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
+- `components/ProjectHeader.tsx` — the project window's header (back, refresh, name/settings, sync, debug, help)
+- `components/SyncControls.tsx` — header sync button, commit-message popover, repo-page context menu
+- `components/SyncToast.tsx` — post-sync summary / error toast, including the cleared-tracks confirmation
+- `components/ToolModals.tsx` — the annotation-tool modals (settings, edit, create, example library, delete)
+- `components/TransportToolbar.tsx` — Toolbar wired to usePlaybackTransport + useBandPassFilter; used by both windows
+- `components/VideoSection.tsx` — video pane, its collapsed bar and the split handle; used by both windows
+- `components/buzzdetect/BuzzdetectViews.tsx` — neuron palette and activations panel wired to useBuzzdetect + useSubsetTimeline; used by both windows
+- `components/buzzdetect/stripPainter.ts` — canvas painter for the buzzdetect panel's strip
+- `components/spectrogram/canvasPainters.ts` / `overlayPainter.ts` — spectrogram gutter/ticks/joins and overlay drawing, shared with ExampleSpectrogram
+- `components/ConfirmDialog.tsx` — titled dialog with a message and a row of actions; MessageDialog and the delete/import/relink prompts build on it
+- `components/ModalBackdrop.tsx` — modal backdrop with Escape and outside-click dismissal on the shared Escape stack
+- `components/FileRow.tsx` / `FileTreeScrollbar.tsx` / `PinnedBreadcrumb.tsx` — FileTree's row, custom scrollbar, and the pinned row naming the folders above the topmost visible row
 
 ## Help guide (its own window — `index.html?window=help`)
 - `components/help/guide.ts` — the guide's page tree: parts → pages → blocks, plus nav/search derivations (keep in sync with behavior changes)
@@ -138,10 +150,33 @@ Quick reference for agents. One phrase per file.
 - `hooks/useVideoFrameSource.ts` — opens and tears down the VideoFrameSource for the active track/mode
 - `hooks/useAnnotationLoad.ts` — loads annotations for a track and resets history
 - `hooks/useOsOpenFile.ts` — routes an OS "Open With SeeNote" launch (file-association cold start, or a relaunch forwarded from a second instance) into the app
+- `hooks/useProjectScans.ts` — media / annotation / buzzdetect directory scans and which tracks have results
+- `hooks/useFindLabel.ts` — Find & Rename dock state, rename handlers, and Go-to-match (opening the match's track first)
+- `hooks/useAnnotationCommands.ts` — annotation editing commands: tool activation and relabelling, Mod+A/Enter/Delete, copy-paste, bind-to-hotkey, keyboard/toolbar resize
+- `hooks/useSelectionControl.ts` — the one setter for the selection (activation stack, frame pin, bounded stop); both windows
+- `hooks/useExportSelection.ts` — export the selection's audio to a file; both windows
+- `hooks/useTrackLoader.ts` — load a file into the engine and bring the view onto it (sample rate, zoom, chunk cache); both windows
+- `hooks/useWindowLiveHost.ts` — publishes a window's toolbar state to the help guide and accepts its control input; both windows
+- `hooks/useEscapeKey.ts` — Escape stack for modals and menus (innermost closes first)
+- `hooks/useSpectrogramZoomPan.ts` / `useAnnotationJumps.ts` — Spectrogram's wheel zoom/pan and prev/next-annotation jumps
+- `hooks/useScrollSync.ts` — re-runs a sync callback on scroll/resize (once per frame) for widgets that mirror a scroller (FileTree's scrollbar and breadcrumb)
+- `hooks/useFlushableDebounce.ts` — debounced callback that can be flushed on demand (exit, track switch)
+- `hooks/useDraftField.ts` / `useProjectForm.ts` — draft-then-commit input state; project create/settings form state
 
 ## Shared types & constants
 - `types.ts` — all shared TypeScript types (Project, Annotation, AnnotationTool, etc.)
 - `constants.ts` — supported file extensions, default values, keybinding constants
+- `utils/exitFlush.ts` — pending debounced writes to flush before the window closes, plus the annotation write queue
+- `utils/annotationIoGate.ts` — tracks pending sync/reload work so the autosave and track switches wait for it
+- `utils/projectForm.ts` — project form values ↔ ProjectSettings, plus required-field checks
+- `utils/fileTreeBuild.ts` — builds FileTree's folder tree from flat path lists
+- `utils/dragSession.ts` — window-level mousemove/mouseup drag session with cancel
+- `utils/dirDialogs.ts` — directory picker that opens near an existing path
+- `utils/videoUrl.ts` — the URL a `<video>` element plays a file from (asset:// on macOS/Windows, local HTTP loopback on Linux)
+- `utils/spectrogramPixels.ts` — spectrogram colormap LUT and chunk drawing
+- `utils/previewLayer.ts` — the stacking layer an annotation being drawn would land on
+- `utils/audio/playbackClock.ts` — effective playback rate under time-stretch
+- `utils/audio/AudioClockDiagnostics.ts` — output-latency and clock-drift logging for AudioEngine
 
 ## Time display
 - `utils/timeAxis.ts` — tick-spacing cascade and elapsed-time ruler label formatting/parsing
