@@ -5,7 +5,7 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
+import { Annotation, AnnotationTool, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey, pickNextToolColor } from './constants';
 import { makeAnnotationFromTool, makeAnnotationFromLabel, stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
 import { parseFilenameTime } from './utils/filenameTime';
@@ -1255,6 +1255,20 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       enterAnnotationToolLayer();
   }, [enterAnnotationToolLayer]);
 
+  // Commit a new annotation and leave it selected and bound — the end state of
+  // every way of making one (a tool key over a selection, Mod+A, a keyboard
+  // extend, paste).
+  const addBoundAnnotation = useCallback((a: Annotation) => {
+      handleAnnotationsCommit([...annotations, a]);
+      setSelectedAnnotationId(a.id);
+      setBoundAnnotationId(a.id);
+  }, [annotations, handleAnnotationsCommit]);
+  // A new annotation from `tool` spanning a display-time selection.
+  const addToolAnnotation = useCallback((tool: AnnotationTool, span: Selection) => {
+      const src = selectionToSource(span);
+      addBoundAnnotation(makeAnnotationFromTool(tool, src.start, src.end));
+  }, [selectionToSource, addBoundAnnotation]);
+
   // Shared handler for activating an annotation tool by key — used by both
   // number hotkeys and palette clicks. Also manages the `annotationTool` entry
   // in the activation stack: pushIfAbsent on activate, remove when this
@@ -1294,11 +1308,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               }
           }
       } else if (activeToolKey === null && selection !== null) {
-          const src = selectionToSource(selection);
-          const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
-          handleAnnotationsCommit([...annotations, newAnnotation]);
-          setSelectedAnnotationId(newAnnotation.id);
-          setBoundAnnotationId(newAnnotation.id);
+          addToolAnnotation(tool, selection);
           setActiveToolKey(key);
           enterAnnotationToolLayer();
       } else if (activeToolKey === key) {
@@ -1307,7 +1317,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       } else {
           readyTool(key);
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, selectionToSource, enterAnnotationToolLayer, readyTool]);
+  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, addToolAnnotation, enterAnnotationToolLayer, readyTool]);
 
   // Global Hotkeys — see hooks/useHotkeys.ts. Handlers close over the latest
   // render's state (the bindings array is read from a ref refreshed each render),
@@ -1318,11 +1328,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (activeToolKey !== null) {
           const tool = annotationTools.find(t => t.key === activeToolKey);
           if (tool) {
-              const src = selectionToSource(span);
-              const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
-              handleAnnotationsCommit([...annotations, newAnnotation]);
-              setSelectedAnnotationId(newAnnotation.id);
-              setBoundAnnotationId(newAnnotation.id);
+              addToolAnnotation(tool, span);
               handleSelectionChange(span);
           }
       } else {
@@ -1383,12 +1389,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       if (endD <= startD) return;
       const src = selectionToSource({ start: startD, end: endD });
       const color = resolveLabelColor(clip.text, annotationTools, clip.color ?? '#ffffff');
-      const newAnnotation = makeAnnotationFromLabel(clip.text, color, src.start, src.end);
-      handleAnnotationsCommit([...annotations, newAnnotation]);
-      // Select and bind it, with the selection region on the pasted span —
-      // the same end state as creating an annotation from a drag or a tool key.
-      setSelectedAnnotationId(newAnnotation.id);
-      setBoundAnnotationId(newAnnotation.id);
+      // With the selection region on the pasted span — the same end state as
+      // creating an annotation from a drag or a tool key.
+      addBoundAnnotation(makeAnnotationFromLabel(clip.text, color, src.start, src.end));
       handleSelectionChange({ start: startD, end: endD });
   };
 
@@ -1512,16 +1515,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     if (boundAnnotationId === null && activeToolKey !== null && selectionRef.current) {
       const tool = annotationTools.find(t => t.key === activeToolKey);
       if (tool) {
-        const src = selectionToSource(selectionRef.current);
-        const newAnnotation = makeAnnotationFromTool(tool, src.start, src.end);
-        handleAnnotationsCommit([...annotations, newAnnotation]);
-        setSelectedAnnotationId(newAnnotation.id);
-        setBoundAnnotationId(newAnnotation.id);
+        addToolAnnotation(tool, selectionRef.current);
         return;
       }
     }
     commitBoundAnnotationResize();
-  }, [boundAnnotationId, activeToolKey, annotationTools, selectionRef, selectionToSource, annotations, handleAnnotationsCommit, commitBoundAnnotationResize]);
+  }, [boundAnnotationId, activeToolKey, annotationTools, selectionRef, addToolAnnotation, commitBoundAnnotationResize]);
 
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
