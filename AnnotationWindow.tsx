@@ -1,9 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, RefreshCw } from 'lucide-react';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
-import GradientProjectName from './components/GradientProjectName';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, AnnotationTool, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
 import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
@@ -63,10 +61,9 @@ import VideoSection from './components/VideoSection';
 import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import MessageDialog from './components/MessageDialog';
 import ConfirmDialog from './components/ConfirmDialog';
-import SyncControls from './components/SyncControls';
+import ProjectHeader from './components/ProjectHeader';
 import SyncToast from './components/SyncToast';
-import { tooltips } from './copy/tooltips';
-import { annotationWindow, debugConsole } from './copy/ui';
+import { annotationWindow } from './copy/ui';
 
 export interface AnnotationWindowProps {
   project: Project;
@@ -1589,72 +1586,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
-      {/* Header */}
-      <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative" data-help-target="toolbar">
-        <div className="flex items-center space-x-4">
-            <button
-                onClick={onClose}
-                className="flex items-center space-x-1 text-slate-400 hover:text-white hover:bg-slate-700 px-2 py-1.5 rounded transition-colors"
-                data-tooltip={tooltips.backToProjects}
-            >
-                <ArrowLeft size={18} />
-            </button>
-            <button
-                onClick={handleRefreshAll}
-                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
-                data-tooltip={tooltips.refreshAll}
-                data-help-target="header-refresh-btn"
-            >
-                <RefreshCw size={18} />
-            </button>
-            <button
-                onClick={() => setShowProjectSettings(true)}
-                className="flex items-center space-x-2 px-2 py-1.5 rounded hover:bg-slate-700 transition-colors group"
-                data-tooltip={tooltips.projectSettings}
-                data-help-target="project-settings-btn"
-            >
-                <h1 className="text-xl font-bold">
-                    <GradientProjectName name={project.settings.projectName} nameGradientColors={project.settings.nameGradientColors} />
-                </h1>
-                <Settings size={15} className="text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
-            </button>
-        </div>
-
-        <div />
-
-        <div className="flex items-center space-x-3">
-             {project.settings.gitSync && (
-               <SyncControls
-                 remoteUrl={project.settings.gitSync.remoteUrl}
-                 syncing={syncing}
-                 hasLocalChanges={hasLocalChanges}
-                 hasRemoteChanges={hasRemoteChanges}
-                 onSync={handleSync}
-               />
-             )}
-             <button
-                onClick={() => setShowDebug(true)}
-                className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                data-tooltip={debugConsole.title}
-            >
-                <Bug size={18} />
-            </button>
-             <button
-                onClick={() => showHelpPage()}
-                className="p-2 rounded hover:bg-slate-700 transition-colors text-slate-400 hover:text-white"
-                data-tooltip={tooltips.helpGuide}
-            >
-                <HelpCircle size={18} />
-            </button>
-             <button
-                onClick={() => showHelpPage('shortcuts')}
-                className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-                data-tooltip={tooltips.keyboardShortcuts}
-            >
-                <Keyboard size={18} />
-            </button>
-        </div>
-      </header>
+      <ProjectHeader
+        project={project}
+        onClose={onClose}
+        onRefreshAll={handleRefreshAll}
+        onOpenProjectSettings={() => setShowProjectSettings(true)}
+        onOpenDebug={() => setShowDebug(true)}
+        sync={project.settings.gitSync ? { syncing, hasLocalChanges, hasRemoteChanges, onSync: handleSync } : null}
+      />
 
       <SyncToast
         summary={syncSummary}
