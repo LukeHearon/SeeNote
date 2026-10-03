@@ -106,6 +106,7 @@ export default function App() {
   if (activeProject) {
     return (
       <AnnotationWindow
+        key={activeProject.id}
         project={activeProject}
         onClose={handleCloseProject}
         updateProjectSettings={updateActiveProjectSettings}

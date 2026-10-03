@@ -22,6 +22,7 @@ export interface CollapsibleSidebarOptions {
    * Default true.
    */
   collapsible?: boolean;
+  initialCollapsed?: boolean;
 }
 
 export interface CollapsibleSidebar {
@@ -49,9 +50,10 @@ export function useCollapsibleSidebar({
   collapsedWidth,
   side = 'left',
   collapsible = true,
+  initialCollapsed = false,
 }: CollapsibleSidebarOptions): CollapsibleSidebar {
   const [width, setWidth] = useState(initialWidth);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   const handleWidthDrag = (e: React.MouseEvent) => {
     e.preventDefault();

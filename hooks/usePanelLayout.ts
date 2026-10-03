@@ -15,6 +15,8 @@ export interface PanelLayoutInitial {
    */
   leftPanelCollapsible?: boolean;
   findPanelWidth: number;
+  filePanelCollapsed?: boolean;
+  videoCollapsed?: boolean;
 }
 
 export interface PanelLayoutApi {
@@ -64,7 +66,7 @@ const FIND_PANEL_MAX_WIDTH = 560;
  * by the owner.
  */
 export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
-  const [videoCollapsed, setVideoCollapsed] = useState(false);
+  const [videoCollapsed, setVideoCollapsed] = useState(initial.videoCollapsed ?? false);
   const [hideLabels, setHideLabels] = useState(false);
 
   const [splitRatio, setSplitRatio] = useState(initial.splitRatio);
@@ -84,6 +86,7 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
     maxWidth: LEFT_PANEL_MAX_WIDTH,
     collapsedWidth: LEFT_PANEL_COLLAPSED_PX,
     collapsible: initial.leftPanelCollapsible,
+    initialCollapsed: initial.filePanelCollapsed,
   });
 
   // Same behaviour mirrored onto the right edge for the find dock, minus the

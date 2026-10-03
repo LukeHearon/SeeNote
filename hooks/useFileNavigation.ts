@@ -24,13 +24,13 @@ export function useFileNavigation({
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [trackName, setTrackName] = useState<string>("video");
   const [trackPath, setTrackPath] = useState<string | null>(null);
-  const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
+  const [currentDirectory, setCurrentDirectory] = useState<string | null>(() => projectRef.current.mediaDirectoryAbs);
   const [isAudioTrack, setIsAudioTrack] = useState(false);
   const [sampleRate, setSampleRate] = useState(44100);
   const [duration, setDuration] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allTracks, setAllMediaFiles] = useState<string[]>([]);
-  const [shuffleMode, setShuffleMode] = useState(false);
+  const [shuffleMode, setShuffleMode] = useState(() => projectRef.current.preferences.shuffleMode ?? false);
   const [shuffledFiles, setShuffledFiles] = useState<string[]>([]);
 
   const durationRef = useRef(0);
