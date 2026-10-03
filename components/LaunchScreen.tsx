@@ -248,14 +248,15 @@ export default function LaunchScreen({
 
   const handleShowDataFolder = () => {
     if (!projectsFilePath) return;
-    const dir = projectsFilePath.substring(0, projectsFilePath.lastIndexOf('/'));
+    const dir = dirname(projectsFilePath);
     revealInFileManager(dir).catch(() => {
-      const appDataDir = dir.substring(0, dir.lastIndexOf('/'));
+      const appDataDir = dirname(dir);
       revealInFileManager(appDataDir).catch(() => {});
     });
   };
 
   const fmLabel = fileManagerLabel();
+  const appDataRoot = projectsFilePath ? dirname(dirname(projectsFilePath)) : undefined;
 
   const renderProjectRow = (entry: ProjectListEntry) => {
     const isOk = entry.status === 'ok';
@@ -555,8 +556,8 @@ export default function LaunchScreen({
               <FolderOpen size={12} />
               {launchScreen.showDataFolder}
             </button>
-            <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={projectsFilePath?.split('/').slice(0, -2).join('/')}>
-              {projectsFilePath?.split('/').slice(0, -2).join('/')}
+            <span className="text-gray-700 text-xs font-mono truncate" data-tooltip={appDataRoot}>
+              {appDataRoot}
             </span>
           </div>
         )}

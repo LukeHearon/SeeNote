@@ -433,7 +433,7 @@ export function useChunkRenderer({
           const incrCtx = incrCanvas.getContext('2d');
           if (!incrCtx) return;
           drawSpectrogramChunk(
-            incrCtx, vd, count, nFreqBins,
+            incrCtx, vd, nFreqBins,
             count, offscreen.height,
             settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
             settings.displayFloor, settings.displayCeil,
@@ -538,7 +538,7 @@ export function useChunkRenderer({
           }
 
           drawSpectrogramChunk(
-            offCtx, viewportData, bbWidth, nFreqBins,
+            offCtx, viewportData, nFreqBins,
             offscreen.width, offscreen.height,
             settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
             settings.displayFloor, settings.displayCeil,

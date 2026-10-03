@@ -533,6 +533,11 @@ export const annotationWindow = {
   get pendingClearsQuestion() { return getOverride('ui.annotationWindow.pendingClearsQuestion') ?? "Commit these changes?"; },
   get pendingClearsCommit() { return getOverride('ui.annotationWindow.pendingClearsCommit') ?? "Commit"; },
   get pendingClearsKeep() { return getOverride('ui.annotationWindow.pendingClearsKeep') ?? "Not now"; },
+  // Sync toast tallies: "<verb> +N, −M annotations across K recordings."
+  get syncUploaded() { return getOverride('ui.annotationWindow.syncUploaded') ?? "Uploaded"; },
+  get syncDownloaded() { return getOverride('ui.annotationWindow.syncDownloaded') ?? "Downloaded"; },
+  syncTallySuffix: (pluralAnnotations: boolean, recordings: number) =>
+    ` annotation${pluralAnnotations ? 's' : ''} across ${recordings} recording${recordings === 1 ? '' : 's'}.`,
   // Import-conflict dialog
   get importConflictTitle() { return getOverride('ui.annotationWindow.importConflictTitle') ?? "Annotations already exist"; },
   get importErrorTitle() { return getOverride('ui.annotationWindow.importErrorTitle') ?? "Could not import annotations"; },

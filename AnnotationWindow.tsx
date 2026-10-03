@@ -2440,16 +2440,16 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               )}
               {syncSummary.identsUploaded > 0 && (
                 <p>
-                  Uploaded <span className="text-green-400">+{syncSummary.annotationsUploaded}</span>,{' '}
-                  <span className="text-red-400">−{syncSummary.annotationsRemovedOnPush}</span> annotation{syncSummary.annotationsUploaded === 1 && syncSummary.annotationsRemovedOnPush === 0 ? '' : 's'}
-                  {' '}across {syncSummary.identsUploaded} recording{syncSummary.identsUploaded === 1 ? '' : 's'}.
+                  {annotationWindow.syncUploaded} <span className="text-green-400">+{syncSummary.annotationsUploaded}</span>,{' '}
+                  <span className="text-red-400">−{syncSummary.annotationsRemovedOnPush}</span>
+                  {annotationWindow.syncTallySuffix(!(syncSummary.annotationsUploaded === 1 && syncSummary.annotationsRemovedOnPush === 0), syncSummary.identsUploaded)}
                 </p>
               )}
               {(syncSummary.annotationsAdded > 0 || syncSummary.annotationsRemoved > 0) && (
                 <p>
-                  Downloaded <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
-                  <span className="text-red-400">−{syncSummary.annotationsRemoved}</span> annotations
-                  across {syncSummary.recordingsChanged.length} recording{syncSummary.recordingsChanged.length === 1 ? '' : 's'}.
+                  {annotationWindow.syncDownloaded} <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
+                  <span className="text-red-400">−{syncSummary.annotationsRemoved}</span>
+                  {annotationWindow.syncTallySuffix(true, syncSummary.recordingsChanged.length)}
                 </p>
               )}
               {syncSummary.recordingsChanged.length > 0 && (

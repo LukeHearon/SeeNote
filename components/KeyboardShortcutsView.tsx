@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { keyboardShortcutsView as copy } from '../copy/ui';
 import { isMac, formatModKey } from '../utils/platform';
 
@@ -279,9 +279,9 @@ function useKeyboardLayoutMap() {
 // ---------------------------------------------------------------------------
 
 function KeyCap({
-  code, label, flex, fixedPx, small, group, active, dimmed, onEnter, onLeave,
+  label, flex, fixedPx, small, group, active, dimmed, onEnter, onLeave,
 }: {
-  code: string; label: string; flex?: number; fixedPx?: number;
+  label: string; flex?: number; fixedPx?: number;
   small?: boolean; group: Group | undefined; active: boolean; dimmed: boolean;
   onEnter: () => void; onLeave: () => void;
 }) {
@@ -350,7 +350,6 @@ function KeyboardDisplay({
             {row.map(k => (
               <KeyCap
                 key={k.code}
-                code={k.code}
                 label={keyLabel(k)}
                 flex={k.flex}
                 small={k.small}
@@ -379,7 +378,6 @@ function KeyboardDisplay({
         {arrowKeys.map(ak => (
           <div key={ak.code} style={{ gridArea: ak.gridArea }}>
             <KeyCap
-              code={ak.code}
               label={ak.label}
               fixedPx={ARROW_KEY_PX}
               group={CODE_TO_GROUP.get(ak.code)}

@@ -155,7 +155,7 @@ export class MultiTierSpectrogramCache {
   constructor(
     private readonly filePath: string,
     private readonly fftSize: number,
-    private readonly sampleRate: number,
+    sampleRate: number,
     private readonly duration: number,
     private readonly onChunkLoaded: () => void,
     /**

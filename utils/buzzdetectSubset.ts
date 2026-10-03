@@ -71,7 +71,6 @@
 
 import { BuzzdetectData, BuzzdetectSeriesMode } from '../types';
 import { defaultBuzzdetectThreshold } from '../constants';
-import { bucketFrameRange } from './binIndex';
 import { buildAnyOverThresholdPrefix, buildPrefixSum, rangeMean, rangeSum } from './prefixSums';
 import { detectionThreshold } from './buzzdetectThresholds';
 import { Timeline, buildSubsetTimeline, identityTimeline } from './subsetTimeline';

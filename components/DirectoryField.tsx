@@ -4,8 +4,6 @@ import { openDirectoryDialog, checkDirExists } from '../utils/tauriCommands';
 import { isInsideProjectDir, isAbsolutePath, resolveInputPath, trimProjectPrefix, inputToProjectPath } from '../utils/projectPaths';
 import { directoryField } from '../copy/ui';
 
-export const PORTABILITY_WARNING = directoryField.portabilityWarning;
-
 interface DirectoryFieldProps {
   /** Base label, e.g. "Media" — rendered as "{label} Directory". */
   label: string;
@@ -83,7 +81,7 @@ export default function DirectoryField({
         <p className="text-gray-500 text-xs mt-1">→ {resolved}</p>
       )}
       {isOutside && !isNearby && (
-        <p className="text-yellow-400 text-xs mt-1">{PORTABILITY_WARNING}</p>
+        <p className="text-yellow-400 text-xs mt-1">{directoryField.portabilityWarning}</p>
       )}
       {isNearby && (
         <p className="text-gray-500 text-xs mt-1">{directoryField.nearbyNote}</p>

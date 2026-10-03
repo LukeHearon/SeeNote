@@ -76,7 +76,7 @@ describe('reconcileAnnotations', () => {
 
   it('does not read a hidden annotation as a deletion', () => {
     const source = [ann('a', 10.5, 11.5), ann('gone', 20, 30)];
-    const { shown, hidden } = projectAnnotations(source, tl);
+    const { hidden } = projectAnnotations(source, tl);
     // The user deleted the only annotation they could see.
     const back = reconcileAnnotations([], source, hidden, tl);
     expect(back.map(a => a.id)).toEqual(['gone']);

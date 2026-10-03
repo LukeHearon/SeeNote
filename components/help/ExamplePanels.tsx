@@ -186,19 +186,19 @@ export function ExampleBuzzdetectPanel() {
   }
   const { viewport, time, data } = storesRef.current;
 
-  const [thresholds, setThresholds] = useState<Record<string, number>>(
+  const [thresholds] = useState<Record<string, number>>(
     () => Object.fromEntries(DEMO_NEURONS.map(n => [n, DEMO_THRESHOLD])));
-  const [hiddenNeurons, setHiddenNeurons] = useState<string[]>([]);
-  const [neuronColors, setNeuronColors] = useState<Record<string, string>>({});
-  const [seriesMode, setSeriesMode] = useState<BuzzdetectSeriesMode>('activation');
-  const [binWidthOverride, setBinWidthOverride] = useState<number | null>(null);
+  const [hiddenNeurons] = useState<string[]>([]);
+  const [neuronColors] = useState<Record<string, string>>({});
+  const [seriesMode] = useState<BuzzdetectSeriesMode>('activation');
+  const [binWidthOverride] = useState<number | null>(null);
   const [baselineAdjusted, setBaselineAdjusted] = useState(false);
   const [height, setHeight] = useState(DEFAULT_BUZZDETECT_PANEL_HEIGHT);
   const [selection, setSelection] = useState<Selection | null>(null);
   // Subset picks ARE the subset thresholds, exactly as in the app: a neuron
   // with an entry here is one the example track is cut by.
-  const [subsetThresholds, setSubsetThresholds] = useState<Record<string, number>>({});
-  const [minDetectionRate, setMinDetectionRate] = useState(DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
+  const [subsetThresholds] = useState<Record<string, number>>({});
+  const [minDetectionRate] = useState(DEFAULT_BUZZDETECT_MIN_DETECTION_RATE);
 
   // Subsetting for real, through the same two calls the annotation window
   // makes: give a neuron a Subset at value here and the example track genuinely

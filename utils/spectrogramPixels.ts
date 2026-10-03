@@ -169,7 +169,6 @@ const _binMapCache = new Map<string, Float32Array>();
 export const drawSpectrogramChunk = (
   ctx: CanvasRenderingContext2D,
   specData: Uint16Array,
-  specWidth: number, // Total columns in data (== canvasWidth in current pipeline)
   specHeight: number, // Total bins
   canvasWidth: number,
   canvasHeight: number,

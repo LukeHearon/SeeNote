@@ -296,7 +296,7 @@ describe('drawSpectrogramChunk pixel coverage', () => {
     for (let i = 0; i < spec.length; i++) spec[i] = (i * 997) % 65535;
     drawSpectrogramChunk(
       ctx as unknown as CanvasRenderingContext2D,
-      spec, W, H2, W, H2,
+      spec, H2, W, H2,
       20, 22050, 44100, 'linear', -100, 0,
       colMask,
     );
@@ -345,7 +345,7 @@ describe('drawSpectrogramChunk colormap', () => {
     // One column, two bins, linear scale over the full range: both rows read `value`.
     drawSpectrogramChunk(
       ctx as unknown as CanvasRenderingContext2D,
-      new Uint16Array([value, value]), 1, 2, 1, 1,
+      new Uint16Array([value, value]), 2, 1, 1,
       0, 22050, 44100, 'linear', floor, ceil,
     );
     (globalThis as any).ImageData = prev;

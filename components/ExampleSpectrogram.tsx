@@ -168,7 +168,7 @@ export default function ExampleSpectrogram({ filePath, sampleRate, duration, set
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
     drawSpectrogramChunk(
-      offCtx, viewportData, bbWidth, nFreqBins,
+      offCtx, viewportData, nFreqBins,
       offscreen.width, offscreen.height,
       settings.minFreq, settings.maxFreq, sampleRate, settings.frequencyScale,
       settings.displayFloor, settings.displayCeil,

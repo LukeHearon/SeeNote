@@ -74,9 +74,8 @@ function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTar
   });
 }
 
-function ToolItem({ tool, toolIndex, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, dim, isPlaying, onPlayExample }: {
+function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, dim, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
-  toolIndex: number;
   // In a hotkey slot (true) vs. the Unassigned bin (false). Drives the
   // middle-click action and whether the unassign button is shown.
   assigned: boolean;
@@ -350,7 +349,6 @@ export default function AnnotationToolsSettingsModal({
                     >
                       <ToolItem
                         tool={tool}
-                        toolIndex={toolIndex}
                         assigned
                         onDragStart={() => beginDrag(toolIndex)}
                         onDragEnd={cancelDrag}
@@ -404,7 +402,6 @@ export default function AnnotationToolsSettingsModal({
                   <div key={toolIndex} className="mb-2 flex h-8">
                     <ToolItem
                       tool={tool}
-                      toolIndex={toolIndex}
                       assigned={false}
                       onDragStart={() => beginDrag(toolIndex)}
                       onDragEnd={cancelDrag}
