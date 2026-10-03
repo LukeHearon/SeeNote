@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, ChevronDown, RefreshCw, X, Github } from 'lucide-react';
+import { Settings, Keyboard, HelpCircle, Bug, ArrowLeft, RefreshCw } from 'lucide-react';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
@@ -13,9 +13,7 @@ import { renameLabelAcrossTracks, renameOneLabelInTrack, invalidateProjectLabelI
 import { resolveLabelColor } from './utils/annotationTools';
 import { toolColorsByLabel } from './utils/neuronColors';
 import { bindAnnotationToHotkey, annotationMatchingTool } from './utils/bindAnnotationHotkey';
-import { openGithubUrl } from './utils/tauriCommands';
 import { nextFileFilter, passesFileFilter } from './utils/fileFilter';
-import { githubRepoPageUrl } from './utils/gitSync';
 import { isInsideDir } from './utils/projectPaths';
 import { showHelpPage } from './utils/helpChannel';
 import { preferencesPatch, type UpdateProjectPreferences } from './utils/projectPreferences';
@@ -38,7 +36,7 @@ import { useSubsetTimeline } from './hooks/useSubsetTimeline';
 import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
 import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
-import { useSyncManagement, INCOMING_CLEARS_PREFIX } from './hooks/useSyncManagement';
+import { useSyncManagement } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
 import { useImportAnnotations } from './hooks/useImportAnnotations';
 import { useFileNavigation } from './hooks/useFileNavigation';
@@ -66,6 +64,8 @@ import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSetti
 import VideoSection from './components/VideoSection';
 import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import MessageDialog from './components/MessageDialog';
+import SyncControls from './components/SyncControls';
+import SyncToast from './components/SyncToast';
 import { tooltips } from './copy/tooltips';
 import { annotationWindow, debugConsole } from './copy/ui';
 
@@ -1134,31 +1134,6 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   });
   useEffect(() => { flushPendingAutosaveRef.current = flushPendingAutosave; }, [flushPendingAutosave]);
 
-  // Custom-commit-message popover: open state + the typed message.
-  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
-  const [commitMessage, setCommitMessage] = useState('');
-
-  // Right-click menu on the sync button ("View GitHub repo").
-  const [syncCtxMenu, setSyncCtxMenu] = useState<{ x: number; y: number } | null>(null);
-
-  // Auto-dismiss the sync result toast (manual sync or background auto-pull):
-  // fade it out, then clear it, a few seconds after it appears.
-  const [syncToastFading, setSyncToastFading] = useState(false);
-  useEffect(() => {
-    if (!syncSummary && !syncError) return;
-    setSyncToastFading(false);
-    // A toast asking whether to commit cleared tracks must not fade out from
-    // under the user — it is the only thing standing between an accidentally
-    // emptied track and everyone else losing those records.
-    if (syncSummary && syncSummary.pendingClears.length > 0) return;
-    const fadeTimer = setTimeout(() => setSyncToastFading(true), 4500);
-    const clearTimer = setTimeout(() => {
-      setSyncSummary(null);
-      setSyncError(null);
-    }, 5000);
-    return () => { clearTimeout(fadeTimer); clearTimeout(clearTimer); };
-  }, [syncSummary, syncError, setSyncSummary, setSyncError]);
-
   // Annotation disk I/O for the active track: the debounced auto-save effect and
   // the auto-load effect. getAnnotationPath stays in the orchestrator (shared
   // with tools/import/sync); the hook drives both effects off it. Placed here so
@@ -1823,108 +1798,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
         <div className="flex items-center space-x-3">
              {project.settings.gitSync && (
-               <div className="relative flex items-center">
-                 <button
-                    onClick={() => handleSync()}
-                    onContextMenu={e => { e.preventDefault(); setSyncCtxMenu({ x: e.clientX, y: e.clientY }); }}
-                    disabled={syncing}
-                    className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-default relative"
-                    data-tooltip={
-                      syncing ? tooltips.syncing
-                      : hasLocalChanges && hasRemoteChanges ? `${tooltips.syncUnpushed} · ${tooltips.syncUnpulled}`
-                      : hasLocalChanges ? tooltips.syncUnpushed
-                      : hasRemoteChanges ? tooltips.syncUnpulled
-                      : tooltips.syncIdle
-                    }
-                >
-                    <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
-                    {hasLocalChanges && !syncing && (
-                      <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-green-400/80 pointer-events-none" />
-                    )}
-                    {hasRemoteChanges && !syncing && (
-                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400/80 pointer-events-none" />
-                    )}
-                </button>
-                <button
-                    onClick={() => setSyncMenuOpen(o => !o)}
-                    disabled={syncing}
-                    className={`p-1 rounded hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-default ${syncMenuOpen ? 'text-white bg-slate-700' : 'text-slate-400'}`}
-                    data-tooltip={tooltips.syncWithMessage}
-                >
-                    <ChevronDown size={14} />
-                </button>
-                {syncMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 z-[300] w-72 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-3">
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">{annotationWindow.commitLabel}</label>
-                    <textarea
-                      autoFocus
-                      value={commitMessage}
-                      onChange={e => setCommitMessage(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          setSyncMenuOpen(false);
-                          handleSync(commitMessage);
-                          setCommitMessage('');
-                        } else if (e.key === 'Escape') {
-                          setSyncMenuOpen(false);
-                        }
-                      }}
-                      rows={2}
-                      placeholder={annotationWindow.commitPlaceholder}
-                      className="w-full text-xs bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-[#e65161]"
-                    />
-                    {githubRepoPageUrl(project.settings.gitSync.remoteUrl) && (
-                      <button
-                        onClick={() => {
-                          setSyncMenuOpen(false);
-                          const url = githubRepoPageUrl(project.settings.gitSync.remoteUrl);
-                          if (url) openGithubUrl(url).catch(err => console.error('Failed to open GitHub repo:', err));
-                        }}
-                        className="flex items-center gap-1.5 mt-2 text-xs text-slate-300 hover:text-white transition-colors"
-                      >
-                        <Github size={13} />
-                        {annotationWindow.viewGithubRepo}
-                      </button>
-                    )}
-                    <div className="flex justify-end gap-2 mt-2">
-                      <button
-                        onClick={() => setSyncMenuOpen(false)}
-                        className="text-xs px-2.5 py-1 rounded text-slate-300 hover:bg-slate-700"
-                      >
-                        {annotationWindow.syncMenuCancel}
-                      </button>
-                      <button
-                        onClick={() => { setSyncMenuOpen(false); handleSync(commitMessage); setCommitMessage(''); }}
-                        className="text-xs px-2.5 py-1 rounded bg-[#e65161] text-white hover:bg-[#d63d4e]"
-                      >
-                        {annotationWindow.syncMenuConfirm}
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {syncCtxMenu && (
-                  <>
-                    <div className="fixed inset-0 z-[300]" onClick={() => setSyncCtxMenu(null)} />
-                    <div
-                      className="fixed z-[300] bg-slate-800 border border-slate-600 rounded shadow-lg py-1 min-w-[160px]"
-                      style={{ left: syncCtxMenu.x, top: syncCtxMenu.y }}
-                    >
-                      <button
-                        className="w-full text-left px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-default"
-                        disabled={!githubRepoPageUrl(project.settings.gitSync.remoteUrl)}
-                        onClick={() => {
-                          setSyncCtxMenu(null);
-                          const url = githubRepoPageUrl(project.settings.gitSync.remoteUrl);
-                          if (url) openGithubUrl(url).catch(err => console.error('Failed to open GitHub repo:', err));
-                        }}
-                      >
-                        {annotationWindow.viewGithubRepo}
-                      </button>
-                    </div>
-                  </>
-                )}
-               </div>
+               <SyncControls
+                 remoteUrl={project.settings.gitSync.remoteUrl}
+                 syncing={syncing}
+                 hasLocalChanges={hasLocalChanges}
+                 hasRemoteChanges={hasRemoteChanges}
+                 onSync={handleSync}
+               />
              )}
              <button
                 onClick={() => setShowDebug(true)}
@@ -1950,92 +1830,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         </div>
       </header>
 
-      {/* Post-sync summary / error toast (non-blocking); fades out and clears itself after a few seconds. */}
-      {(syncSummary || syncError) && (
-        <div className={`fixed top-20 right-4 z-[300] w-80 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl p-4 transition-opacity duration-500 ${syncToastFading ? 'opacity-0' : 'opacity-100'}`}>
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="text-sm font-semibold text-slate-100">
-              {syncError
-                ? (syncError.includes('AUTH_FAILED:') ? annotationWindow.syncFailedAuth
-                  : syncError.includes(INCOMING_CLEARS_PREFIX) ? annotationWindow.autoPullBlocked
-                  : annotationWindow.syncFailed)
-                : syncIsAutoPull ? annotationWindow.autoPullComplete : annotationWindow.syncComplete}
-            </h3>
-            <button
-              onClick={() => { setSyncSummary(null); setSyncError(null); }}
-              className="text-slate-400 hover:text-white"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          {syncError ? (
-            <p className="text-xs text-red-400 mt-2 whitespace-pre-wrap">
-              {syncError.replace('AUTH_FAILED:', '').replace(INCOMING_CLEARS_PREFIX, '').trim()}
-            </p>
-          ) : syncSummary && (
-            <div className="text-xs text-slate-300 mt-2 space-y-1">
-              <p>{syncSummary.message}</p>
-              {syncSummary.pendingClears.length > 0 && (
-                <div className="mt-2 p-2 rounded border border-amber-600/60 bg-amber-950/30 space-y-2">
-                  <p className="text-amber-200">{annotationWindow.pendingClearsPrompt}</p>
-                  <ul className="max-h-32 overflow-y-auto space-y-0.5">
-                    {syncSummary.pendingClears.map(id => (
-                      <li key={id} className="font-mono text-[10px] text-amber-100/80 truncate">{id}</li>
-                    ))}
-                  </ul>
-                  <p className="text-amber-200">{annotationWindow.pendingClearsQuestion}</p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => { const ids = syncSummary.pendingClears; setSyncSummary(null); confirmPendingClears(ids); }}
-                      className="px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white text-xs"
-                    >
-                      {annotationWindow.pendingClearsCommit}
-                    </button>
-                    <button
-                      onClick={() => setSyncSummary(null)}
-                      className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs"
-                    >
-                      {annotationWindow.pendingClearsKeep}
-                    </button>
-                  </div>
-                </div>
-              )}
-              {syncSummary.identsUploaded > 0 && (
-                <p>
-                  {annotationWindow.syncUploaded} <span className="text-green-400">+{syncSummary.annotationsUploaded}</span>,{' '}
-                  <span className="text-red-400">−{syncSummary.annotationsRemovedOnPush}</span>
-                  {annotationWindow.syncTallySuffix(!(syncSummary.annotationsUploaded === 1 && syncSummary.annotationsRemovedOnPush === 0), syncSummary.identsUploaded)}
-                </p>
-              )}
-              {(syncSummary.annotationsAdded > 0 || syncSummary.annotationsRemoved > 0) && (
-                <p>
-                  {annotationWindow.syncDownloaded} <span className="text-green-400">+{syncSummary.annotationsAdded}</span>,{' '}
-                  <span className="text-red-400">−{syncSummary.annotationsRemoved}</span>
-                  {annotationWindow.syncTallySuffix(true, syncSummary.recordingsChanged.length)}
-                </p>
-              )}
-              {syncSummary.recordingsChanged.length > 0 && (
-                <ul className="max-h-32 overflow-y-auto mt-1 space-y-0.5">
-                  {syncSummary.recordingsChanged.map(p => (
-                    <li key={p} className="font-mono text-[10px] text-slate-400 truncate">{p}</li>
-                  ))}
-                </ul>
-              )}
-              {([
-                [syncSummary.remoteClears, annotationWindow.remoteClearsApplied],
-                [syncSummary.ignoredRemoteDeletions, annotationWindow.remoteDeletionsKept],
-              ] as const).map(([paths, label]) => paths.length > 0 && (
-                <div key={label} className="mt-2">
-                  <p className="text-amber-200">{label}</p>
-                  <ul className="max-h-24 overflow-y-auto space-y-0.5">
-                    {paths.map(p => <li key={p} className="font-mono text-[10px] text-amber-100/80 truncate">{p}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      <SyncToast
+        summary={syncSummary}
+        error={syncError}
+        isAutoPull={syncIsAutoPull}
+        onClose={() => { setSyncSummary(null); setSyncError(null); }}
+        onCommitClears={confirmPendingClears}
+      />
 
       <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
 
