@@ -13,7 +13,7 @@ import type { useExamplePlayer } from './useExamplePlayer';
 import { useHotkeys } from './useHotkeys';
 
 interface UsePlaybackTransportArgs {
-  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: TimeDisplayUnit; fallbackTimeDisplayUnit?: ElapsedTimeDisplayUnit } } };
+  project: { preferences: { uiSettings?: { volume?: number; playbackSpeed?: number; lastDefinedSpeed?: number; timeDisplayUnit?: TimeDisplayUnit; fallbackTimeDisplayUnit?: ElapsedTimeDisplayUnit; playheadLocked?: boolean } } };
   // Track / mode / selection mirrors driving transport selection & playback.
   isAudioTrack: boolean;
   isAudioTrackRef: React.MutableRefObject<boolean>;
@@ -101,9 +101,15 @@ export function usePlaybackTransport({
   // Whether the spectrogram auto-scrolls to keep the playhead centered.
   // Toggled by the 'c' shortcut below; read via ref inside that handler so it
   // always sees the latest value without re-registering the binding.
-  const [playheadLocked, setPlayheadLocked] = useState(false);
-  const playheadLockedRef = useRef(false);
+  const [playheadLocked, setPlayheadLocked] = useState(project.preferences.uiSettings?.playheadLocked ?? false);
+  const playheadLockedRef = useRef(playheadLocked);
   useEffect(() => { playheadLockedRef.current = playheadLocked; }, [playheadLocked]);
+  // Shared by the 'c' hotkey, the toolbar button and the guide's live copy.
+  const togglePlayheadLock = useCallback(() => {
+    const willLock = !playheadLockedRef.current;
+    setPlayheadLocked(willLock);
+    if (willLock) spectrogramRef.current?.recenterPlayhead();
+  }, [spectrogramRef]);
 
   // Running-time readout format (see components/Toolbar.tsx). Persisted per-project;
   // single-file mode passes no uiSettings, so it stays plain session state there.
@@ -501,11 +507,7 @@ export function usePlaybackTransport({
     { key: ' ', handler: togglePlay },
     { key: 'r', handler: () => setPlaybackSpeed(playbackSpeed === 1 ? lastDefinedSpeed : 1) },
     { key: 'm', handler: () => setMuted(prev => !prev), preventDefault: false },
-    { key: 'c', handler: () => {
-        const willLock = !playheadLockedRef.current;
-        setPlayheadLocked(willLock);
-        if (willLock) spectrogramRef.current?.recenterPlayhead();
-    }},
+    { key: 'c', handler: togglePlayheadLock },
   ], enabled);
 
   return {
@@ -515,7 +517,7 @@ export function usePlaybackTransport({
     lastDefinedSpeed, setLastDefinedSpeed,
     volume, setVolume,
     muted, setMuted,
-    playheadLocked, setPlayheadLocked,
+    playheadLocked, setPlayheadLocked, togglePlayheadLock,
     timeDisplayUnit, setTimeDisplayUnit, fallbackTimeDisplayUnit, setFallbackTimeDisplayUnit, chooseTimeDisplayUnit,
     engineRef,
     videoEngineRef,

@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
+import type { HotkeyBinding } from './useHotkeys';
 
 /**
  * The kinds of "layers" that can be activated. The activation stack records
@@ -74,4 +75,23 @@ export function useActivationStack(): ActivationStackApi {
     () => ({ stack, pushIfAbsent, remove, popTop, topOf }),
     [stack, pushIfAbsent, remove, popTop, topOf],
   );
+}
+
+/**
+ * Escape as a universal undo of the most recently activated layer: pops the
+ * top of the stack and runs that layer's clear action. Fires even when a text
+ * input has focus. A kind with no entry (or an empty stack) is a no-op.
+ */
+export function escapeUnwindBinding(
+  stack: ActivationStackApi,
+  clear: Partial<Record<ActivationKind, () => void>>,
+): HotkeyBinding {
+  return {
+    key: 'Escape',
+    allowInInput: true,
+    handler: () => {
+      const top = stack.popTop();
+      if (top) clear[top]?.();
+    },
+  };
 }

@@ -1,29 +1,28 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Activity, ArrowLeft, Bug, ChevronDown, HelpCircle, X } from 'lucide-react';
-import VideoPane from './components/VideoPane';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Activity, ArrowLeft, Bug, HelpCircle, X } from 'lucide-react';
 import { resolveVideoElementUrl } from './utils/videoUrl';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
-import DebugConsole from './components/DebugConsole';
+import DebugConsole, { type DebugLog } from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
-import Toolbar, { speedRangeFor } from './components/Toolbar';
-import BuzzdetectPanel from './components/BuzzdetectPanel';
-import NeuronPalette from './components/NeuronPalette';
+import Toolbar from './components/Toolbar';
+import VideoSection from './components/VideoSection';
+import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import SidebarStack from './components/SidebarStack';
 import MessageDialog from './components/MessageDialog';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import TooltipLayer from './components/TooltipLayer';
 import { Selection, SpectrogramSettings, VideoMode } from './types';
-import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, MIN_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
+import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
-import { suggestExportFilename, audioExportExtensions } from './utils/filenameTime';
-import { getFileInfo, saveFileDialog, exportAudioRange, openFileDialog } from './utils/tauriCommands';
-import { displayOfNearestKept, projectIntervalToDisplay } from './utils/subsetTimeline';
+import { openFileDialog } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
-import { useLiveHost } from './utils/liveBridge';
-import { isFilterAvailable } from './utils/videoPlaybackMode';
 import { createViewportStore } from './utils/viewportStore';
-import { useActivationStack } from './hooks/useActivationStack';
+import { useActivationStack, escapeUnwindBinding } from './hooks/useActivationStack';
+import { useSelectionControl } from './hooks/useSelectionControl';
+import { useExportSelection } from './hooks/useExportSelection';
+import { useTrackLoader } from './hooks/useTrackLoader';
+import { useWindowLiveHost, NO_PROJECT_LIVE_HANDLERS } from './hooks/useWindowLiveHost';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useVideoFrameSource } from './hooks/useVideoFrameSource';
@@ -74,7 +73,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   useEffect(() => { isAudioTrackRef.current = isAudioTrack; }, [isAudioTrack]);
 
   const [showDebug, setShowDebug] = useState(false);
-  const [debugLogs, setDebugLogs] = useState<{ time: string, msg: string, type: 'info' | 'error' }[]>([]);
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const addLog = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString();
     setDebugLogs(prev => [...prev, { time, msg, type }]);
@@ -115,42 +114,14 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     addLog,
     onLoadError: msg => { setBuzzdetectFile(null); setBuzzdetectError(msg); },
   });
+  const { buzzdetectEnabled, setBuzzdetectEnabled, setBuzzdetectSubsetEnabled, toggleBuzzdetectSubset } = buzzdetect;
+  const subset = useSubsetTimeline(buzzdetect, duration, videoMode);
   const {
-    buzzdetectEnabled, setBuzzdetectEnabled,
-    buzzdetectThresholds, buzzdetectSubsetThresholds, setBuzzdetectSubsetEnabled,
-    buzzdetectHiddenNeurons, buzzdetectNeuronColors,
-    buzzdetectSeriesMode, setBuzzdetectSeriesMode,
-    buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride,
-    buzzdetectSubsetNeurons,
-    buzzdetectMinDetectionRate, setBuzzdetectMinDetectionRate,
-    buzzdetectSubsetBuffer, setBuzzdetectSubsetBuffer,
-    buzzdetectPinnedNeurons,
-    buzzdetectPanelHeight, setBuzzdetectPanelHeight,
-    buzzdetectData,
-    buzzdetectSettingsOpen, setBuzzdetectSettingsOpen,
-    buzzdetectYAxisOverride, setBuzzdetectYAxisOverride,
-    buzzdetectBaselineAdjusted, setBuzzdetectBaselineAdjusted,
-    buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth,
-    buzzdetectAutoYRange, setBuzzdetectAutoYRange,
-    handleBuzzdetectThresholdChange,
-    handleBuzzdetectSubsetThresholdChange,
-    handleBuzzdetectToggleNeuron,
-    handleBuzzdetectNeuronColorChange,
-    handleBuzzdetectNeuronColorReset,
-    handleBuzzdetectTogglePinNeuron,
-    buzzdetectIsolatedNeurons,
-    handleBuzzdetectToggleIsolateNeuron,
-    buzzdetectIsolateEnabled,
-    toggleBuzzdetectIsolate,
-    toggleBuzzdetectSubset,
-    handleBuzzdetectSetAllNeuronsHidden,
-  } = buzzdetect;
-  const {
-    timeline, displayDuration, subsetActive, activeIsolatedNeurons,
-    subsetGrainSec, subsetSourceRanges, subsetStats: buzzdetectSubsetStats, displayBuzzdetectData,
+    timeline, displayDuration,
+    subsetGrainSec, subsetSourceRanges,
     effectiveVideoMode, effectiveVideoModeRef, timelineRef, displayDurationRef,
     subsetGrainRef, subsetSourceRangesRef, selectionToSource, selectAllSpanAt,
-  } = useSubsetTimeline(buzzdetect, duration, videoMode);
+  } = subset;
 
   // Pick a CSV and load it. Every import opens the panel, including a replace:
   // an import that leaves nothing visible reads as a failure.
@@ -212,13 +183,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   // hook usePlaybackTransport expects is simply inert here.
   const examplePlayer = { playingToolId: null as string | null, toggle: () => {}, stop: () => {} };
 
-  const {
-    isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
-    volume, setVolume, muted, setMuted, playheadLocked, setPlayheadLocked,
-    timeDisplayUnit, setTimeDisplayUnit,
-    engineRef, currentTimeRef, currentTimeStoreRef,
-    togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
-  } = usePlaybackTransport({
+  const transport = usePlaybackTransport({
     project: { preferences: {} },
     // The transport runs on the DISPLAY axis, so it gets the display duration and
     // the effective video mode (see AnnotationWindow).
@@ -227,6 +192,13 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     selection, selectionRef, frameSourceRef, videoPrefetchEndRef, videoPrefetchBusyRef,
     prerollVideo, timelineRef, spectrogramRef, examplePlayer, addLog,
   });
+  const {
+    isPlaying, isBuffering, playbackSpeed, setPlaybackSpeed, lastDefinedSpeed, setLastDefinedSpeed,
+    volume, setVolume, muted, setMuted, playheadLocked, togglePlayheadLock,
+    timeDisplayUnit, setTimeDisplayUnit,
+    engineRef, currentTimeRef, currentTimeStoreRef,
+    togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
+  } = transport;
   const getFrameTime = useSourceFrameTime(timelineRef, getMediaTime);
 
   // Spectrogram zoom-in/out/fit-to-track hotkeys — identical registration to
@@ -237,11 +209,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
 
   const bandPassProjectRef = useRef({ id: 'single-file', preferences: {} as { bandPassFilter?: import('./types').BandPassFilter | null } });
   const prevProjectIdRef = useRef<string | null>('single-file');
-  const {
-    filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter, filterStrength, setFilterStrength,
-    handleToggleFilterTool, handleDisableBandPassFilter,
-    handleEnableBandPassFilter, handleBandPassFilterDrawn,
-  } = useBandPassFilter({
+  const filter = useBandPassFilter({
     project: bandPassProjectRef.current,
     engineRef,
     activationStack,
@@ -250,6 +218,11 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     isAudioTrack,
     videoMode: effectiveVideoMode,
   });
+  const {
+    filterToolActive, setFilterToolActive, bandPassFilter, setBandPassFilter, filterStrength, setFilterStrength,
+    handleToggleFilterTool, handleDisableBandPassFilter,
+    handleEnableBandPassFilter, handleBandPassFilterDrawn,
+  } = filter;
 
   // Builds the spectrogram chunk cache (opening the file, changing the FFT size,
   // engaging or re-graining a subset) and keeps it in step with the subset.
@@ -259,74 +232,34 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     subsetGrainSec, subsetSourceRanges, subsetGrainRef, subsetSourceRangesRef, timelineRef,
   });
 
+  const loadTrack = useTrackLoader({
+    engineRef, zoomSecRef, setSampleRate, setDuration, setSettings, setZoomSec, installChunkCache, addLog,
+  });
+
   // Load the file once on mount (this window is scoped to exactly one file —
   // "next/prev" and re-opening a different file both go back through the
   // launch screen, which mounts a fresh instance).
   useEffect(() => {
     let cancelled = false;
-    const isAudio = !isVideoFile(filePath);
-    setIsAudioTrack(isAudio);
+    setIsAudioTrack(!isVideoFile(filePath));
     resolveVideoElementUrl(filePath).then(url => { if (!cancelled) setVideoSrc(url); });
     setIsProcessing(true);
     addLog(`Opening: ${trackName}`);
-
-    (async () => {
-      try {
-        let sr: number, dur: number;
-        if (engineRef.current) {
-          const info = await engineRef.current.loadFile(filePath);
-          sr = info.sampleRate;
-          dur = info.durationSec;
-          addLog(`File info: ${dur.toFixed(2)}s, ${sr}Hz, ${info.channels}ch`);
-        } else {
-          const info = await getFileInfo(filePath);
-          sr = info.sample_rate;
-          dur = info.duration_secs;
-          addLog(`File info: ${dur.toFixed(2)}s, ${sr}Hz, ${info.channels}ch`);
-        }
+    loadTrack(filePath, () => cancelled)
+      .catch(err => {
         if (cancelled) return;
-        setSampleRate(sr);
-        if (dur > 0) setDuration(dur);
-        setSettings(s => s.maxFreq > sr / 2 ? { ...s, maxFreq: sr / 2 } : s);
-        const effectiveZoom = (dur > 0 && dur < zoomSecRef.current) ? Math.max(MIN_ZOOM_SEC, dur) : zoomSecRef.current;
-        if (effectiveZoom !== zoomSecRef.current) setZoomSec(effectiveZoom);
-
-        installChunkCache(filePath, sr, dur, effectiveZoom);
-        addLog('Spectrogram loading...');
-      } catch (err) {
-        if (cancelled) return;
-        const errMsg = err instanceof Error ? err.message : String(err);
-        addLog(`Error opening file: ${errMsg}`, 'error');
+        addLog(`Error opening file: ${err instanceof Error ? err.message : String(err)}`, 'error');
         setVideoSrc(null);
         setDuration(0);
-      } finally {
-        if (!cancelled) setIsProcessing(false);
-      }
-    })();
-
+      })
+      .finally(() => { if (!cancelled) setIsProcessing(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
-  const handleSelectionChange = useCallback((s: Selection | null) => {
-    setSelection(s);
-    // Sync synchronously, not just via the state-mirroring effect below: a caller
-    // that seeks in the same tick as committing a new selection (e.g. snapping the
-    // playhead into a just-created selection) needs seek()'s bounded-restart logic
-    // to see the new selection immediately, not the stale one from last render.
-    selectionRef.current = s;
-    if (s) {
-      activationStack.pushIfAbsent('selection');
-      frameSourceRef.current?.pinSelectionRange(s.start, s.end);
-    } else {
-      activationStack.remove('selection');
-      frameSourceRef.current?.clearPinnedRange();
-      // The selection was driving playback's bounded stop — drop it so
-      // playback continues through to EOF instead of stopping at the now-stale
-      // selection end.
-      clearSelectionEnd();
-    }
-  }, [activationStack, frameSourceRef, clearSelectionEnd]);
+  const handleSelectionChange = useSelectionControl({
+    setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource,
+  });
 
   // Hand the engine the subset's axis and bring the view onto it — see
   // hooks/useSubsetSync.ts.
@@ -335,27 +268,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     spectrogramRef, zoomSecRef, setZoomSec,
   });
 
-  // Export the current selection's audio to a file. The selection is display
-  // time; the file is read at its source time (selectionToSource), which under
-  // a subset is not the same thing. No project here, so no filename-timestamp
-  // scheme to reuse — suggestExportFilename falls back to its "_s<offset>" default.
-  const handleExportSelection = useCallback(async () => {
-    if (!selection) return;
-    const src = selectionToSource(selection);
-    const filename = basename(filePath);
-    const dir = filePath.slice(0, filePath.length - filename.length);
-    const suggested = suggestExportFilename(filename, src.start);
-    const chosenPath = await saveFileDialog(`${dir}${suggested}`, [
-      { name: 'Audio File', extensions: audioExportExtensions(filename) },
-    ]);
-    if (!chosenPath) return;
-    try {
-      await exportAudioRange(filePath, src.start, src.end - src.start, chosenPath);
-      addLog(`Exported selection to ${basename(chosenPath)}`);
-    } catch (err) {
-      addLog(`Error exporting audio: ${err}`, 'error');
-    }
-  }, [selection, filePath, selectionToSource, addLog]);
+  const handleExportSelection = useExportSelection({ selection, trackPath: filePath, selectionToSource, addLog });
 
   // All arrow-key playhead movement (coarse scrub, fine ramp, Shift extend).
   // Lives here rather than in usePlaybackTransport because it needs the
@@ -399,46 +312,21 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     // Shift+S: subset the track to the picked neurons' detections, and back.
     { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
     { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
-    { key: 'Escape', allowInInput: true, handler: () => {
-        const top = activationStack.popTop();
-        switch (top) {
-          case 'selection':
-            setSelection(null);
-            frameSourceRef.current?.clearPinnedRange();
-            setBoundAnnotationId(null);
-            clearSelectionEnd();
-            break;
-          case 'filterTool':
-            setFilterToolActive(false);
-            break;
-          case 'filterBand':
-            setBandPassFilter(null);
-            break;
-          default:
-            break;
-        }
-    }},
+    escapeUnwindBinding(activationStack, {
+      selection: () => { handleSelectionChange(null); setBoundAnnotationId(null); },
+      filterTool: () => setFilterToolActive(false),
+      filterBand: () => setBandPassFilter(null),
+    }),
   ]);
 
-  const liveSpeedRange = speedRangeFor(isAudioTrack, videoMode);
-
-  // Mirror the toolbar into the help guide window, same as AnnotationWindow —
-  // opening the guide from single-file mode gets live controls too. Only one of
-  // the two windows is ever mounted, so there's never a second host.
-  useLiveHost(
-    {
-      hasTrack: !!videoSrc,
-      duration,
-      isPlaying,
+  // Opening the guide from single-file mode gets live controls too.
+  useWindowLiveHost({
+    transport, filter, buzzdetect, subset,
+    hasTrack: !!videoSrc, duration, sampleRate, isAudioTrack, videoMode,
+    selection, handleSelectionChange, setBoundAnnotationId,
+    settings, setSettings, showSettings, setShowSettings, debugLogs, spectrogramRef,
+    snapshot: {
       isBuffering,
-      volume,
-      muted,
-      playbackSpeed,
-      lastDefinedSpeed,
-      speedMin: liveSpeedRange.min,
-      speedMax: liveSpeedRange.max,
-      // Source time, like everything else on the bridge (see LiveSnapshot).
-      selection: selection && selectionToSource(selection),
       timeDisplayUnit,
       selectedTimeDisplayUnit: timeDisplayUnit,
       // No project, so no filename-timestamp format to read a start from —
@@ -448,78 +336,14 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       // Single-file mode has no annotations to step between.
       canGoPrevAnnotation: false,
       canGoNextAnnotation: false,
-      playheadLocked,
-      filterToolActive,
-      filterUnavailable: !isFilterAvailable(isAudioTrack, videoMode),
-      filterEnabled: bandPassFilter !== null,
-      filterStrength,
-      bandPassFilter,
       buzzdetectAvailable: buzzdetectFile !== null,
-      buzzdetectEnabled,
-      subsetAvailable: buzzdetectSubsetNeurons.length > 0,
-      subsetActive,
-      isolateAvailable: buzzdetectIsolatedNeurons.length > 0,
-      isolateActive: activeIsolatedNeurons.length > 0,
-      spectrogramSettings: settings,
-      spectrogramSettingsOpen: showSettings,
-      sampleRate,
-      // No file panel and no annotation tools in single-file mode — the guide's
-      // copies of those fall back to their demos rather than to dead buttons.
+      // No file panel and no annotation tools here — the guide's copies of
+      // those fall back to their demos rather than to dead buttons.
       filePanel: null,
       toolPalette: null,
-      debugLogs,
     },
-    {
-      play: togglePlay,
-      // A time a subset cut out has no place on the axis, so it goes to the
-      // nearest kept moment — the same answer typing it into the toolbar gives.
-      seek: (t, scroll) => seek(displayOfNearestKept(timeline, t), scroll),
-      skipToStart: () => { seek(0, true); handleSelectionChange(null); setBoundAnnotationId(null); },
-      skipToEnd: () => { seek(displayDuration, true); handleSelectionChange(null); setBoundAnnotationId(null); },
-      prevAnnotation: () => {},
-      nextAnnotation: () => {},
-      togglePlayheadLock: () => {
-        const willLock = !playheadLocked;
-        setPlayheadLocked(willLock);
-        if (willLock) spectrogramRef.current?.recenterPlayhead();
-      },
-      setVolume,
-      setMuted,
-      setPlaybackSpeed,
-      setLastDefinedSpeed,
-      setTimeDisplayUnit,
-      setSelection: s => {
-        const d = projectIntervalToDisplay(timeline, s.start, s.end);
-        if (d) handleSelectionChange(d);
-      },
-      toggleFilterTool: handleToggleFilterTool,
-      setFilterStrength: s => {
-        setFilterStrength(s);
-        if (bandPassFilter) setBandPassFilter({ ...bandPassFilter, strength: s });
-      },
-      enableFilter: handleEnableBandPassFilter,
-      disableFilter: () => { handleDisableBandPassFilter(); setFilterStrength(0); },
-      toggleBuzzdetect: () => setBuzzdetectEnabled(v => !v),
-      toggleSubset: toggleBuzzdetectSubset,
-      toggleIsolate: toggleBuzzdetectIsolate,
-      toggleSpectrogramSettings: () => setShowSettings(s => !s),
-      setSpectrogramSettings: patch => setSettings(s => ({ ...s, ...patch })),
-      toggleFileExpandCollapse: () => {},
-      toggleFileFilter: () => {},
-      toggleBuzzdetectFilter: () => {},
-      activateTool: () => {},
-      activateSelectMode: () => {},
-      openToolSettings: () => {},
-      openFindLabel: () => {},
-      editTool: () => {},
-      requestDeleteTool: () => {},
-      playExample: () => {},
-      showExamples: () => {},
-    },
-    currentTimeStoreRef.current,
-    // Bound, not passed as a bare method reference — Timeline is a class.
-    t => timeline.toSource(t),
-  );
+    handlers: NO_PROJECT_LIVE_HANDLERS,
+  });
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
@@ -599,48 +423,13 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               items={[{
                 id: SIDEBAR_SECTION_NEURONS,
                 node: (
-                  <NeuronPalette
-                    data={buzzdetectData}
-                    onRefreshBuzzdetect={refreshBuzzdetect}
-                    thresholds={buzzdetectThresholds}
-                    subsetThresholds={buzzdetectSubsetThresholds}
-                    hiddenNeurons={buzzdetectHiddenNeurons}
-                    neuronColors={buzzdetectNeuronColors}
+                  <BuzzdetectNeuronPalette
+                    buzzdetect={buzzdetect}
+                    subset={subset}
                     toolColors={NO_TOOL_COLORS}
-                    subsetNeurons={buzzdetectSubsetNeurons}
-                    pinnedNeurons={buzzdetectPinnedNeurons}
                     collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
                     onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
-                    onToggleNeuron={handleBuzzdetectToggleNeuron}
-                    onSetAllNeuronsHidden={(hidden) => handleBuzzdetectSetAllNeuronsHidden(buzzdetectData?.neurons ?? [], hidden)}
-                    isolatedNeurons={buzzdetectIsolatedNeurons}
-                    onToggleIsolateNeuron={handleBuzzdetectToggleIsolateNeuron}
-                    isolateEnabled={buzzdetectIsolateEnabled}
-                    onToggleIsolate={toggleBuzzdetectIsolate}
-                    onNeuronColorChange={handleBuzzdetectNeuronColorChange}
-                    onNeuronColorReset={handleBuzzdetectNeuronColorReset}
-                    onThresholdChange={handleBuzzdetectThresholdChange}
-                    onSubsetThresholdChange={handleBuzzdetectSubsetThresholdChange}
-                    onTogglePinNeuron={handleBuzzdetectTogglePinNeuron}
-                    seriesMode={buzzdetectSeriesMode}
-                    binWidthOverride={buzzdetectBinWidthOverride}
-                    autoBinWidth={buzzdetectAutoBinWidth}
-                    autoYRange={buzzdetectAutoYRange}
-                    yAxisOverride={buzzdetectYAxisOverride}
-                    minDetectionRate={buzzdetectMinDetectionRate}
-                    subsetEnabled={subsetActive}
-                    onToggleSubset={toggleBuzzdetectSubset}
-                    panelOpen={buzzdetectEnabled}
-                    onTogglePanel={() => setBuzzdetectEnabled(v => !v)}
-                    subsetBuffer={buzzdetectSubsetBuffer}
-                    subsetStats={buzzdetectSubsetStats}
-                    settingsOpen={buzzdetectSettingsOpen}
-                    onSettingsOpenChange={setBuzzdetectSettingsOpen}
-                    onSeriesModeChange={setBuzzdetectSeriesMode}
-                    onBinWidthOverrideChange={setBuzzdetectBinWidthOverride}
-                    onYAxisOverrideChange={setBuzzdetectYAxisOverride}
-                    onMinDetectionRateChange={setBuzzdetectMinDetectionRate}
-                    onSubsetBufferChange={setBuzzdetectSubsetBuffer}
+                    onRefresh={refreshBuzzdetect}
                   />
                 ),
               }]}
@@ -656,53 +445,33 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
 
         <div className="flex-1 flex flex-col relative overflow-hidden">
           {!isAudioTrack && (
-            <>
-              <div
-                style={{ height: videoCollapsed ? VIDEO_COLLAPSED_BAR_PX : `${splitRatio * 100}%` }}
-                className="bg-black relative flex flex-none overflow-hidden"
-              >
-                <VideoPane
-                  frameSource={frameSourceRef.current}
-                  frameSourceVersion={frameSourceVersion}
-                  frameSourceDecodeError={frameSourceDecodeError}
-                  isAudioTrack={isAudioTrack}
-                  videoSrc={videoSrc}
-                  isProcessing={isProcessing}
-                  isBuffering={isBuffering}
-                  getFrameTime={getFrameTime}
-                  onDebugLog={addLog}
-                  onDurationChange={setDuration}
-                  videoMode={videoMode}
-                  hasSelection={selection !== null}
-                  onVideoModeChange={setVideoMode}
-                  onVideoElement={attachVideoElement}
-                  brightness={videoBrightness}
-                  contrast={videoContrast}
-                  onBrightnessChange={setVideoBrightness}
-                  onContrastChange={setVideoContrast}
-                />
-                {videoCollapsed && (
-                  <div className="absolute inset-0 z-40 bg-slate-900 border-b border-slate-700 flex items-center px-3">
-                    <button
-                      type="button"
-                      onClick={() => setVideoCollapsed(false)}
-                      className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
-                      data-tooltip={tooltips.expandVideoPanel}
-                    >
-                      <ChevronDown size={16} />
-                      <span className="text-xs font-medium uppercase tracking-wide">{annotationWindow.videoLabel}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="h-2 bg-slate-800 border-y border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors z-10 flex justify-center items-center"
-                onMouseDown={handleSplitDrag}
-              >
-                <div className="w-12 h-1 bg-slate-600 rounded-full" />
-              </div>
-            </>
+            <VideoSection
+              collapsed={videoCollapsed}
+              splitRatio={splitRatio}
+              collapsedBarPx={VIDEO_COLLAPSED_BAR_PX}
+              onExpand={() => setVideoCollapsed(false)}
+              onSplitDrag={handleSplitDrag}
+              pane={{
+                frameSource: frameSourceRef.current,
+                frameSourceVersion,
+                frameSourceDecodeError,
+                isAudioTrack,
+                videoSrc,
+                isProcessing,
+                isBuffering,
+                getFrameTime,
+                onDebugLog: addLog,
+                onDurationChange: setDuration,
+                videoMode,
+                hasSelection: selection !== null,
+                onVideoModeChange: setVideoMode,
+                onVideoElement: attachVideoElement,
+                brightness: videoBrightness,
+                contrast: videoContrast,
+                onBrightnessChange: setVideoBrightness,
+                onContrastChange: setVideoContrast,
+              }}
+            />
           )}
 
           <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
@@ -748,11 +517,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               isAudioTrack={isAudioTrack}
               onRestartAudio={() => { engineRef.current?.restart(); }}
               playheadLocked={playheadLocked}
-              onTogglePlayheadLock={() => {
-                const willLock = !playheadLocked;
-                setPlayheadLocked(willLock);
-                if (willLock) spectrogramRef.current?.recenterPlayhead();
-              }}
+              onTogglePlayheadLock={togglePlayheadLock}
               timeDisplayUnit={timeDisplayUnit}
               onTimeDisplayUnitChange={setTimeDisplayUnit}
               timeline={timeline}
@@ -804,36 +569,18 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
             </div>
 
             {buzzdetectFile !== null && buzzdetectEnabled && (
-              <BuzzdetectPanel
-                data={displayBuzzdetectData}
+              <BuzzdetectTrackPanel
+                buzzdetect={buzzdetect}
+                subset={subset}
+                toolColors={NO_TOOL_COLORS}
                 viewportStore={viewportStoreRef.current}
-                duration={displayDuration}
                 currentTimeStore={currentTimeStoreRef.current}
                 selection={selection}
                 timeDisplayUnit={timeDisplayUnit}
-                thresholds={buzzdetectThresholds}
-                hiddenNeurons={buzzdetectHiddenNeurons}
-                isolatedNeurons={activeIsolatedNeurons}
-                neuronColors={buzzdetectNeuronColors}
-                toolColors={NO_TOOL_COLORS}
-                seriesMode={buzzdetectSeriesMode}
-                binWidthOverride={buzzdetectBinWidthOverride}
-                subsetActive={subsetActive}
-                timeline={timeline}
-                yAxisOverride={buzzdetectYAxisOverride}
-                baselineAdjusted={buzzdetectBaselineAdjusted}
-                onBaselineAdjustedChange={setBuzzdetectBaselineAdjusted}
-                reportAutoValues={buzzdetectSettingsOpen}
-                height={buzzdetectPanelHeight}
-                onAutoBinWidthChange={setBuzzdetectAutoBinWidth}
-                onAutoYRangeChange={setBuzzdetectAutoYRange}
-                onHeightChange={setBuzzdetectPanelHeight}
+                spectrogramRef={spectrogramRef}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onSeek={seek}
-                onScrollWheel={(deltaX, deltaY, ctrlKey, metaKey, clientX) =>
-                  spectrogramRef.current?.applyWheel(deltaX, deltaY, ctrlKey, metaKey, clientX)
-                }
               />
             )}
 
