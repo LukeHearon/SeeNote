@@ -9,7 +9,7 @@ import { useProjects } from './hooks/useProjects';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
 import { useOsOpenFile } from './hooks/useOsOpenFile';
-import { listDirectory, setFfmpegPath, onWindowCloseRequested } from './utils/tauriCommands';
+import { checkDirExists, setFfmpegPath, onWindowCloseRequested } from './utils/tauriCommands';
 import { flushForExit } from './utils/exitFlush';
 import { readAppSettings } from './utils/projectCommands';
 
@@ -77,7 +77,10 @@ export default function App() {
     // so we trust `project` here and don't stat the project dir again — that
     // would just cost another macOS TCC consent prompt for no new information.
     const touched = await touchLastOpened(project.id) ?? project;
-    const mediaExists = await listDirectory(touched.mediaDirectoryAbs).then(() => true).catch(() => false);
+    // A single stat. Listing the directory here would read every entry (plus a
+    // stat each) on the slow drive before the window can appear; the window's
+    // own scan does that work after it's up.
+    const mediaExists = await checkDirExists(touched.mediaDirectoryAbs).catch(() => false);
     if (!mediaExists) {
       setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
       return;
