@@ -161,6 +161,7 @@ pub fn run() {
             commands::window::close_sync_guide_window,
             commands::window::open_help_window,
             commands::window::close_help_window,
+            commands::window::close_popout_window,
             commands::window::open_copy_editor_window,
             commands::window::take_pending_open_file,
             commands::buzzdetect::read_buzzdetect,

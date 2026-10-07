@@ -610,6 +610,11 @@ export function closeHelpWindow(): void {
   invoke('close_help_window').catch(console.error);
 }
 
+/** Close a panel pop-out's native window, found by its title (`window.close()` alone can leave it open and empty). */
+export function closePopoutWindow(title: string): void {
+  invoke('close_popout_window', { title }).catch(console.error);
+}
+
 /** Open the sync setup guide in a separate native window. */
 export function openSyncGuideWindow(): void {
   invoke('open_sync_guide_window').catch(console.error);

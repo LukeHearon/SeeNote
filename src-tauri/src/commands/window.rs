@@ -208,3 +208,16 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     });
     Ok(())
 }
+
+/// Close the pop-out window whose title is `title`. `window.close()` from the
+/// frontend closes the page but can leave the native window open and empty, so
+/// the portal asks for it here. Titles are unique because each panel has at
+/// most one pop-out.
+#[tauri::command]
+pub fn close_popout_window(app: tauri::AppHandle, title: String) {
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("popout-") && win.title().map(|t| t == title).unwrap_or(false) {
+            let _ = win.destroy();
+        }
+    }
+}

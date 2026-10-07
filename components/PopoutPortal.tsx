@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ArrowDownLeft } from 'lucide-react';
 import TooltipLayer from './TooltipLayer';
 import { registerWindow } from '../utils/windowRegistry';
+import { closePopoutWindow } from '../utils/tauriCommands';
 import { tooltips } from '../copy/tooltips';
 
 interface Props {
@@ -83,6 +84,7 @@ export default function PopoutPortal({ title, onClosed, headerActions, children 
         return;
       }
       const { win } = opened;
+      const windowTitle = win.document.title;
       let tearingDown = false;
       const unregister = registerWindow(win);
       const handleGone = () => {
@@ -105,6 +107,7 @@ export default function PopoutPortal({ title, onClosed, headerActions, children 
         unregister();
         setPopout(null);
         win.close();
+        closePopoutWindow(windowTitle);
       };
     }, 0);
     return () => {
