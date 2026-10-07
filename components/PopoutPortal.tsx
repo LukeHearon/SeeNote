@@ -71,34 +71,45 @@ export default function PopoutPortal({ title, onClosed, headerActions, children 
   onClosedStable.current = onClosed;
 
   useEffect(() => {
-    const opened = openPopout(title);
-    if (!opened) {
-      onClosedStable.current();
-      return;
-    }
-    const { win } = opened;
-    let tearingDown = false;
-    const unregister = registerWindow(win);
-    const handleGone = () => {
-      if (tearingDown) return;
-      tearingDown = true;
-      onClosedStable.current();
-    };
-    // Closing the window from its title bar doesn't always raise pagehide in
-    // the webview, so also poll for it.
-    win.addEventListener('pagehide', handleGone);
-    const poll = window.setInterval(() => { if (win.closed) handleGone(); }, CLOSED_POLL_MS);
-    // The popout can't outlive the window that owns its state.
-    const closeWithMain = () => { tearingDown = true; win.close(); };
-    window.addEventListener('pagehide', closeWithMain);
-    setPopout(opened);
+    let cleanup: (() => void) | null = null;
+    // Opened a tick late: StrictMode mounts, unmounts and remounts effects
+    // back to back in dev, and a window closed before it has finished opening
+    // is left behind as a blank second one. The throwaway mount's cleanup
+    // cancels this before anything opens.
+    const timer = window.setTimeout(() => {
+      const opened = openPopout(title);
+      if (!opened) {
+        onClosedStable.current();
+        return;
+      }
+      const { win } = opened;
+      let tearingDown = false;
+      const unregister = registerWindow(win);
+      const handleGone = () => {
+        if (tearingDown) return;
+        tearingDown = true;
+        onClosedStable.current();
+      };
+      // Closing the window from its title bar doesn't always raise pagehide in
+      // the webview, so also poll for it.
+      win.addEventListener('pagehide', handleGone);
+      const poll = window.setInterval(() => { if (win.closed) handleGone(); }, CLOSED_POLL_MS);
+      // The popout can't outlive the window that owns its state.
+      const closeWithMain = () => { tearingDown = true; win.close(); };
+      window.addEventListener('pagehide', closeWithMain);
+      setPopout(opened);
+      cleanup = () => {
+        tearingDown = true;
+        window.clearInterval(poll);
+        window.removeEventListener('pagehide', closeWithMain);
+        unregister();
+        setPopout(null);
+        win.close();
+      };
+    }, 0);
     return () => {
-      tearingDown = true;
-      window.clearInterval(poll);
-      window.removeEventListener('pagehide', closeWithMain);
-      unregister();
-      setPopout(null);
-      win.close();
+      window.clearTimeout(timer);
+      cleanup?.();
     };
     // The window is opened once per mount; the title only seeds it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
