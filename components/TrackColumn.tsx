@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ArrowDownToLine, Settings } from 'lucide-react';
+import { ArrowDownLeft, Settings } from 'lucide-react';
 import VideoPane from './VideoPane';
 import VideoSection, { type VideoSectionProps } from './VideoSection';
 import PopoutPortal from './PopoutPortal';
@@ -172,7 +172,7 @@ export default function TrackColumn({ popouts, video, toolbar, spectrogram, spec
               className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white transition-colors"
               data-tooltip={tooltips.popInPanel}
             >
-              <ArrowDownToLine size={12} />
+              <ArrowDownLeft size={12} />
               {TITLES[id]()}
             </button>
           ))}

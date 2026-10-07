@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownToLine } from 'lucide-react';
+import { ArrowDownLeft } from 'lucide-react';
 import TooltipLayer from './TooltipLayer';
 import { registerWindow } from '../utils/windowRegistry';
 import { tooltips } from '../copy/tooltips';
@@ -127,7 +127,7 @@ export default function PopoutPortal({ title, onClosed, headerActions, children 
           className="p-1 rounded text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
           data-tooltip={tooltips.popInPanel}
         >
-          <ArrowDownToLine size={14} />
+          <ArrowDownLeft size={14} />
         </button>
       </div>
       <div className="flex-1 min-h-0 flex flex-col relative">{children}</div>
