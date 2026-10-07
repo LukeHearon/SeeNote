@@ -150,3 +150,61 @@ pub async fn open_copy_editor_window(app: tauri::AppHandle) -> Result<(), String
     .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Builds the main window from its tauri.conf.json entry (which has
+/// `"create": false`) with a `window.open` handler attached. The panel pop-outs
+/// (video, spectrogram, buzzdetect) are React portals into windows the frontend
+/// opens this way, so they share the main window's JS context and state; this
+/// handler only supplies the native window. Other `window.open` calls are
+/// denied.
+pub fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use tauri::webview::NewWindowResponse;
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    let handle = app.handle().clone();
+    let closer = app.handle().clone();
+    let counter = AtomicU32::new(0);
+    let main = WebviewWindowBuilder::from_config(app, &config)?
+        .on_new_window(move |url, features| {
+            // Only the frontend's own blank pop-out shells.
+            if url.as_str() != "about:blank" {
+                return NewWindowResponse::Deny;
+            }
+            let n = counter.fetch_add(1, Ordering::Relaxed);
+            let builder = WebviewWindowBuilder::new(
+                &handle,
+                format!("popout-{n}"),
+                WebviewUrl::External("about:blank".parse().unwrap()),
+            )
+            .window_features(features)
+            .min_inner_size(240.0, 160.0)
+            .on_document_title_changed(|window, title| {
+                let _ = window.set_title(&title);
+            });
+            match builder.build() {
+                Ok(window) => NewWindowResponse::Create { window },
+                Err(_) => NewWindowResponse::Deny,
+            }
+        })
+        .build()?;
+    // Pop-outs render the main window's state, so they go when it does —
+    // otherwise they'd keep the process alive with nothing behind them.
+    main.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            for (label, win) in closer.webview_windows() {
+                if label.starts_with("popout-") {
+                    let _ = win.destroy();
+                }
+            }
+        }
+    });
+    Ok(())
+}

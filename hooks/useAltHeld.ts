@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { addWindowListener } from '../utils/windowRegistry';
 
 /**
  * Tracks whether Alt/Option is currently held down, window-wide.
@@ -18,14 +19,12 @@ export function useAltHeld(): boolean {
   useEffect(() => {
     const sync = (e: KeyboardEvent) => setAltHeld(e.altKey);
     const clear = () => setAltHeld(false);
-    window.addEventListener('keydown', sync);
-    window.addEventListener('keyup', sync);
-    window.addEventListener('blur', clear);
-    return () => {
-      window.removeEventListener('keydown', sync);
-      window.removeEventListener('keyup', sync);
-      window.removeEventListener('blur', clear);
-    };
+    const removers = [
+      addWindowListener('keydown', sync),
+      addWindowListener('keyup', sync),
+      addWindowListener('blur', clear),
+    ];
+    return () => removers.forEach(r => r());
   }, []);
 
   return altHeld;

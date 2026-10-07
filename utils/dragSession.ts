@@ -1,3 +1,5 @@
+import { addWindowListener } from './windowRegistry';
+
 /**
  * Window-level drag scaffold: `onMove` for every mousemove until the button
  * comes up, then `onEnd`. Returns a cancel function (detaches without calling
@@ -6,14 +8,16 @@
 export function startDragSession(onMove: (e: MouseEvent) => void, onEnd?: () => void): () => void {
   const move = (e: MouseEvent) => onMove(e);
   const detach = () => {
-    window.removeEventListener('mousemove', move);
-    window.removeEventListener('mouseup', up);
+    removeMove();
+    removeUp();
   };
   const up = () => {
     detach();
     onEnd?.();
   };
-  window.addEventListener('mousemove', move);
-  window.addEventListener('mouseup', up);
+  // Every open window, so a drag that starts in a popped-out panel still gets
+  // its moves and its release.
+  const removeMove = addWindowListener('mousemove', move);
+  const removeUp = addWindowListener('mouseup', up);
   return detach;
 }

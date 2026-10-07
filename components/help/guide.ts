@@ -131,6 +131,8 @@ export const GUIDE: Part[] = [
           { kind: 'p', text: help.layout.p_resize },
           { kind: 'h', id: 'collapse', text: help.layout.h_collapse },
           { kind: 'p', text: help.layout.p_collapse },
+          { kind: 'h', id: 'popout', text: help.layout.h_popout },
+          { kind: 'p', text: help.layout.p_popout },
         ],
       },
       {

@@ -93,6 +93,12 @@ interface SpectrogramProps {
    * Optional so callers that don't need it pay nothing.
    */
   onViewportChange?: (viewport: { scrollLeft: number; pixelsPerSecond: number; containerWidth: number }) => void;
+  /**
+   * Time at the left edge to open on, read once at mount. A spectrogram moved
+   * between windows (popping out/in) is a new instance in a box of another
+   * width, and this keeps it on the stretch of the file the old one was showing.
+   */
+  initialLeftEdgeTime?: number;
   videoMode?: VideoMode;
   isAudioTrack?: boolean;
   playheadLocked?: boolean;
@@ -180,6 +186,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onBoundAnnotationChange,
   onZoomChange,
   onViewportChange,
+  initialLeftEdgeTime,
   videoMode,
   isAudioTrack = false,
   playheadLocked = false,
@@ -377,6 +384,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Last width the ResizeObserver reported, so a notification that carries no
   // actual size change can skip the scroll rescale entirely.
   const lastObservedWidthRef = useRef(0);
+  const initialLeftEdgeRef = useRef<number | null>(initialLeftEdgeTime ?? null);
   // The container's CSS box, cached from the ResizeObserver. Every draw sizes
   // its own canvas bitmap from this at the CURRENT dpr (see utils/canvasDpr),
   // so a dpr change that leaves the box alone can't leave a bitmap behind.
@@ -923,7 +931,12 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         // constant just off 1.0 — every notification, compounding, in the same
         // direction. Zoomed in, where scrollLeft is large, that reads as the
         // view panning steadily right on its own.
-        if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0 && newWidth !== lastObservedWidthRef.current) {
+        if (initialLeftEdgeRef.current !== null && zoomSecRef.current > 0) {
+          const newPps = newWidth / zoomSecRef.current;
+          pixelsPerSecondRef.current = newPps;
+          setScroll(initialLeftEdgeRef.current * newPps, 'resize');
+          initialLeftEdgeRef.current = null;
+        } else if (pixelsPerSecondRef.current > 0 && zoomSecRef.current > 0 && newWidth !== lastObservedWidthRef.current) {
           const leftEdgeTime = scrollLeftRef.current / pixelsPerSecondRef.current;
           const newPps = newWidth / zoomSecRef.current;
           const newScrollLeft = leftEdgeTime * newPps;

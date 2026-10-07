@@ -564,6 +564,14 @@ export const annotationWindow = {
   get noMediaHint() { return getOverride('ui.annotationWindow.noMediaHint') ?? "Open a video or audio file to begin annotating"; },
 };
 
+export const popouts = {
+  get videoTitle() { return getOverride('ui.popouts.videoTitle') ?? "Video"; },
+  get spectrogramTitle() { return getOverride('ui.popouts.spectrogramTitle') ?? "Spectrogram"; },
+  get buzzdetectTitle() { return getOverride('ui.popouts.buzzdetectTitle') ?? "Buzzdetect results"; },
+  get barLabel() { return getOverride('ui.popouts.barLabel') ?? "Popped out"; },
+  get allPoppedOut() { return getOverride('ui.popouts.allPoppedOut') ?? "Everything is popped out"; },
+};
+
 export const singleFileWindow = {
   get importBuzzdetectLabel() { return getOverride('ui.singleFileWindow.importBuzzdetectLabel') ?? "buzzdetect"; },
   get importBuzzdetectFilter() { return getOverride('ui.singleFileWindow.importBuzzdetectFilter') ?? "buzzdetect results"; },

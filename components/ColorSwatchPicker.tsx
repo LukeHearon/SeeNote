@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HexColorPicker } from 'react-colorful';
+import { addWindowListener } from '../utils/windowRegistry';
 
 // Rainbow gradient shared by the custom-color swatch fill and its active ring.
 const RAINBOW_GRADIENT = 'linear-gradient(to right, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7)';
@@ -34,8 +35,7 @@ export default function ColorSwatchPicker({ value, swatchColors, onChange, custo
     const handler = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setShowPicker(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    return addWindowListener('mousedown', handler);
   }, [showPicker]);
 
   const sizeStyle = { width: size, height: size };

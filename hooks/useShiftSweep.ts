@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { Selection } from '../types';
+import { addWindowListener } from '../utils/windowRegistry';
 
 /**
  * How long Shift must be held for the sweep to count. Below this it was a
@@ -103,13 +104,13 @@ export function useShiftSweep({
       if (!e.altKey) cbRef.current.pause();
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', cancelSweep);
+    const removers = [
+      addWindowListener('keydown', onKeyDown),
+      addWindowListener('keyup', onKeyUp),
+      addWindowListener('blur', cancelSweep),
+    ];
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', cancelSweep);
+      removers.forEach(r => r());
       cancelSweep();
     };
   }, [enabled, isPlaying, selectionRef, currentTimeRef, cancelSweep]);

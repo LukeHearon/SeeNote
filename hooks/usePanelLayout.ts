@@ -3,6 +3,7 @@ import { useCollapsibleSidebar } from './useCollapsibleSidebar';
 import { startDragSession } from '../utils/dragSession';
 import { useSidebarSections, SidebarSectionsApi, SidebarSectionsState } from './useSidebarSections';
 import { isEditableTarget } from './useHotkeys';
+import { addWindowListener } from '../utils/windowRegistry';
 
 export interface PanelLayoutInitial {
   splitRatio: number;
@@ -117,12 +118,8 @@ export function usePanelLayout(initial: PanelLayoutInitial): PanelLayoutApi {
       if (e.key.toLowerCase() !== 'h') return;
       setHideLabels(false);
     };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
+    const removers = [addWindowListener('keydown', onKeyDown), addWindowListener('keyup', onKeyUp)];
+    return () => removers.forEach(r => r());
   }, []);
 
   const handleSplitDrag = (e: React.MouseEvent) => {

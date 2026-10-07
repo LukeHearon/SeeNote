@@ -99,6 +99,10 @@ pub fn run() {
         .manage(commands::audio::PcmStreamState::default())
         .manage(commands::window::PendingOpenFile::default())
         .setup(|app| {
+            // The main window is built here rather than from tauri.conf.json
+            // alone ("create": false there) so it can answer `window.open`,
+            // which the panel pop-outs use (see commands::window::build_main_window).
+            commands::window::build_main_window(app)?;
             // Windows/Linux hand the launched file to us as a CLI arg on cold start
             // (macOS instead fires RunEvent::Opened below, so this is a no-op there —
             // Finder-launched processes get no meaningful argv).

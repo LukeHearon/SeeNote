@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { isEditableTarget } from './useHotkeys';
+import { addWindowListener } from '../utils/windowRegistry';
 
 // Open dismissable layers, innermost last. Only the innermost one hears Escape,
 // so closing a dialog opened from a modal doesn't close the modal too.
 const stack: Array<{ current: () => void }> = [];
+let removeListener: (() => void) | null = null;
 
 function onKeyDown(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || stack.length === 0) return;
@@ -26,11 +28,11 @@ export function useEscapeKey(onEscape: (() => void) | undefined): void {
     if (!enabled) return;
     const entry = { current: () => ref.current?.() };
     stack.push(entry);
-    if (stack.length === 1) window.addEventListener('keydown', onKeyDown, true);
+    if (stack.length === 1) removeListener = addWindowListener('keydown', onKeyDown, true);
     return () => {
       const i = stack.indexOf(entry);
       if (i >= 0) stack.splice(i, 1);
-      if (stack.length === 0) window.removeEventListener('keydown', onKeyDown, true);
+      if (stack.length === 0) { removeListener?.(); removeListener = null; }
     };
   }, [enabled]);
 }

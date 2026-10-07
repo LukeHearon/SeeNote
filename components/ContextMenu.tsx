@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { Z } from '../constants';
+import { addWindowListener } from '../utils/windowRegistry';
 
 export interface ContextMenuItem {
   label: string;
@@ -50,8 +51,7 @@ export default function ContextMenu({ x, y, items, onClose, minWidth = 160 }: Co
     const onMouseDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    return addWindowListener('mousedown', onMouseDown);
   }, [onClose]);
   // Through the shared Escape stack, so a menu opened over a modal closes alone.
   useEscapeKey(onClose);

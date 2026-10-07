@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { addWindowListener, windowOf } from '../utils/windowRegistry';
 
 const TOOLTIP_DELAY = 400;
 
 function findTooltipText(el: Element | null): string | null {
-  while (el && el !== document.body) {
+  while (el && el.tagName !== 'BODY') {
     const t = el.getAttribute('data-tooltip');
     if (t) return t;
     el = el.parentElement;
@@ -12,7 +13,7 @@ function findTooltipText(el: Element | null): string | null {
 }
 
 function findTooltipDelay(el: Element | null): number {
-  while (el && el !== document.body) {
+  while (el && el.tagName !== 'BODY') {
     const d = el.getAttribute('data-tooltip-delay');
     if (d) return parseInt(d, 10);
     el = el.parentElement;
@@ -20,7 +21,12 @@ function findTooltipDelay(el: Element | null): number {
   return TOOLTIP_DELAY;
 }
 
-export default function TooltipLayer() {
+/**
+ * One layer per window: the app's own, plus one inside each popped-out panel
+ * (which `ownerWindow` names), since a tooltip is drawn in the window the
+ * pointer is over.
+ */
+export default function TooltipLayer({ ownerWindow = window }: { ownerWindow?: Window }) {
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const instantRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,8 +46,14 @@ export default function TooltipLayer() {
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      if (windowOf(e) !== ownerWindow) {
+        clearTimer();
+        currentTextRef.current = null;
+        setTooltip(null);
+        return;
+      }
       mouseRef.current = { x: e.clientX, y: e.clientY };
-      const el = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
+      const el = ownerWindow.document.elementFromPoint(e.clientX, e.clientY) as Element | null;
       const text = findTooltipText(el);
 
       if (text !== currentTextRef.current) {
@@ -77,22 +89,22 @@ export default function TooltipLayer() {
       }
     };
 
-    document.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
+    const removers = [
+      addWindowListener('mousemove', onMouseMove),
+      addWindowListener('keydown', onKeyDown),
+      addWindowListener('keyup', onKeyUp),
+    ];
 
     return () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      removers.forEach(r => r());
       clearTimer();
     };
-  }, []);
+  }, [ownerWindow]);
 
   if (!tooltip) return null;
 
   const padding = 8;
-  const x = Math.min(tooltip.x + 12, window.innerWidth - 200 - padding);
+  const x = Math.min(tooltip.x + 12, ownerWindow.innerWidth - 200 - padding);
   const y = tooltip.y + 20;
 
   const lines = tooltip.text.split('\n');

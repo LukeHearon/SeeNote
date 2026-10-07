@@ -29,6 +29,10 @@ Quick reference for agents. One phrase per file.
 - `components/ToolModals.tsx` — the annotation-tool modals (settings, edit, create, example library, delete)
 - `components/TransportToolbar.tsx` — Toolbar wired to usePlaybackTransport + useBandPassFilter; used by both windows
 - `components/VideoSection.tsx` — video pane, its collapsed bar and the split handle; used by both windows
+- `components/TrackColumn.tsx` — the column right of the sidebar (video, toolbar, spectrogram, buzzdetect results); owns the pop-out layout: popped panels leave, the rest stretch into the space, a bottom bar pops them back. Used by both windows
+- `components/PopoutPortal.tsx` — renders children into a `window.open` window (React portal, so state stays shared) with a pop-in header; Rust side is `build_main_window`'s `on_new_window` in `commands/window.rs`
+- `components/PopOutButton.tsx` — the corner button that pops a panel out
+- `components/buzzdetect/BuzzdetectGraphSettings.tsx` — the graph-wide buzzdetect settings block; in the neuron palette, or in the results panel's popout
 - `components/buzzdetect/BuzzdetectViews.tsx` — neuron palette and activations panel wired to useBuzzdetect + useSubsetTimeline; used by both windows
 - `components/buzzdetect/stripPainter.ts` — canvas painter for the buzzdetect panel's strip
 - `components/spectrogram/canvasPainters.ts` / `overlayPainter.ts` — spectrogram gutter/ticks/joins and overlay drawing, shared with ExampleSpectrogram
@@ -157,6 +161,7 @@ Quick reference for agents. One phrase per file.
 - `hooks/useExportSelection.ts` — export the selection's audio to a file; both windows
 - `hooks/useTrackLoader.ts` — load a file into the engine and bring the view onto it (sample rate, zoom, chunk cache); both windows
 - `hooks/useWindowLiveHost.ts` — publishes a window's toolbar state to the help guide and accepts its control input; both windows
+- `hooks/usePopouts.ts` — which panels are popped out (in memory only)
 - `hooks/useEscapeKey.ts` — Escape stack for modals and menus (innermost closes first)
 - `hooks/useSpectrogramZoomPan.ts` / `useAnnotationJumps.ts` — Spectrogram's wheel zoom/pan and prev/next-annotation jumps
 - `hooks/useScrollSync.ts` — re-runs a sync callback on scroll/resize (once per frame) for widgets that mirror a scroller (FileTree's scrollbar and breadcrumb)
@@ -170,6 +175,7 @@ Quick reference for agents. One phrase per file.
 - `utils/annotationIoGate.ts` — tracks pending sync/reload work so the autosave and track switches wait for it
 - `utils/projectForm.ts` — project form values ↔ ProjectSettings, plus required-field checks
 - `utils/fileTreeBuild.ts` — builds FileTree's folder tree from flat path lists
+- `utils/windowRegistry.ts` — the windows the UI is drawn into (main + popouts); `addWindowListener` attaches a global listener to all of them. Use it, not `window.addEventListener`, for anything that must hear a popped-out panel (hotkeys, drags, click-outside)
 - `utils/dragSession.ts` — window-level mousemove/mouseup drag session with cancel
 - `utils/dirDialogs.ts` — directory picker that opens near an existing path
 - `utils/videoUrl.ts` — the URL a `<video>` element plays a file from (asset:// on macOS/Windows, local HTTP loopback on Linux)

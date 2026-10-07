@@ -42,6 +42,7 @@ import { tooltips } from '../copy/tooltips';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 import { startDragSession } from '../utils/dragSession';
 import { renderStrip, StripParams, MIN_UNIT_BOUNDARY_PX } from './buzzdetect/stripPainter';
+import { addWindowListener } from '../utils/windowRegistry';
 
 // Above this many visible bins, average them into groups to keep the drawn
 // polyline near this point count instead of a scratchy per-bin path.
@@ -143,6 +144,8 @@ interface BuzzdetectPanelProps {
    */
   reportAutoValues: boolean;
   height: number;
+  /** Take whatever height the parent leaves instead of `height` (and drop the resize handle). */
+  fill?: boolean;
   // Callbacks.
   onAutoBinWidthChange: (binWidth: number) => void;
   onAutoYRangeChange: (range: { min: number; max: number } | null) => void;
@@ -176,6 +179,7 @@ export default function BuzzdetectPanel({
   onBaselineAdjustedChange,
   reportAutoValues,
   height,
+  fill = false,
   onAutoBinWidthChange,
   onAutoYRangeChange,
   onHeightChange,
@@ -835,12 +839,8 @@ export default function BuzzdetectPanel({
     const onUp = () => {
       setDragging(false);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
+    const removers = [addWindowListener('mousemove', onMove), addWindowListener('mouseup', onUp)];
+    return () => removers.forEach(r => r());
   }, [dragging, unitAtClientX, unitSpan, onSelectionChange, onBoundAnnotationChange]);
 
   const handleAreaMouseDown = (e: React.MouseEvent) => {
@@ -1006,15 +1006,20 @@ export default function BuzzdetectPanel({
   };
 
   return (
-    <div className="flex-none bg-[#0b1220] border-t border-slate-700 flex flex-col relative" style={{ height }}>
+    <div
+      className={`${fill ? 'flex-1 min-h-0' : 'flex-none'} bg-[#0b1220] border-t border-slate-700 flex flex-col relative`}
+      style={fill ? undefined : { height }}
+    >
       {/* Top-edge resize handle */}
-      <div
-        className="h-2 bg-slate-800 border-b border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors flex justify-center items-center flex-none"
-        onMouseDown={handleResizeDown}
-        data-buzz-ui
-      >
-        <GripHorizontal size={12} className="text-slate-600" />
-      </div>
+      {!fill && (
+        <div
+          className="h-2 bg-slate-800 border-b border-slate-700 cursor-row-resize hover:bg-[#e65161]/50 transition-colors flex justify-center items-center flex-none"
+          onMouseDown={handleResizeDown}
+          data-buzz-ui
+        >
+          <GripHorizontal size={12} className="text-slate-600" />
+        </div>
+      )}
 
       <div className="flex-1 flex min-h-0 relative">
         {/* Y-axis gutter, aligned to the spectrogram's 50px gutter */}

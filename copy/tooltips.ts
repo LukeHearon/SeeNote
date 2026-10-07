@@ -74,6 +74,8 @@ export const tooltips = {
   get removeBuzzdetect() { return getOverride('tooltips.removeBuzzdetect') ?? "Remove buzzdetect results"; },
   get helpGuide() { return getOverride('tooltips.helpGuide') ?? "Help Guide (F1)"; },
   get keyboardShortcuts() { return getOverride('tooltips.keyboardShortcuts') ?? "Keyboard Shortcuts"; },
+  get popOutPanel() { return getOverride('tooltips.popOutPanel') ?? "Pop out into its own window"; },
+  get popInPanel() { return getOverride('tooltips.popInPanel') ?? "Return to the main window"; },
   get expandVideoPanel() { return getOverride('tooltips.expandVideoPanel') ?? "Expand video panel"; },
   get syncing() { return getOverride('tooltips.syncing') ?? "Syncing…"; },
   get syncIdle() { return getOverride('tooltips.syncIdle') ?? "Sync annotations"; },

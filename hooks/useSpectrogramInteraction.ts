@@ -6,6 +6,7 @@ import { xToTime, maxScroll as computeMaxScroll } from '../utils/viewportTransfo
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import type { Timeline } from '../utils/subsetTimeline';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
+import { addWindowListener, forEachWindow } from '../utils/windowRegistry';
 
 // Lowest cutoff the band-pass filter graph will honour (see BandPassFilterGraph).
 const FILTER_FLOOR_HZ = 20;
@@ -440,8 +441,7 @@ export function useSpectrogramInteraction({
   // Always track mouse position so the RAF can use it even when mouse is outside the spectrogram
   useEffect(() => {
     const trackMouse = (e: MouseEvent) => { mousePosRef.current = { clientX: e.clientX, clientY: e.clientY }; };
-    window.addEventListener('mousemove', trackMouse, { passive: true });
-    return () => window.removeEventListener('mousemove', trackMouse);
+    return addWindowListener('mousemove', trackMouse, { passive: true });
   }, []);
 
   // While a filter drag is active, track mouse moves at window level so the drag
@@ -462,8 +462,7 @@ export function useSpectrogramInteraction({
         setCreatingFilter({ ...creatingFilter, y1: clamp(e.clientY - rect.top, 0, canvasHeight) });
       }
     };
-    window.addEventListener('mousemove', onMove);
-    return () => window.removeEventListener('mousemove', onMove);
+    return addWindowListener('mousemove', onMove);
   }, [isFilterDragActive, creatingFilter, resizingFilterEdge, bandPassFilter, settings, sampleRate, onBandPassFilterChange]);
 
   // Re-sync pendingAnnotationsRef when the annotations prop changes externally (e.g. undo/redo).
@@ -477,9 +476,12 @@ export function useSpectrogramInteraction({
   // Prevent text selection in all panels while a drag is in progress
   useEffect(() => {
     if (!isAnyDragActive) return;
-    const prev = document.body.style.userSelect;
-    document.body.style.userSelect = 'none';
-    return () => { document.body.style.userSelect = prev; };
+    const prev = new Map<Window, string>();
+    forEachWindow(w => {
+      prev.set(w, w.document.body.style.userSelect);
+      w.document.body.style.userSelect = 'none';
+    });
+    return () => prev.forEach((v, w) => { w.document.body.style.userSelect = v; });
   }, [isAnyDragActive]);
 
   // Auto-pan: while a drag is active and the mouse is outside the spectrogram bounds,
@@ -521,7 +523,7 @@ export function useSpectrogramInteraction({
           // sides room to trigger before the cursor would need to leave the window.
           const AUTOPAN_EDGE_MARGIN = 24;
           const leftBound = AUTOPAN_EDGE_MARGIN;
-          const rightBound = window.innerWidth - AUTOPAN_EDGE_MARGIN;
+          const rightBound = (containerRef.current?.ownerDocument.defaultView ?? window).innerWidth - AUTOPAN_EDGE_MARGIN;
           if (pos.clientX < leftBound) overflow = pos.clientX - leftBound;       // negative → pan left
           else if (pos.clientX > rightBound) overflow = pos.clientX - rightBound; // positive → pan right
         }
@@ -823,8 +825,7 @@ export function useSpectrogramInteraction({
     const onWindowMouseUp = () => {
       if (isAnyDragActiveRef.current || isFilterDragActiveRef.current) handleMouseUpRef.current();
     };
-    window.addEventListener('mouseup', onWindowMouseUp);
-    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+    return addWindowListener('mouseup', onWindowMouseUp);
   }, []);
 
   return {

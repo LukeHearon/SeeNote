@@ -1,6 +1,8 @@
 import type { RefObject } from 'react';
 import NeuronPalette from '../NeuronPalette';
 import BuzzdetectPanel from '../BuzzdetectPanel';
+import BuzzdetectGraphSettings from './BuzzdetectGraphSettings';
+import { pickedNeuronsIn } from '../../utils/buzzdetectSubset';
 import type { BuzzdetectApi } from '../../hooks/useBuzzdetect';
 import type { SubsetTimelineApi } from '../../hooks/useSubsetTimeline';
 import type { SpectrogramHandle } from '../Spectrogram';
@@ -21,9 +23,11 @@ interface PaletteProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onRefresh: () => void;
+  /** The graph settings are in the results panel's popout; leave them out of the palette. */
+  settingsAway?: boolean;
 }
 
-export function BuzzdetectNeuronPalette({ buzzdetect: b, subset, toolColors, collapsed, onToggleCollapsed, onRefresh }: PaletteProps) {
+export function BuzzdetectNeuronPalette({ buzzdetect: b, subset, toolColors, collapsed, onToggleCollapsed, onRefresh, settingsAway }: PaletteProps) {
   return (
     <NeuronPalette
       data={b.buzzdetectData}
@@ -62,10 +66,39 @@ export function BuzzdetectNeuronPalette({ buzzdetect: b, subset, toolColors, col
       subsetStats={subset.subsetStats}
       settingsOpen={b.buzzdetectSettingsOpen}
       onSettingsOpenChange={b.setBuzzdetectSettingsOpen}
+      settingsAway={settingsAway}
       onSeriesModeChange={b.setBuzzdetectSeriesMode}
       onBinWidthOverrideChange={b.setBuzzdetectBinWidthOverride}
       onYAxisOverrideChange={b.setBuzzdetectYAxisOverride}
       onMinDetectionRateChange={b.setBuzzdetectMinDetectionRate}
+      onSubsetBufferChange={b.setBuzzdetectSubsetBuffer}
+    />
+  );
+}
+
+/** The graph-wide settings on their own, for the results panel's popout. */
+export function BuzzdetectSettingsBlock({ buzzdetect: b, subset }: { buzzdetect: BuzzdetectApi; subset: SubsetTimelineApi }) {
+  const data = b.buzzdetectData;
+  if (!data) return null;
+  return (
+    <BuzzdetectGraphSettings
+      data={data}
+      seriesMode={b.buzzdetectSeriesMode}
+      binWidthOverride={b.buzzdetectBinWidthOverride}
+      autoBinWidth={b.buzzdetectAutoBinWidth}
+      autoYRange={b.buzzdetectAutoYRange}
+      yAxisOverride={b.buzzdetectYAxisOverride}
+      minDetectionRate={b.buzzdetectMinDetectionRate}
+      subsetNeurons={b.buzzdetectSubsetNeurons}
+      cuttingNeurons={pickedNeuronsIn(b.buzzdetectSubsetThresholds, data.neurons)}
+      subsetBuffer={b.buzzdetectSubsetBuffer}
+      subsetStats={subset.subsetStats}
+      className="flex-none max-h-[50%] overflow-y-auto px-2 pt-2 pb-2 space-y-2 border-b border-slate-700 bg-slate-800/40"
+      onSeriesModeChange={b.setBuzzdetectSeriesMode}
+      onBinWidthOverrideChange={b.setBuzzdetectBinWidthOverride}
+      onYAxisOverrideChange={b.setBuzzdetectYAxisOverride}
+      onMinDetectionRateChange={b.setBuzzdetectMinDetectionRate}
+      onSubsetThresholdChange={b.handleBuzzdetectSubsetThresholdChange}
       onSubsetBufferChange={b.setBuzzdetectSubsetBuffer}
     />
   );
@@ -85,11 +118,13 @@ interface TrackPanelProps {
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onSeek: (time: number) => void;
+  /** Take the height the parent leaves rather than the saved panel height. */
+  fill?: boolean;
 }
 
 export function BuzzdetectTrackPanel({
   buzzdetect: b, subset, toolColors, viewportStore, currentTimeStore, selection, timeDisplayUnit,
-  trackStartDate, dateTimeFormat, spectrogramRef, onSelectionChange, onBoundAnnotationChange, onSeek,
+  trackStartDate, dateTimeFormat, spectrogramRef, onSelectionChange, onBoundAnnotationChange, onSeek, fill,
 }: TrackPanelProps) {
   return (
     <BuzzdetectPanel
@@ -115,6 +150,7 @@ export function BuzzdetectTrackPanel({
       onBaselineAdjustedChange={b.setBuzzdetectBaselineAdjusted}
       reportAutoValues={b.buzzdetectSettingsOpen}
       height={b.buzzdetectPanelHeight}
+      fill={fill}
       onAutoBinWidthChange={b.setBuzzdetectAutoBinWidth}
       onAutoYRangeChange={b.setBuzzdetectAutoYRange}
       onHeightChange={b.setBuzzdetectPanelHeight}

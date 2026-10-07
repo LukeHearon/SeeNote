@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { isMac } from '../utils/platform';
+import { addWindowListener } from '../utils/windowRegistry';
 
 export type HotkeyMod = 'mod' | 'shift' | 'alt';
 
@@ -36,9 +37,12 @@ export interface HotkeyBinding {
 
 /** Is the event target a text-entry element (`<input>`, `<textarea>`, `<select>`, contenteditable)? */
 export function isEditableTarget(t: EventTarget | null): boolean {
-  if (!(t instanceof HTMLElement)) return false;
-  if (t.isContentEditable) return true;
-  const tag = t.tagName;
+  // Duck-typed rather than `instanceof HTMLElement`: a popped-out panel's
+  // elements belong to another window's realm, so the check would fail for them.
+  const el = t as HTMLElement | null;
+  if (!el || el.nodeType !== 1) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
@@ -100,7 +104,6 @@ export function useHotkeys(bindings: HotkeyBinding[], enabled: boolean = true): 
         return;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    return addWindowListener('keydown', handler);
   }, [enabled]);
 }

@@ -15,6 +15,7 @@ import {
   type Rect,
   type Viewport,
 } from '../utils/videoZoom';
+import { addWindowListener } from '../utils/windowRegistry';
 
 interface VideoZoomLayerProps {
   viewport: Viewport;
@@ -77,8 +78,7 @@ export default function VideoZoomLayer({
         setExpandedAdjust(null);
       }
     };
-    window.addEventListener('pointerdown', handler);
-    return () => window.removeEventListener('pointerdown', handler);
+    return addWindowListener('pointerdown', handler);
   }, [expandedAdjust]);
 
   // Track container height to detect minimap/button overlap.
@@ -173,8 +173,7 @@ export default function VideoZoomLayer({
         setMarquee(null);
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    return addWindowListener('keydown', handler);
   }, [!!marquee]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Minimap viewfinder ────────────────────────────────────────────────

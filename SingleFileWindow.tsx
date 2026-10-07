@@ -6,8 +6,9 @@ import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
 import DebugConsole, { type DebugLog } from './components/DebugConsole';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import TransportToolbar from './components/TransportToolbar';
-import VideoSection from './components/VideoSection';
-import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
+import TrackColumn from './components/TrackColumn';
+import { usePopouts } from './hooks/usePopouts';
+import { BuzzdetectNeuronPalette, BuzzdetectSettingsBlock, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import SidebarStack from './components/SidebarStack';
 import MessageDialog from './components/MessageDialog';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
@@ -165,6 +166,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const { bumpCacheVersion } = useChunkCacheVersion(chunkCacheRef);
 
   const spectrogramRef = useRef<SpectrogramHandle>(null);
+  const popouts = usePopouts();
 
   // The spectrogram's live time→pixel transform — read by the arrow keys for
   // their per-pixel fine moves. See AnnotationWindow for why it's a ref store.
@@ -344,6 +346,11 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     handlers: NO_PROJECT_LIVE_HANDLERS,
   });
 
+  // Where the view's left edge sits, for a spectrogram that a pop-out or pop-in
+  // is about to remount in a box of another width.
+  const { scrollLeft: viewLeft, pixelsPerSecond: viewPps } = viewportStoreRef.current.get();
+  const leftEdgeTime = viewPps > 0 ? viewLeft / viewPps : 0;
+
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
       <header className="flex-none h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4 justify-between select-none z-50 relative">
@@ -429,6 +436,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                     collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
                     onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
                     onRefresh={refreshBuzzdetect}
+                    settingsAway={buzzdetectEnabled && popouts.isPopped('buzzdetect')}
                   />
                 ),
               }]}
@@ -442,15 +450,15 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
           </div>
         )}
 
-        <div className="flex-1 flex flex-col relative overflow-hidden">
-          {!isAudioTrack && (
-            <VideoSection
-              collapsed={videoCollapsed}
-              splitRatio={splitRatio}
-              collapsedBarPx={VIDEO_COLLAPSED_BAR_PX}
-              onExpand={() => setVideoCollapsed(false)}
-              onSplitDrag={handleSplitDrag}
-              pane={{
+        <TrackColumn
+          popouts={popouts}
+          video={isAudioTrack ? null : {
+              collapsed: videoCollapsed,
+              splitRatio,
+              collapsedBarPx: VIDEO_COLLAPSED_BAR_PX,
+              onExpand: () => setVideoCollapsed(false),
+              onSplitDrag: handleSplitDrag,
+              pane: {
                 frameSource: frameSourceRef.current,
                 frameSourceVersion,
                 frameSourceDecodeError,
@@ -469,17 +477,14 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 contrast: videoContrast,
                 onBrightnessChange: setVideoBrightness,
                 onContrastChange: setVideoContrast,
-              }}
-            />
-          )}
-
-          <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col">
-            {showSettings && (
-              <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
-              </div>
-            )}
-
+              },
+          }}
+          spectrogramSettings={{
+            open: showSettings,
+            onToggle: () => setShowSettings(s => !s),
+            panel: <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />,
+          }}
+          toolbar={
             <TransportToolbar
               transport={transport}
               filter={filter}
@@ -499,8 +504,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               timeDisplayUnit={timeDisplayUnit}
               timeline={timeline}
             />
-
-            <div className="flex-1 relative overflow-hidden">
+          }
+          spectrogram={
               <Spectrogram
                 ref={spectrogramRef}
                 chunkCache={chunkCacheRef.current}
@@ -529,6 +534,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
                 onViewportChange={v => viewportStoreRef.current.set(v)}
+                initialLeftEdgeTime={leftEdgeTime}
                 filterToolActive={filterToolActive}
                 bandPassFilter={bandPassFilter}
                 onBandPassFilterChange={setBandPassFilter}
@@ -543,10 +549,14 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 onBindHotkey={() => {}}
                 onListenExample={() => {}}
               />
-            </div>
-
-            {buzzdetectFile !== null && buzzdetectEnabled && (
+          }
+          buzzdetect={buzzdetectFile !== null && buzzdetectEnabled ? {
+            settingsOpen: buzzdetect.buzzdetectSettingsOpen,
+            onToggleSettings: () => buzzdetect.setBuzzdetectSettingsOpen(v => !v),
+            settings: <BuzzdetectSettingsBlock buzzdetect={buzzdetect} subset={subset} />,
+            panel: fill => (
               <BuzzdetectTrackPanel
+                fill={fill}
                 buzzdetect={buzzdetect}
                 subset={subset}
                 toolColors={NO_TOOL_COLORS}
@@ -559,17 +569,16 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onSeek={seek}
               />
-            )}
-
-            {!videoSrc && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-slate-600 text-center">
-                  <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
-                </div>
+            ),
+          } : null}
+          overlay={!videoSrc && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="text-slate-600 text-center">
+                <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
+        />
       </div>
       <TooltipLayer />
       <HelpHighlightHost />

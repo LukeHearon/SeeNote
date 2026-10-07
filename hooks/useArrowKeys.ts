@@ -4,6 +4,7 @@ import { clamp } from '../utils/helpers';
 import { rampVelocityPx, scrubTarget } from '../utils/arrowScrub';
 import { ExtendGesture, extendGestureFor, spanBetween } from '../utils/selectionExtend';
 import { useHotkeys } from './useHotkeys';
+import { addWindowListener } from '../utils/windowRegistry';
 
 /** Idle time after the last arrow movement before the gesture counts as finished. */
 const SETTLE_MS = 400;
@@ -245,13 +246,13 @@ export function useArrowKeys({
     };
     // Losing focus mid-hold gives no keyup at all, so land the gesture here.
     const onBlur = () => { stopRamp(); settleNow(); };
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    window.addEventListener('mousedown', stopRamp);
+    const removers = [
+      addWindowListener('keyup', onKeyUp),
+      addWindowListener('blur', onBlur),
+      addWindowListener('mousedown', stopRamp),
+    ];
     return () => {
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-      window.removeEventListener('mousedown', stopRamp);
+      removers.forEach(r => r());
       stopRamp();
       settleNow();
     };

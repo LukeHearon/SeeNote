@@ -56,8 +56,9 @@ import ToolModals from './components/ToolModals';
 import FindLabelPanel from './components/FindLabelPanel';
 import TransportToolbar from './components/TransportToolbar';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
-import VideoSection from './components/VideoSection';
-import { BuzzdetectNeuronPalette, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
+import TrackColumn from './components/TrackColumn';
+import { usePopouts } from './hooks/usePopouts';
+import { BuzzdetectNeuronPalette, BuzzdetectSettingsBlock, BuzzdetectTrackPanel } from './components/buzzdetect/BuzzdetectViews';
 import MessageDialog from './components/MessageDialog';
 import ConfirmDialog from './components/ConfirmDialog';
 import ProjectHeader from './components/ProjectHeader';
@@ -179,6 +180,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Ref to Spectrogram imperative handle (prev/next annotation navigation)
   const spectrogramRef = useRef<SpectrogramHandle>(null);
+  const popouts = usePopouts();
 
   // Panel sizing + drag handling (video/spectrogram split, left-panel height &
   // width) plus the H-held hide-labels toggle. See hooks/usePanelLayout.ts.
@@ -1356,6 +1358,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     },
   });
 
+  // Where the view's left edge sits, for a spectrogram that a pop-out or pop-in
+  // is about to remount in a box of another width.
+  const { scrollLeft: viewLeft, pixelsPerSecond: viewPps } = viewportStoreRef.current.get();
+  const leftEdgeTime = viewPps > 0 ? viewLeft / viewPps : 0;
+
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
       <ProjectHeader
@@ -1527,6 +1534,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   collapsed={sidebarSections.isCollapsed(SIDEBAR_SECTION_NEURONS)}
                   onToggleCollapsed={() => sidebarSections.toggleCollapsed(SIDEBAR_SECTION_NEURONS)}
                   onRefresh={refreshBuzzdetect}
+                  settingsAway={buzzdetectEnabled && popouts.isPopped('buzzdetect')}
                 />
               ),
             });
@@ -1550,20 +1558,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
           );
         })()}
 
-        {/* Right: video + spectrogram stacked */}
-        <div className="flex-1 flex flex-col relative overflow-hidden">
-
-        {/* Video Pane — only created for video tracks; audio-only tracks route
-            playback through AudioEngine and never use the <video> element. */}
-        {!isAudioTrack && (
-          <VideoSection
-            collapsed={videoCollapsed}
-            splitRatio={splitRatio}
-            collapsedBarPx={VIDEO_COLLAPSED_BAR_PX}
-            onExpand={() => setVideoCollapsed(false)}
-            onSplitDrag={handleSplitDrag}
-            helpTarget="video-panel"
-            pane={{
+        {/* Right: video, toolbar, spectrogram and buzzdetect results. Video,
+            spectrogram and results can each be popped out into their own window. */}
+        <TrackColumn
+          popouts={popouts}
+          video={isAudioTrack ? null : {
+            collapsed: videoCollapsed,
+            splitRatio,
+            collapsedBarPx: VIDEO_COLLAPSED_BAR_PX,
+            onExpand: () => setVideoCollapsed(false),
+            onSplitDrag: handleSplitDrag,
+            pane: {
               frameSource: frameSourceRef.current,
               frameSourceVersion,
               frameSourceDecodeError,
@@ -1582,20 +1587,14 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               contrast: videoContrast,
               onBrightnessChange: setVideoBrightness,
               onContrastChange: setVideoContrast,
-            }}
-          />
-        )}
-
-        {/* Spectrogram Pane */}
-        <div className="relative flex-1 min-h-0 bg-slate-900 border-t border-slate-700 flex flex-col" data-help-target="spectrogram-canvas">
-
-             {/* Settings Panel (Absolute, relative to spectrogram pane) */}
-             {showSettings && (
-                <div className="absolute top-10 right-4 z-50 bg-slate-800 border border-slate-600 shadow-xl rounded-lg w-72 max-h-[calc(100%-4rem)] overflow-y-auto custom-scrollbar flex flex-col">
-                    <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />
-                </div>
-             )}
-
+            },
+          }}
+          spectrogramSettings={{
+            open: showSettings,
+            onToggle: () => setShowSettings(s => !s),
+            panel: <SpectrogramSettingsPanel settings={settings} onChange={patch => setSettings(s => ({ ...s, ...patch }))} />,
+          }}
+          toolbar={
              <TransportToolbar
                transport={transport}
                filter={filter}
@@ -1618,8 +1617,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                dateTimeFormat={dateTimeFormat}
                timeline={timeline}
              />
-
-             <div className="flex-1 relative overflow-hidden">
+          }
+          spectrogram={
+             <>
              <Spectrogram
                 ref={spectrogramRef}
                 chunkCache={chunkCacheRef.current}
@@ -1653,6 +1653,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
                 topTool={activationStack.topOf(['annotationTool', 'filterTool']) as 'annotationTool' | 'filterTool' | null}
                 onViewportChange={publishViewport}
+                initialLeftEdgeTime={leftEdgeTime}
                 videoMode={effectiveVideoMode}
                 isAudioTrack={isAudioTrack}
                 playheadLocked={playheadLocked}
@@ -1675,13 +1676,18 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  </span>
                </div>
              )}
-             </div>
-
-             {/* Same gate as the Neurons palette (and its toggle button): the
-                 project has to name a buzzdetect directory for there to be
-                 results at all, whatever the persisted open/closed flag says. */}
-             {project.buzzdetectDirectoryAbs !== null && buzzdetectEnabled && (
+             </>
+          }
+          // Same gate as the Neurons palette (and its toggle button): the
+          // project has to name a buzzdetect directory for there to be
+          // results at all, whatever the persisted open/closed flag says.
+          buzzdetect={project.buzzdetectDirectoryAbs !== null && buzzdetectEnabled ? {
+            settingsOpen: buzzdetect.buzzdetectSettingsOpen,
+            onToggleSettings: () => buzzdetect.setBuzzdetectSettingsOpen(v => !v),
+            settings: <BuzzdetectSettingsBlock buzzdetect={buzzdetect} subset={subset} />,
+            panel: fill => (
                <BuzzdetectTrackPanel
+                 fill={fill}
                  buzzdetect={buzzdetect}
                  subset={subset}
                  toolColors={toolColors}
@@ -1696,18 +1702,17 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                  onBoundAnnotationChange={setBoundAnnotationId}
                  onSeek={seek}
                />
-             )}
-
-             {!videoSrc && (
+            ),
+          } : null}
+          overlay={!videoSrc && (
                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                      <div className="text-slate-600 text-center">
                          <p className="text-lg font-medium">{annotationWindow.noMediaTitle}</p>
                          <p className="text-sm">{annotationWindow.noMediaHint}</p>
                      </div>
                  </div>
-             )}
-        </div>
-        </div>{/* end right column */}
+          )}
+        />
 
         {/* Find & Rename dock. Summoned by {mod}+F or the Labels palette's
             magnifying glass, and gone the moment it's closed — nothing brings it
