@@ -9,6 +9,8 @@ interface SelectionControlParams {
   activationStack: ActivationStackApi;
   frameSourceRef: MutableRefObject<VideoFrameSource | null>;
   clearSelectionEnd: () => void;
+  /** Bound a play already in flight at the new selection's end. */
+  bindSelectionEnd: (s: Selection) => void;
   /** Display-time selection → source time (identity without a subset). */
   selectionToSource: (s: Selection) => Selection;
 }
@@ -20,7 +22,7 @@ interface SelectionControlParams {
  * in step without each caller having to remember them.
  */
 export function useSelectionControl({
-  setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource,
+  setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource,
 }: SelectionControlParams) {
   return useCallback((s: Selection | null) => {
     setSelection(s);
@@ -39,6 +41,7 @@ export function useSelectionControl({
       // selection converts first.
       const src = selectionToSource(s);
       frameSourceRef.current?.pinSelectionRange(src.start, src.end);
+      bindSelectionEnd(s);
     } else {
       activationStack.remove('selection');
       frameSourceRef.current?.clearPinnedRange();
@@ -46,5 +49,5 @@ export function useSelectionControl({
       // playback continues through to EOF instead of stopping at the stale end.
       clearSelectionEnd();
     }
-  }, [setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource]);
+  }, [setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource]);
 }

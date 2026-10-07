@@ -462,6 +462,18 @@ export function usePlaybackTransport({
     activeTransport()?.clearEndSec();
   }, [isPlaying, activeTransport]);
 
+  // Counterpart to clearSelectionEnd for a selection that appears mid-playback
+  // (e.g. a buzzdetect frame click seeks first, then selects): bound the running
+  // play at its end, restarting only if the engine had already scheduled past it.
+  // Leaves playback alone when the playhead is outside the selection.
+  const bindSelectionEnd = useCallback((sel: Selection) => {
+    const transport = activeTransport();
+    if (!transport?.isActive) return;
+    const t = transport.getMediaTime();
+    if (t < sel.start || t >= sel.end) return;
+    if (!transport.setEndSec(sel.end)) transport.play(transport.getResumeTime(), sel.end);
+  }, [activeTransport]);
+
   // Keep both transports' gain in sync with the volume slider and mute button.
   // VideoElementEngine clamps to the element's 0–1 range (no boost above unity).
   useEffect(() => {
@@ -522,6 +534,7 @@ export function usePlaybackTransport({
     engineRef,
     videoEngineRef,
     seekRef,
+    bindSelectionEnd,
     playTokenRef,
     currentTimeRef,
     currentTimeStoreRef,

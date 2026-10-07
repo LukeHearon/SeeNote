@@ -199,7 +199,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     playheadLocked,
     timeDisplayUnit,
     engineRef, currentTimeRef, currentTimeStoreRef,
-    togglePlay, seek, clearSelectionEnd, getMediaTime, attachVideoElement,
+    togglePlay, seek, clearSelectionEnd, bindSelectionEnd, getMediaTime, attachVideoElement,
   } = transport;
   const getFrameTime = useSourceFrameTime(timelineRef, getMediaTime);
 
@@ -259,7 +259,7 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   }, [filePath]);
 
   const handleSelectionChange = useSelectionControl({
-    setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource,
+    setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource,
   });
 
   // Hand the engine the subset's axis and bring the view onto it — see

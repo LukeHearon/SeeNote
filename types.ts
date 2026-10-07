@@ -120,6 +120,12 @@ export interface PlaybackTransport {
    * now-stale endSec. No-op when not playing or when no end was set.
    */
   clearEndSec(): void;
+  /**
+   * Bound the in-flight play at `endSec` (a selection created mid-playback).
+   * Returns false when the stop can't be applied without a restart — audio past
+   * `endSec` is already scheduled — so the caller re-plays from the playhead.
+   */
+  setEndSec(endSec: number): boolean;
   /** Move the playhead to `sec` without changing the playing state. */
   seek(sec: number): void;
   setGain(gain: number): void;

@@ -135,6 +135,12 @@ export class VideoElementEngine implements PlaybackTransport {
     this.endSec = null;
   }
 
+  /** Bound the running play at `endSec`; the rAF loop in _startRaf() enforces it. */
+  setEndSec(endSec: number): boolean {
+    this.endSec = endSec;
+    return true;
+  }
+
   /** Play from `startSec`; if `endSec` is given, stop and fire onEnded there. */
   play(startSec: number, endSec?: number): void {
     const el = this.el;

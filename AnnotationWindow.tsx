@@ -499,6 +499,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     togglePlay,
     seek,
     clearSelectionEnd,
+    bindSelectionEnd,
     getMediaTime,
     attachVideoElement,
   } = transport;
@@ -856,7 +857,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const dateTimeFormat = project.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT;
 
   const handleSelectionChange = useSelectionControl({
-    setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, selectionToSource,
+    setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource,
   });
 
   // Entering or leaving a folder ends a shuffle: the queue was scoped to the

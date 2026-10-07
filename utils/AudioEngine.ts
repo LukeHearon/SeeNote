@@ -622,6 +622,18 @@ export class AudioEngine implements PlaybackTransport {
     this._prefetchLoop(this.playId, tail.ctxEnd);
   }
 
+  /**
+   * Bound the in-flight play at `endSec`. The prefetch loop re-reads this.endSec
+   * every chunk, so assigning is enough while nothing past `endSec` has been
+   * scheduled. Once it has (or an earlier stop is already baked into the graph),
+   * return false and let the caller restart the play bounded.
+   */
+  setEndSec(endSec: number): boolean {
+    if (this.endBoundCommitted || this.schedCursor >= endSec) return false;
+    this.endSec = endSec;
+    return true;
+  }
+
   /** Update the playback start position without resuming. Caller calls play() to resume. */
   seek(sec: number): void {
     if (this.disposed) return;
