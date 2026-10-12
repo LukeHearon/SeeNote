@@ -1118,6 +1118,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
       {/* Layer 2: annotation HTML divs and selection handles */}
       <div className="absolute top-0 left-0 w-full h-full">
          <AnnotationOverlay
+           ident={ident}
            layeredAnnotations={layeredAnnotations}
            annotations={annotations}
            selectedAnnotationId={selectedAnnotationId}

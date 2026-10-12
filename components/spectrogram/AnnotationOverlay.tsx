@@ -13,6 +13,7 @@ import type { ScrollSyncHub } from '../../utils/scrollSyncHub';
 import { useScrollTransformLayer } from '../../hooks/useScrollTransformLayer';
 
 interface AnnotationOverlayProps {
+  ident: string | null;
   layeredAnnotations: AnnotationWithLayer[];
   annotations: Annotation[];
   selectedAnnotationId: string | null;
@@ -170,6 +171,7 @@ const buttonRightFor = (
 // selection, zoom — plus a coarse cull window (below) that only advances once
 // per half-viewport of scrolling.
 const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
+  ident,
   layeredAnnotations,
   annotations,
   selectedAnnotationId,
@@ -363,7 +365,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         label: copy.contextCopyAnnotation,
         icon: <Copy size={12} />,
         onSelect: () => {
-          navigator.clipboard.writeText(`${ann.text} (${ann.start}, ${ann.end})`);
+          navigator.clipboard.writeText(`${ident ? `${ident} - ` : ''}${ann.text} (${ann.start}, ${ann.end})`);
         },
       },
     ];
