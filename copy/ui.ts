@@ -479,6 +479,7 @@ export const keyboardShortcutsView = {
   get scNextTrack() { return getOverride('ui.keyboardShortcutsView.scNextTrack') ?? "Next track"; },
   get scReadyAnnotationTool() { return getOverride('ui.keyboardShortcutsView.scReadyAnnotationTool') ?? "Ready annotation tool"; },
   get scSelectionModeUnreadyTools() { return getOverride('ui.keyboardShortcutsView.scSelectionModeUnreadyTools') ?? "Selection mode (unready tools)"; },
+  get scToggleBuzzdetectResults() { return getOverride('ui.keyboardShortcutsView.scToggleBuzzdetectResults') ?? "Toggle buzzdetect results"; },
   get scSubsetTrackToBuzzdetectDetections() { return getOverride('ui.keyboardShortcutsView.scSubsetTrackToBuzzdetectDetections') ?? "Subset track to buzzdetect detections"; },
   get scPlayStopExampleClipFor() { return getOverride('ui.keyboardShortcutsView.scPlayStopExampleClipFor') ?? "Play / stop example clip for active tool"; },
   get scReadyAudioFilterTool() { return getOverride('ui.keyboardShortcutsView.scReadyAudioFilterTool') ?? "Ready audio filter tool"; },

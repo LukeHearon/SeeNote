@@ -20,7 +20,7 @@ export const tooltips = {
   get restoreSpeed() { return getOverride('tooltips.restoreSpeed') ?? "Toggle playback rate (R)"; },
   get setSpeed() { return getOverride('tooltips.setSpeed') ?? "Click to set playback speed"; },
   get filterStrength() { return getOverride('tooltips.filterStrength') ?? "Adjust filter strength (F to toggle)"; },
-  get buzzdetectPanel() { return getOverride('tooltips.buzzdetectPanel') ?? "buzzdetect activations panel"; },
+  get buzzdetectPanel() { return getOverride('tooltips.buzzdetectPanel') ?? "buzzdetect activations panel (B)"; },
   get spectrogramSettings() { return getOverride('tooltips.spectrogramSettings') ?? "Spectrogram Settings"; },
   get resetFreqMin() { return getOverride('tooltips.resetFreqMin') ?? "Reset to 0 Hz"; },
   get resetFreqMax() { return getOverride('tooltips.resetFreqMax') ?? "Reset to nyquist limit"; },

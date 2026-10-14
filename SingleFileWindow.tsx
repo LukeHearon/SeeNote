@@ -312,6 +312,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     { key: 'ArrowRight', mods: ['alt'], handler: () => spectrogramRef.current?.goToNextAnnotation() },
     // Shift+S: subset the track to the picked neurons' detections, and back.
     { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
+    // B: show/hide the buzzdetect panel (only once a results file is loaded).
+    { key: 'b', handler: () => { if (buzzdetectFile !== null) setBuzzdetectEnabled(v => !v); } },
     { key: 'e', mods: ['mod', 'shift'], handler: () => handleExportSelection() },
     escapeUnwindBinding(activationStack, {
       selection: () => { handleSelectionChange(null); setBoundAnnotationId(null); },

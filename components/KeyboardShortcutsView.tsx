@@ -64,6 +64,7 @@ const GROUPS: Group[] = [
       { codes: ['Digit0','Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'], display: '0–9', get label() { return copy.scReadyAnnotationTool; } },
       { codes: ['KeyS'], display: 'S', get label() { return copy.scSelectionModeUnreadyTools; } },
       { codes: ['KeyS'], display: 'Shift+S', get label() { return copy.scSubsetTrackToBuzzdetectDetections; } },
+      { codes: ['KeyB'], display: 'B', get label() { return copy.scToggleBuzzdetectResults; } },
       { codes: ['KeyE'], display: 'E', get label() { return copy.scPlayStopExampleClipFor; } },
       { codes: ['KeyF'], display: 'Shift+F', get label() { return copy.scReadyAudioFilterTool; } },
       { codes: ['KeyF'], display: 'F', get label() { return copy.scToggleAudioFiltering; } },

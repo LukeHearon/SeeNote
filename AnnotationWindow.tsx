@@ -1253,6 +1253,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // back. No-op until a neuron is ticked in the buzzdetect panel — there'd
       // be nothing to subset by.
       { key: 's', mods: ['shift'], handler: toggleBuzzdetectSubset },
+      // `B`: show/hide the buzzdetect panel. Only when the project has a
+      // buzzdetect directory — otherwise there's no panel to toggle.
+      { key: 'b', handler: () => { if (project.buzzdetectDirectoryAbs !== null) buzzdetect.setBuzzdetectEnabled(v => !v); } },
       { key: 'Enter', handler: deselectAnnotation },
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
