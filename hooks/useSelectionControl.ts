@@ -1,4 +1,5 @@
-import { useCallback, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
+import { addWindowListener } from '../utils/windowRegistry';
 import type { Selection } from '../types';
 import type { VideoFrameSource } from '../utils/VideoFrameSource';
 import type { ActivationStackApi } from './useActivationStack';
@@ -24,6 +25,35 @@ interface SelectionControlParams {
 export function useSelectionControl({
   setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource,
 }: SelectionControlParams) {
+  // A drag (spectrogram, resize handle, bound annotation, buzzdetect units)
+  // reports the selection on every mousemove. Binding each of those to the
+  // running play restarts the engine many times a second — a stuttering
+  // playhead and torn audio — so while a button is held the bind waits and
+  // applies once, to the final selection, on release. Capture-phase down/up so
+  // the held flag is current before any component handler runs; the flush is
+  // bubble-phase so a release handler that commits the span (commitSpan) gets
+  // to bind it directly first.
+  const pointerHeldRef = useRef(false);
+  const bindPendingRef = useRef(false);
+  const bindSelectionEndRef = useRef(bindSelectionEnd);
+  bindSelectionEndRef.current = bindSelectionEnd;
+  useEffect(() => {
+    const flush = () => {
+      pointerHeldRef.current = false;
+      if (!bindPendingRef.current) return;
+      bindPendingRef.current = false;
+      if (selectionRef.current) bindSelectionEndRef.current(selectionRef.current);
+    };
+    const removers = [
+      addWindowListener('mousedown', () => { pointerHeldRef.current = true; }, { capture: true }),
+      addWindowListener('mouseup', () => { pointerHeldRef.current = false; }, { capture: true }),
+      addWindowListener('mouseup', flush),
+      // A release outside every window never reaches us; don't stay held.
+      addWindowListener('blur', flush),
+    ];
+    return () => removers.forEach(r => r());
+  }, [selectionRef]);
+
   return useCallback((s: Selection | null) => {
     setSelection(s);
     // Sync synchronously, not just via the state-mirroring effect: a caller
@@ -41,8 +71,14 @@ export function useSelectionControl({
       // selection converts first.
       const src = selectionToSource(s);
       frameSourceRef.current?.pinSelectionRange(src.start, src.end);
-      bindSelectionEnd(s);
+      if (pointerHeldRef.current) {
+        bindPendingRef.current = true;
+      } else {
+        bindPendingRef.current = false;
+        bindSelectionEnd(s);
+      }
     } else {
+      bindPendingRef.current = false;
       activationStack.remove('selection');
       frameSourceRef.current?.clearPinnedRange();
       // The selection was driving playback's bounded stop — drop it so

@@ -629,6 +629,8 @@ export class AudioEngine implements PlaybackTransport {
    * return false and let the caller restart the play bounded.
    */
   setEndSec(endSec: number): boolean {
+    // Already bounded here (e.g. a restart that carried this end) — nothing to do.
+    if (this.endSec === endSec) return true;
     if (this.endBoundCommitted || this.schedCursor >= endSec) return false;
     this.endSec = endSec;
     return true;
