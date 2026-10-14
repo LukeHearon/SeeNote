@@ -47,7 +47,7 @@ export type LiveControlId =
 // reader can work out what a control does by driving it, project or no project.
 // ---------------------------------------------------------------------------
 
-const DEMO_FILE_PANEL = { fileFilter: 'all' as const, buzzdetectFilter: 'all' as const, hasBuzzdetect: true, shuffleMode: false, anyExpanded: false };
+const DEMO_FILE_PANEL = { fileFilter: 'all' as const, buzzdetectFilter: 'all' as const, hasBuzzdetect: true, shuffleMode: false, anyExpanded: false, expandAction: 'folders' as const };
 
 // Stand-in log lines so the console shows its shape with no project open. The
 // real ones come from playback and video-decode diagnostics.
@@ -330,10 +330,11 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
           <FilePanelHeaderButtons
             shuffleMode={fp.shuffleMode}
             anyExpanded={fp.anyExpanded}
+            expandAction={fp.expandAction}
             fileFilter={fp.fileFilter}
             showBuzzdetect={fp.hasBuzzdetect}
             buzzdetectFilter={fp.buzzdetectFilter}
-            onToggleExpandCollapse={() => act(() => client.call('toggleFileExpandCollapse'), () => setFp({ anyExpanded: !fp.anyExpanded }))}
+            onToggleExpandCollapse={() => act(() => client.call('toggleFileExpandCollapse'), () => setFp(fp.expandAction === 'folders' ? { anyExpanded: true, expandAction: 'files' } : fp.expandAction === 'files' ? { expandAction: 'collapse' } : { anyExpanded: false, expandAction: 'folders' }))}
             onToggleFileFilter={() => act(() => client.call('toggleFileFilter'), () => setFp({ fileFilter: nextFileFilter(fp.fileFilter) }))}
             onToggleBuzzdetectFilter={() => act(() => client.call('toggleBuzzdetectFilter'), () => setFp({ buzzdetectFilter: nextFileFilter(fp.buzzdetectFilter) }))}
           />

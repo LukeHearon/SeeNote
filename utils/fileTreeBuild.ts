@@ -113,6 +113,40 @@ export function getAllDirPaths(nodes: TreeNode[]): string[] {
   return paths;
 }
 
+/** What the next click of the expand/collapse button does. */
+export type ExpandAction = 'folders' | 'files' | 'collapse';
+
+/** Folders that contain other folders — opening only these lists every folder without listing the lowest folders' files. */
+function getBranchDirPaths(nodes: TreeNode[]): string[] {
+  const paths: string[] = [];
+  const walk = (list: TreeNode[]) => {
+    for (const n of list) {
+      if (!n.isDir) continue;
+      if (n.children.some(c => c.isDir)) paths.push(n.path);
+      walk(n.children);
+    }
+  };
+  walk(nodes);
+  return paths;
+}
+
+/**
+ * The expand/collapse button cycles: not every folder shown → open down to the
+ * lowest folders (leaving those closed); every folder shown → open them too, so
+ * all files show; everything open → collapse.
+ */
+export function getExpandAction(nodes: TreeNode[], expanded: ReadonlySet<string>): ExpandAction {
+  const all = getAllDirPaths(nodes);
+  if (all.length > 0 && all.every(p => expanded.has(p))) return 'collapse';
+  return getBranchDirPaths(nodes).every(p => expanded.has(p)) ? 'files' : 'folders';
+}
+
+/** The open-folder set after one click of the expand/collapse button. */
+export function applyExpandAction(nodes: TreeNode[], action: ExpandAction): Set<string> {
+  if (action === 'collapse') return new Set();
+  return new Set(action === 'files' ? getAllDirPaths(nodes) : getBranchDirPaths(nodes));
+}
+
 /** Folder paths (as buildTree names them) between `root` and `track`. */
 export function getAncestorPaths(track: string | null, root: string | null): Set<string> {
   const paths = new Set<string>();

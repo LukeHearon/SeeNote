@@ -1160,9 +1160,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // up so the help guide's live copy of the header buttons can show and drive it.
   const fileTreeHeaderRef = useRef<{ toggleExpandCollapse: () => void } | null>(null);
   const [fileTreeAnyExpanded, setFileTreeAnyExpanded] = useState(false);
-  const handleFileTreeHeaderState = useCallback((state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => {
+  const [fileTreeExpandAction, setFileTreeExpandAction] = useState<'folders' | 'files' | 'collapse'>('folders');
+  const handleFileTreeHeaderState = useCallback((state: { anyExpanded: boolean; expandAction: 'folders' | 'files' | 'collapse'; toggleExpandCollapse: () => void }) => {
     fileTreeHeaderRef.current = state;
     setFileTreeAnyExpanded(state.anyExpanded);
+    setFileTreeExpandAction(state.expandAction);
   }, []);
 
   const handleRevealInFinder = useCallback((path: string) => {
@@ -1337,6 +1339,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         hasBuzzdetect: project.buzzdetectDirectoryAbs !== null,
         shuffleMode,
         anyExpanded: fileTreeAnyExpanded,
+        expandAction: fileTreeExpandAction,
       },
       toolPalette: {
         tools: annotationTools,

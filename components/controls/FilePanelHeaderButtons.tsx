@@ -1,6 +1,7 @@
 import type React from 'react';
 import { Activity, FoldVertical, StickyNote, UnfoldVertical } from 'lucide-react';
 import { tooltips } from '../../copy/tooltips';
+import type { ExpandAction } from '../../utils/fileTreeBuild';
 import type { FileFilter } from '../../utils/fileFilter';
 import type { ColumnLayout } from '../../utils/fileTreeColumns';
 import { PresenceFilterButton } from './PresenceFilterButton';
@@ -12,6 +13,8 @@ export interface FilePanelHeaderButtonsProps {
   shuffleMode: boolean;
   /** Whether any folder is open, which is what the expand/collapse button flips. */
   anyExpanded: boolean;
+  /** What the next click does, which the tooltip names. */
+  expandAction: ExpandAction;
   fileFilter: FileFilter;
   /** The buzzdetect filter (and its column) only exist when the project names a buzzdetect directory. */
   showBuzzdetect: boolean;
@@ -35,6 +38,7 @@ export interface FilePanelHeaderButtonsProps {
 export function FilePanelHeaderButtons({
   shuffleMode,
   anyExpanded,
+  expandAction,
   fileFilter,
   showBuzzdetect,
   buzzdetectFilter,
@@ -52,7 +56,7 @@ export function FilePanelHeaderButtons({
     <button
       onClick={onToggleExpandCollapse}
       className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
-      data-tooltip={anyExpanded ? tooltips.collapseAll : tooltips.expandAll}
+      data-tooltip={{ folders: tooltips.expandFolders, files: tooltips.expandFiles, collapse: tooltips.collapseAll }[expandAction]}
     >
       {anyExpanded ? <FoldVertical size={13} /> : <UnfoldVertical size={13} />}
     </button>

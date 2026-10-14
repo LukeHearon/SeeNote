@@ -4,7 +4,7 @@ import type { FileFilter } from '../utils/fileFilter';
 import { totalCounts } from '../utils/fileTreeCounts';
 import { columnLayout } from '../utils/fileTreeColumns';
 import {
-  buildTree, filterUnderDir, flattenTree, getAllDirPaths, getAncestorPaths, toggleDirInSet, TreeNode,
+  applyExpandAction, buildTree, ExpandAction, filterUnderDir, flattenTree, getAncestorPaths, getExpandAction, toggleDirInSet, TreeNode,
 } from '../utils/fileTreeBuild';
 import { FilePanelHeaderButtons } from './controls/FilePanelHeaderButtons';
 import SidebarSection from './SidebarSection';
@@ -73,10 +73,10 @@ interface FileTreeProps {
   /**
    * Reports the header state the guide's live copy of these buttons needs, plus
    * the one action (expand/collapse) whose state lives inside this component.
-   * Called whenever `anyExpanded` flips; the action itself is stable and reads
+   * Called whenever `anyExpanded` or `expandAction` changes; the action itself is stable and reads
    * current state when invoked.
    */
-  onHeaderState?: (state: { anyExpanded: boolean; toggleExpandCollapse: () => void }) => void;
+  onHeaderState?: (state: { anyExpanded: boolean; expandAction: ExpandAction; toggleExpandCollapse: () => void }) => void;
 }
 
 interface ContextMenuState {
@@ -282,16 +282,17 @@ function FileTree({
   // active file's ancestors highlighted rather than expanded.
   const toggleExpandCollapse = useCallback(() => {
     cancelPendingActiveScroll();
-    setExpandedDirs(prev => (prev.size > 0 ? new Set() : new Set(getAllDirPaths(treeRef.current))));
+    setExpandedDirs(prev => applyExpandAction(treeRef.current, getExpandAction(treeRef.current, prev)));
   }, [cancelPendingActiveScroll]);
 
   const isAnyExpanded = expandedDirs.size > 0;
+  const expandAction = useMemo(() => getExpandAction(tree, expandedDirs), [tree, expandedDirs]);
 
   // Publish the header state upward for the guide's live copy of these buttons.
   useEffect(() => {
-    onHeaderState?.({ anyExpanded: isAnyExpanded, toggleExpandCollapse });
+    onHeaderState?.({ anyExpanded: isAnyExpanded, expandAction, toggleExpandCollapse });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAnyExpanded, toggleExpandCollapse]);
+  }, [isAnyExpanded, expandAction, toggleExpandCollapse]);
 
   // Rows on screen: the expanded tree, or the shuffle window around the current track.
   const treeRows = useMemo(
@@ -541,6 +542,7 @@ function FileTree({
         <FilePanelHeaderButtons
           shuffleMode={shuffleMode}
           anyExpanded={isAnyExpanded}
+          expandAction={expandAction}
           fileFilter={fileFilter}
           showBuzzdetect={showBuzzdetect}
           buzzdetectFilter={buzzdetectFilter}

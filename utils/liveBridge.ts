@@ -87,6 +87,7 @@ export interface LiveSnapshot {
     hasBuzzdetect: boolean;
     shuffleMode: boolean;
     anyExpanded: boolean;
+    expandAction: 'folders' | 'files' | 'collapse';
   } | null;
   /** Annotation tools, or null in single-file mode (no tool palette). */
   toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null } | null;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTree, filterUnderDir, flattenTree, getAllDirPaths, getAncestorPaths, toggleDirInSet } from '../utils/fileTreeBuild';
+import { applyExpandAction, getExpandAction, buildTree, filterUnderDir, flattenTree, getAllDirPaths, getAncestorPaths, toggleDirInSet } from '../utils/fileTreeBuild';
 
 const files = ['/r/a/x.mp3', '/r/a/b/y.mp3', '/r/c/w.mp3', '/r/top.mp3'];
 const build = (nonMedia: string[] = []) => buildTree('/r', files, nonMedia, new Set(['/r/a/x.mp3']), new Set(), files);
@@ -52,5 +52,20 @@ describe('flattenTree', () => {
     const open = flattenTree(tree, '/r', new Set(['/r/a']), new Set(['/r/a']), []);
     expect(open.map(r => r.key)).toEqual(['/r/a', '/r/a/x.mp3', '/r/a/b', 'nm:/r/a', 'nmi:/r/a/notes.txt', '/r/c', '/r/top.mp3']);
     expect(open[1]).toMatchObject({ depth: 1, parentPath: '/r/a' });
+  });
+});
+
+describe('expand/collapse cycle', () => {
+  const tree = () => build();
+  it('opens down to the lowest folders, then them too, then collapses', () => {
+    let open = new Set<string>();
+    expect(getExpandAction(tree(), open)).toBe('folders');
+    open = applyExpandAction(tree(), 'folders');
+    expect([...open]).toEqual(['/r/a']);
+    expect(getExpandAction(tree(), open)).toBe('files');
+    open = applyExpandAction(tree(), 'files');
+    expect(open.size).toBe(3);
+    expect(getExpandAction(tree(), open)).toBe('collapse');
+    expect(applyExpandAction(tree(), 'collapse').size).toBe(0);
   });
 });
