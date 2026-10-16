@@ -26,7 +26,9 @@ For domain terms (Track, Annotation Tool, Selection, Ident, etc.), see [`TERMS.m
 
 ## Releasing a new version
 
-`npm version <x.y.z>` then `git push --follow-tags`. This commits, tags, and syncs the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`. The GitHub Actions workflow picks up the tag and builds a draft release.
+Releases are cut from `main`, so the tag must land on `main`. Run `git branch --show-current` first. If you're on `development` or a worktree branch, run the tests, then fast-forward `main` onto it (`git checkout main && git merge --ff-only development`) before `npm version`. Merging to `main` needs the user's confirmation (see Commit workflow), so ask for it as part of the release request.
+
+Then `npm version <x.y.z>` and `git push origin main --follow-tags`. This commits, tags, and syncs the version across `package.json`, `tauri.conf.json`, and `Cargo.toml`. The GitHub Actions workflow picks up the tag and builds a draft release. Afterwards, merge `main` back into `development` so the version-bump commit isn't missing there.
 
 ## No visual verification
 
