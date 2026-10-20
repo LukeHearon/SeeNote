@@ -32,7 +32,7 @@ tokio = { version = "1", features = ["full"] }
 symphonia = { version = "0.6", features = ["mp3", "flac", "wav", "aac", "ogg", "vorbis", "isomp4", "mkv"] }
 # Opus support: Symphonia has no built-in Opus decoder. This adapter wraps
 # libopus; `bundled` statically builds libopus from vendored C source via cmake
-# (no system dependency required), mirroring the git2 vendoring approach above.
+# (no system dependency required), mirroring the git2 vendoring below.
 symphonia-adapter-libopus = { version = "0.3", features = ["bundled"] }
 rustfft = "6"
 rayon = "1"

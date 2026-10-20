@@ -3,7 +3,7 @@
 // kept chunk when no annotation lies in between.
 
 /** How close (s) the playhead must be to a stop to count as already on it. */
-export const JUMP_EPSILON = 0.05;
+const JUMP_EPSILON = 0.05;
 
 /** Merge stop times into one sorted list. */
 export function mergeStops(...lists: readonly (readonly number[])[]): number[] {

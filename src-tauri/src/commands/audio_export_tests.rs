@@ -39,8 +39,8 @@ fn exports_the_requested_range_preserving_channels() {
     assert_eq!(samples.len(), 16000 * 2);
     // First exported frame is source frame 8000 (start_sec=1.0 * sr):
     // channel 0 value is (8000*2 + 0) % 30000.
-    assert_eq!(samples[0], ((8000 * 2) % 30000) as i16);
-    assert_eq!(samples[1], ((8000 * 2 + 1) % 30000) as i16);
+    assert_eq!(samples[0], (8000 * 2) as i16);
+    assert_eq!(samples[1], (8000 * 2 + 1) as i16);
 
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_file(&out);

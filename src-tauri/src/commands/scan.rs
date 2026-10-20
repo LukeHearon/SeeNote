@@ -266,7 +266,7 @@ fn walk(root: &Path, root_key: &str, st: &mut ScanState) -> std::io::Result<bool
                 Err(_) => path.is_dir(),
             };
             if is_dir {
-                if st.skip.iter().any(|s| *s == path) {
+                if st.skip.contains(&path) {
                     continue;
                 }
                 if prefix.as_ref().is_some_and(|p| path.starts_with(p)) {

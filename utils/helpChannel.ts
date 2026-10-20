@@ -17,7 +17,7 @@ export type HelpMessage =
   /** Ask an already-open help window to switch pages. */
   | { type: 'navigate'; page: string };
 
-export const helpChannel: BroadcastChannel | null =
+const helpChannel: BroadcastChannel | null =
   typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('seenote-help') : null;
 
 export function postHelpMessage(msg: HelpMessage): void {

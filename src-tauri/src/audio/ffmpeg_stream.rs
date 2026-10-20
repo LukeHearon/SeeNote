@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::decoder::FileInfo;
+use super::decoder::{skip_gap_frames, FileInfo};
 
 /// Custom ffmpeg/ffprobe location from Application Settings (see
 /// `commands::audio::set_ffmpeg_path`), used in place of a PATH lookup when
@@ -542,18 +542,8 @@ impl FfmpegStream {
     /// process, no respawn. Errors if `start_sec` is behind the current
     /// position — the caller must `seek_to` instead.
     pub fn skip_to(&mut self, start_sec: f64) -> Result<()> {
-        if !start_sec.is_finite() || start_sec < 0.0 {
-            return Err(anyhow::anyhow!(
-                "start_sec must be a finite non-negative number, got {start_sec}"
-            ));
-        }
-        let target_frame = (start_sec * self.sample_rate as f64).round() as u64;
-        if target_frame < self.next_output_frame {
-            return Err(anyhow::anyhow!(
-                "skip_to cannot move backwards ({start_sec}s is behind the current position)"
-            ));
-        }
-        self.discard_frames(target_frame - self.next_output_frame)
+        let gap = skip_gap_frames(start_sec, self.sample_rate, self.next_output_frame)?;
+        self.discard_frames(gap)
     }
 
     /// Pull `frames` frames off the pipe and throw them away, advancing the
@@ -791,7 +781,7 @@ mod tests {
         }
         // ~2s at 44.1kHz, allowing generous slack for encoder framing.
         assert!(
-            total_frames > 44100 * 1,
+            total_frames > 44100,
             "expected roughly 2s of audio, got {total_frames} frames"
         );
         let _ = std::fs::remove_file(&path);

@@ -1,9 +1,22 @@
 //! Shared helpers used by more than one command module: the media-extension
-//! tables, the atomic file-write primitive, and a generic recursive
-//! file-walker. Keeping these in one place avoids the divergence that comes
+//! tables, the atomic file-write primitive, a generic recursive file-walker,
+//! and the blocking-pool runner. Keeping these in one place avoids the divergence that comes
 //! from maintaining parallel copies.
 
 use std::path::Path;
+
+/// Run blocking work (container scans, decoding, ffprobe/ffmpeg spawns, large
+/// file reads) off the async runtime's worker threads, so a slow drive stalls
+/// only its own command rather than every IPC call queued behind it.
+pub async fn blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("blocking task failed: {e}"))?
+}
 
 /// Audio file extensions SeeNote recognizes (lowercase, no leading dot).
 /// `wma` decodes via a system ffmpeg/ffprobe binary rather than symphonia (see

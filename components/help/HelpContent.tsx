@@ -29,7 +29,7 @@ export interface NavigateFn {
 }
 
 /** Inline markdown with the guide's kbd + anchor renderers. */
-export function md(text: string, onNavigate: NavigateFn, onHighlight: (target: string | null) => void): React.ReactNode[] {
+function md(text: string, onNavigate: NavigateFn, onHighlight: (target: string | null) => void): React.ReactNode[] {
   const anchorRenderer = (raw: string, linkText: string, key: number) => {
     const { target, page, heading } = parseLinkTarget(raw);
     return (

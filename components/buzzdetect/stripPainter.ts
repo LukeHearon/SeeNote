@@ -13,8 +13,8 @@ import { rangeMean, rangeSum } from '../../utils/prefixSums';
 import { buzzdetectPanel as buzzdetectCopy } from '../../copy/ui';
 import { paintGutter, paintSubsetJoins } from '../spectrogram/canvasPainters';
 
-export const PAD_TOP = 12;
-export const PAD_BOTTOM = 12;
+const PAD_TOP = 12;
+const PAD_BOTTOM = 12;
 // Narrower than this on screen (px), unit boundaries are too tight to draw as
 // separate hash marks — and by the same token too tight for a click to have
 // meant one unit rather than its neighbour, so below it a click only seeks
@@ -23,7 +23,7 @@ export const PAD_BOTTOM = 12;
 export const MIN_UNIT_BOUNDARY_PX = 6;
 // Alpha the other neurons drop to while one is isolated. Far enough back that
 // the isolated line reads alone at a glance, still visible as context.
-export const ISOLATED_ALPHA = 0.15;
+const ISOLATED_ALPHA = 0.15;
 
 export interface StripParams {
   stripCanvasRef: MutableRefObject<HTMLCanvasElement | null>;

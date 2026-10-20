@@ -1,4 +1,4 @@
-export const GITHUB_REPO = 'LukeHearon/SeeNote';
+const GITHUB_REPO = 'LukeHearon/SeeNote';
 export const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
 export type Inline =

@@ -22,7 +22,7 @@ export function fileManagerLabel(): string {
 export const MOD_KEY_LABEL = isMac ? '⌘' : 'Ctrl';
 
 /** Token used in UI copy / shortcut display strings, resolved by `formatModKey`. */
-export const MOD_TOKEN = '{mod}';
+const MOD_TOKEN = '{mod}';
 
 /** Replace every `{mod}` token with the OS-appropriate modifier label. */
 export function formatModKey(text: string): string {
