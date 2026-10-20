@@ -64,27 +64,36 @@ export function reconcileAnnotations(
   if (timeline.identity) return displayed as Annotation[];
 
   const prevById = new Map(previous.map(a => [a.id, a]));
-  const out: Annotation[] = [];
-  for (const d of displayed) {
-    const prev = prevById.get(d.id);
-    if (prev) {
-      const projected = projectIntervalToDisplay(timeline, prev.start, prev.end);
-      const untouched =
-        projected !== null &&
-        Math.abs(projected.start - d.start) <= UNTOUCHED_EPSILON &&
-        Math.abs(projected.end - d.end) <= UNTOUCHED_EPSILON;
-      if (untouched) {
-        out.push({ ...d, start: prev.start, end: prev.end });
-        continue;
-      }
-    }
-    out.push({
-      ...d,
-      start: timeline.toSource(d.start),
-      end: timeline.toSourceWithin(d.start, d.end),
-    });
-  }
+  const out = displayed.map(d => annotationToSource(d, prevById.get(d.id), timeline));
   out.push(...hidden);
   out.sort((a, b) => a.start - b.start);
   return out;
+}
+
+/**
+ * One display-time annotation back in source time. `prev` is its stored
+ * source-time version, if any: when the displayed bounds still match its
+ * projection, the stored bounds are returned exactly rather than re-derived.
+ * Anything reporting an annotation's times to the user (e.g. "Copy annotation")
+ * goes through here, so it names file time even while a subset is shown.
+ */
+export function annotationToSource(
+  d: Annotation,
+  prev: Annotation | undefined,
+  timeline: Timeline,
+): Annotation {
+  if (timeline.identity) return d;
+  if (prev) {
+    const projected = projectIntervalToDisplay(timeline, prev.start, prev.end);
+    const untouched =
+      projected !== null &&
+      Math.abs(projected.start - d.start) <= UNTOUCHED_EPSILON &&
+      Math.abs(projected.end - d.end) <= UNTOUCHED_EPSILON;
+    if (untouched) return { ...d, start: prev.start, end: prev.end };
+  }
+  return {
+    ...d,
+    start: timeline.toSource(d.start),
+    end: timeline.toSourceWithin(d.start, d.end),
+  };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Annotation } from '../types';
-import { projectAnnotations, reconcileAnnotations } from '../utils/annotationProjection';
+import { annotationToSource, projectAnnotations, reconcileAnnotations } from '../utils/annotationProjection';
 import { buildSubsetTimeline, identityTimeline } from '../utils/subsetTimeline';
 
 // Kept: source 10–12 (display 0–2) and 50–53 (display 2–5).
@@ -93,5 +93,22 @@ describe('reconcileAnnotations', () => {
     const edited = [{ ...shown[0], text: 'fly' }];
     const back = reconcileAnnotations(edited, source, hidden, tl);
     expect(back).toEqual([ann('a', 10.5, 11.5, 'fly')]);
+  });
+});
+
+describe('annotationToSource', () => {
+  it('returns stored source bounds exactly for an untouched annotation', () => {
+    const stored = ann('a', 50.1, 50.7);
+    const [shown] = projectAnnotations([stored], tl).shown;
+    expect(annotationToSource(shown, stored, tl)).toMatchObject({ start: 50.1, end: 50.7 });
+  });
+
+  it('converts display bounds to file time when there is no stored version', () => {
+    expect(annotationToSource(ann('a', 2.5, 3), undefined, tl)).toMatchObject({ start: 50.5, end: 51 });
+  });
+
+  it('is the identity when no subset is shown', () => {
+    const a = ann('a', 1, 2);
+    expect(annotationToSource(a, undefined, identityTimeline(100))).toBe(a);
   });
 });

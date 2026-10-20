@@ -30,7 +30,7 @@ import { useBandPassFilter } from './hooks/useBandPassFilter';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useSubsetTimeline } from './hooks/useSubsetTimeline';
 import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
-import { projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
+import { annotationToSource, projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
@@ -368,6 +368,13 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   const toSourceAnnotations = useCallback(
     (displayed: Annotation[]) => reconcileAnnotations(displayed, annotations, hiddenAnnotations, timeline),
     [annotations, hiddenAnnotations, timeline],
+  );
+  // A single shown annotation in source time, for anything that reports its
+  // bounds to the user (the overlay's "Copy annotation").
+  const annotationsById = useMemo(() => new Map(annotations.map(a => [a.id, a])), [annotations]);
+  const displayAnnotationToSource = useCallback(
+    (displayed: Annotation) => annotationToSource(displayed, annotationsById.get(displayed.id), timeline),
+    [annotationsById, timeline],
   );
   const handleDisplayAnnotationsChange = useCallback(
     (displayed: Annotation[]) => setAnnotations(toSourceAnnotations(displayed)),
@@ -1635,6 +1642,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onSettingsChange={patch => setSettings(s => ({ ...s, ...patch }))}
                 zoomSec={zoomSec}
                 annotations={displayAnnotations}
+                annotationToSource={displayAnnotationToSource}
                 selectedAnnotationId={selectedAnnotationId}
                 activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
                 annotationTools={annotationTools}

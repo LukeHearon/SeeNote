@@ -16,6 +16,9 @@ interface AnnotationOverlayProps {
   ident: string | null;
   layeredAnnotations: AnnotationWithLayer[];
   annotations: Annotation[];
+  // Display → source time for one annotation (identity when absent). "Copy
+  // annotation" reports file time, never the subset's display time.
+  annotationToSource?: (annotation: Annotation) => Annotation;
   selectedAnnotationId: string | null;
   boundAnnotationId: string | null;
   hoveredAnnotationId: string | null;
@@ -174,6 +177,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   ident,
   layeredAnnotations,
   annotations,
+  annotationToSource,
   selectedAnnotationId,
   boundAnnotationId,
   hoveredAnnotationId,
@@ -365,7 +369,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         label: copy.contextCopyAnnotation,
         icon: <Copy size={12} />,
         onSelect: () => {
-          navigator.clipboard.writeText(`${ident ? `${ident} - ` : ''}${ann.text} (${ann.start}, ${ann.end})`);
+          const { start, end } = annotationToSource ? annotationToSource(ann) : ann;
+          navigator.clipboard.writeText(`${ident ? `${ident} - ` : ''}${ann.text} (${start}, ${end})`);
         },
       },
     ];

@@ -59,6 +59,12 @@ interface SpectrogramProps {
   onSettingsChange: (patch: Partial<SpectrogramSettings>) => void;
   zoomSec: number;
   annotations: Annotation[];
+  /**
+   * Maps one of `annotations` (display time) back to source time. Used where
+   * the bounds are reported to the user, which must always be file time.
+   * Defaults to the identity, i.e. no subset.
+   */
+  annotationToSource?: (annotation: Annotation) => Annotation;
   selectedAnnotationId: string | null;
   // null = Selection Mode (no annotation tool active)
   activeAnnotationTool: AnnotationTool | null;
@@ -167,6 +173,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   onSettingsChange,
   zoomSec,
   annotations,
+  annotationToSource,
   selectedAnnotationId,
   activeAnnotationTool,
   annotationTools,
@@ -1121,6 +1128,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            ident={ident}
            layeredAnnotations={layeredAnnotations}
            annotations={annotations}
+           annotationToSource={annotationToSource}
            selectedAnnotationId={selectedAnnotationId}
            boundAnnotationId={boundAnnotationId}
            hoveredAnnotationId={hoveredAnnotationId}
