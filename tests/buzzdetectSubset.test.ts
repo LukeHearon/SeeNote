@@ -307,7 +307,7 @@ describe('subsetCriteriaFrom', () => {
   it('cuts at the detection threshold in detection-rate mode', () => {
     const c = subsetCriteriaFrom({ ...inputs, mode: 'detectionRate', subsetThresholds: { bee: -1.5 } })!;
     expect(c.thresholdOf('bee')).toBe(0.25);
-    expect(c.thresholdOf('wasp')).toBe(Infinity);
+    expect(c.thresholdOf('wasp')).toBe(0);
   });
 
   // A cleared threshold is a neuron that never detects, so a detection-rate cut

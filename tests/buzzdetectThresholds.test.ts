@@ -1,17 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { baselineOffset, detectionThreshold } from '../utils/buzzdetectThresholds';
-import { INS_BUZZ_DEFAULT_THRESHOLD } from '../constants';
 
 // Three states in one map, and the distinction between the last two is the
 // whole point: never set takes the default, deliberately cleared detects
 // nothing.
 describe('detectionThreshold', () => {
-  it('takes no threshold by default', () => {
-    expect(detectionThreshold(undefined, 'wasp')).toBe(Infinity);
-  });
-
-  it('defaults ins_buzz to its pretrained boundary', () => {
-    expect(detectionThreshold(undefined, 'ins_buzz')).toBe(INS_BUZZ_DEFAULT_THRESHOLD);
+  it('defaults every neuron to 0, ins_buzz included', () => {
+    expect(detectionThreshold(undefined, 'wasp')).toBe(0);
+    expect(detectionThreshold(undefined, 'ins_buzz')).toBe(0);
   });
 
   it('passes a set threshold through, zero included', () => {
