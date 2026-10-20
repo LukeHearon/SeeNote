@@ -303,6 +303,24 @@ export interface AppSettings {
    * PATH lookup.
    */
   ffmpegPath?: string;
+  /** How wall-clock datetimes are written, in every project and single-file mode. */
+  dateTimeFormat?: DateTimeFormat;
+  /** Commit author name for synced projects. */
+  annotatorName?: string;
+  /** Settings for files opened outside a project (single-file mode). */
+  singleFile?: SingleFileSettings;
+}
+
+/**
+ * Single-file mode's counterparts of the project settings that shape how a
+ * file is read — same meanings as the like-named ProjectSettings fields.
+ */
+export interface SingleFileSettings {
+  filenameTimeFormat?: string;
+  filenameTimeOffsetSeparator?: string;
+  buzzdetectFrameLength?: number;
+  buzzdetectTrimActivationPrefix?: boolean;
+  spectrogramSettings?: SpectrogramSettings;
 }
 
 export interface ProjectSettings {
@@ -377,9 +395,8 @@ export interface ProjectPreferences {
   /** Match the Find Label search query case-sensitively. Defaults to off (case-folded matching on every path, including exact). */
   findLabelCaseSensitive?: boolean;
   /**
-   * Style used to render wall-clock datetimes (spectrogram ruler, running
-   * time, and the From/To selection fields) when `ProjectUiSettings.timeDisplayUnit`
-   * is 'datetime'. Set in the Preferences tab of project settings.
+   * Legacy per-project datetime style, from before it moved to
+   * AppSettings.dateTimeFormat. Still read as a fallback; no longer written.
    */
   dateTimeFormat?: DateTimeFormat;
 }
@@ -395,7 +412,8 @@ export interface GitSyncConfig {
  * project can each store their own token and author identity.
  */
 export interface GitSyncUserConfig {
-  /** Optional commit author name for this machine's user. */
+  /** Legacy per-project commit author name, from before it moved to
+   *  AppSettings.annotatorName. Still read as a fallback; no longer written. */
   authorName?: string;
   /**
    * Where this machine keeps the PAT. Default 'keychain'. On unsigned/quarantined
@@ -505,4 +523,6 @@ export interface RecentFileEntry {
   lastOpened: string; // ISO timestamp
   /** Whether the user has starred this file on the launch screen. */
   starred?: boolean;
+  /** The buzzdetect results CSV last imported for this file, reopened with it. */
+  buzzdetectFile?: string;
 }

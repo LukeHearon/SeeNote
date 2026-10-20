@@ -11,7 +11,7 @@ import { useCopyEditorBridge } from './hooks/useCopyEditorBridge';
 import { useOsOpenFile } from './hooks/useOsOpenFile';
 import { checkDirExists, setFfmpegPath, onWindowCloseRequested } from './utils/tauriCommands';
 import { flushForExit } from './utils/exitFlush';
-import { readAppSettings } from './utils/projectCommands';
+import { loadAppSettings } from './hooks/useAppSettings';
 
 export default function App() {
   useCopyEditorBridge();
@@ -20,7 +20,7 @@ export default function App() {
   // the Rust side once at startup. Later edits push their own update — see
   // ApplicationSettingsFields.
   useEffect(() => {
-    readAppSettings()
+    loadAppSettings()
       .then(s => setFfmpegPath(s.ffmpegPath ?? null))
       .catch(() => {});
   }, []);
@@ -43,7 +43,10 @@ export default function App() {
     createProject, addExistingProject, updateProjectSettings, updateProjectPreferences,
     removeProject, toggleStarred, touchLastOpened, reconnectProject, relinkProject,
   } = useProjects();
-  const { fileEntries, isLoadingFiles, touchRecentFile, removeRecentFile, toggleFileStarred } = useRecentFiles();
+  const {
+    fileEntries, isLoadingFiles, touchRecentFile, getRecentFile, setRecentFileBuzzdetect,
+    removeRecentFile, toggleFileStarred,
+  } = useRecentFiles();
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
@@ -119,7 +122,16 @@ export default function App() {
   }
 
   if (activeFile) {
-    return <SingleFileWindow filePath={activeFile} onClose={handleCloseFile} />;
+    return (
+      <SingleFileWindow
+        // Keyed: an "Open With SeeNote" while a file is showing swaps in a fresh window.
+        key={activeFile}
+        filePath={activeFile}
+        onClose={handleCloseFile}
+        loadRememberedBuzzdetectFile={() => getRecentFile(activeFile).then(e => e?.buzzdetectFile ?? null)}
+        onBuzzdetectFileChange={csv => { setRecentFileBuzzdetect(activeFile, csv).catch(() => {}); }}
+      />
+    );
   }
 
   return (

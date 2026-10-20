@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Activity, ArrowLeft, Bug, HelpCircle, X } from 'lucide-react';
+import { Activity, ArrowLeft, Bug, HelpCircle, Settings, X } from 'lucide-react';
 import { resolveVideoElementUrl } from './utils/videoUrl';
 import Spectrogram, { SpectrogramHandle } from './components/Spectrogram';
 import { useChunkCacheVersion } from './hooks/useChunkCacheVersion';
@@ -14,7 +14,7 @@ import MessageDialog from './components/MessageDialog';
 import { SpectrogramSettingsPanel } from './components/controls/SpectrogramSettingsPanel';
 import TooltipLayer from './components/TooltipLayer';
 import { Selection, SpectrogramSettings, VideoMode } from './types';
-import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
+import { DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_ZOOM_SEC, DEFAULT_SPLIT_RATIO, DEFAULT_LEFT_PANEL_WIDTH, SIDEBAR_SECTION_NEURONS, isVideoFile } from './constants';
 import { basename } from './utils/helpers';
 import { openFileDialog } from './utils/tauriCommands';
 import { showHelpPage } from './utils/helpChannel';
@@ -35,6 +35,11 @@ import { useHotkeys } from './hooks/useHotkeys';
 import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useSubsetTimeline } from './hooks/useSubsetTimeline';
 import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
+import { useAppSettings, updateAppSettings } from './hooks/useAppSettings';
+import { useTrackWallClock } from './hooks/useTrackWallClock';
+import { useFlushableDebounce } from './hooks/useFlushableDebounce';
+import { withSingleFileSettings } from './utils/appSettings';
+import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { MultiTierSpectrogramCache } from './MultiTierSpectrogramCache';
 import { annotationWindow, singleFileWindow } from './copy/ui';
 import { tooltips } from './copy/tooltips';
@@ -45,6 +50,10 @@ const NO_TOOL_COLORS: Record<string, string> = {};
 export interface SingleFileWindowProps {
   filePath: string;
   onClose: () => void;
+  /** The buzzdetect CSV last imported for this file, if any — reopened on mount. */
+  loadRememberedBuzzdetectFile: () => Promise<string | null>;
+  /** Called as the imported CSV changes, so it can be remembered for next time. */
+  onBuzzdetectFileChange: (path: string | null) => void;
 }
 
 // Lean viewer for a single audio/video file opened via "Open File" on the
@@ -57,7 +66,17 @@ export interface SingleFileWindowProps {
 // useVideoFrameSource, which all take plain shapes, not the Project type) but
 // skips AnnotationWindow's own JSX shell, which hardcodes the file-tree +
 // annotation-tools layout with no seam to opt out of.
-export default function SingleFileWindow({ filePath, onClose }: SingleFileWindowProps) {
+export default function SingleFileWindow(props: SingleFileWindowProps) {
+  // Waits for the application settings, which seed this window's own
+  // (spectrogram settings, filename pattern, buzzdetect reading).
+  const app = useAppSettings();
+  if (!app) return null;
+  return <SingleFileWindowBody {...props} />;
+}
+
+function SingleFileWindowBody({ filePath, onClose, loadRememberedBuzzdetectFile, onBuzzdetectFileChange }: SingleFileWindowProps) {
+  const singleFileSettings = useAppSettings()?.singleFile ?? {};
+  const [showAppSettings, setShowAppSettings] = useState(false);
   const trackName = basename(filePath);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const videoSrcRef = useRef<string | null>(null);
@@ -97,8 +116,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   useEffect(() => { videoModeRef.current = videoMode; }, [videoMode]);
 
   // ── buzzdetect ──────────────────────────────────────────────────────────────
-  // Results come from one CSV picked by hand; nothing is persisted, so every
-  // setting here is session state. Instantiated ahead of the frame source and
+  // Results come from one CSV picked by hand, remembered per file in the
+  // recent-files registry; the panel's own settings are session state. Instantiated ahead of the frame source and
   // the transport for the same reason as in AnnotationWindow: the subset's
   // timeline decides the display duration and the effective video mode.
   const [buzzdetectFile, setBuzzdetectFile] = useState<string | null>(null);
@@ -109,8 +128,8 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     dir: null,
     ident: null,
     file: buzzdetectFile,
-    frameLength: undefined,
-    trimActivationPrefix: undefined,
+    frameLength: singleFileSettings.buzzdetectFrameLength,
+    trimActivationPrefix: singleFileSettings.buzzdetectTrimActivationPrefix,
     reloadNonce: buzzdetectReloadNonce,
     addLog,
     onLoadError: msg => { setBuzzdetectFile(null); setBuzzdetectError(msg); },
@@ -142,13 +161,50 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     setBuzzdetectFile(null);
     setBuzzdetectSubsetEnabled(false);
   }, [setBuzzdetectSubsetEnabled]);
+
+  // Reopen the CSV this file was last viewed with — unless one was picked by
+  // hand while the lookup was out.
+  useEffect(() => {
+    let cancelled = false;
+    loadRememberedBuzzdetectFile()
+      .then(path => {
+        if (cancelled || !path) return;
+        setBuzzdetectFile(cur => cur ?? path);
+        setBuzzdetectEnabled(true);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Remember every change after the first render's null, including a removal
+  // or a failed load (which clears the file).
+  const buzzdetectFileMountedRef = useRef(false);
+  useEffect(() => {
+    if (!buzzdetectFileMountedRef.current) { buzzdetectFileMountedRef.current = true; return; }
+    onBuzzdetectFileChange(buzzdetectFile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buzzdetectFile]);
   const refreshBuzzdetect = useCallback(() => setBuzzdetectReloadNonce(n => n + 1), []);
 
   // No project to persist against in single-file mode — plain session state.
   const [videoBrightness, setVideoBrightness] = useState(100);
   const [videoContrast, setVideoContrast] = useState(100);
 
-  const [settings, setSettings] = useState<SpectrogramSettings>(DEFAULT_SPECTROGRAM_SETTINGS);
+  // Spectrogram settings are the exception: remembered app-wide, as a
+  // project remembers its own.
+  const [settings, setSettings] = useState<SpectrogramSettings>(() => ({
+    ...DEFAULT_SPECTROGRAM_SETTINGS,
+    ...singleFileSettings.spectrogramSettings,
+  }));
+  const settingsDebounce = useFlushableDebounce();
+  const settingsMountedRef = useRef(false);
+  useEffect(() => {
+    if (!settingsMountedRef.current) { settingsMountedRef.current = true; return; }
+    settingsDebounce.schedule(() => {
+      updateAppSettings(s => withSingleFileSettings(s, { spectrogramSettings: settings }));
+    }, 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
   const [showSettings, setShowSettings] = useState(false);
 
   // The left panel holds only the neuron palette, so it exists (and is
@@ -197,11 +253,20 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
   const {
     isPlaying, isBuffering,
     playheadLocked,
-    timeDisplayUnit,
+    timeDisplayUnit, fallbackTimeDisplayUnit,
     engineRef, currentTimeRef, currentTimeStoreRef,
     togglePlay, seek, clearSelectionEnd, bindSelectionEnd, getMediaTime, attachVideoElement,
   } = transport;
   const getFrameTime = useSourceFrameTime(timelineRef, getMediaTime);
+
+  // Wall-clock start read out of the filename with the single-file timestamp
+  // pattern (Application Settings → Single File), as a project reads its tracks.
+  const { trackStartDate, shownTimeUnit, dateTimeFormat } = useTrackWallClock({
+    trackPath: filePath,
+    filenameTimeFormat: singleFileSettings.filenameTimeFormat,
+    filenameTimeOffsetSeparator: singleFileSettings.filenameTimeOffsetSeparator,
+    timeDisplayUnit, fallbackTimeDisplayUnit,
+  });
 
   // Spectrogram zoom-in/out/fit-to-track hotkeys — identical registration to
   // AnnotationWindow's (see hooks/useSpectrogramZoomHotkeys.ts); this window
@@ -330,12 +395,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
     settings, setSettings, showSettings, setShowSettings, debugLogs, spectrogramRef,
     snapshot: {
       isBuffering,
-      timeDisplayUnit,
+      timeDisplayUnit: shownTimeUnit,
       selectedTimeDisplayUnit: timeDisplayUnit,
-      // No project, so no filename-timestamp format to read a start from —
-      // single-file mode never shows wall-clock times.
-      trackStartMs: null,
-      dateTimeFormat: DEFAULT_DATE_TIME_FORMAT,
+      trackStartMs: trackStartDate?.getTime() ?? null,
+      dateTimeFormat,
       // Single-file mode has no annotations to step between.
       canGoPrevAnnotation: false,
       canGoNextAnnotation: false,
@@ -392,6 +455,13 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
         </div>
         <div className="flex items-center space-x-3">
           <button
+            onClick={() => setShowAppSettings(true)}
+            className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+            data-tooltip={tooltips.appSettings}
+          >
+            <Settings size={18} />
+          </button>
+          <button
             onClick={() => setShowDebug(true)}
             className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
           >
@@ -408,6 +478,10 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
       </header>
 
       <DebugConsole open={showDebug} onClose={() => setShowDebug(false)} logs={debugLogs} />
+
+      {showAppSettings && (
+        <ProjectSettingsModal initialTab="singleFile" onClose={() => setShowAppSettings(false)} />
+      )}
 
       {buzzdetectError && (
         <MessageDialog
@@ -503,7 +577,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
               onToggleSettings={() => setShowSettings(s => !s)}
               videoMode={effectiveVideoMode}
               isAudioTrack={isAudioTrack}
-              timeDisplayUnit={timeDisplayUnit}
+              timeDisplayUnit={shownTimeUnit}
+              trackStartDate={trackStartDate}
+              dateTimeFormat={dateTimeFormat}
               timeline={timeline}
             />
           }
@@ -546,6 +622,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 isAudioTrack={isAudioTrack}
                 playheadLocked={playheadLocked}
                 hideLabels={hideLabels}
+                trackStartDate={trackStartDate}
+                timeDisplayUnit={shownTimeUnit}
+                dateTimeFormat={dateTimeFormat}
                 onExportSelection={handleExportSelection}
                 onCreateTool={() => {}}
                 onBindHotkey={() => {}}
@@ -565,7 +644,9 @@ export default function SingleFileWindow({ filePath, onClose }: SingleFileWindow
                 viewportStore={viewportStoreRef.current}
                 currentTimeStore={currentTimeStoreRef.current}
                 selection={selection}
-                timeDisplayUnit={timeDisplayUnit}
+                timeDisplayUnit={shownTimeUnit}
+                trackStartDate={trackStartDate}
+                dateTimeFormat={dateTimeFormat}
                 spectrogramRef={spectrogramRef}
                 onSelectionChange={handleSelectionChange}
                 onBoundAnnotationChange={setBoundAnnotationId}

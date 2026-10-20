@@ -23,6 +23,9 @@ Quick reference for agents. One phrase per file.
 - `components/NeuronPalette.tsx` — sidebar list of every neuron (color dot toggles plotting; unplotted ones sort to the bottom) and the graph-wide settings (series, bin width, Y range, subset buffer + readout)
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
+- `components/FilenameTimeFields.tsx` / `BuzzdetectReadingFields.tsx` — filename-timestamp and buzzdetect-reading fields, shared by project settings and the app settings' Single File tab
+- `components/ApplicationSettingsFields.tsx` / `SingleFileSettingsFields.tsx` — the app settings' Application and Single File tabs (inside ProjectSettingsModal); persist immediately via useAppSettings
+- `components/AnnotatorNameField.tsx` / `DateTimeFormatField.tsx` — app-wide annotator name and datetime style, bound to useAppSettings
 - `components/ProjectHeader.tsx` — the project window's header (back, refresh, name/settings, sync, debug, help)
 - `components/SyncControls.tsx` — header sync button, commit-message popover, repo-page context menu
 - `components/SyncToast.tsx` — post-sync summary / error toast, including the cleared-tracks confirmation
@@ -166,6 +169,9 @@ Quick reference for agents. One phrase per file.
 - `hooks/useSpectrogramZoomPan.ts` / `useAnnotationJumps.ts` — Spectrogram's wheel zoom/pan and prev/next-annotation jumps
 - `hooks/useScrollSync.ts` — re-runs a sync callback on scroll/resize (once per frame) for widgets that mirror a scroller (FileTree's scrollbar and breadcrumb)
 - `hooks/useFlushableDebounce.ts` — debounced callback that can be flushed on demand (exit, track switch)
+- `hooks/useAppSettings.ts` — shared in-memory store for `app_settings.json` (load once, serialized whole-file writes)
+- `hooks/useTrackWallClock.ts` — a track's filename start time, the time unit in force, and the datetime style; used by both windows
+- `hooks/useRecentFiles.ts` — single-file history (`files.json`), including each file's remembered buzzdetect CSV
 - `hooks/useDraftField.ts` / `useProjectForm.ts` — draft-then-commit input state; project create/settings form state
 
 ## Shared types & constants
@@ -174,6 +180,7 @@ Quick reference for agents. One phrase per file.
 - `utils/exitFlush.ts` — pending debounced writes to flush before the window closes, plus the annotation write queue
 - `utils/annotationIoGate.ts` — tracks pending sync/reload work so the autosave and track switches wait for it
 - `utils/projectForm.ts` — project form values ↔ ProjectSettings, plus required-field checks
+- `utils/appSettings.ts` — resolving app-wide settings against legacy per-project values; single-file settings merge
 - `utils/fileTreeBuild.ts` — builds FileTree's folder tree from flat path lists
 - `utils/windowRegistry.ts` — the windows the UI is drawn into (main + popouts); `addWindowListener` attaches a global listener to all of them. Use it, not `window.addEventListener`, for anything that must hear a popped-out panel (hotkeys, drags, click-outside)
 - `utils/dragSession.ts` — window-level mousemove/mouseup drag session with cancel

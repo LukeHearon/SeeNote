@@ -6,12 +6,10 @@ import { tooltips } from '../copy/tooltips';
 import GradientPicker from './GradientPicker';
 import DirectoryField from './DirectoryField';
 import CollapsibleSection from './CollapsibleSection';
-import DraftNumberInput from './DraftNumberInput';
+import FilenameTimeFields from './FilenameTimeFields';
+import BuzzdetectReadingFields from './BuzzdetectReadingFields';
 import { openSyncGuideWindow } from '../utils/tauriCommands';
 import { normalizeGitRemoteUrl } from '../utils/gitSync';
-import { formatFilenameTime, isUsableFilenameTimePattern, parseFilenameOffsetSeconds, FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
-
-const PREVIEW_DATE = FILENAME_PREVIEW_DATE;
 
 interface Props {
   projectDir: string;
@@ -116,46 +114,12 @@ export default function ProjectBaseFields({
         notExistMessage={annotationDirNotExistMessage}
       />
 
-      <div>
-        <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.filenameTimeLabel}</label>
-        <input
-          type="text"
-          value={filenameTimeFormat}
-          onChange={e => onFilenameTimeFormatChange(e.target.value)}
-          placeholder={projectBaseFields.filenameTimePlaceholder}
-          spellCheck={false}
-          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
-        />
-        <p className="text-gray-600 text-xs mt-1">{projectBaseFields.filenameTimeHelp}</p>
-        {filenameTimeFormat.trim() !== '' && (
-          isUsableFilenameTimePattern(filenameTimeFormat) ? (
-            <p className="text-gray-500 text-xs mt-1 font-mono">
-              {projectBaseFields.examplePrefix} {projectBaseFields.previewDateLabel} → <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}.mp3</span>
-            </p>
-          ) : (
-            <p className="text-amber-500/80 text-xs mt-1">{projectBaseFields.filenameTimeIncomplete}</p>
-          )
-        )}
-      </div>
-
-      <div>
-        <label className="text-gray-400 text-sm block mb-1">{projectBaseFields.filenameTimeOffsetLabel}</label>
-        <input
-          type="text"
-          value={filenameTimeOffsetSeparator}
-          onChange={e => onFilenameTimeOffsetSeparatorChange(e.target.value)}
-          placeholder={projectBaseFields.filenameTimeOffsetPlaceholder}
-          spellCheck={false}
-          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
-        />
-        <p className="text-gray-600 text-xs mt-1">{projectBaseFields.filenameTimeOffsetHelp}</p>
-        {filenameTimeOffsetSeparator.trim() !== '' && isUsableFilenameTimePattern(filenameTimeFormat) && (
-          <p className="text-gray-500 text-xs mt-1 font-mono">
-            {projectBaseFields.examplePrefix} <span className="text-gray-300">{formatFilenameTime(PREVIEW_DATE, filenameTimeFormat)}{filenameTimeOffsetSeparator}52860.mp3</span>{' '}
-            → {new Date(PREVIEW_DATE.getTime() + (parseFilenameOffsetSeconds(`${filenameTimeOffsetSeparator}52860`, filenameTimeOffsetSeparator) ?? 0) * 1000).toLocaleString()}
-          </p>
-        )}
-      </div>
+      <FilenameTimeFields
+        format={filenameTimeFormat}
+        offsetSeparator={filenameTimeOffsetSeparator}
+        onFormatChange={onFilenameTimeFormatChange}
+        onOffsetSeparatorChange={onFilenameTimeOffsetSeparatorChange}
+      />
 
       <div>
         <div className="flex items-center justify-between">
@@ -191,36 +155,12 @@ export default function ProjectBaseFields({
             placeholder={projectBaseFields.buzzdetectPlaceholder}
             notExistMessage="Directory does not exist."
           />
-          <div className="flex items-center justify-between mt-2">
-            <div>
-              <label className="text-gray-400 text-sm block">{projectBaseFields.buzzdetectFrameLengthLabel}</label>
-              <p className="text-gray-600 text-xs">
-                {buzzdetectFrameLength === null ? projectBaseFields.buzzdetectFrameLengthAutoHelp : projectBaseFields.buzzdetectFrameLengthOverrideHelp}
-              </p>
-            </div>
-            {/* Always editable — a value here always wins. Clearing the field
-                is the "unset" state, which falls back to auto-detection. */}
-            <DraftNumberInput
-              value={buzzdetectFrameLength}
-              onCommit={onBuzzdetectFrameLengthChange}
-              min={0.001}
-              allowEmpty
-              placeholder={projectBaseFields.buzzdetectFrameLengthPlaceholder}
-              className="w-20 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-            />
-          </div>
-          <label className="flex items-start gap-2 cursor-pointer select-none mt-3">
-            <input
-              type="checkbox"
-              checked={buzzdetectTrimActivationPrefix}
-              onChange={e => onBuzzdetectTrimActivationPrefixChange(e.target.checked)}
-              className="mt-0.5 accent-blue-500"
-            />
-            <span>
-              <span className="block text-sm text-gray-200">{projectBaseFields.buzzdetectTrimPrefixLabel}</span>
-              <span className="block text-xs text-gray-500 mt-0.5">{projectBaseFields.buzzdetectTrimPrefixHint}</span>
-            </span>
-          </label>
+          <BuzzdetectReadingFields
+            frameLength={buzzdetectFrameLength}
+            trimActivationPrefix={buzzdetectTrimActivationPrefix}
+            onFrameLengthChange={onBuzzdetectFrameLengthChange}
+            onTrimActivationPrefixChange={onBuzzdetectTrimActivationPrefixChange}
+          />
         </div>
 
         <div>

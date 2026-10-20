@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { projectSettingsModal, applicationSettingsFields } from '../copy/ui';
-import { readAppSettings, writeAppSettings } from '../utils/projectCommands';
+import { loadAppSettings, updateAppSettings } from '../hooks/useAppSettings';
 import { detectFfmpeg, openFileDialog, setFfmpegPath as pushFfmpegPath } from '../utils/tauriCommands';
+import type { DateTimeFormat } from '../utils/datetimeDisplay';
+import DateTimeFormatField from './DateTimeFormatField';
+import AnnotatorNameField from './AnnotatorNameField';
+
+interface Props {
+  /** Values an open project stored before these settings went app-wide —
+   *  shown until the user sets the app-wide ones. */
+  legacyDateTimeFormat?: DateTimeFormat;
+  legacyAnnotatorName?: string;
+}
 
 /**
  * System-wide settings, stored in `{appDataDir}/app_settings.json` rather
@@ -10,7 +20,7 @@ import { detectFfmpeg, openFileDialog, setFfmpegPath as pushFfmpegPath } from '.
  * and persists each change immediately, independent of the parent modal's
  * save/cancel flow (there's nothing project-specific here to validate).
  */
-export default function ApplicationSettingsFields() {
+export default function ApplicationSettingsFields({ legacyDateTimeFormat, legacyAnnotatorName }: Props) {
   const [ffmpegPath, setFfmpegPath] = useState('');
   /** True while the box is showing an auto-detected path rather than a value
    *  the user set. Such a value is displayed (so detection is visible) but not
@@ -30,7 +40,7 @@ export default function ApplicationSettingsFields() {
       .catch(() => {});
 
   useEffect(() => {
-    readAppSettings()
+    loadAppSettings()
       .then(async s => {
         const saved = s.ffmpegPath?.trim();
         if (saved) setFfmpegPath(saved);
@@ -42,7 +52,7 @@ export default function ApplicationSettingsFields() {
   const commit = async (path: string) => {
     const trimmed = path.trim();
     setAutoDetected(false);
-    await writeAppSettings({ ffmpegPath: trimmed || undefined }).catch(() => {});
+    await updateAppSettings(s => ({ ...s, ffmpegPath: trimmed || undefined }));
     await pushFfmpegPath(trimmed || null).catch(() => {});
     // Cleared the field? Fall back to showing whatever the search now finds.
     if (!trimmed) await showDetected();
@@ -59,35 +69,41 @@ export default function ApplicationSettingsFields() {
   if (!loaded) return null;
 
   return (
-    <div>
-      <label className="text-gray-400 text-sm block mb-1">{projectSettingsModal.ffmpegPathLabel}</label>
-      <p className="text-xs text-gray-500 mb-2">{projectSettingsModal.ffmpegPathHint}</p>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={ffmpegPath}
-          onChange={e => {
-            setAutoDetected(false);
-            setFfmpegPath(e.target.value);
-          }}
-          // Nothing to save when the box is just echoing what was detected.
-          onBlur={() => { if (!autoDetected) commit(ffmpegPath); }}
-          className={`flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm ${
-            autoDetected ? 'text-gray-400 italic' : 'text-white'
-          }`}
-        />
-        <button
-          type="button"
-          onClick={handleBrowse}
-          className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
-          title={applicationSettingsFields.browse}
-        >
-          <FolderOpen size={16} />
-        </button>
+    <>
+      <AnnotatorNameField legacyName={legacyAnnotatorName} />
+
+      <DateTimeFormatField legacyFormat={legacyDateTimeFormat} />
+
+      <div>
+        <label className="text-gray-400 text-sm block mb-1">{projectSettingsModal.ffmpegPathLabel}</label>
+        <p className="text-xs text-gray-500 mb-2">{projectSettingsModal.ffmpegPathHint}</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={ffmpegPath}
+            onChange={e => {
+              setAutoDetected(false);
+              setFfmpegPath(e.target.value);
+            }}
+            // Nothing to save when the box is just echoing what was detected.
+            onBlur={() => { if (!autoDetected) commit(ffmpegPath); }}
+            className={`flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm ${
+              autoDetected ? 'text-gray-400 italic' : 'text-white'
+            }`}
+          />
+          <button
+            type="button"
+            onClick={handleBrowse}
+            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition-colors"
+            title={applicationSettingsFields.browse}
+          >
+            <FolderOpen size={16} />
+          </button>
+        </div>
+        {autoDetected && (
+          <p className="text-xs text-gray-500 mt-1">{projectSettingsModal.ffmpegPathDetected}</p>
+        )}
       </div>
-      {autoDetected && (
-        <p className="text-xs text-gray-500 mt-1">{projectSettingsModal.ffmpegPathDetected}</p>
-      )}
-    </div>
+    </>
   );
 }

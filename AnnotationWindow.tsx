@@ -4,9 +4,9 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, DEFAULT_DATE_TIME_FORMAT, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
-import { stripExt, shuffleArray, basename, effectiveTimeUnit } from './utils/helpers';
-import { parseFilenameTime } from './utils/filenameTime';
+import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
+import { stripExt, shuffleArray, basename } from './utils/helpers';
+import { useTrackWallClock } from './hooks/useTrackWallClock';
 import { invalidateProjectLabelIndex } from './utils/annotationRename';
 import { toolColorsByLabel } from './utils/neuronColors';
 import { nextFileFilter, passesFileFilter } from './utils/fileFilter';
@@ -840,21 +840,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
 
   // Toggle shuffle: randomise current allTracks order
 
-  // Wall-clock start of the open track, read out of its filename with the
-  // project's timestamp pattern. Null (so time readouts stay elapsed) when the
-  // project defines no pattern or this particular name doesn't match it.
-  const trackStartDate = useMemo(() => {
-    const pattern = project.settings.filenameTimeFormat;
-    if (!pattern || !trackPath) return null;
-    return parseFilenameTime(basename(trackPath), pattern, project.settings.filenameTimeOffsetSeparator);
-  }, [project.settings.filenameTimeFormat, project.settings.filenameTimeOffsetSeparator, trackPath]);
-
-  // 'datetime' only applies where a start time is known; elsewhere readouts
-  // fall back to the last elapsed unit the user chose.
-  const shownTimeUnit = effectiveTimeUnit(timeDisplayUnit, trackStartDate, fallbackTimeDisplayUnit);
-
-  // Style for wall-clock datetime readouts, set in the Preferences tab.
-  const dateTimeFormat = project.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT;
+  // Wall-clock start of the open track (read out of its filename with the
+  // project's timestamp pattern), the unit readouts show, and the datetime style.
+  const { trackStartDate, shownTimeUnit, dateTimeFormat } = useTrackWallClock({
+    trackPath,
+    filenameTimeFormat: project.settings.filenameTimeFormat,
+    filenameTimeOffsetSeparator: project.settings.filenameTimeOffsetSeparator,
+    timeDisplayUnit, fallbackTimeDisplayUnit,
+    legacyDateTimeFormat: project.preferences.dateTimeFormat,
+  });
 
   const handleSelectionChange = useSelectionControl({
     setSelection, selectionRef, activationStack, frameSourceRef, clearSelectionEnd, bindSelectionEnd, selectionToSource,

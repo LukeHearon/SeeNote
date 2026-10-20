@@ -36,6 +36,9 @@ pub struct RecentFileRecord {
     /// Whether the user has starred this file on the launch screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
+    /// buzzdetect results CSV last imported for this file in single-file mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buzzdetect_file: Option<String>,
 }
 
 #[derive(Deserialize)]

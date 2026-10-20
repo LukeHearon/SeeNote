@@ -87,6 +87,8 @@ export const projectSettingsModal = {
   get tabApplication() { return getOverride('ui.projectSettingsModal.tabApplication') ?? "Application Settings"; },
   get tabSettings() { return getOverride('ui.projectSettingsModal.tabSettings') ?? "Project Settings"; },
   get tabPreferences() { return getOverride('ui.projectSettingsModal.tabPreferences') ?? "User Preferences"; },
+  get tabSingleFile() { return getOverride('ui.projectSettingsModal.tabSingleFile') ?? "Single File"; },
+  get singleFileIntro() { return getOverride('ui.projectSettingsModal.singleFileIntro') ?? "How files opened on their own, outside any project, are read. Projects keep their own copies of these in Project Settings."; },
   get closeButton() { return getOverride('ui.projectSettingsModal.closeButton') ?? "Close"; },
   get ffmpegPathLabel() { return getOverride('ui.projectSettingsModal.ffmpegPathLabel') ?? "ffmpeg location"; },
   get ffmpegPathHint() { return getOverride('ui.projectSettingsModal.ffmpegPathHint') ?? "Used to open .wma files, which have no bundled decoder. Leave blank to search your PATH and the usual install locations automatically; an empty box means nothing was found."; },
@@ -196,6 +198,7 @@ export const gitSyncUserFields = {
   get keychainNoteLinux() { return getOverride('ui.gitSyncUserFields.keychainNoteLinux') ?? "Saved in your system keyring (Secret Service), never in preferences.json. The keyring may prompt to unlock."; },
   get patFormatWarning() { return getOverride('ui.gitSyncUserFields.patFormatWarning') ?? "Token doesn't look like a GitHub fine-grained PAT (expected prefix: github_pat_)"; },
   get nameLabel() { return getOverride('ui.gitSyncUserFields.nameLabel') ?? "Annotator name"; },
+  get nameHint() { return getOverride('ui.gitSyncUserFields.nameHint') ?? "Recorded as the author of your changes in every synced project."; },
 };
 
 export const projectBaseFields = {

@@ -5,6 +5,13 @@ import { readSyncToken } from '../utils/gitSync';
 import { persistAnnotations, resolveFlushTarget, whenWritesSettled } from '../utils/annotationPersist';
 import type { AnnotationIoGate } from '../utils/annotationIoGate';
 import { DEFAULT_OUTPUT_ROUNDING_DECIMALS, DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
+import { resolveAnnotatorName } from '../utils/appSettings';
+import { loadAppSettings } from './useAppSettings';
+
+/** Commit author for a sync: the app-wide name, else the project's legacy one. */
+async function annotatorName(project: Project): Promise<string> {
+  return resolveAnnotatorName(await loadAppSettings(), project.preferences.gitSyncUser?.authorName);
+}
 
 /** Prefix of the error an auto-pull returns instead of applying a remote clear
  *  (mirrors INCOMING_CLEARS_PREFIX in git_sync/mod.rs). */
@@ -163,7 +170,7 @@ export function useSyncManagement({
         annDir,
         cfg.remoteUrl,
         token,
-        projectRef.current.preferences.gitSyncUser?.authorName ?? '',
+        await annotatorName(projectRef.current),
         commitMessage,
         confirmedClears,
       );
@@ -216,7 +223,7 @@ export function useSyncManagement({
         annDir,
         cfg.remoteUrl,
         token,
-        projectRef.current.preferences.gitSyncUser?.authorName ?? '',
+        await annotatorName(projectRef.current),
       );
       if (summary.pulled) {
         requestReload();

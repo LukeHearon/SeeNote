@@ -10,6 +10,11 @@ export function useRecentFiles() {
 
   const filesFileRef = useRef<string | null>(null);
   const entriesRef = useRef<RecentFileEntry[]>([]);
+  // Settles once the registry has been read. Every mutation waits on it: an
+  // "Open With SeeNote" cold start records its file before the read finishes,
+  // and would otherwise be dropped (no path to save to yet) and then
+  // overwritten by the loaded list.
+  const readyRef = useRef<Promise<void> | null>(null);
 
   const setBoth = useCallback((next: RecentFileEntry[]) => {
     entriesRef.current = next;
@@ -29,7 +34,7 @@ export function useRecentFiles() {
   }, []);
 
   useEffect(() => {
-    (async () => {
+    readyRef.current = (async () => {
       try {
         const appDataDir = await getAppDataDir();
         const filePath = registryFilePath(appDataDir, 'files.json');
@@ -45,8 +50,11 @@ export function useRecentFiles() {
     })();
   }, [setBoth]);
 
+  const whenReady = useCallback(() => readyRef.current ?? Promise.resolve(), []);
+
   /** Record a file as just-opened: move it to front, or add it if new. */
   const touchRecentFile = useCallback(async (path: string): Promise<void> => {
+    await whenReady();
     const now = new Date().toISOString();
     const existing = entriesRef.current.find(e => e.path === path);
     const entry: RecentFileEntry = existing
@@ -55,7 +63,25 @@ export function useRecentFiles() {
     const next = [entry, ...entriesRef.current.filter(e => e.path !== path)];
     setBoth(next);
     await persist(next);
-  }, [persist, setBoth]);
+  }, [persist, setBoth, whenReady]);
+
+  /** The registry entry for `path`, once the registry has loaded. */
+  const getRecentFile = useCallback(async (path: string): Promise<RecentFileEntry | undefined> => {
+    await whenReady();
+    return entriesRef.current.find(e => e.path === path);
+  }, [whenReady]);
+
+  /** Remember (or, with null, forget) the buzzdetect CSV imported for `path`. */
+  const setRecentFileBuzzdetect = useCallback(async (path: string, buzzdetectFile: string | null): Promise<void> => {
+    await whenReady();
+    const existing = entriesRef.current.find(e => e.path === path);
+    if (!existing || (existing.buzzdetectFile ?? null) === buzzdetectFile) return;
+    const next = entriesRef.current.map(e =>
+      e.path === path ? { ...e, buzzdetectFile: buzzdetectFile ?? undefined } : e
+    );
+    setBoth(next);
+    await persist(next);
+  }, [persist, setBoth, whenReady]);
 
   const removeRecentFile = useCallback(async (id: string): Promise<void> => {
     const next = entriesRef.current.filter(e => e.id !== id);
@@ -75,6 +101,8 @@ export function useRecentFiles() {
     fileEntries: entries,
     isLoadingFiles: isLoading,
     touchRecentFile,
+    getRecentFile,
+    setRecentFileBuzzdetect,
     removeRecentFile,
     toggleFileStarred,
   };

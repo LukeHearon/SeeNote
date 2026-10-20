@@ -10,8 +10,6 @@ export interface GitSyncUserFieldsProps {
   syncTokenSavedLength?: number | null;
   syncTokenStorage?: 'keychain' | 'plaintext';
   onSyncTokenStorageChange?: (v: 'keychain' | 'plaintext') => void;
-  syncAuthorName: string;
-  onSyncAuthorNameChange: (v: string) => void;
   autoFocusToken?: boolean;
 }
 
@@ -22,8 +20,6 @@ export default function GitSyncUserFields({
   syncTokenSavedLength = null,
   syncTokenStorage = 'keychain',
   onSyncTokenStorageChange,
-  syncAuthorName,
-  onSyncAuthorNameChange,
   autoFocusToken = false,
 }: GitSyncUserFieldsProps) {
   const displayedSyncToken =
@@ -91,17 +87,6 @@ export default function GitSyncUserFields({
             {isWindows ? gitSyncUserFields.keychainNoteWindows : isMac ? gitSyncUserFields.keychainNoteMac : gitSyncUserFields.keychainNoteLinux}
           </p>
         )}
-      </div>
-      <div className="mt-3">
-        <label className="text-gray-400 text-sm block mb-1">
-          {gitSyncUserFields.nameLabel}
-        </label>
-        <input
-          type="text"
-          value={syncAuthorName}
-          onChange={e => onSyncAuthorNameChange(e.target.value)}
-          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-        />
       </div>
     </>
   );

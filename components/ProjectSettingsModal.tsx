@@ -5,32 +5,33 @@ import { tooltips } from '../copy/tooltips';
 import { GitSyncUserConfig, Project, ProjectSettings, ProjectPreferences } from '../types';
 import { checkDirExists, listAnnotationFilesRecursive, getGitCredential, deleteGitCredential, openSyncGuideWindow } from '../utils/tauriCommands';
 import { copyAnnotationFiles, revealInFileManager } from '../utils/projectCommands';
-import { DEFAULT_AUTO_PULL_REMOTE_CHANGES, DEFAULT_DATE_TIME_FORMAT } from '../constants';
-import { DateTimeFormat, previewDateTimeFormat } from '../utils/datetimeDisplay';
-import { FILENAME_PREVIEW_DATE } from '../utils/filenameTime';
+import { DEFAULT_AUTO_PULL_REMOTE_CHANGES } from '../constants';
 import { resolveInputPath } from '../utils/projectPaths';
 import { normalizeGitRemoteUrl, readSyncToken, applySyncToken, type TokenStorage } from '../utils/gitSync';
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
 import ApplicationSettingsFields from './ApplicationSettingsFields';
+import SingleFileSettingsFields from './SingleFileSettingsFields';
 import ModalBackdrop from './ModalBackdrop';
 import { useProjectForm } from '../hooks/useProjectForm';
 import { projectFormFromSettings, missingProjectField, settingsFromProjectForm } from '../utils/projectForm';
 
 type Step = 'form' | 'annotationCopyConfirm' | 'conflictConfirm';
-type SettingsTab = 'application' | 'settings' | 'preferences';
+export type SettingsTab = 'application' | 'singleFile' | 'settings' | 'preferences';
 
 interface Props {
-  /** Omit to open the modal in application-settings-only mode (e.g. from the
-   *  launch screen, before any project is loaded) — the Project Settings and
-   *  User Preferences tabs only make sense once a project is open. */
+  /** Omit to open the modal in application-settings-only mode (from the
+   *  launch screen or single-file mode) — the Project Settings and User
+   *  Preferences tabs only make sense once a project is open, and the Single
+   *  File tab only without one. */
   project?: Project;
   onSave?: (settings: ProjectSettings, preferences: ProjectPreferences) => void;
   onClose: () => void;
+  initialTab?: SettingsTab;
 }
 
-export default function ProjectSettingsModal({ project, onSave, onClose }: Props) {
+export default function ProjectSettingsModal({ project, onSave, onClose, initialTab }: Props) {
   const { values: form, set: setForm } = useProjectForm(() => projectFormFromSettings(project?.settings));
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenDirty, setSyncTokenDirty] = useState(false);
@@ -38,12 +39,8 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>(
     project?.preferences.gitSyncUser?.tokenStorage ?? 'keychain',
   );
-  const [syncAuthorName, setSyncAuthorName] = useState(project?.preferences.gitSyncUser?.authorName ?? '');
   const [autoPullRemoteChanges, setAutoPullRemoteChanges] = useState(
     project?.preferences.autoPullRemoteChanges ?? DEFAULT_AUTO_PULL_REMOTE_CHANGES,
-  );
-  const [dateTimeFormat, setDateTimeFormat] = useState<DateTimeFormat>(
-    project?.preferences.dateTimeFormat ?? DEFAULT_DATE_TIME_FORMAT,
   );
   // Track the original URL so we can delete the old keyring entry if the user changes it.
   const initialRemoteUrlRef = React.useRef(project?.settings.gitSync?.remoteUrl ?? '');
@@ -63,7 +60,7 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
   const resolvedMediaDir = project ? resolveInputPath(project.projectDir, form.mediaDir) : '';
   const resolvedAnnotationDir = project ? resolveInputPath(project.projectDir, form.annotationDir) : '';
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>(project ? 'settings' : 'application');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? (project ? 'settings' : 'application'));
   const [focusToken, setFocusToken] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [isBusy, setIsBusy] = useState(false);
@@ -142,10 +139,10 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
     const preferences: ProjectPreferences = {
       ...project.preferences,
       gitSyncUser: newUrl
-        ? { authorName: syncAuthorName.trim() || undefined, ...tokenFields }
+        // The legacy per-project name is kept as the app-wide setting's fallback.
+        ? { authorName: project.preferences.gitSyncUser?.authorName, ...tokenFields }
         : undefined,
       autoPullRemoteChanges,
-      dateTimeFormat,
     };
     pendingRef.current = { settings, preferences };
 
@@ -239,7 +236,10 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             { label: projectSettingsModal.tabApplication, active: activeTab === 'application', onClick: () => setActiveTab('application') },
             { label: projectSettingsModal.tabSettings, active: activeTab === 'settings', onClick: () => setActiveTab('settings') },
             { label: projectSettingsModal.tabPreferences, active: activeTab === 'preferences', onClick: () => setActiveTab('preferences') },
-          ] : undefined}
+          ] : [
+            { label: projectSettingsModal.tabApplication, active: activeTab === 'application', onClick: () => setActiveTab('application') },
+            { label: projectSettingsModal.tabSingleFile, active: activeTab === 'singleFile', onClick: () => setActiveTab('singleFile') },
+          ]}
           footer={
             project ? (
               <>
@@ -261,7 +261,14 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
             )
           }
         >
-          {activeTab === 'application' && <ApplicationSettingsFields />}
+          {activeTab === 'application' && (
+            <ApplicationSettingsFields
+              legacyDateTimeFormat={project?.preferences.dateTimeFormat}
+              legacyAnnotatorName={project?.preferences.gitSyncUser?.authorName}
+            />
+          )}
+
+          {!project && activeTab === 'singleFile' && <SingleFileSettingsFields />}
 
           {project && activeTab === 'settings' && (
             <>
@@ -319,8 +326,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                   syncTokenSavedLength={syncTokenSavedLength}
                   syncTokenStorage={syncTokenStorage}
                   onSyncTokenStorageChange={setSyncTokenStorage}
-                  syncAuthorName={syncAuthorName}
-                  onSyncAuthorNameChange={setSyncAuthorName}
                   autoFocusToken={focusToken}
                 />
                 <label className="flex items-start gap-2 cursor-pointer select-none mt-3">
@@ -335,28 +340,6 @@ export default function ProjectSettingsModal({ project, onSave, onClose }: Props
                     <span className="block text-xs text-gray-500 mt-0.5">{projectSettingsModal.autoPullHint}</span>
                   </span>
                 </label>
-              </div>
-
-              <div>
-                <h3 className="text-gray-300 text-sm font-medium mb-1">{projectSettingsModal.dateTimeFormatHeader}</h3>
-                <p className="text-xs text-gray-500 mb-3">{projectSettingsModal.dateTimeFormatHint}</p>
-                <div className="space-y-2">
-                  {(['friendly', 'iso'] as DateTimeFormat[]).map(fmt => (
-                    <label key={fmt} className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="radio"
-                        name="dateTimeFormat"
-                        checked={dateTimeFormat === fmt}
-                        onChange={() => setDateTimeFormat(fmt)}
-                        className="accent-blue-500"
-                      />
-                      <span className="text-sm text-gray-200">
-                        {fmt === 'friendly' ? projectSettingsModal.dateTimeFormatFriendlyLabel : projectSettingsModal.dateTimeFormatIsoLabel}
-                      </span>
-                      <span className="text-xs text-gray-500 font-mono">{previewDateTimeFormat(fmt, FILENAME_PREVIEW_DATE)}</span>
-                    </label>
-                  ))}
-                </div>
               </div>
 
               {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}

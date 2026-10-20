@@ -55,14 +55,21 @@ interface RecentFileRecord {
   path: string;
   last_opened: string;
   starred?: boolean | null;
+  buzzdetect_file?: string | null;
 }
 
 function toRecentFile(r: RecentFileRecord): RecentFileEntry {
-  return { id: r.id, path: r.path, lastOpened: r.last_opened, starred: r.starred ?? undefined };
+  return {
+    id: r.id, path: r.path, lastOpened: r.last_opened, starred: r.starred ?? undefined,
+    buzzdetectFile: r.buzzdetect_file ?? undefined,
+  };
 }
 
 function toRecentFileRecord(e: RecentFileEntry): RecentFileRecord {
-  return { id: e.id, path: e.path, last_opened: e.lastOpened, starred: e.starred ?? null };
+  return {
+    id: e.id, path: e.path, last_opened: e.lastOpened, starred: e.starred ?? null,
+    buzzdetect_file: e.buzzdetectFile ?? null,
+  };
 }
 
 export const loadRecentFiles = async (filesFile: string): Promise<RecentFileEntry[]> => {

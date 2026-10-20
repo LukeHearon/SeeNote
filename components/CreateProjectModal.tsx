@@ -12,6 +12,7 @@ import { normalizeGitRemoteUrl, applySyncToken, type TokenStorage } from '../uti
 import SettingsModalShell from './SettingsModalShell';
 import ProjectBaseFields from './ProjectBaseFields';
 import GitSyncUserFields from './GitSyncUserFields';
+import AnnotatorNameField from './AnnotatorNameField';
 import ModalBackdrop from './ModalBackdrop';
 import { useProjectForm } from '../hooks/useProjectForm';
 import { projectFormFromSettings, missingProjectField, settingsFromProjectForm } from '../utils/projectForm';
@@ -28,7 +29,6 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
   const { values: form, set: setForm } = useProjectForm(() => projectFormFromSettings(undefined, randomMagmaGradient()));
   const [syncToken, setSyncToken] = useState('');
   const [syncTokenStorage, setSyncTokenStorage] = useState<TokenStorage>('keychain');
-  const [syncAuthorName, setSyncAuthorName] = useState('');
   const [activeTab, setActiveTab] = useState<'settings' | 'preferences'>('settings');
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -121,7 +121,7 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
       const prefs: ProjectPreferences = {
         toolHotkeys: buildHotkeyMap(DEFAULT_TOOL_SEED),
         ...(normalizedSyncRemoteUrl ? {
-          gitSyncUser: { authorName: syncAuthorName.trim() || undefined, ...tokenFields },
+          gitSyncUser: { ...tokenFields },
         } : {}),
       };
       await writeProjectPreferences(projectDir, prefs);
@@ -244,9 +244,10 @@ export default function CreateProjectModal({ onCreated, onClose, createProject, 
                 onSyncTokenChange={setSyncToken}
                 syncTokenStorage={syncTokenStorage}
                 onSyncTokenStorageChange={setSyncTokenStorage}
-                syncAuthorName={syncAuthorName}
-                onSyncAuthorNameChange={setSyncAuthorName}
               />
+              <div className="mt-3">
+                <AnnotatorNameField />
+              </div>
             </div>
 
           </>
