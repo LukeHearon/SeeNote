@@ -6,7 +6,7 @@ import { colorForLabel, type LabelMatcher } from '../utils/helpers';
 import { renameLabelAcrossTracks, renameOneLabelInTrack, type LabelMatch } from '../utils/annotationRename';
 import { isInsideDir } from '../utils/projectPaths';
 import type { UpdateProjectPreferences } from '../utils/projectPreferences';
-import type { Timeline } from '../utils/subsetTimeline';
+import { displayOfNearestKept, projectIntervalToDisplay, type Timeline } from '../utils/subsetTimeline';
 
 interface FindLabelParams {
   project: Project;
@@ -137,12 +137,26 @@ export function useFindLabel({
   const goToAnnotationMatch = useCallback((match: LabelMatch) => {
     const found = annotations.find(a => a.start === match.start && a.end === match.end && a.text === match.label);
     if (!found) return;
+    // The match carries source times; the view, the playhead, and the
+    // selection are all on the display axis. Projected as the overlay projects
+    // it (utils/annotationProjection), so the selection covers exactly the box
+    // on screen — mapping the two ends separately could straddle a subset cut.
+    const shown = projectIntervalToDisplay(timeline, match.start, match.end);
+    if (!shown) {
+      // Cut out by the subset: there's no box to bind, and selecting an
+      // annotation the user can't see would leave Delete aimed at it. Go to
+      // where it would be instead.
+      setSelectedAnnotationId(null);
+      setBoundAnnotationId(null);
+      handleSelectionChange(null);
+      const d = displayOfNearestKept(timeline, match.start);
+      seek(d);
+      spectrogramRef.current?.scrollToTime(d);
+      return;
+    }
     setSelectedAnnotationId(found.id);
     setBoundAnnotationId(found.id);
-    // The match carries source times; the view, the playhead, and the
-    // selection are all on the display axis.
-    const dStart = timeline.toDisplay(match.start);
-    const dEnd = timeline.toDisplay(match.end);
+    const { start: dStart, end: dEnd } = shown;
     handleSelectionChange({ start: dStart, end: dEnd });
     seek(dStart);
     // Centre the match at whatever zoom the user is already working at — walking
