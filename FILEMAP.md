@@ -24,6 +24,7 @@ Quick reference for agents. One phrase per file.
 - `components/DirectoryField.tsx` — shared directory picker (label/input/browse/resolve/portability/existence) used by both project modals
 - `components/CollapsibleSection.tsx` — small disclosure section (chevron + title) for optional form fields
 - `components/ProjectHeader.tsx` — the project window's header (back, refresh, name/settings, sync, debug, help)
+- `components/ProjectOpeningView.tsx` — stand-in for the project window while an open is in progress (header + spinner); shown by App over the launch screen so a slow drive doesn't leave the click looking dead
 - `components/SyncControls.tsx` — header sync button, commit-message popover, repo-page context menu
 - `components/SyncToast.tsx` — post-sync summary / error toast, including the cleared-tracks confirmation
 - `components/ToolModals.tsx` — the annotation-tool modals (settings, edit, create, example library, delete)

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Settings, Trash2, Play, Square, Search, Images } from 'lucide-react';
+import { Settings, Trash2, Play, Square, Search, Images, Loader2 } from 'lucide-react';
 import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool } from '../types';
 import { HOTKEY_SLOTS } from '../constants';
@@ -41,6 +41,8 @@ interface AnnotationToolsPanelProps {
   onShowExamples: (toolIndex: number) => void;
   /** Re-read annotations, the tool set and the find index from disk. Absent in the guide's live copy. */
   onRefreshAnnotations?: () => void;
+  /** The project's tools are still being read from disk: a spinner stands in for the labels. */
+  loading?: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }
@@ -61,6 +63,7 @@ function AnnotationToolsPanel({
   onPlayExample,
   onShowExamples,
   onRefreshAnnotations,
+  loading = false,
   collapsed,
   onToggleCollapsed,
 }: AnnotationToolsPanelProps) {
@@ -176,6 +179,12 @@ function AnnotationToolsPanel({
           </div>
         </div>
 
+        {loading && (
+          <div className="flex justify-center py-2 text-slate-500" role="status" aria-label={copy.loading}>
+            <Loader2 size={14} className="animate-spin" />
+          </div>
+        )}
+
         {/* Defined labels — single scrollable column */}
         <div className="flex flex-col gap-1">
           {definedTools.map((tool) => {
@@ -240,7 +249,7 @@ function AnnotationToolsPanel({
       {/* Add-tool entry — pinned below the scrolling list (so its match dropdown
           isn't clipped) whenever a hotkey slot is still free. Same search-then-
           create behaviour as the empty slots in Annotation Tool Settings. */}
-      {definedTools.length < HOTKEY_SLOTS.length && (
+      {!loading && definedTools.length < HOTKEY_SLOTS.length && (
         <div className="flex-none mx-1.5 mb-1.5 px-2 py-1 rounded border border-dashed border-slate-700 hover:border-slate-500 transition-colors">
           <NewToolEntry
             annotationTools={annotationTools}

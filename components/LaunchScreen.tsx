@@ -27,7 +27,12 @@ interface Props {
   isLoading: boolean;
   loadError: string | null;
   projectsFilePath: string | null;
-  onOpenProject: (project: Project) => void;
+  /** Open a project. `signal` is the one from `beginOpening` when the caller began the open itself. */
+  onOpenProject: (project: Project, signal?: AbortSignal) => void;
+  /** Show the project-opening view now, before any disk access; aborted if the user backs out. */
+  beginOpening: (name: string, nameGradientColors?: [string, string]) => AbortSignal;
+  /** Drop the opening view, for an open that won't go ahead. */
+  endOpening: (signal: AbortSignal) => void;
   onOpenFile: (path: string) => void;
   createProject: (args: { projectDir: string; settings: ProjectSettings }) => Promise<Project>;
   addExistingProject: (projectDir: string) => Promise<Project>;
@@ -56,6 +61,8 @@ export default function LaunchScreen({
   loadError,
   projectsFilePath,
   onOpenProject,
+  beginOpening,
+  endOpening,
   onOpenFile,
   createProject,
   addExistingProject,
@@ -184,12 +191,21 @@ export default function LaunchScreen({
   // left grayed out until the user successfully re-links it.
   const handleEntryClick = async (entry: ProjectListEntry) => {
     setOpenError(null);
+    // The opening view goes up before the first read: reconnectProject stats
+    // the project folder and reads its settings, which on a sleeping drive is
+    // the long wait. It's named from the list's mirrored name and colors.
+    const signal = beginOpening(
+      entry.registry.name ?? basename(entry.registry.projectDir),
+      entry.registry.nameGradientColors,
+    );
     const resolved = await reconnectProject(entry.registry.id);
-    if (!resolved) return;
-    if (resolved.status === 'ok') {
-      onOpenProject(resolved.project);
+    if (signal.aborted) return;
+    if (resolved?.status === 'ok') {
+      onOpenProject(resolved.project, signal);
       return;
     }
+    endOpening(signal);
+    if (!resolved) return;
     const name = resolved.registry.name ?? basename(resolved.registry.projectDir);
     const isBadSettings = resolved.status === 'bad-settings';
     const ok = await askConfirm({
