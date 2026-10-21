@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use crate::audio::{decoder, lock, spectrogram, stream_pool, wav};
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use super::shared::blocking;
 
 // ── PCM stream state ──────────────────────────────────────────────────────────
 
@@ -67,19 +68,6 @@ fn reap_idle_streams(streams: &mut HashMap<u64, StreamEntry>) -> Vec<StreamEntry
             streams.remove(&id)
         })
         .collect()
-}
-
-/// Run blocking work (container scans, decoding, ffprobe/ffmpeg spawns) off the
-/// async runtime's worker threads, so a slow drive stalls only its own command
-/// rather than every IPC call queued behind it.
-async fn blocking<T, F>(f: F) -> Result<T, String>
-where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("audio task failed: {e}"))?
 }
 
 // ── File info ─────────────────────────────────────────────────────────────────

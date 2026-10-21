@@ -273,13 +273,15 @@ pub async fn save_file_dialog(
 
 #[tauri::command]
 pub async fn apply_copy_overrides(overrides_json: String) -> Result<String, String> {
-    let repo_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-    let script = repo_dir.join("scripts").join("apply-copy-overrides.js");
+    // Dev-only (the Copy Editor rewrites the checkout's copy/*.ts), so the
+    // script is found from the source tree this binary was built from rather
+    // than from the working directory, which depends on how the app was started.
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = manifest_dir.join("scripts").join("apply-copy-overrides.js");
 
     let mut child = std::process::Command::new("node")
         .arg(&script)
-        .arg("--stdin")
-        .current_dir(&repo_dir)
+        .current_dir(manifest_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -221,7 +221,7 @@ pub async fn list_txt_files_recursive(path: String, ext: Option<String>) -> Resu
     let extension = ext.as_deref().unwrap_or("txt").trim_start_matches('.');
     let mut results = vec![];
     collect_ext_files(root, extension, &mut results);
-    results.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    results.sort_by_key(|a| a.to_lowercase());
     Ok(results)
 }
 

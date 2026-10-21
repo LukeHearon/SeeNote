@@ -52,7 +52,7 @@ interface PatternPart {
  * settings preview, which needs to know whether a pattern has any tokens at
  * all.
  */
-export function parsePattern(pattern: string): PatternPart[] {
+function parsePattern(pattern: string): PatternPart[] {
   const parts: PatternPart[] = [];
   let rest = pattern;
   let sawHour = false;

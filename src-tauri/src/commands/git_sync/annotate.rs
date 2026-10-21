@@ -158,7 +158,7 @@ pub(crate) fn resolve_annotation(
     match (ancestor, ours, theirs) {
         (Some(_), Some(o), None) => Some(o.to_string()),
         (Some(_), None, Some(t)) => Some(t.to_string()),
-        (a, Some(o), Some(t)) if o != t && a.map_or(true, |a| o != a && t != a) => {
+        (a, Some(o), Some(t)) if o != t && a.is_none_or(|a| o != a && t != a) => {
             Some(set_merge(a.unwrap_or(""), o, t))
         }
         _ => None,

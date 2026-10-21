@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::Path;
+use super::shared::blocking;
 
 /// Parsed buzzdetect activations for one track.
 ///
@@ -85,18 +86,21 @@ pub async fn read_buzzdetect(
     frame_length: Option<f32>,
     trim_activation_prefix: Option<bool>,
 ) -> Result<Option<BuzzdetectData>, String> {
-    let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
-    let finished_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
-    let partial_path = Path::new(dir).join(format!("{}_buzzpart.csv", ident));
-    let (csv_path, is_partial) = if finished_path.exists() {
-        (finished_path, false)
-    } else if partial_path.exists() {
-        (partial_path, true)
-    } else {
-        return Ok(None);
-    };
-    parse_buzzdetect_csv(&csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
-        .map(Some)
+    blocking(move || {
+        let dir = buzzdetect_dir.trim_end_matches(['/', '\\']);
+        let finished_path = Path::new(dir).join(format!("{}_buzzdetect.csv", ident));
+        let partial_path = Path::new(dir).join(format!("{}_buzzpart.csv", ident));
+        let (csv_path, is_partial) = if finished_path.exists() {
+            (finished_path, false)
+        } else if partial_path.exists() {
+            (partial_path, true)
+        } else {
+            return Ok(None);
+        };
+        parse_buzzdetect_csv(&csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
+            .map(Some)
+    })
+    .await
 }
 
 /// Read one buzzdetect CSV picked by path (single-file mode, which has no
@@ -109,12 +113,15 @@ pub async fn read_buzzdetect_file(
     frame_length: Option<f32>,
     trim_activation_prefix: Option<bool>,
 ) -> Result<BuzzdetectData, String> {
-    let csv_path = Path::new(&path);
-    let is_partial = csv_path
-        .file_name()
-        .map(|n| n.to_string_lossy().ends_with("_buzzpart.csv"))
-        .unwrap_or(false);
-    parse_buzzdetect_csv(csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
+    blocking(move || {
+        let csv_path = Path::new(&path);
+        let is_partial = csv_path
+            .file_name()
+            .map(|n| n.to_string_lossy().ends_with("_buzzpart.csv"))
+            .unwrap_or(false);
+        parse_buzzdetect_csv(csv_path, is_partial, frame_length, trim_activation_prefix.unwrap_or(true))
+    })
+    .await
 }
 
 /// The shared parse behind both readers; see [`read_buzzdetect`] for the CSV contract.
@@ -236,6 +243,32 @@ fn parse_buzzdetect_csv(
     })
 }
 
+/// Infer the frame hop from the spacing between the first few `start` values,
+/// erroring if that spacing is inconsistent. Uses a small relative tolerance so
+/// floating-point round-off in the CSV (e.g. 0, 0.96, 1.92 …) is accepted.
+fn infer_frame_hop(starts: &[f32]) -> Result<f32, String> {
+    if starts.len() < 2 {
+        return Err("cannot infer frame hop from fewer than 2 rows".to_string());
+    }
+    let width = starts[1] - starts[0];
+    if width <= 0.0 {
+        return Err(format!("non-increasing start times (width {})", width));
+    }
+    // Check up to the first 5 deltas for consistency.
+    let checks = starts.len().min(6);
+    let tol = width.abs() * 1e-3;
+    for i in 1..checks {
+        let delta = starts[i] - starts[i - 1];
+        if (delta - width).abs() > tol {
+            return Err(format!(
+                "inconsistent frame spacing: expected {:.6}s but found {:.6}s between rows {} and {}",
+                width, delta, i, i + 1
+            ));
+        }
+    }
+    Ok(width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,30 +364,4 @@ mod tests {
             assert!(!is_missing_token(tok), "expected {:?} to not be missing", tok);
         }
     }
-}
-
-/// Infer the frame hop from the spacing between the first few `start` values,
-/// erroring if that spacing is inconsistent. Uses a small relative tolerance so
-/// floating-point round-off in the CSV (e.g. 0, 0.96, 1.92 …) is accepted.
-fn infer_frame_hop(starts: &[f32]) -> Result<f32, String> {
-    if starts.len() < 2 {
-        return Err("cannot infer frame hop from fewer than 2 rows".to_string());
-    }
-    let width = starts[1] - starts[0];
-    if width <= 0.0 {
-        return Err(format!("non-increasing start times (width {})", width));
-    }
-    // Check up to the first 5 deltas for consistency.
-    let checks = starts.len().min(6);
-    let tol = width.abs() * 1e-3;
-    for i in 1..checks {
-        let delta = starts[i] - starts[i - 1];
-        if (delta - width).abs() > tol {
-            return Err(format!(
-                "inconsistent frame spacing: expected {:.6}s but found {:.6}s between rows {} and {}",
-                width, delta, i, i + 1
-            ));
-        }
-    }
-    Ok(width)
 }

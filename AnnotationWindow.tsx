@@ -408,7 +408,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     getAnnotationPath,
   });
   const {
-    annotationTools, annotationToolsRef,
+    annotationTools, annotationToolsRef, toolsLoaded,
     setPanelEditingToolIndex, setPanelDeletingToolIndex,
     libraryToolIndex, libraryPlaying,
     handleShowExamples, loadAnnotationTools, handleCreateTool, handleBindHotkey, handleReorderTools,
@@ -1374,12 +1374,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
       <ProjectHeader
-        project={project}
+        name={project.settings.projectName}
+        nameGradientColors={project.settings.nameGradientColors}
         onClose={onClose}
         onRefreshAll={handleRefreshAll}
         onOpenProjectSettings={() => setShowProjectSettings(true)}
         onOpenDebug={() => setShowDebug(true)}
-        sync={project.settings.gitSync ? { syncing, hasLocalChanges, hasRemoteChanges, onSync: handleSync } : null}
+        sync={project.settings.gitSync
+          ? { remoteUrl: project.settings.gitSync.remoteUrl, syncing, hasLocalChanges, hasRemoteChanges, onSync: handleSync }
+          : null}
       />
 
       <SyncToast
@@ -1506,6 +1509,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
               node: (
                 <AnnotationToolsPanel
                   annotationTools={annotationTools}
+                  loading={!toolsLoaded}
                   activeToolKey={activeToolKey}
                   onToolActivate={handleToolActivate}
                   onSelectModeActivate={selectMode}

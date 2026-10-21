@@ -269,6 +269,7 @@ export const repairProjectModal = {
 export const annotationToolsPanel = {
   get refresh() { return getOverride('ui.annotationToolsPanel.refresh') ?? "Refresh annotations"; },
   get header() { return getOverride('ui.annotationToolsPanel.header') ?? "Labels"; },
+  get loading() { return getOverride('ui.annotationToolsPanel.loading') ?? "Loading labels"; },
   get selectLabel() { return getOverride('ui.annotationToolsPanel.selectLabel') ?? "Select"; },
   get customLabel() { return getOverride('ui.annotationToolsPanel.customLabel') ?? "Custom"; },
   get showExamples() { return getOverride('ui.annotationToolsPanel.showExamples') ?? "Show examples"; },
@@ -513,6 +514,10 @@ export const keyboardShortcutsView = {
   get groupAnnotations() { return getOverride('ui.keyboardShortcutsView.groupAnnotations') ?? "Annotations"; },
   get groupApp() { return getOverride('ui.keyboardShortcutsView.groupApp') ?? "App"; },
   get noShortcuts() { return getOverride('ui.keyboardShortcutsView.noShortcuts') ?? "No shortcuts for this key"; },
+};
+
+export const projectOpening = {
+  get opening() { return getOverride('ui.projectOpening.opening') ?? "Opening project…"; },
 };
 
 export const annotationWindow = {

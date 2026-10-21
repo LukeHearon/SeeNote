@@ -5,7 +5,7 @@ import type { DateTimeFormat } from './utils/datetimeDisplay';
 // © 2022 dofuuz — MIT License
 // Source: https://github.com/dofuuz/roseus
 // 17 stops sampled evenly from the 256-entry dataset (indices 0, 16, 32 … 240, 255)
-export const MAGMA_STOPS = [
+const MAGMA_STOPS = [
   { pos: 0.00, r: 0,   g: 0,   b: 0   },  // True black (noise floor)
   { pos: 0.07, r: 28,  g: 15,  b: 70  },  // Midnight purple
   { pos: 0.2,  r: 80,  g: 17,  b: 123 },  // Purple
@@ -103,7 +103,7 @@ export const DEFAULT_SPECTROGRAM_SETTINGS: SpectrogramSettings = {
 export const DEFAULT_LEFT_PANEL_WIDTH = 224; // px
 export const DEFAULT_FIND_PANEL_WIDTH = 260; // px — the right-hand Find & Rename dock
 export const DEFAULT_SPLIT_RATIO = 0.5;      // vertical video/spectrogram split
-export const DEFAULT_LEFT_PANEL_RATIO = 0.6; // legacy file-tree vs tool-palette split; seeds sidebarSections on load
+const DEFAULT_LEFT_PANEL_RATIO = 0.6; // legacy file-tree vs tool-palette split; seeds sidebarSections on load
 
 /**
  * The left sidebar's stack, top to bottom. `neurons` is only rendered while
@@ -188,7 +188,7 @@ export const MIN_BUZZDETECT_PANEL_HEIGHT = 80;
 export const MAX_BUZZDETECT_PANEL_HEIGHT = 600;
 // Every neuron starts at 0 until the user sets or clears it (a cleared
 // threshold is null and never detects; see utils/buzzdetectThresholds.ts).
-export const DEFAULT_BUZZDETECT_THRESHOLD = 0;
+const DEFAULT_BUZZDETECT_THRESHOLD = 0;
 export function defaultBuzzdetectThreshold(_neuron: string): number {
   return DEFAULT_BUZZDETECT_THRESHOLD;
 }
@@ -291,7 +291,7 @@ export const MIN_COLS_PER_CHUNK = 64;
 export const OVERVIEW_TARGET_COLS = 1024;
 
 /** Per-tier LRU budget in bytes; converted to a chunk count using fftSize. */
-export const TIER_CACHE_BYTES = 16 * 1024 * 1024;
+const TIER_CACHE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Per-tier LRU budget while a subset is active.

@@ -63,6 +63,9 @@ export function useAnnotationTools({
   // re-read the on-disk file before the debounced autosave has written renames,
   // clobbering them.
   const annotationToolsRef = useRef(annotationTools);
+  // False until the project's tool folders have been read once. On a slow drive
+  // that read can take a while, and until then the palette holds only Custom.
+  const [toolsLoaded, setToolsLoaded] = useState(false);
 
   // Edit/delete triggered from the palette right-click context menu (outside the settings modal).
   const [panelEditingToolIndex, setPanelEditingToolIndex] = useState<number | null>(null);
@@ -121,6 +124,8 @@ export function useAnnotationTools({
       setAnnotations(prev => prev.map(a => ({ ...a, color: colorForLabel(a.text, tools) })));
     } catch (err) {
       addLog(`Error loading annotation tools: ${err}`, 'error');
+    } finally {
+      setToolsLoaded(true);
     }
   }, [setAnnotations]);
 
@@ -309,6 +314,7 @@ export function useAnnotationTools({
     annotationTools,
     setAnnotationTools,
     annotationToolsRef,
+    toolsLoaded,
     panelEditingToolIndex,
     setPanelEditingToolIndex,
     panelDeletingToolIndex,

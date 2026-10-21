@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Reads { key: newValue } JSON from stdin.
 // For each key, rewrites the ?? "default" in the matching copy/*.ts source file.
+// Run by the dev-only Copy Editor's Commit (`apply_copy_overrides` in
+// src-tauri/src/commands/filesystem.rs).
 
 import fs from 'fs';
 import path from 'path';
@@ -12,7 +14,7 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const FILE_MAP = {
   ui: path.join(repoRoot, 'copy', 'ui.ts'),
   tooltips: path.join(repoRoot, 'copy', 'tooltips.ts'),
-  helpPanel: path.join(repoRoot, 'copy', 'help.ts'),
+  help: path.join(repoRoot, 'copy', 'help.ts'),
 };
 
 let input = '';
@@ -43,15 +45,16 @@ process.stdin.on('end', () => {
     }
 
     const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // The default is a double-quoted literal that may itself hold escapes
+    // (\" or \n), so match escape sequences whole rather than stopping at the
+    // first quote. JSON.stringify writes a valid literal for any new value, and
+    // the replacement is a function so a `$` in the value isn't read as a group.
     const re = new RegExp(
-      `(getOverride\\('${escaped}'\\)\\s*\\?\\?\\s*)(?:"([^"]*)"|'([^']*)')`,
+      `(getOverride\\('${escaped}'\\)\\s*\\?\\?\\s*)"(?:[^"\\\\]|\\\\.)*"`,
       'g',
     );
-
-    const useDouble = contents[filePath].includes(`getOverride('${key}') ?? "`);
-    const quote = useDouble ? '"' : "'";
-    const safeValue = newValue.replace(new RegExp(quote, 'g'), '\\' + quote);
-    const next = contents[filePath].replace(re, `$1${quote}${safeValue}${quote}`);
+    const literal = JSON.stringify(newValue);
+    const next = contents[filePath].replace(re, (_, lead) => lead + literal);
 
     if (next === contents[filePath]) {
       skipped.push(`${key}: no match found in source`);

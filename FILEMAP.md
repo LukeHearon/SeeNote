@@ -27,6 +27,7 @@ Quick reference for agents. One phrase per file.
 - `components/ApplicationSettingsFields.tsx` / `SingleFileSettingsFields.tsx` — the app settings' Application and Single File tabs (inside ProjectSettingsModal); persist immediately via useAppSettings
 - `components/AnnotatorNameField.tsx` / `DateTimeFormatField.tsx` — app-wide annotator name and datetime style, bound to useAppSettings
 - `components/ProjectHeader.tsx` — the project window's header (back, refresh, name/settings, sync, debug, help)
+- `components/ProjectOpeningView.tsx` — stand-in for the project window while an open is in progress (header + spinner); shown by App over the launch screen so a slow drive doesn't leave the click looking dead
 - `components/SyncControls.tsx` — header sync button, commit-message popover, repo-page context menu
 - `components/SyncToast.tsx` — post-sync summary / error toast, including the cleared-tracks confirmation
 - `components/ToolModals.tsx` — the annotation-tool modals (settings, edit, create, example library, delete)

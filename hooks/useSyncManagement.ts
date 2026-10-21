@@ -18,7 +18,7 @@ async function annotatorName(project: Project): Promise<string> {
 export const INCOMING_CLEARS_PREFIX = 'INCOMING_CLEARS:';
 
 /** Sync errors the user has to act on, as opposed to a transient network failure. */
-export function needsUserAction(message: string): boolean {
+function needsUserAction(message: string): boolean {
   return message.includes('AUTH_FAILED:')
     || message.includes(INCOMING_CLEARS_PREFIX)
     || message.includes('refusing to sync');

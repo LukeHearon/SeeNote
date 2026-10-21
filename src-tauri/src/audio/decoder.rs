@@ -343,6 +343,25 @@ fn resync_gap_frames(pts_frame: u64, expected: u64, sample_rate: u32) -> u64 {
     }
 }
 
+/// The frames a forward-only `skip_to` must discard to land on `start_sec`
+/// from `next_output_frame`. Shared by both stream kinds (symphonia here,
+/// `ffmpeg_stream`), which differ only in how they throw the frames away.
+/// Errors on a non-finite or negative time, or one behind the current position.
+pub(super) fn skip_gap_frames(start_sec: f64, sample_rate: u32, next_output_frame: u64) -> Result<u64> {
+    if !start_sec.is_finite() || start_sec < 0.0 {
+        return Err(anyhow::anyhow!(
+            "start_sec must be a finite non-negative number, got {start_sec}"
+        ));
+    }
+    let target_frame = (start_sec * sample_rate as f64).round() as u64;
+    if target_frame < next_output_frame {
+        return Err(anyhow::anyhow!(
+            "skip_to cannot move backwards ({start_sec}s is behind the current position)"
+        ));
+    }
+    Ok(target_frame - next_output_frame)
+}
+
 impl SymphoniaStream {
     /// Open a file and seek to just before `start_sec` using the 500ms margin
     /// + first-packet timestamp technique (see module-level doc).
@@ -427,22 +446,12 @@ impl SymphoniaStream {
     /// `read()` returns the frame at round(start_sec * sample_rate), the same
     /// guarantee `seek_to` gives.
     pub fn skip_to(&mut self, start_sec: f64) -> Result<()> {
-        if !start_sec.is_finite() || start_sec < 0.0 {
-            return Err(anyhow::anyhow!(
-                "start_sec must be a finite non-negative number, got {start_sec}"
-            ));
-        }
-        let target_frame = (start_sec * self.sample_rate as f64).round() as u64;
-        if target_frame < self.next_output_frame {
-            return Err(anyhow::anyhow!(
-                "skip_to cannot move backwards ({start_sec}s is behind the current position)"
-            ));
-        }
+        let gap = skip_gap_frames(start_sec, self.sample_rate, self.next_output_frame)?;
 
         // Bounded chunks: read() allocates its whole request up front, and the
         // gap here is whatever the caller asked for.
         const SKIP_CHUNK_FRAMES: usize = 16 * 1024;
-        let mut remaining = (target_frame - self.next_output_frame) as usize;
+        let mut remaining = gap as usize;
         while remaining > 0 {
             let (_, frames_read) = self.read(remaining.min(SKIP_CHUNK_FRAMES))?;
             if frames_read == 0 {
@@ -710,7 +719,7 @@ impl SymphoniaStream {
                             "SymphoniaStream: {gap} frames lost to a corrupt packet at frame {}; padding with silence",
                             self.abs_frame
                         );
-                        self.pending.splice(0..0, std::iter::repeat(0.0f32).take(gap as usize * ch));
+                        self.pending.splice(0..0, std::iter::repeat_n(0.0f32, gap as usize * ch));
                     }
                 }
             }
@@ -730,10 +739,7 @@ impl SymphoniaStream {
                 if self.eof {
                     break;
                 }
-                match self.fill_next_packet()? {
-                    false => { self.eof = true; break; }
-                    true => {}
-                }
+                if !self.fill_next_packet()? { self.eof = true; break; }
                 // fill_next_packet resets pending_pos to 0 and only returns
                 // true when it produced a non-empty packet, so pending is
                 // guaranteed non-empty here.

@@ -1,8 +1,9 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import LaunchScreen from './components/LaunchScreen';
 import AnnotationWindow from './AnnotationWindow';
 import SingleFileWindow from './SingleFileWindow';
 import RepairProjectModal, { RepairProjectState } from './components/RepairProjectModal';
+import ProjectOpeningView from './components/ProjectOpeningView';
 import TooltipLayer from './components/TooltipLayer';
 import { Project, ProjectPreferences, ProjectSettings } from './types';
 import { useProjects } from './hooks/useProjects';
@@ -51,6 +52,34 @@ export default function App() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [repairProject, setRepairProject] = useState<RepairProjectState | null>(null);
 
+  // A project open in progress. Everything between the click and the project
+  // window (validating the entry, reading its settings, checking the media
+  // directory) touches the project's drive, which on a sleeping external disk
+  // can take many seconds, so the opening view stands in for the window the
+  // whole time. The LaunchScreen stays mounted beneath it: a failed open falls
+  // back to its not-found / re-link prompts. Back aborts the signal, and each
+  // step of the open checks it before going on.
+  const [opening, setOpening] = useState<{ name: string; nameGradientColors?: [string, string] } | null>(null);
+  const openingRef = useRef<AbortController | null>(null);
+  const beginOpening = useCallback((name: string, nameGradientColors?: [string, string]): AbortSignal => {
+    openingRef.current?.abort();
+    const controller = new AbortController();
+    openingRef.current = controller;
+    setOpening({ name, nameGradientColors });
+    return controller.signal;
+  }, []);
+  const endOpening = useCallback((signal: AbortSignal) => {
+    if (openingRef.current?.signal !== signal) return;
+    openingRef.current = null;
+    setOpening(null);
+  }, []);
+  const cancelOpening = useCallback(() => {
+    const controller = openingRef.current;
+    if (!controller) return;
+    controller.abort();
+    endOpening(controller.signal);
+  }, [endOpening]);
+
   // Keep the in-memory active project in lockstep with persisted settings/preferences.
   // `activeProject` is held here, separate from the projects store, so without
   // this the AnnotationWindow header (name + gradient) and its own `projectRef`
@@ -74,22 +103,32 @@ export default function App() {
     [updateProjectPreferences],
   );
 
-  const handleOpenProject = useCallback(async (project: Project) => {
+  const handleOpenProject = useCallback(async (project: Project, signal?: AbortSignal) => {
     // The LaunchScreen has already lazily re-validated this project (either
     // via reconnectProject on click, or via relinkProject after a re-link),
     // so we trust `project` here and don't stat the project dir again — that
     // would just cost another macOS TCC consent prompt for no new information.
-    const touched = await touchLastOpened(project.id) ?? project;
-    // A single stat. Listing the directory here would read every entry (plus a
-    // stat each) on the slow drive before the window can appear; the window's
-    // own scan does that work after it's up.
-    const mediaExists = await checkDirExists(touched.mediaDirectoryAbs).catch(() => false);
-    if (!mediaExists) {
-      setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
-      return;
+    // Callers that began the open themselves (a launch-list click) pass its
+    // signal; any other path starts one here.
+    const open = signal ?? beginOpening(project.settings.projectName, project.settings.nameGradientColors);
+    try {
+      const touched = await touchLastOpened(project.id) ?? project;
+      if (open.aborted) return;
+      // A single stat. Listing the directory here would read every entry (plus a
+      // stat each) on the slow drive before the window can appear; the window's
+      // own scan does that work after it's up.
+      const mediaExists = await checkDirExists(touched.mediaDirectoryAbs).catch(() => false);
+      if (open.aborted) return;
+      if (!mediaExists) {
+        setRepairProject({ project: touched, repairedMedia: touched.mediaDirectoryAbs });
+        return;
+      }
+      setActiveProject(touched);
+    } finally {
+      // A no-op once the open was cancelled or superseded.
+      endOpening(open);
     }
-    setActiveProject(touched);
-  }, [touchLastOpened]);
+  }, [touchLastOpened, beginOpening, endOpening]);
 
   const handleCloseProject = useCallback(() => {
     setActiveProject(null);
@@ -98,10 +137,11 @@ export default function App() {
   const handleOpenFile = useCallback((path: string) => {
     touchRecentFile(path).catch(err => console.error('Failed to record recent file:', err));
     // Also called from an OS "Open With SeeNote" launch (see useOsOpenFile), which can
-    // land while a project is already open — close it so the new file actually shows.
+    // land while a project is already open or opening — close it so the new file actually shows.
+    cancelOpening();
     setActiveProject(null);
     setActiveFile(path);
-  }, [touchRecentFile]);
+  }, [touchRecentFile, cancelOpening]);
 
   const handleCloseFile = useCallback(() => {
     setActiveFile(null);
@@ -142,6 +182,8 @@ export default function App() {
         loadError={loadError}
         projectsFilePath={projectsFilePath}
         onOpenProject={handleOpenProject}
+        beginOpening={beginOpening}
+        endOpening={endOpening}
         onOpenFile={handleOpenFile}
         createProject={createProject}
         addExistingProject={addExistingProject}
@@ -155,6 +197,11 @@ export default function App() {
         removeRecentFile={removeRecentFile}
         toggleFileStarred={toggleFileStarred}
       />
+      {opening && (
+        <div className="fixed inset-0 z-[100]">
+          <ProjectOpeningView name={opening.name} nameGradientColors={opening.nameGradientColors} onCancel={cancelOpening} />
+        </div>
+      )}
       {repairProject && (
         <RepairProjectModal
           repairProject={repairProject}
