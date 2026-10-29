@@ -106,6 +106,36 @@ export function resolveSlotDropTarget(
   return { type: 'slot', key: HOTKEY_SLOTS[row] };
 }
 
+export const sameSlotDropTarget = (a: SlotDropTarget | null, b: SlotDropTarget | null) =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * How far (px) the pointer must cross a zone boundary before the target
+ * switches away from the current one. Stops the target — and with it the
+ * preview — flip-flopping while the pointer rests on a boundary.
+ */
+export const TARGET_HYSTERESIS_PX = 4;
+
+/**
+ * resolveSlotDropTarget with hysteresis: stay on `prev` while it's still the
+ * target anywhere within `hysteresisPx` of the pointer.
+ */
+export function resolveSlotDropTargetSticky(
+  tools: AnnotationTool[],
+  sourceIndex: number,
+  rows: RowSpan[],
+  y: number,
+  prev: SlotDropTarget | null,
+  hysteresisPx: number = TARGET_HYSTERESIS_PX,
+): SlotDropTarget | null {
+  const next = resolveSlotDropTarget(tools, sourceIndex, rows, y);
+  if (!prev || prev.type === 'unassigned' || sameSlotDropTarget(next, prev)) return next;
+  for (const dy of [-hysteresisPx, hysteresisPx]) {
+    if (sameSlotDropTarget(resolveSlotDropTarget(tools, sourceIndex, rows, y + dy), prev)) return prev;
+  }
+  return next;
+}
+
 /** The tools after dropping `tools[sourceIndex]` on `target`. */
 export function applySlotDrop(tools: AnnotationTool[], sourceIndex: number, target: SlotDropTarget | null): AnnotationTool[] {
   if (!target) return tools;

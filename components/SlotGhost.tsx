@@ -6,7 +6,7 @@ import type { AnnotationTool } from '../types';
 export default function SlotGhost({ tool, leftPx }: { tool: AnnotationTool; leftPx: number }) {
   return (
     <div
-      className="absolute inset-y-0 right-0 z-10 pointer-events-none rounded border border-dashed flex items-center px-2 min-w-0"
+      className="slot-ghost absolute inset-y-0 right-0 z-10 pointer-events-none rounded border border-dashed flex items-center px-2 min-w-0"
       style={{ left: leftPx, borderColor: tool.color, backgroundColor: 'rgba(15,23,42,0.85)' }}
     >
       <span className="w-2 h-2 rounded-full flex-none mr-1.5 opacity-70" style={{ backgroundColor: tool.color }} />

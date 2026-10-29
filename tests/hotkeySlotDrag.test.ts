@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applySlotDrop, insertDirections, resolveSlotDropTarget, RowSpan } from '../utils/hotkeySlotDrag';
+import { applySlotDrop, insertDirections, resolveSlotDropTarget, resolveSlotDropTargetSticky, TARGET_HYSTERESIS_PX, RowSpan } from '../utils/hotkeySlotDrag';
 import type { AnnotationTool } from '../types';
 
 // Tool 0 is Custom; the rest are keyed by the `keys` string ('-' = unassigned).
@@ -126,5 +126,23 @@ describe('resolveSlotDropTarget', () => {
     const full = tools('A1 B2 C3 D4 E5 F6 G7 H8 I9 X-');
     expect(resolveSlotDropTarget(full, idx(full, 'X'), rows, 30)).toEqual({ type: 'slot', key: '1' });
     expect(resolveSlotDropTarget(full, idx(full, 'X'), rows, 37)).toEqual({ type: 'slot', key: '2' });
+  });
+});
+
+describe('resolveSlotDropTargetSticky', () => {
+  const ts = tools('B2 C3 D4 X-'); // room both ways around the 3|4 gap (midpoint 116)
+  const x = idx(ts, 'X');
+  const up = { type: 'insert', gap: 2, direction: 'up' } as const;
+  const down = { type: 'insert', gap: 2, direction: 'down' } as const;
+
+  it('holds the current target until the pointer is well past the boundary', () => {
+    expect(resolveSlotDropTargetSticky(ts, x, rows, 118, up)).toEqual(up);
+    expect(resolveSlotDropTargetSticky(ts, x, rows, 116 + TARGET_HYSTERESIS_PX + 1, up)).toEqual(down);
+    expect(resolveSlotDropTargetSticky(ts, x, rows, 114, down)).toEqual(down);
+  });
+
+  it('behaves like the plain resolver with nothing to hold', () => {
+    expect(resolveSlotDropTargetSticky(ts, x, rows, 118, null)).toEqual(down);
+    expect(resolveSlotDropTargetSticky(ts, x, rows, 118, { type: 'unassigned' })).toEqual(down);
   });
 });

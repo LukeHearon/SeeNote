@@ -47,3 +47,12 @@ body {
 .scan-bounce {
   animation: scan-bounce 1.1s ease-in-out infinite alternate;
 }
+
+/* Hotkey-slot drag ghosts (components/SlotGhost.tsx) fade in rather than pop. */
+@keyframes slot-ghost-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.slot-ghost {
+  animation: slot-ghost-in 100ms ease-out;
+}
