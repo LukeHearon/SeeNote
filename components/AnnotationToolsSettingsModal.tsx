@@ -369,8 +369,13 @@ export default function AnnotationToolsSettingsModal({
             <div className="overflow-y-auto flex-1 min-h-0">
               {annotationTools
                 .map((t, i) => ({ tool: t, toolIndex: i }))
-                .filter(({ tool, toolIndex }) => toolIndex !== 0 && tool.key === null)
-                .map(({ tool, toolIndex }) => (
+                .filter(({ tool, toolIndex }) => toolIndex !== 0 && (tool.key === null || slotDrag.unassignGhosts.has(toolIndex)))
+                .map(({ tool, toolIndex }) => slotDrag.unassignGhosts.has(toolIndex) ? (
+                  // Where a drop would send this tool: into the bin.
+                  <div key={toolIndex} className="relative mb-2 h-8">
+                    <SlotGhost tool={tool} leftPx={0} />
+                  </div>
+                ) : (
                   <div key={toolIndex} className="mb-2 flex h-8">
                     <ToolItem
                       tool={tool}

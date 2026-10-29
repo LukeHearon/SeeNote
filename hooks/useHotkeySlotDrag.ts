@@ -36,15 +36,23 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     setTarget(resolveSlotDropTarget(tools, drag.sourceIndex, spans as DOMRect[], e.clientY));
   };
 
-  // Where the drop would put things: slot key → the tool that would land there,
-  // for every slot whose occupant changes (the dragged tool and everything it
-  // bumps or swaps). Drawn as ghosts over those rows.
-  const ghosts = useMemo(() => {
-    const m = new Map<string, AnnotationTool>();
-    if (!drag?.target) return m;
-    const next = applySlotDrop(tools, drag.sourceIndex, drag.target);
-    next.forEach((t, i) => { if (i !== 0 && t.key !== null && t.key !== tools[i].key) m.set(t.key, t); });
-    return m;
+  // Where the drop would put things, drawn as ghosts. `ghosts`: slot key → the
+  // tool that would land there, for every slot whose occupant changes (the
+  // dragged tool and everything it bumps or swaps). `unassignGhosts`: indices
+  // of tools the drop would send to the Unassigned bin (dragged there, or
+  // swapped out by a tool dragged in from it).
+  const { ghosts, unassignGhosts } = useMemo(() => {
+    const ghosts = new Map<string, AnnotationTool>();
+    const unassignGhosts = new Set<number>();
+    if (drag?.target) {
+      const next = applySlotDrop(tools, drag.sourceIndex, drag.target);
+      next.forEach((t, i) => {
+        if (i === 0 || t.key === tools[i].key) return;
+        if (t.key !== null) ghosts.set(t.key, t);
+        else unassignGhosts.add(i);
+      });
+    }
+    return { ghosts, unassignGhosts };
   }, [drag, tools]);
 
   const commit = () => {
@@ -56,5 +64,5 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     setDrag(null);
   };
 
-  return { drag, ghosts, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
+  return { drag, ghosts, unassignGhosts, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
 }
