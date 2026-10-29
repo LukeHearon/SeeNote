@@ -1525,6 +1525,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                     readyTool(key);
                   }}
                   onCreateToolForHotkey={(text) => setPanelCreatingToolText(text)}
+                  onReorderTools={handleReorderTools}
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
                   onShowExamples={handleShowExamples}

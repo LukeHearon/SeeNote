@@ -11,6 +11,9 @@ import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
 import NewToolEntry from './NewToolEntry';
 import { isEditableTarget } from '../hooks/useHotkeys';
 import ModalBackdrop from './ModalBackdrop';
+import SlotInsertIndicator from './SlotInsertIndicator';
+import { applySlotDrop, SlotDropTarget } from '../utils/hotkeySlotDrag';
+import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
 interface Props {
   annotationTools: AnnotationTool[];
@@ -48,31 +51,6 @@ type ToolsSnapshot = { tools: AnnotationTool[]; annotations: Annotation[] };
 
 const SLOTS = HOTKEY_SLOTS;
 type Slot = typeof SLOTS[number];
-
-type DragTarget =
-  | { type: 'slot'; key: Slot }
-  | { type: 'unassigned' }
-  | null;
-
-type DragState = { sourceIndex: number; target: DragTarget } | null;
-
-function applySwap(tools: AnnotationTool[], sourceIndex: number, target: DragTarget): AnnotationTool[] {
-  if (!target) return tools;
-
-  if (target.type === 'unassigned') {
-    return tools.map((t, i) => i === sourceIndex ? { ...t, key: null } : t);
-  }
-
-  const targetKey = target.key;
-  const sourceKey = tools[sourceIndex].key;
-  const occupantIndex = tools.findIndex((t, i) => i !== sourceIndex && t.key === targetKey);
-
-  return tools.map((t, i) => {
-    if (i === sourceIndex) return { ...t, key: targetKey };
-    if (i === occupantIndex) return { ...t, key: sourceKey ?? null };
-    return t;
-  });
-}
 
 function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, dim, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
@@ -156,7 +134,6 @@ export default function AnnotationToolsSettingsModal({
   // Tool whose edit modal's "Delete tool" button was clicked: drives the
   // delete-confirmation overlay (Delete vs Unlink). null = no dialog open.
   const [deletingToolIndex, setDeletingToolIndex] = useState<number | null>(null);
-  const [drag, setDrag] = useState<DragState>(null);
   // Which bin has an open create dialog: the Unassigned bin or a specific
   // empty hotkey slot (its digit). null = none.
   const [addingTo, setAddingTo] = useState<'unassigned' | Slot | null>(null);
@@ -213,18 +190,8 @@ export default function AnnotationToolsSettingsModal({
     onRestoreRef.current(next.tools, next.annotations);
   };
 
-  const beginDrag = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
-  const cancelDrag = () => setDrag(null);
-
-  const updateTarget = (target: DragTarget) =>
-    setDrag(d => d ? { ...d, target } : d);
-
-  const commitDrag = () => {
-    if (!drag?.target) { cancelDrag(); return; }
-    const newTools = applySwap(annotationTools, drag.sourceIndex, drag.target);
-    withSnapshot(() => onReorderTools(newTools));
-    setDrag(null);
-  };
+  const slotDrag = useHotkeySlotDrag(annotationTools, newTools => withSnapshot(() => onReorderTools(newTools)));
+  const { drag, rowRef, begin: beginDrag, cancel: cancelDrag, commit: commitDrag } = slotDrag;
 
   const unassignAll = () => {
     const newTools = annotationTools.map((t, i) => (i !== 0 && t.key !== null ? { ...t, key: null } : t));
@@ -245,8 +212,8 @@ export default function AnnotationToolsSettingsModal({
   // A NewToolEntry's typed text matched an existing tool exactly (or the user
   // clicked a dropdown match): reassign that tool to the target slot, reusing
   // the same swap-with-occupant logic as drag-and-drop.
-  const assignExistingTool = (toolIndex: number, target: DragTarget) => {
-    const newTools = applySwap(annotationTools, toolIndex, target);
+  const assignExistingTool = (toolIndex: number, target: SlotDropTarget) => {
+    const newTools = applySlotDrop(annotationTools, toolIndex, target);
     withSnapshot(() => onReorderTools(newTools));
   };
 
@@ -255,7 +222,7 @@ export default function AnnotationToolsSettingsModal({
   const assignToNextHotkey = (toolIndex: number) => {
     const key = nextAvailableHotkey(annotationTools);
     if (!key) return;
-    assignExistingTool(toolIndex, { type: 'slot', key: key as Slot });
+    assignExistingTool(toolIndex, { type: 'slot', key });
   };
 
   // A NewToolEntry's typed text didn't match any existing tool: open the
@@ -330,15 +297,18 @@ export default function AnnotationToolsSettingsModal({
         >
           <div className="flex-1 flex flex-col min-w-0">
             <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">{copy.hotkeysHeading}</h3>
-            {SLOTS.map(k => {
+            <div onDragOver={slotDrag.onSlotsDragOver}>
+            {SLOTS.map((k, slotIdx) => {
               const tool = annotationTools.find(t => t.key === k);
               const toolIndex = tool ? annotationTools.indexOf(tool) : -1;
+              const insert = drag?.target?.type === 'insert' && drag.target.gap === slotIdx ? drag.target : null;
               return (
                 <div
                   key={k}
-                  className="flex items-center gap-2 mb-2 h-8"
-                  onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) updateTarget({ type: 'slot', key: k }); }}
+                  ref={rowRef(slotIdx)}
+                  className="relative flex items-center gap-2 mb-2 h-8"
                 >
+                  {insert && <SlotInsertIndicator direction={insert.direction} gapPx={8} />}
                   <div className="w-6 h-6 bg-slate-700 rounded text-xs font-mono flex items-center justify-center text-slate-300 flex-none">
                     {k}
                   </div>
@@ -379,6 +349,7 @@ export default function AnnotationToolsSettingsModal({
                 </div>
               );
             })}
+            </div>
             <button
               onClick={unassignAll}
               disabled={!hasAssigned}
@@ -391,7 +362,7 @@ export default function AnnotationToolsSettingsModal({
           <div
             className="flex-1 min-w-0 rounded-lg border-2 border-dashed p-3 flex flex-col min-h-0 transition-colors"
             style={{ borderColor: isUnassignedHighlighted ? '#3b82f6' : '#334155' }}
-            onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) updateTarget({ type: 'unassigned' }); }}
+            onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (drag) slotDrag.setTarget({ type: 'unassigned' }); }}
           >
             <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3 flex-none">{copy.unassignedHeading}</h3>
             <div className="overflow-y-auto flex-1 min-h-0">

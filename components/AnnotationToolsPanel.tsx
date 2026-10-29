@@ -10,6 +10,8 @@ import { refreshMenuItem, useRefreshMenu } from '../hooks/useRefreshMenu';
 import ContextMenu, { ContextMenuItem } from './ContextMenu';
 import { tooltips } from '../copy/tooltips';
 import { annotationToolsPanel as copy } from '../copy/ui';
+import SlotInsertIndicator from './SlotInsertIndicator';
+import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
 interface ContextMenuState {
   toolIndex: number;
@@ -34,6 +36,9 @@ interface AnnotationToolsPanelProps {
   // to the next free key, or open the editor to create one from the typed name.
   onAssignToolHotkey?: (toolIndex: number) => void;
   onCreateToolForHotkey?: (text: string) => void;
+  // Drag a tool onto another slot (place / swap / insert-and-bump — the same
+  // rules as Annotation Tool Settings). Absent → the rows aren't draggable.
+  onReorderTools?: (newTools: AnnotationTool[]) => void;
   // Example-clip playback: id of the tool currently auditioning (null = none),
   // a toggle to play/stop a tool's next example, and the "Show examples" library.
   playingExampleToolId: string | null;
@@ -59,6 +64,7 @@ function AnnotationToolsPanel({
   onUnassignTool,
   onAssignToolHotkey,
   onCreateToolForHotkey,
+  onReorderTools,
   playingExampleToolId,
   onPlayExample,
   onShowExamples,
@@ -75,6 +81,8 @@ function AnnotationToolsPanel({
     () => annotationTools.slice(1).filter(t => t.key !== null).sort((a, b) => Number(a.key) - Number(b.key)),
     [annotationTools],
   );
+  const slotDrag = useHotkeySlotDrag(annotationTools, newTools => onReorderTools?.(newTools));
+  const { drag } = slotDrag;
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [hoveredToolKey, setHoveredToolKey] = useState<string | null>(null);
   const openContextMenu = (e: React.MouseEvent, toolIndex: number, canDelete: boolean) => {
@@ -185,22 +193,57 @@ function AnnotationToolsPanel({
           </div>
         )}
 
-        {/* Defined labels — single scrollable column */}
-        <div className="flex flex-col gap-1">
-          {definedTools.map((tool) => {
+        {/* Hotkey slots 1–9 — always all nine, empty ones as placeholders.
+            Drag a tool to place / swap / insert between, as in the settings modal. */}
+        {!loading && (
+        <div
+          className="flex flex-col gap-1"
+          onDragOver={slotDrag.onSlotsDragOver}
+          onDrop={e => { e.preventDefault(); slotDrag.commit(); }}
+        >
+          {HOTKEY_SLOTS.map((k, slotIdx) => {
+            const tool = definedTools.find(t => t.key === k);
+            const insert = drag?.target?.type === 'insert' && drag.target.gap === slotIdx ? drag.target : null;
+            const highlighted = drag?.target?.type === 'slot' && drag.target.key === k;
+            if (!tool) {
+              return (
+                <div
+                  key={k}
+                  ref={slotDrag.rowRef(slotIdx)}
+                  className="relative px-1.5 py-1 rounded text-xs border border-dashed transition-colors"
+                  style={{ borderColor: highlighted ? '#3b82f6' : '#334155' }}
+                >
+                  {insert && <SlotInsertIndicator direction={insert.direction} gapPx={4} />}
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 flex-none" />
+                    <span className="flex-1 leading-tight">&nbsp;</span>
+                    <span className="font-mono text-slate-600 text-[10px] flex-none">{k}</span>
+                  </div>
+                </div>
+              );
+            }
             const toolIndex = annotationTools.indexOf(tool);
             const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
             const isPlaying = playingExampleToolId === tool.id;
-            const showOverlay = hoveredToolKey === tool.key || isPlaying;
+            const showOverlay = !drag && (hoveredToolKey === tool.key || isPlaying);
             return (
               <div
-                key={tool.key}
-                className="relative"
+                key={k}
+                ref={slotDrag.rowRef(slotIdx)}
+                className="relative rounded"
+                style={{
+                  opacity: drag?.sourceIndex === toolIndex ? 0.35 : 1,
+                  outline: highlighted && drag?.sourceIndex !== toolIndex ? '2px solid #3b82f6' : undefined,
+                }}
+                draggable={!!onReorderTools}
+                onDragStart={() => slotDrag.begin(toolIndex)}
+                onDragEnd={slotDrag.cancel}
                 onContextMenu={e => openContextMenu(e, toolIndex, true)}
                 onMouseDown={e => { if (e.button === 1) { e.preventDefault(); onUnassignTool?.(toolIndex); } }}
                 onMouseEnter={() => setHoveredToolKey(tool.key!)}
                 onMouseLeave={() => setHoveredToolKey(null)}
               >
+                {insert && <SlotInsertIndicator direction={insert.direction} gapPx={4} />}
                 <ToolCell
                   isActive={tool.key === activeToolKey}
                   color={tool.color}
@@ -244,6 +287,7 @@ function AnnotationToolsPanel({
             );
           })}
         </div>
+        )}
       </div>
 
       {/* Add-tool entry — pinned below the scrolling list (so its match dropdown
