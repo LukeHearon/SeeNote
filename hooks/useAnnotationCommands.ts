@@ -324,13 +324,20 @@ export function useAnnotationCommands({
   }, [setActiveToolKey, activationStack, disarmKnife]);
 
   // Split annotation `id` at display time `t` — shared by K (at the playhead)
-  // and the Knife (at the click). If it was selected or bound, the right-hand
-  // piece takes over, so pressing K repeatedly during playback keeps chopping
-  // the piece the playhead is in; a bound selection shrinks to match.
-  const splitAnnotationAt = useCallback((id: string, t: number) => {
+  // and the Knife (at the click). If it was selected or bound, `keep` says
+  // which piece stays so, and a bound selection shrinks to that piece. K keeps
+  // the right-hand piece, the one the playhead is in, so pressing it repeatedly
+  // during playback keeps chopping; the Knife keeps the left (the original id).
+  const splitAnnotationAt = useCallback((id: string, t: number, keep: 'left' | 'right') => {
       const r = splitAnnotation(annotations, id, timeline.toSource(t));
       if (!r) return;
       handleAnnotationsCommit(r.annotations);
+      if (keep === 'left') {
+          // The left piece keeps the id, so selection and binding stay put.
+          const sel = selectionRef.current;
+          if (boundAnnotationId === id && sel) handleSelectionChange({ start: sel.start, end: t });
+          return;
+      }
       if (selectedAnnotationId === id) setSelectedAnnotationId(r.right.id);
       if (boundAnnotationId === id) {
           setBoundAnnotationId(r.right.id);
@@ -342,7 +349,7 @@ export function useAnnotationCommands({
   // selected or the playhead isn't inside it.
   const splitSelectedAnnotationAtPlayhead = () => {
       const id = selectedAnnotationId ?? boundAnnotationId;
-      if (id) splitAnnotationAt(id, currentTimeRef.current);
+      if (id) splitAnnotationAt(id, currentTimeRef.current, 'right');
   };
 
   return {
@@ -350,6 +357,8 @@ export function useAnnotationCommands({
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
     resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
-    knifeArmed, toggleKnife, disarmKnife, splitAnnotationAt, splitSelectedAnnotationAtPlayhead,
+    knifeArmed, toggleKnife, disarmKnife, splitSelectedAnnotationAtPlayhead,
+    // The Knife's click: keeps the left-hand piece selected / bound.
+    knifeSplitAt: (id: string, t: number) => splitAnnotationAt(id, t, 'left'),
   };
 }

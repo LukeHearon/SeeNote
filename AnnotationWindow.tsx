@@ -1204,7 +1204,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
     resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
-    knifeArmed, toggleKnife, disarmKnife, splitAnnotationAt, splitSelectedAnnotationAtPlayhead,
+    knifeArmed, toggleKnife, disarmKnife, knifeSplitAt, splitSelectedAnnotationAtPlayhead,
   } = useAnnotationCommands({
     annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
     activeToolKey, setActiveToolKey, selection, selectionRef,
@@ -1674,7 +1674,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onZoomChange={setZoomSec}
                 filterToolActive={filterToolActive}
                 knifeArmed={knifeArmed}
-                onKnifeSplit={splitAnnotationAt}
+                onKnifeSplit={knifeSplitAt}
                 bandPassFilter={bandPassFilter}
                 onBandPassFilterChange={setBandPassFilter}
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
