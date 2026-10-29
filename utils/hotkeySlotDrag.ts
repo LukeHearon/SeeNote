@@ -57,10 +57,12 @@ export function resolveSlotDropTarget(
   y: number,
 ): SlotDropTarget | null {
   if (rows.length !== HOTKEY_SLOTS.length) return null;
-  const occ = occupants(tools, sourceIndex);
-  // Past either end of the list counts as filled: the edge gaps are walls on
-  // their outer side, so they only ever bump inward.
-  const filled = (j: number) => j < 0 || j >= occ.length || occ[j] !== -1;
+  // Whether the gap's neighbours are filled is judged by what's on screen, so
+  // the dragged tool still counts in its own slot here — only the bump itself
+  // treats that slot as free. Past either end of the list counts as filled:
+  // the edge gaps are walls on their outer side, so they only ever bump inward.
+  const shown = occupants(tools, -1);
+  const filled = (j: number) => j < 0 || j >= shown.length || shown[j] !== -1;
 
   // Nearest row, and — if the pointer is in an edge band, the space between
   // rows, or past either end of the list — the gap it's near.
@@ -87,7 +89,13 @@ export function resolveSlotDropTarget(
   }
 
   if (gap !== null && filled(gap) && filled(gap + 1)) {
-    const { up, down } = insertDirections(tools, sourceIndex, gap);
+    // A direction is only offered if dropping that way changes something —
+    // bumping up into the dragged tool's own adjacent slot just puts it back.
+    const space = insertDirections(tools, sourceIndex, gap);
+    const moves = (direction: InsertDirection) =>
+      applySlotDrop(tools, sourceIndex, { type: 'insert', gap, direction }).some((t, i) => t.key !== tools[i].key);
+    const up = space.up && moves('up');
+    const down = space.down && moves('down');
     if (up || down) {
       const mid = gap < 0 ? -Infinity : gap >= rows.length - 1 ? Infinity
         : (rows[gap].bottom + rows[gap + 1].top) / 2;

@@ -108,6 +108,20 @@ describe('resolveSlotDropTarget', () => {
     expect(resolveSlotDropTarget(low, idx(low, 'X'), rows, 350)).toEqual({ type: 'insert', gap: 8, direction: 'up' });
   });
 
+  it("still sees the dragged tool in its own slot when judging a gap's neighbours", () => {
+    // Pick up A from 1,2,3 and drop between 1 and 2 (or above 1): B and C bump
+    // down, A lands on 2. Bumping up would only put A back, so isn't offered.
+    const ts = tools('A1 B2 C3');
+    const src = idx(ts, 'A');
+    for (const y of [30, 34, 38, 42]) {
+      expect(resolveSlotDropTarget(ts, src, rows, y)).toEqual({ type: 'insert', gap: 0, direction: 'down' });
+    }
+    expect(keys(applySlotDrop(ts, src, { type: 'insert', gap: 0, direction: 'down' })))
+      .toEqual({ A: '2', B: '3', C: '4' });
+    // Strip above slot 1: inserting there only puts A back — plain slot drop.
+    expect(resolveSlotDropTarget(ts, src, rows, -3)).toEqual({ type: 'slot', key: '1' });
+  });
+
   it('falls back to swap when every slot is full', () => {
     const full = tools('A1 B2 C3 D4 E5 F6 G7 H8 I9 X-');
     expect(resolveSlotDropTarget(full, idx(full, 'X'), rows, 30)).toEqual({ type: 'slot', key: '1' });
