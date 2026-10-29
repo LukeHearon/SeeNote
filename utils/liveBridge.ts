@@ -90,7 +90,7 @@ export interface LiveSnapshot {
     expandAction: 'folders' | 'files' | 'collapse';
   } | null;
   /** Annotation tools, or null in single-file mode (no tool palette). */
-  toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null } | null;
+  toolPalette: { tools: AnnotationTool[]; activeToolKey: string | null; playingExampleToolId: string | null; knifeArmed: boolean } | null;
   /**
    * The debug console's log lines. Bounded in practice — diagnostics, not a
    * firehose — and only re-serialized when a line is appended, so shipping the
@@ -140,6 +140,8 @@ export interface LiveHandlers {
   openToolSettings(): void;
   /** Summons the right-hand Find & Rename dock (or refocuses it if already open). */
   openFindLabel(): void;
+  /** Arm / disarm the Knife (Shift+K). */
+  toggleKnife(): void;
   editTool(index: number): void;
   requestDeleteTool(index: number): void;
   playExample(toolId: string): void;

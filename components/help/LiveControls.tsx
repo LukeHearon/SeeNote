@@ -61,6 +61,7 @@ const DEMO_PALETTE = {
   tools: demoAnnotationTools,
   activeToolKey: '1' as string | null,
   playingExampleToolId: null,
+  knifeArmed: false,
 };
 
 function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnapshot>) => void; store: CurrentTimeStore } {
@@ -370,6 +371,8 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
               onSelectModeActivate={() => act(() => client.call('activateSelectMode'), () => setTp({ activeToolKey: null }))}
               onOpenSettings={() => act(() => client.call('openToolSettings'), () => {})}
               onOpenFindLabel={() => act(() => client.call('openFindLabel'), () => {})}
+              knifeArmed={tp.knifeArmed}
+              onToggleKnife={() => act(() => client.call('toggleKnife'), () => setTp({ knifeArmed: !tp.knifeArmed }))}
               onEditTool={i => act(() => client.call('editTool', i), () => {})}
               onRequestDeleteTool={i => act(() => client.call('requestDeleteTool', i), () => {})}
               playingExampleToolId={tp.playingExampleToolId}

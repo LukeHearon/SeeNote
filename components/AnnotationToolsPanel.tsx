@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Settings, Trash2, Play, Square, Search, Images, Loader2 } from 'lucide-react';
+import KnifeIcon from './icons/KnifeIcon';
 import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool } from '../types';
 import { HOTKEY_SLOTS } from '../constants';
@@ -12,6 +13,7 @@ import { tooltips } from '../copy/tooltips';
 import { annotationToolsPanel as copy } from '../copy/ui';
 import SlotInsertIndicator from './SlotInsertIndicator';
 import SlotGhost from './SlotGhost';
+import SlotTargetRing from './SlotTargetRing';
 import ToolChip from './ToolChip';
 import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
@@ -29,6 +31,9 @@ interface AnnotationToolsPanelProps {
   onSelectModeActivate: () => void;
   onOpenSettings: () => void;
   onOpenFindLabel: () => void;
+  // Knife (Shift+K) header toggle: lit while armed.
+  knifeArmed: boolean;
+  onToggleKnife: () => void;
   onEditTool: (toolIndex: number) => void;
   onRequestDeleteTool: (toolIndex: number) => void;
   // Middle-click a keyed tool chip to free its hotkey (tool kept, key -> null).
@@ -61,6 +66,8 @@ function AnnotationToolsPanel({
   onSelectModeActivate,
   onOpenSettings,
   onOpenFindLabel,
+  knifeArmed,
+  onToggleKnife,
   onEditTool,
   onRequestDeleteTool,
   onUnassignTool,
@@ -129,6 +136,14 @@ function AnnotationToolsPanel({
             data-tooltip={tooltips.findLabel}
           >
             <Search size={12} />
+          </button>
+          <button
+            onClick={onToggleKnife}
+            className={`p-0.5 rounded transition-colors ${knifeArmed ? 'text-sky-300 bg-sky-500/20 hover:bg-sky-500/30' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700'}`}
+            data-tooltip={tooltips.knife}
+            aria-pressed={knifeArmed}
+          >
+            <KnifeIcon size={12} />
           </button>
           <button
             onClick={onOpenSettings}
@@ -207,11 +222,16 @@ function AnnotationToolsPanel({
         >
           {HOTKEY_SLOTS.map((k, slotIdx) => {
             const tool = definedTools.find(t => t.key === k);
-            const insertTarget = drag?.target?.type === 'insert' ? drag.target : null;
+            const insertTarget = slotDrag.preview?.type === 'insert' ? slotDrag.preview : null;
               const insert = insertTarget && (insertTarget.gap === slotIdx || (insertTarget.gap === -1 && slotIdx === 0)) ? insertTarget : null;
-            const highlighted = drag?.target?.type === 'slot' && drag.target.key === k;
+            const highlighted = slotDrag.preview?.type === 'slot' && slotDrag.preview.key === k;
             // Badge (w-4) + gap-1 = 20px.
-            const ghost = slotDrag.ghosts.has(k) ? <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={20} compact /> : null;
+            const ghost = (
+              <>
+                {slotDrag.ghosts.has(k) && <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={20} compact />}
+                {highlighted && <SlotTargetRing leftPx={20} />}
+              </>
+            );
             const badge = (
               <div className="w-4 h-4 bg-slate-700 rounded text-[10px] font-mono flex items-center justify-center text-slate-300 flex-none">
                 {k}
@@ -225,7 +245,6 @@ function AnnotationToolsPanel({
                   {ghost}
                   <EmptyHotkeySlot
                     annotationTools={annotationTools}
-                    highlighted={highlighted}
                     onAssignExisting={toolIndex => onAssignToolHotkey?.(toolIndex, k)}
                     onCreateNew={text => onCreateToolForHotkey?.(text, k)}
                     // Lower rows open their matches upward, away from the list's bottom edge.
@@ -246,9 +265,10 @@ function AnnotationToolsPanel({
               {ghost}
               <div
                 className="relative rounded flex-1 min-w-0 self-stretch"
+                // The dragged tool's chip is hidden (kept mounted — the drag needs
+                // it) and its slot outlined as vacated; ghosts show where it lands.
                 style={{
-                  opacity: drag?.sourceIndex === toolIndex ? 0.35 : 1,
-                  outline: highlighted && drag?.sourceIndex !== toolIndex ? '2px solid #3b82f6' : undefined,
+                  outline: drag?.sourceIndex === toolIndex ? '1px dashed #334155' : undefined,
                 }}
                 draggable={!!onReorderTools}
                 onDragStart={() => slotDrag.begin(toolIndex)}
@@ -265,7 +285,7 @@ function AnnotationToolsPanel({
                   active={tool.key === activeToolKey}
                   onClick={() => onToolActivate(tool.key!)}
                   tooltip={tool.description ? `${tool.text}\n${tool.description}` : undefined}
-                  style={{ cursor: onReorderTools ? 'grab' : 'pointer' }}
+                  style={{ cursor: onReorderTools ? 'grab' : 'pointer', visibility: drag?.sourceIndex === toolIndex ? 'hidden' : undefined }}
                 />
                 {showOverlay && (
                   <div

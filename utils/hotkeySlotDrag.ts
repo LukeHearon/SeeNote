@@ -5,10 +5,10 @@ import { HOTKEY_SLOTS } from '../constants';
 // and the Labels palette. Three kinds of drop:
 //   - onto an empty slot: the tool takes that key;
 //   - onto an assigned tool: the two swap keys;
-//   - between two assigned tools: the tool goes between them, bumping the
-//     neighbours up or down into the nearest free slot on that side;
-//   - above slot 1 / below slot 9 (when that slot is assigned): the tool takes
-//     slot 1 / 9 and everything is bumped down / up.
+//   - between two slots, next to an assigned tool: the tool goes between
+//     them, bumping its neighbours up or down into the nearest free slot on
+//     that side (above slot 1 / below slot 9 bumps everything down / up);
+//     offered only where that bump would actually move another tool.
 // The dragged tool's own slot counts as free — picking it up vacates it.
 
 export type InsertDirection = 'up' | 'down';
@@ -46,9 +46,11 @@ export function insertDirections(tools: AnnotationTool[], sourceIndex: number, g
 
 /**
  * Resolve the drop target under pointer `y`, given the nine slot rows' spans
- * (in HOTKEY_SLOTS order, top to bottom). A gap is only a target when both
- * tools around it are assigned and there's somewhere to bump into; otherwise
- * the pointer falls through to the nearest row (place or swap).
+ * (in HOTKEY_SLOTS order, top to bottom). A gap — the space between rows, the
+ * edge bands of an assigned row, or past either end of the list — is a target
+ * when inserting there would bump at least one other tool; otherwise the
+ * pointer falls through to the nearest row (place or swap). An empty row is a
+ * place target edge to edge.
  */
 export function resolveSlotDropTarget(
   tools: AnnotationTool[],
@@ -57,12 +59,10 @@ export function resolveSlotDropTarget(
   y: number,
 ): SlotDropTarget | null {
   if (rows.length !== HOTKEY_SLOTS.length) return null;
-  // Whether the gap's neighbours are filled is judged by what's on screen, so
-  // the dragged tool still counts in its own slot here — only the bump itself
-  // treats that slot as free. Past either end of the list counts as filled:
-  // the edge gaps are walls on their outer side, so they only ever bump inward.
+  // Rows with a tool on screen (the dragged tool still counts in its own slot;
+  // only the bump itself treats that slot as free) have edge bands that read
+  // as "between"; an empty row is all "onto".
   const shown = occupants(tools, -1);
-  const filled = (j: number) => j < 0 || j >= shown.length || shown[j] !== -1;
 
   // Nearest row, and — if the pointer is in an edge band, the space between
   // rows, or past either end of the list — the gap it's near.
@@ -79,23 +79,30 @@ export function resolveSlotDropTarget(
     }
     if (y <= bottom) {
       row = i;
-      if (y < top + edge) gap = i - 1;
-      else if (y > bottom - edge) gap = i;
+      if (shown[i] !== -1) {
+        if (y < top + edge) gap = i - 1;
+        else if (y > bottom - edge) gap = i;
+      }
       break;
     }
+  }
+  const last = rows.length - 1;
+  if (y > rows[last].bottom) {
     // Below the last row.
-    row = i;
-    gap = i;
+    row = last;
+    gap = last;
   }
 
-  if (gap !== null && filled(gap) && filled(gap + 1)) {
-    // A direction is only offered if dropping that way changes something —
-    // bumping up into the dragged tool's own adjacent slot just puts it back.
+  if (gap !== null) {
+    // A direction is only offered if it bumps another tool. Without a bump the
+    // insert is just a slot drop (into an empty neighbour, or back into the
+    // dragged tool's own adjacent slot), which that slot's own zone covers.
     const space = insertDirections(tools, sourceIndex, gap);
-    const moves = (direction: InsertDirection) =>
-      applySlotDrop(tools, sourceIndex, { type: 'insert', gap, direction }).some((t, i) => t.key !== tools[i].key);
-    const up = space.up && moves('up');
-    const down = space.down && moves('down');
+    const bumps = (direction: InsertDirection) =>
+      applySlotDrop(tools, sourceIndex, { type: 'insert', gap, direction })
+        .some((t, i) => i !== sourceIndex && t.key !== tools[i].key);
+    const up = space.up && bumps('up');
+    const down = space.down && bumps('down');
     if (up || down) {
       const mid = gap < 0 ? -Infinity : gap >= rows.length - 1 ? Infinity
         : (rows[gap].bottom + rows[gap + 1].top) / 2;

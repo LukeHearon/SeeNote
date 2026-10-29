@@ -1358,6 +1358,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         tools: annotationTools,
         activeToolKey,
         playingExampleToolId: examplePlayer.playingToolId,
+        knifeArmed,
       },
     },
     handlers: {
@@ -1368,6 +1369,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       activateSelectMode: selectMode,
       openToolSettings: () => setShowToolSettings(true),
       openFindLabel,
+      toggleKnife,
       editTool: setPanelEditingToolIndex,
       requestDeleteTool: setPanelDeletingToolIndex,
       playExample: handleListenExample,
@@ -1524,6 +1526,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onSelectModeActivate={selectMode}
                   onOpenSettings={() => setShowToolSettings(true)}
                   onOpenFindLabel={openFindLabel}
+                  knifeArmed={knifeArmed}
+                  onToggleKnife={toggleKnife}
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
                   onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}

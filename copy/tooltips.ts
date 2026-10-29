@@ -40,6 +40,7 @@ export const tooltips = {
   get useFolderName() { return getOverride('tooltips.useFolderName') ?? "Use the name from the folder's .seenote/settings.json"; },
   get annotationToolSettings() { return getOverride('tooltips.annotationToolSettings') ?? "Annotation Tool Settings"; },
   get findLabel() { return getOverride('tooltips.findLabel') ?? "Find Label"; },
+  get knife() { return getOverride('tooltips.knife') ?? "Knife: click an annotation to split it (Shift+K)"; },
   get stopExample() { return getOverride('tooltips.stopExample') ?? "Stop example"; },
   get playExample() { return getOverride('tooltips.playExample') ?? "Play example clip"; },
   get editTool() { return getOverride('tooltips.editTool') ?? "Edit tool"; },

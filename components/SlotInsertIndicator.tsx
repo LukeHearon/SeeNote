@@ -11,7 +11,7 @@ export default function SlotInsertIndicator({ direction, gapPx, above = false }:
   const Chevron = direction === 'up' ? ChevronUp : ChevronDown;
   return (
     <div
-      className="absolute inset-x-0 h-0.5 bg-blue-500 rounded-full pointer-events-none z-20 flex items-center justify-center"
+      className="slot-ghost absolute inset-x-0 h-0.5 bg-blue-500 rounded-full pointer-events-none z-20 flex items-center justify-center"
       style={above ? { top: -gapPx / 2 - 1 } : { top: `calc(100% + ${gapPx / 2}px - 1px)` }}
     >
       <span className="bg-blue-500 rounded-full text-white flex items-center justify-center w-3.5 h-3.5">

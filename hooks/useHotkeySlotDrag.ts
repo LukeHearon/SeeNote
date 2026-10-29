@@ -6,10 +6,10 @@ import { applySlotDrop, resolveSlotDropTargetSticky, sameSlotDropTarget, SlotDro
 export type HotkeySlotDragState = { sourceIndex: number; target: SlotDropTarget | null } | null;
 
 /**
- * How long (ms) a target must hold before its ghosts appear. The line, chevron
- * and outline track the pointer at once — they're local — but ghosts move many
- * rows, so they wait until the pointer settles rather than flashing on every
- * zone crossed mid-sweep.
+ * How long (ms) a target must hold before any of its preview appears — ghosts,
+ * the insert line and chevron, and the target outline alike — so sweeping the
+ * pointer across the list doesn't flash a preview for every zone it crosses.
+ * The drop itself always uses the live target.
  */
 export const GHOST_DWELL_MS = 120;
 
@@ -26,8 +26,22 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
 
   const rowRef = useCallback((i: number) => (el: HTMLElement | null) => { rows.current[i] = el; }, []);
 
-  const begin = (sourceIndex: number) => setDrag({ sourceIndex, target: null });
-  const cancel = () => setDrag(null);
+  // Starting the drag hides the source chip (its slot reads as vacated). That
+  // must wait a frame: React would otherwise apply it inside the dragstart
+  // handler, while the browser is still snapshotting the drag image, and
+  // WebKit abandons a drag whose source turns invisible there.
+  const beginFrame = useRef<number | null>(null);
+  const begin = (sourceIndex: number) => {
+    if (beginFrame.current !== null) cancelAnimationFrame(beginFrame.current);
+    beginFrame.current = requestAnimationFrame(() => {
+      beginFrame.current = null;
+      setDrag({ sourceIndex, target: null });
+    });
+  };
+  const cancel = () => {
+    if (beginFrame.current !== null) { cancelAnimationFrame(beginFrame.current); beginFrame.current = null; }
+    setDrag(null);
+  };
 
   const setTarget = (target: SlotDropTarget | null) =>
     setDrag(d => (d && !sameSlotDropTarget(d.target, target) ? { ...d, target } : d));
@@ -46,7 +60,8 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
   // dragged tool and everything it bumps or swaps). `unassignGhosts`: indices
   // of tools the drop would send to the Unassigned bin (dragged there, or
   // swapped out by a tool dragged in from it).
-  // Computed from the dwell-settled target, not the live one (GHOST_DWELL_MS).
+  // The preview follows the dwell-settled target, not the live one
+  // (GHOST_DWELL_MS); null while the pointer hasn't settled.
   const target = drag?.target ?? null;
   const [settled, setSettled] = useState<SlotDropTarget | null>(null);
   useEffect(() => {
@@ -56,19 +71,23 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     return () => clearTimeout(id);
   }, [target]);
 
+  const preview = drag && settled && settled === drag.target ? settled : null;
+
   const { ghosts, unassignGhosts } = useMemo(() => {
     const ghosts = new Map<string, AnnotationTool>();
     const unassignGhosts = new Set<number>();
-    if (drag && settled && settled === drag.target) {
-      const next = applySlotDrop(tools, drag.sourceIndex, settled);
+    if (drag && preview) {
+      const next = applySlotDrop(tools, drag.sourceIndex, preview);
       next.forEach((t, i) => {
-        if (i === 0 || t.key === tools[i].key) return;
+        // The dragged tool's own chip is hidden for the drag, so it's ghosted
+        // even when the drop would leave it where it is.
+        if (i === 0 || (t.key === tools[i].key && i !== drag.sourceIndex)) return;
         if (t.key !== null) ghosts.set(t.key, t);
         else unassignGhosts.add(i);
       });
     }
     return { ghosts, unassignGhosts };
-  }, [drag, settled, tools]);
+  }, [drag, preview, tools]);
 
   const commit = () => {
     if (drag?.target) {
@@ -79,5 +98,5 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     setDrag(null);
   };
 
-  return { drag, ghosts, unassignGhosts, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
+  return { drag, preview, ghosts, unassignGhosts, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
 }

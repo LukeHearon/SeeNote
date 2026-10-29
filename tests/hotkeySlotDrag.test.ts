@@ -122,6 +122,19 @@ describe('resolveSlotDropTarget', () => {
     expect(resolveSlotDropTarget(ts, src, rows, -3)).toEqual({ type: 'slot', key: '1' });
   });
 
+  it('bumps from a gap next to an empty slot, toward the assigned side', () => {
+    // Tools on 2 and 3, slot 1 empty: between 1 and 2 bumps 2,3 down.
+    const ts = tools('B2 C3 X-');
+    const x = idx(ts, 'X');
+    for (const y of [36, 42]) {
+      expect(resolveSlotDropTarget(ts, x, rows, y)).toEqual({ type: 'insert', gap: 0, direction: 'down' });
+    }
+    expect(keys(applySlotDrop(ts, x, { type: 'insert', gap: 0, direction: 'down' })))
+      .toEqual({ B: '3', C: '4', X: '2' });
+    // The empty slot's own edge band still places into it.
+    expect(resolveSlotDropTarget(ts, x, rows, 30)).toEqual({ type: 'slot', key: '1' });
+  });
+
   it('falls back to swap when every slot is full', () => {
     const full = tools('A1 B2 C3 D4 E5 F6 G7 H8 I9 X-');
     expect(resolveSlotDropTarget(full, idx(full, 'X'), rows, 30)).toEqual({ type: 'slot', key: '1' });

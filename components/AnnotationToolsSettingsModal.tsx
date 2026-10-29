@@ -13,6 +13,7 @@ import { isEditableTarget } from '../hooks/useHotkeys';
 import ModalBackdrop from './ModalBackdrop';
 import SlotInsertIndicator from './SlotInsertIndicator';
 import SlotGhost from './SlotGhost';
+import SlotTargetRing from './SlotTargetRing';
 import ToolChip from './ToolChip';
 import { applySlotDrop, SlotDropTarget } from '../utils/hotkeySlotDrag';
 import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
@@ -54,7 +55,7 @@ type ToolsSnapshot = { tools: AnnotationTool[]; annotations: Annotation[] };
 const SLOTS = HOTKEY_SLOTS;
 type Slot = typeof SLOTS[number];
 
-function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, dim, isPlaying, onPlayExample }: {
+function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnassign, onAssign, vacated, isPlaying, onPlayExample }: {
   tool: AnnotationTool;
   // In a hotkey slot (true) vs. the Unassigned bin (false). Drives the
   // middle-click action and whether the unassign button is shown.
@@ -66,13 +67,15 @@ function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnass
   onUnassign: () => void;
   // Assign this tool to the next free hotkey (Unassigned bin only).
   onAssign: () => void;
-  dim?: boolean;
+  // Being dragged: hidden (not unmounted — the drag needs its source element)
+  // so its old slot reads as vacated; ghosts show where it will land.
+  vacated?: boolean;
   isPlaying?: boolean;
   onPlayExample?: () => void;
 }) {
   const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
   return (
-    <div className="flex items-center gap-1 flex-1 min-w-0" style={{ opacity: dim ? 0.35 : 1 }}>
+    <div className="flex items-center gap-1 flex-1 min-w-0" style={{ visibility: vacated ? 'hidden' : undefined }}>
       <ToolChip
         tool={tool}
         draggable
@@ -231,11 +234,13 @@ export default function AnnotationToolsSettingsModal({
     setAddingTo(target);
   };
 
+  // Drop-target highlights follow the dwell-gated preview, like the ghosts.
+  const preview = slotDrag.preview;
   const isSlotHighlighted = (k: Slot) =>
-    drag?.target?.type === 'slot' && drag.target.key === k;
+    preview?.type === 'slot' && preview.key === k;
 
   const isUnassignedHighlighted =
-    drag?.target?.type === 'unassigned';
+    preview?.type === 'unassigned';
 
   // Modal-local undo/redo. Registered in the CAPTURE phase on window so it runs
   // BEFORE the app's bubble-phase global hotkey listener (useHotkeys attaches
@@ -301,7 +306,7 @@ export default function AnnotationToolsSettingsModal({
             {SLOTS.map((k, slotIdx) => {
               const tool = annotationTools.find(t => t.key === k);
               const toolIndex = tool ? annotationTools.indexOf(tool) : -1;
-              const insertTarget = drag?.target?.type === 'insert' ? drag.target : null;
+              const insertTarget = preview?.type === 'insert' ? preview : null;
               const insert = insertTarget && (insertTarget.gap === slotIdx || (insertTarget.gap === -1 && slotIdx === 0)) ? insertTarget : null;
               return (
                 <div
@@ -312,13 +317,14 @@ export default function AnnotationToolsSettingsModal({
                   {insert && <SlotInsertIndicator direction={insert.direction} gapPx={8} above={insert.gap === -1} />}
                   {/* Badge (w-6) + gap-2 = 32px. */}
                   {slotDrag.ghosts.has(k) && <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={32} />}
+                  {isSlotHighlighted(k) && <SlotTargetRing leftPx={32} />}
                   <div className="w-6 h-6 bg-slate-700 rounded text-xs font-mono flex items-center justify-center text-slate-300 flex-none">
                     {k}
                   </div>
                   {tool && toolIndex !== -1 ? (
                     <div
                       className="flex-1 flex rounded min-w-0"
-                      style={isSlotHighlighted(k) ? { outline: '2px solid #3b82f6' } : undefined}
+                      style={drag?.sourceIndex === toolIndex ? { outline: '2px dashed #334155' } : undefined}
                     >
                       <ToolItem
                         tool={tool}
@@ -328,7 +334,7 @@ export default function AnnotationToolsSettingsModal({
                         onGearClick={() => setEditingToolIndex(toolIndex)}
                         onUnassign={() => assignExistingTool(toolIndex, { type: 'unassigned' })}
                         onAssign={() => {}}
-                        dim={drag?.sourceIndex === toolIndex}
+                        vacated={drag?.sourceIndex === toolIndex}
                         isPlaying={playingExampleToolId === tool.id}
                         onPlayExample={() => onPlayExample(tool)}
                       />
@@ -339,7 +345,6 @@ export default function AnnotationToolsSettingsModal({
                     // opens the create dialog pre-targeted at this digit.
                     <EmptyHotkeySlot
                       annotationTools={annotationTools}
-                      highlighted={isSlotHighlighted(k)}
                       onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'slot', key: k })}
                       onCreateNew={text => openCreateDialog(k, text)}
                       className="h-8 border-2"
@@ -368,13 +373,19 @@ export default function AnnotationToolsSettingsModal({
               {annotationTools
                 .map((t, i) => ({ tool: t, toolIndex: i }))
                 .filter(({ tool, toolIndex }) => toolIndex !== 0 && (tool.key === null || slotDrag.unassignGhosts.has(toolIndex)))
-                .map(({ tool, toolIndex }) => slotDrag.unassignGhosts.has(toolIndex) ? (
-                  // Where a drop would send this tool: into the bin.
+                .map(({ tool, toolIndex }) => tool.key !== null ? (
+                  // An assigned tool a drop would send into the bin.
                   <div key={toolIndex} className="relative mb-2 h-8">
                     <SlotGhost tool={tool} leftPx={0} />
                   </div>
                 ) : (
-                  <div key={toolIndex} className="mb-2 flex h-8">
+                  <div
+                    key={toolIndex}
+                    className="relative mb-2 flex h-8 rounded"
+                    style={drag?.sourceIndex === toolIndex ? { outline: '2px dashed #334155' } : undefined}
+                  >
+                    {/* Dragged from the bin and headed back into it. */}
+                    {slotDrag.unassignGhosts.has(toolIndex) && <SlotGhost tool={tool} leftPx={0} />}
                     <ToolItem
                       tool={tool}
                       assigned={false}
@@ -383,7 +394,7 @@ export default function AnnotationToolsSettingsModal({
                       onGearClick={() => setEditingToolIndex(toolIndex)}
                       onUnassign={() => {}}
                       onAssign={() => assignToNextHotkey(toolIndex)}
-                      dim={drag?.sourceIndex === toolIndex}
+                      vacated={drag?.sourceIndex === toolIndex}
                       isPlaying={playingExampleToolId === tool.id}
                       onPlayExample={() => onPlayExample(tool)}
                     />

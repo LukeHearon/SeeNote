@@ -33,7 +33,7 @@ import { DIAG_SCROLL, diag } from '../utils/scrollDiag';
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 import ContextMenu from './ContextMenu';
-import { Scissors } from 'lucide-react';
+import KnifeIcon from './icons/KnifeIcon';
 
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
@@ -1238,21 +1238,13 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                 outlineOffset: 0,
               }}
             />
-            {/* Knife: scissors beside the bar (which marks the cut) and its name below. */}
+            {/* Knife: a blade beside the bar, which marks where the cut lands. */}
             {knifeArmed && (
-              <>
-                <Scissors
-                  size={12}
-                  className="absolute text-white"
-                  style={{ left: 6, top: -6, filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.9))' }}
-                />
-                <div
-                  className="absolute whitespace-nowrap text-[10px] leading-none font-medium text-white"
-                  style={{ top: 24, left: '50%', transform: 'translateX(-50%)', textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)' }}
-                >
-                  {spectrogramView.knifeCursorLabel}
-                </div>
-              </>
+              <KnifeIcon
+                size={16}
+                className="absolute text-white"
+                style={{ left: 5, top: 0, filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.95)) drop-shadow(0 0 2px rgba(0,0,0,0.7))' }}
+              />
             )}
             {/* Tool name — only shown when an annotation tool is active. */}
             {!isFilter && !knifeArmed && activeAnnotationTool && (

@@ -4,8 +4,8 @@ import type { AnnotationTool } from '../types';
 
 // A hotkey tool's chip: grip handle, the tool's color as a bar down the left
 // edge, and its label. Shared by Annotation Tool Settings, the Labels palette
-// and the drag ghosts (`ghost`: the same chip greyed out, for where a drop
-// would land a tool). Extra props (drag / mouse handlers) go on the root.
+// and the drag ghosts (`ghost`: the same chip faded, for where a drop would
+// land a tool). Extra props (drag / mouse handlers) go on the root.
 export default function ToolChip({ tool, active = false, ghost = false, compact = false, tooltip, className, style, ...rest }: {
   tool: AnnotationTool;
   /** This tool is readied: tint the chip with its color. */
@@ -24,7 +24,7 @@ export default function ToolChip({ tool, active = false, ghost = false, compact 
         backgroundColor: active ? tool.color + '40' : '#1e293b',
         boxShadow: active ? `inset 0 0 0 1px ${tool.color}` : undefined,
         cursor: ghost ? undefined : 'grab',
-        ...(ghost ? { opacity: 0.45, filter: 'grayscale(1)' } : null),
+        ...(ghost ? { opacity: 0.35 } : null),
         ...style,
       }}
       {...rest}

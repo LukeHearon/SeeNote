@@ -17,7 +17,7 @@ type WindowSnapshot = Pick<LiveSnapshot,
 
 type WindowHandlers = Pick<LiveHandlers,
   'toggleFileExpandCollapse' | 'toggleFileFilter' | 'toggleBuzzdetectFilter'
-  | 'activateTool' | 'activateSelectMode' | 'openToolSettings' | 'openFindLabel'
+  | 'activateTool' | 'activateSelectMode' | 'openToolSettings' | 'openFindLabel' | 'toggleKnife'
   | 'editTool' | 'requestDeleteTool' | 'playExample' | 'showExamples'>;
 
 /** File-panel and tool-palette handlers for a window that has neither. */
@@ -29,6 +29,7 @@ export const NO_PROJECT_LIVE_HANDLERS: WindowHandlers = {
   activateSelectMode: () => {},
   openToolSettings: () => {},
   openFindLabel: () => {},
+  toggleKnife: () => {},
   editTool: () => {},
   requestDeleteTool: () => {},
   playExample: () => {},

@@ -1,7 +1,7 @@
 import type { AnnotationTool } from '../types';
 import ToolChip from './ToolChip';
 
-// Drag preview for a hotkey slot: the greyed-out chip of the tool the drop
+// Drag preview for a hotkey slot: the faded chip of the tool the drop
 // would land in this slot, laid over the row's content. The row must be
 // `relative`; `leftPx` skips past its digit badge.
 export default function SlotGhost({ tool, leftPx, compact }: { tool: AnnotationTool; leftPx: number; compact?: boolean }) {
