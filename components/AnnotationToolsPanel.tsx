@@ -12,6 +12,7 @@ import { tooltips } from '../copy/tooltips';
 import { annotationToolsPanel as copy } from '../copy/ui';
 import SlotInsertIndicator from './SlotInsertIndicator';
 import SlotGhost from './SlotGhost';
+import ToolChip from './ToolChip';
 import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
 interface ContextMenuState {
@@ -210,7 +211,7 @@ function AnnotationToolsPanel({
               const insert = insertTarget && (insertTarget.gap === slotIdx || (insertTarget.gap === -1 && slotIdx === 0)) ? insertTarget : null;
             const highlighted = drag?.target?.type === 'slot' && drag.target.key === k;
             // Badge (w-4) + gap-1 = 20px.
-            const ghost = slotDrag.ghosts.has(k) ? <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={20} /> : null;
+            const ghost = slotDrag.ghosts.has(k) ? <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={20} compact /> : null;
             const badge = (
               <div className="w-4 h-4 bg-slate-700 rounded text-[10px] font-mono flex items-center justify-center text-slate-300 flex-none">
                 {k}
@@ -244,7 +245,7 @@ function AnnotationToolsPanel({
               {badge}
               {ghost}
               <div
-                className="relative rounded flex-1 min-w-0"
+                className="relative rounded flex-1 min-w-0 self-stretch"
                 style={{
                   opacity: drag?.sourceIndex === toolIndex ? 0.35 : 1,
                   outline: highlighted && drag?.sourceIndex !== toolIndex ? '2px solid #3b82f6' : undefined,
@@ -257,13 +258,14 @@ function AnnotationToolsPanel({
                 onMouseEnter={() => setHoveredToolKey(tool.key!)}
                 onMouseLeave={() => setHoveredToolKey(null)}
               >
-                <ToolCell
-                  isActive={tool.key === activeToolKey}
-                  color={tool.color}
-                  dotColor={tool.color}
-                  label={tool.text}
+                {/* Same chip as Annotation Tool Settings; click readies the tool. */}
+                <ToolChip
+                  tool={tool}
+                  compact
+                  active={tool.key === activeToolKey}
                   onClick={() => onToolActivate(tool.key!)}
-                  tooltip={tool.description || undefined}
+                  tooltip={tool.description ? `${tool.text}\n${tool.description}` : undefined}
+                  style={{ cursor: onReorderTools ? 'grab' : 'pointer' }}
                 />
                 {showOverlay && (
                   <div

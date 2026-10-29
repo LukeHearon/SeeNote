@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { annotationToolsSettingsModal as copy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
-import { X, GripVertical, Settings, Plus, FolderDown, Play, Square } from 'lucide-react';
+import { X, Settings, Plus, FolderDown, Play, Square } from 'lucide-react';
 import UnassignHotkeyIcon from './icons/UnassignHotkeyIcon';
 import { AnnotationTool, Annotation } from '../types';
 import { pickNextToolColor, HOTKEY_SLOTS, nextAvailableHotkey } from '../constants';
@@ -13,6 +13,7 @@ import { isEditableTarget } from '../hooks/useHotkeys';
 import ModalBackdrop from './ModalBackdrop';
 import SlotInsertIndicator from './SlotInsertIndicator';
 import SlotGhost from './SlotGhost';
+import ToolChip from './ToolChip';
 import { applySlotDrop, SlotDropTarget } from '../utils/hotkeySlotDrag';
 import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
@@ -72,17 +73,14 @@ function ToolItem({ tool, assigned, onDragStart, onDragEnd, onGearClick, onUnass
   const hasExamples = (tool.exampleFiles?.length ?? 0) > 0;
   return (
     <div className="flex items-center gap-1 flex-1 min-w-0" style={{ opacity: dim ? 0.35 : 1 }}>
-      <div
+      <ToolChip
+        tool={tool}
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onMouseDown={e => { if (e.button === 1) { e.preventDefault(); assigned ? onUnassign() : onAssign(); } }}
-        className="flex items-center gap-2 bg-slate-800 rounded px-2 flex-1 min-w-0 select-none h-8"
-        style={{ borderLeft: `3px solid ${tool.color}`, cursor: 'grab' }}
-      >
-        <GripVertical size={12} className="text-slate-500 flex-none" />
-        <span className="text-xs text-white truncate flex-1" data-tooltip={tool.text} data-tooltip-delay="80">{tool.text}</span>
-      </div>
+        className="flex-1"
+      />
       {hasExamples && onPlayExample && (
         <button
           onClick={e => { e.stopPropagation(); onPlayExample(); }}
