@@ -225,26 +225,27 @@ function AnnotationToolsPanel({
             const insertTarget = slotDrag.preview?.type === 'insert' ? slotDrag.preview : null;
               const insert = insertTarget && (insertTarget.gap === slotIdx || (insertTarget.gap === -1 && slotIdx === 0)) ? insertTarget : null;
             const highlighted = slotDrag.preview?.type === 'slot' && slotDrag.preview.key === k;
-            // Badge (w-4) + gap-1 = 20px.
             const ghost = (
               <>
-                {slotDrag.ghosts.has(k) && <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={20} compact />}
-                {highlighted && <SlotTargetRing leftPx={20} />}
+                {slotDrag.ghosts.has(k) && <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={0} compact />}
+                {highlighted && <SlotTargetRing leftPx={0} />}
               </>
             );
-            const badge = (
-              <div
-                className={`w-4 h-4 text-[10px] font-mono flex items-center justify-center flex-none ${tool ? '' : 'text-slate-600'}`}
-                style={tool ? { color: tool.color } : undefined}
+            // Hotkey digit at the row's right edge, in the tool's color (the
+            // incoming tool's while a ghost is showing), above the ghost layer.
+            const digitTool = slotDrag.ghosts.get(k) ?? tool;
+            const badge = (hidden = false) => hidden ? null : (
+              <span
+                className={`absolute right-2 inset-y-0 z-20 flex items-center text-[10px] font-mono pointer-events-none ${digitTool ? 'opacity-70' : 'text-slate-600'}`}
+                style={digitTool ? { color: digitTool.color } : undefined}
               >
                 {k}
-              </div>
+              </span>
             );
             if (!tool) {
               return (
                 <div key={k} ref={slotDrag.rowRef(slotIdx)} className="relative flex items-center gap-1 h-[25px]">
                   {insert && <SlotInsertIndicator direction={insert.direction} gapPx={4} above={insert.gap === -1} />}
-                  {badge}
                   {ghost}
                   <EmptyHotkeySlot
                     annotationTools={annotationTools}
@@ -254,6 +255,7 @@ function AnnotationToolsPanel({
                     dropUp={slotIdx >= HOTKEY_SLOTS.length / 2}
                     className="h-full border"
                   />
+                  {badge()}
                 </div>
               );
             }
@@ -264,7 +266,6 @@ function AnnotationToolsPanel({
             return (
               <div key={k} ref={slotDrag.rowRef(slotIdx)} className="relative flex items-center gap-1 h-[25px]">
               {insert && <SlotInsertIndicator direction={insert.direction} gapPx={4} above={insert.gap === -1} />}
-              {badge}
               {ghost}
               <div
                 className="relative rounded flex-1 min-w-0 self-stretch"
@@ -321,6 +322,7 @@ function AnnotationToolsPanel({
                   </div>
                 )}
               </div>
+              {badge(showOverlay)}
               </div>
             );
           })}
