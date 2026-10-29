@@ -233,7 +233,10 @@ function AnnotationToolsPanel({
               </>
             );
             const badge = (
-              <div className="w-4 h-4 bg-slate-700 rounded text-[10px] font-mono flex items-center justify-center text-slate-300 flex-none">
+              <div
+                className={`w-4 h-4 text-[10px] font-mono font-semibold flex items-center justify-center flex-none ${tool ? '' : 'text-slate-600'}`}
+                style={tool ? { color: tool.color } : undefined}
+              >
                 {k}
               </div>
             );
