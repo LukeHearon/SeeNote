@@ -378,6 +378,7 @@ export const annotationOverlay = {
 export const spectrogramView = {
   get generating() { return getOverride('ui.spectrogramView.generating') ?? "Generating spectrogram…"; },
   get exportSelectionLabel() { return getOverride('ui.spectrogramView.exportSelectionLabel') ?? "Export selected audio…"; },
+  get knifeCursorLabel() { return getOverride('ui.spectrogramView.knifeCursorLabel') ?? "Knife"; },
 };
 
 export const videoPane = {
@@ -500,6 +501,8 @@ export const keyboardShortcutsView = {
   get scRemoveSelectedAnnotation() { return getOverride('ui.keyboardShortcutsView.scRemoveSelectedAnnotation') ?? "Remove selected annotation"; },
   get scDeselectAnnotationClearItsSelection() { return getOverride('ui.keyboardShortcutsView.scDeselectAnnotationClearItsSelection') ?? "Deselect annotation, clear its selection region"; },
   get scCopySelectedAnnotation() { return getOverride('ui.keyboardShortcutsView.scCopySelectedAnnotation') ?? "Copy selected annotation"; },
+  get scSplitAnnotationAtPlayhead() { return getOverride('ui.keyboardShortcutsView.scSplitAnnotationAtPlayhead') ?? "Split selected annotation at playhead"; },
+  get scToggleKnife() { return getOverride('ui.keyboardShortcutsView.scToggleKnife') ?? "Knife: click an annotation to split it there (toggle)"; },
   get scPasteAnnotationAtPlayhead() { return getOverride('ui.keyboardShortcutsView.scPasteAnnotationAtPlayhead') ?? "Paste annotation at playhead"; },
   get scBindSelectedAnnotationToA() { return getOverride('ui.keyboardShortcutsView.scBindSelectedAnnotationToA') ?? "Bind selected annotation to a hotkey and ready its tool (or ready its tool if already bound)"; },
   get scUnassignAllAnnotationToolHotkeys() { return getOverride('ui.keyboardShortcutsView.scUnassignAllAnnotationToolHotkeys') ?? "Unassign all annotation tool hotkeys"; },

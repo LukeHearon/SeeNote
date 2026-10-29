@@ -10,8 +10,9 @@ import type { HotkeyBinding } from './useHotkeys';
  * - `selection`      — a selection region exists.
  * - `filterTool`     — the band-pass filter tool is readied for drag drawing.
  * - `filterBand`     — a band-pass band has been drawn and filtering is engaged.
+ * - `knifeTool`      — the Knife (Shift+K) is armed: clicking an annotation splits it.
  */
-export type ActivationKind = 'annotationTool' | 'selection' | 'filterTool' | 'filterBand';
+export type ActivationKind = 'annotationTool' | 'selection' | 'filterTool' | 'filterBand' | 'knifeTool';
 
 export interface ActivationStackApi {
   /** Live stack value, oldest at index 0, most recent at the end. */

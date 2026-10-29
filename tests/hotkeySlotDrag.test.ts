@@ -43,6 +43,15 @@ describe('applySlotDrop', () => {
       .toEqual({ A: '3', B: '1', C: '2', D: '4', E: '5', F: '6', G: '7', H: '8', I: '9' });
   });
 
+  it('inserts at the very top or bottom, bumping everything inward', () => {
+    const ts = tools('A1 B2 C3 X-');
+    expect(keys(applySlotDrop(ts, idx(ts, 'X'), { type: 'insert', gap: -1, direction: 'down' })))
+      .toEqual({ X: '1', A: '2', B: '3', C: '4' });
+    const low = tools('H8 I9 X-');
+    expect(keys(applySlotDrop(low, idx(low, 'X'), { type: 'insert', gap: 8, direction: 'up' })))
+      .toEqual({ H: '7', I: '8', X: '9' });
+  });
+
   it('is a no-op when there is no free slot in the given direction', () => {
     const ts = tools('A1 B2 C3 X-');
     expect(applySlotDrop(ts, idx(ts, 'X'), { type: 'insert', gap: 0, direction: 'up' })).toBe(ts);
@@ -86,6 +95,17 @@ describe('resolveSlotDropTarget', () => {
     const down = tools('A1 B2 C3 X-');
     expect(resolveSlotDropTarget(down, idx(down, 'X'), rows, 30)).toEqual({ type: 'insert', gap: 0, direction: 'down' });
     expect(resolveSlotDropTarget(down, idx(down, 'X'), rows, 42)).toEqual({ type: 'insert', gap: 0, direction: 'down' });
+  });
+
+  it('treats the space above slot 1 and below slot 9 as insert-and-bump gaps', () => {
+    const ts = tools('A1 B2 C3 X-');
+    expect(resolveSlotDropTarget(ts, idx(ts, 'X'), rows, -3)).toEqual({ type: 'insert', gap: -1, direction: 'down' });
+    expect(resolveSlotDropTarget(ts, idx(ts, 'X'), rows, 2)).toEqual({ type: 'insert', gap: -1, direction: 'down' });
+    // Slot 9 empty → just place there, no bump.
+    expect(resolveSlotDropTarget(ts, idx(ts, 'X'), rows, 360)).toEqual({ type: 'slot', key: '9' });
+    const low = tools('H8 I9 X-');
+    expect(resolveSlotDropTarget(low, idx(low, 'X'), rows, 360)).toEqual({ type: 'insert', gap: 8, direction: 'up' });
+    expect(resolveSlotDropTarget(low, idx(low, 'X'), rows, 350)).toEqual({ type: 'insert', gap: 8, direction: 'up' });
   });
 
   it('falls back to swap when every slot is full', () => {

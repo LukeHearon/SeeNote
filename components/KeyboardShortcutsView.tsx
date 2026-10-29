@@ -87,6 +87,8 @@ const GROUPS: Group[] = [
       { codes: ['Enter'], display: '↵', get label() { return copy.scDeselectAnnotationClearItsSelection; } },
       { codes: ['KeyC'], display: '{mod}+C', get label() { return copy.scCopySelectedAnnotation; } },
       { codes: ['KeyV'], display: '{mod}+V', get label() { return copy.scPasteAnnotationAtPlayhead; } },
+      { codes: ['KeyK'], display: 'K', get label() { return copy.scSplitAnnotationAtPlayhead; } },
+      { codes: ['KeyK'], display: 'Shift+K', get label() { return copy.scToggleKnife; } },
       { codes: ['KeyB'], display: '{mod}+B', get label() { return copy.scBindSelectedAnnotationToA; } },
       { codes: ['KeyB'], display: '{mod}+Shift+B', get label() { return copy.scUnassignAllAnnotationToolHotkeys; } },
       { codes: ['KeyZ'], display: '{mod}+Z', get label() { return copy.scUndo; } },

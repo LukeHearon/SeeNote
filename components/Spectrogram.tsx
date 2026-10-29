@@ -33,6 +33,7 @@ import { DIAG_SCROLL, diag } from '../utils/scrollDiag';
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 import ContextMenu from './ContextMenu';
+import { Scissors } from 'lucide-react';
 
 interface SpectrogramProps {
   chunkCache: MultiTierSpectrogramCache | null;
@@ -78,6 +79,10 @@ interface SpectrogramProps {
   sweepStart?: number | null;
   boundAnnotationId: string | null;
   filterToolActive: boolean;
+  /** Knife armed (Shift+K): clicking an annotation splits it at the pointer. */
+  knifeArmed?: boolean;
+  /** Split annotation `id` at display time `t` (Knife click). */
+  onKnifeSplit?: (id: string, t: number) => void;
   bandPassFilter: BandPassFilter | null;
   /** Edit-in-place geometry updates (cutoff resize). Does NOT push the stack. */
   onBandPassFilterChange: (f: BandPassFilter | null) => void;
@@ -181,6 +186,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   sweepStart = null,
   boundAnnotationId,
   filterToolActive,
+  knifeArmed = false,
+  onKnifeSplit,
   bandPassFilter,
   onBandPassFilterChange,
   onBandPassFilterDrawn,
@@ -1161,6 +1168,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            onCreateTool={onCreateTool}
            onBindHotkey={onBindHotkey}
            onListenExample={onListenExample}
+           knifeArmed={knifeArmed}
+           onKnifeSplit={onKnifeSplit}
          />
 
          {/* Selection region handles */}
@@ -1229,8 +1238,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
                 outlineOffset: 0,
               }}
             />
+            {/* Knife: scissors beside the bar (which marks the cut) and its name below. */}
+            {knifeArmed && (
+              <>
+                <Scissors
+                  size={12}
+                  className="absolute text-white"
+                  style={{ left: 6, top: -6, filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.9))' }}
+                />
+                <div
+                  className="absolute whitespace-nowrap text-[10px] leading-none font-medium text-white"
+                  style={{ top: 24, left: '50%', transform: 'translateX(-50%)', textShadow: '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7)' }}
+                >
+                  {spectrogramView.knifeCursorLabel}
+                </div>
+              </>
+            )}
             {/* Tool name — only shown when an annotation tool is active. */}
-            {!isFilter && activeAnnotationTool && (
+            {!isFilter && !knifeArmed && activeAnnotationTool && (
               <div
                 className="absolute whitespace-nowrap text-[10px] leading-none font-medium"
                 style={{

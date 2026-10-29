@@ -15,8 +15,8 @@ interface Props {
   addLog: (msg: string, type?: 'info' | 'error') => void;
   showToolSettings: boolean;
   onCloseToolSettings: () => void;
-  /** Label for the create-tool modal, opened from the Labels palette; null = closed. */
-  creatingToolText: string | null;
+  /** Create-tool modal opened from an empty Labels-palette slot: typed label and that slot's key; null = closed. */
+  creatingTool: { text: string; key: string } | null;
   onCloseCreate: () => void;
   /** Ready a tool by hotkey once it's been created. */
   readyTool: (key: string) => void;
@@ -25,7 +25,7 @@ interface Props {
 /** The annotation-tool modals: settings, edit, create, example library, delete. */
 export default function ToolModals({
   tools, annotations, examplePlayer, spectrogramSettings: settings, addLog,
-  showToolSettings, onCloseToolSettings, creatingToolText: panelCreatingToolText, onCloseCreate, readyTool,
+  showToolSettings, onCloseToolSettings, creatingTool, onCloseCreate, readyTool,
 }: Props) {
   const {
     annotationTools,
@@ -76,16 +76,18 @@ export default function ToolModals({
           }}
         />
       )}
-      {panelCreatingToolText !== null && (
+      {creatingTool !== null && (
         <AnnotationToolEditModal
-          tool={{ id: '', key: nextAvailableHotkey(annotationTools), text: panelCreatingToolText, color: pickNextToolColor(annotationTools) }}
+          tool={{ id: '', key: creatingTool.key, text: creatingTool.text, color: pickNextToolColor(annotationTools) }}
           toolIndex={-1}
           annotations={annotations}
           annotationTools={annotationTools}
           isCreate
           onClose={onCloseCreate}
           onSave={(text, color, description) => {
-            const key = nextAvailableHotkey(annotationTools);
+            // The slot may have been filled while the dialog was open; fall
+            // back to the next free key (or none) rather than double-booking it.
+            const key = annotationTools.some(t => t.key === creatingTool.key) ? nextAvailableHotkey(annotationTools) : creatingTool.key;
             handleCreateTool(text, color, key, description);
             onCloseCreate();
             if (key) readyTool(key);

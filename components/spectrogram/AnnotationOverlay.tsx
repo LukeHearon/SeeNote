@@ -64,6 +64,10 @@ interface AnnotationOverlayProps {
   // Right-click "Listen to example": toggles the example-clip preview for the
   // tool matching this label — same action as the `E` hotkey.
   onListenExample: (toolId: string) => void;
+  // Knife armed (Shift+K): a left click on an annotation splits it at the
+  // pointer instead of selecting / dragging it. Edge handles defer to it too.
+  knifeArmed?: boolean;
+  onKnifeSplit?: (id: string, t: number) => void;
 }
 
 interface AnnotationContextMenuState {
@@ -209,6 +213,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   onCreateTool,
   onBindHotkey,
   onListenExample,
+  knifeArmed = false,
+  onKnifeSplit,
 }) => {
   const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
 
@@ -486,6 +492,10 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    // container's mouseup doesn't also fire a bound selection —
                    // onContextMenu handles selecting and opening the menu.
                    if (e.button === 2) return;
+                   if (knifeArmed) {
+                       onKnifeSplit?.(annotation.id, getPointerTime(e));
+                       return;
+                   }
                    onSelectAnnotation(annotation.id);
                    // Track for click vs drag detection
                    clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };
@@ -493,8 +503,9 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
             >
                {/* Left resize handle */}
                <div
-                   className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center"
+                   className={`absolute left-0 top-0 bottom-0 w-2 z-10 flex items-center justify-center ${knifeArmed ? '' : 'cursor-ew-resize hover:bg-white/20'}`}
                    onMouseDown={(e) => {
+                       if (knifeArmed) return; // bubble to the box: the Knife cuts here too
                        e.stopPropagation();
                        if (e.button === 1) {
                            e.preventDefault();
@@ -512,8 +523,9 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                </div>
                {/* Right resize handle */}
                <div
-                   className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center"
+                   className={`absolute right-0 top-0 bottom-0 w-2 z-10 flex items-center justify-center ${knifeArmed ? '' : 'cursor-ew-resize hover:bg-white/20'}`}
                    onMouseDown={(e) => {
+                       if (knifeArmed) return; // bubble to the box: the Knife cuts here too
                        e.stopPropagation();
                        if (e.button === 1) {
                            e.preventDefault();

@@ -8,10 +8,11 @@ import { pickNextToolColor, HOTKEY_SLOTS, nextAvailableHotkey } from '../constan
 import { isMac } from '../utils/platform';
 import AnnotationToolEditModal from './AnnotationToolEditModal';
 import DeleteToolConfirmDialog from './DeleteToolConfirmDialog';
-import NewToolEntry from './NewToolEntry';
+import EmptyHotkeySlot from './EmptyHotkeySlot';
 import { isEditableTarget } from '../hooks/useHotkeys';
 import ModalBackdrop from './ModalBackdrop';
 import SlotInsertIndicator from './SlotInsertIndicator';
+import SlotGhost from './SlotGhost';
 import { applySlotDrop, SlotDropTarget } from '../utils/hotkeySlotDrag';
 import { useHotkeySlotDrag } from '../hooks/useHotkeySlotDrag';
 
@@ -297,18 +298,22 @@ export default function AnnotationToolsSettingsModal({
         >
           <div className="flex-1 flex flex-col min-w-0">
             <h3 className="text-xs text-slate-400 uppercase tracking-wider font-medium mb-3">{copy.hotkeysHeading}</h3>
-            <div onDragOver={slotDrag.onSlotsDragOver}>
+            {/* py strips above slot 1 / below 9 are the edge bump zones. */}
+            <div className="-my-1 py-1" onDragOver={slotDrag.onSlotsDragOver}>
             {SLOTS.map((k, slotIdx) => {
               const tool = annotationTools.find(t => t.key === k);
               const toolIndex = tool ? annotationTools.indexOf(tool) : -1;
-              const insert = drag?.target?.type === 'insert' && drag.target.gap === slotIdx ? drag.target : null;
+              const insertTarget = drag?.target?.type === 'insert' ? drag.target : null;
+              const insert = insertTarget && (insertTarget.gap === slotIdx || (insertTarget.gap === -1 && slotIdx === 0)) ? insertTarget : null;
               return (
                 <div
                   key={k}
                   ref={rowRef(slotIdx)}
                   className="relative flex items-center gap-2 mb-2 h-8"
                 >
-                  {insert && <SlotInsertIndicator direction={insert.direction} gapPx={8} />}
+                  {insert && <SlotInsertIndicator direction={insert.direction} gapPx={8} above={insert.gap === -1} />}
+                  {/* Badge (w-6) + gap-2 = 32px. */}
+                  {slotDrag.ghosts.has(k) && <SlotGhost tool={slotDrag.ghosts.get(k)!} leftPx={32} />}
                   <div className="w-6 h-6 bg-slate-700 rounded text-xs font-mono flex items-center justify-center text-slate-300 flex-none">
                     {k}
                   </div>
@@ -334,17 +339,13 @@ export default function AnnotationToolsSettingsModal({
                     // Empty slot: dashed box holding a NewToolEntry field. Typing
                     // an existing tool's name assigns it here; typing a new name
                     // opens the create dialog pre-targeted at this digit.
-                    <div
-                      className={`flex-1 h-8 rounded border-2 border-dashed px-2 flex items-center min-w-0 transition-colors ${isSlotHighlighted(k) ? '' : 'border-slate-700 hover:border-slate-500'}`}
-                      style={isSlotHighlighted(k) ? { borderColor: '#3b82f6' } : undefined}
-                    >
-                      <NewToolEntry
-                        annotationTools={annotationTools}
-                        onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'slot', key: k })}
-                        onCreateNew={text => openCreateDialog(k, text)}
-                        className="w-full"
-                      />
-                    </div>
+                    <EmptyHotkeySlot
+                      annotationTools={annotationTools}
+                      highlighted={isSlotHighlighted(k)}
+                      onAssignExisting={toolIndex => assignExistingTool(toolIndex, { type: 'slot', key: k })}
+                      onCreateNew={text => openCreateDialog(k, text)}
+                      className="h-8 border-2"
+                    />
                   )}
                 </div>
               );

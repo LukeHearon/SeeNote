@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import type { AnnotationTool } from '../types';
 import { HOTKEY_SLOTS } from '../constants';
 import { applySlotDrop, resolveSlotDropTarget, SlotDropTarget } from '../utils/hotkeySlotDrag';
@@ -36,6 +36,17 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     setTarget(resolveSlotDropTarget(tools, drag.sourceIndex, spans as DOMRect[], e.clientY));
   };
 
+  // Where the drop would put things: slot key → the tool that would land there,
+  // for every slot whose occupant changes (the dragged tool and everything it
+  // bumps or swaps). Drawn as ghosts over those rows.
+  const ghosts = useMemo(() => {
+    const m = new Map<string, AnnotationTool>();
+    if (!drag?.target) return m;
+    const next = applySlotDrop(tools, drag.sourceIndex, drag.target);
+    next.forEach((t, i) => { if (i !== 0 && t.key !== null && t.key !== tools[i].key) m.set(t.key, t); });
+    return m;
+  }, [drag, tools]);
+
   const commit = () => {
     if (drag?.target) {
       const newTools = applySlotDrop(tools, drag.sourceIndex, drag.target);
@@ -45,5 +56,5 @@ export function useHotkeySlotDrag(tools: AnnotationTool[], onCommit: (newTools: 
     setDrag(null);
   };
 
-  return { drag, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
+  return { drag, ghosts, rowRef, begin, cancel, setTarget, onSlotsDragOver, commit };
 }

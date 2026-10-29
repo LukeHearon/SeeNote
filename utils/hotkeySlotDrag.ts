@@ -6,14 +6,17 @@ import { HOTKEY_SLOTS } from '../constants';
 //   - onto an empty slot: the tool takes that key;
 //   - onto an assigned tool: the two swap keys;
 //   - between two assigned tools: the tool goes between them, bumping the
-//     neighbours up or down into the nearest free slot on that side.
+//     neighbours up or down into the nearest free slot on that side;
+//   - above slot 1 / below slot 9 (when that slot is assigned): the tool takes
+//     slot 1 / 9 and everything is bumped down / up.
 // The dragged tool's own slot counts as free — picking it up vacates it.
 
 export type InsertDirection = 'up' | 'down';
 
 export type SlotDropTarget =
   | { type: 'slot'; key: string }
-  // `gap` g sits between HOTKEY_SLOTS[g] and HOTKEY_SLOTS[g + 1].
+  // `gap` g sits between HOTKEY_SLOTS[g] and HOTKEY_SLOTS[g + 1]; -1 is above
+  // the first slot and HOTKEY_SLOTS.length - 1 below the last.
   | { type: 'insert'; gap: number; direction: InsertDirection }
   | { type: 'unassigned' };
 
@@ -55,9 +58,12 @@ export function resolveSlotDropTarget(
 ): SlotDropTarget | null {
   if (rows.length !== HOTKEY_SLOTS.length) return null;
   const occ = occupants(tools, sourceIndex);
+  // Past either end of the list counts as filled: the edge gaps are walls on
+  // their outer side, so they only ever bump inward.
+  const filled = (j: number) => j < 0 || j >= occ.length || occ[j] !== -1;
 
-  // Nearest row, and — if the pointer is in an edge band or the space between
-  // rows — the gap it's near.
+  // Nearest row, and — if the pointer is in an edge band, the space between
+  // rows, or past either end of the list — the gap it's near.
   let row = 0;
   let gap: number | null = null;
   for (let i = 0; i < rows.length; i++) {
@@ -65,27 +71,26 @@ export function resolveSlotDropTarget(
     const edge = (bottom - top) * INSERT_EDGE_FRACTION;
     if (y < top) {
       // Above row i: either above the whole list, or in the space after row i-1.
-      if (i > 0) {
-        gap = i - 1;
-        row = y - rows[i - 1].bottom < top - y ? i - 1 : i;
-      } else {
-        row = 0;
-      }
+      gap = i - 1;
+      row = i > 0 && y - rows[i - 1].bottom < top - y ? i - 1 : i;
       break;
     }
     if (y <= bottom) {
       row = i;
-      if (y < top + edge && i > 0) gap = i - 1;
-      else if (y > bottom - edge && i < rows.length - 1) gap = i;
+      if (y < top + edge) gap = i - 1;
+      else if (y > bottom - edge) gap = i;
       break;
     }
-    row = i; // below the last row
+    // Below the last row.
+    row = i;
+    gap = i;
   }
 
-  if (gap !== null && occ[gap] !== -1 && occ[gap + 1] !== -1) {
+  if (gap !== null && filled(gap) && filled(gap + 1)) {
     const { up, down } = insertDirections(tools, sourceIndex, gap);
     if (up || down) {
-      const mid = (rows[gap].bottom + rows[gap + 1].top) / 2;
+      const mid = gap < 0 ? -Infinity : gap >= rows.length - 1 ? Infinity
+        : (rows[gap].bottom + rows[gap + 1].top) / 2;
       const direction: InsertDirection = up && down ? (y < mid ? 'up' : 'down') : up ? 'up' : 'down';
       return { type: 'insert', gap, direction };
     }

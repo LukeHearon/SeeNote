@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
+import { useRef, useState, useEffect, useCallback, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
 import type { Annotation, AnnotationTool, Selection } from '../types';
 import type { SpectrogramHandle } from '../components/Spectrogram';
 import type { ActivationStackApi } from './useActivationStack';
@@ -6,6 +6,7 @@ import { makeAnnotationFromTool, makeAnnotationFromLabel } from '../utils/helper
 import { resolveLabelColor } from '../utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from '../utils/bindAnnotationHotkey';
 import type { Timeline } from '../utils/subsetTimeline';
+import { splitAnnotation } from '../utils/annotationSplit';
 
 interface AnnotationCommandsParams {
   annotations: Annotation[];
@@ -21,6 +22,7 @@ interface AnnotationCommandsParams {
   selectedAnnotationId: string | null;
   setSelectedAnnotationId: (id: string | null) => void;
   activationStack: ActivationStackApi;
+  filterToolActive: boolean;
   setFilterToolActive: (active: boolean) => void;
   selectionToSource: (s: Selection) => Selection;
   selectAllSpanAt: (t: number) => Selection;
@@ -39,16 +41,39 @@ interface AnnotationCommandsParams {
  * The annotation window's editing commands: readying and switching tools
  * (including relabelling the bound annotation), Mod+A / Enter / Delete,
  * copy-paste, bind-to-hotkey, and resizing the bound annotation from the
- * keyboard or the toolbar's time fields.
+ * keyboard or the toolbar's time fields, and splitting annotations (K at the
+ * playhead; Shift+K arms the Knife, which splits wherever an annotation is clicked).
  */
 export function useAnnotationCommands({
   annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
   activeToolKey, setActiveToolKey, selection, selectionRef,
   boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId,
-  activationStack, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
+  activationStack, filterToolActive, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
   currentTimeRef, trackPathRef, seek, handleSelectionChange, spectrogramRef,
   handleBindHotkey, handleCreateTool,
 }: AnnotationCommandsParams) {
+  // Knife (Shift+K): while armed, clicking an annotation splits it at the
+  // click. Exclusive with the annotation tools and the filter tool — arming it
+  // drops both, and readying either one disarms it. Its own activation-stack
+  // layer, so Esc disarms it in turn.
+  const [knifeArmed, setKnifeArmed] = useState(false);
+  const disarmKnife = useCallback(() => {
+      setKnifeArmed(false);
+      activationStack.remove('knifeTool');
+  }, [activationStack]);
+  const toggleKnife = () => {
+      if (knifeArmed) { disarmKnife(); return; }
+      setActiveToolKey(null);
+      activationStack.remove('annotationTool');
+      setFilterToolActive(false);
+      activationStack.remove('filterTool');
+      setKnifeArmed(true);
+      activationStack.pushIfAbsent('knifeTool');
+  };
+  useEffect(() => {
+      if (activeToolKey !== null || filterToolActive) disarmKnife();
+  }, [activeToolKey, filterToolActive, disarmKnife]);
+
   // Label + span (source seconds) yanked by Mod+C, replayed by Mod+V at the
   // playhead. Persists across track switches (the window stays mounted).
   const annotationClipboardRef = useRef<{ text: string; color?: string; duration: number } | null>(null);
@@ -291,15 +316,40 @@ export function useAnnotationCommands({
 
   // `S`: select mode (no annotation tool readied). Stack-equivalent to removing
   // the `annotationTool` entry — doesn't touch the selection, filter tool, or band.
+  // Also puts the Knife away — S means "back to plain selecting".
   const selectMode = useCallback(() => {
       setActiveToolKey(null);
       activationStack.remove('annotationTool');
-  }, [setActiveToolKey, activationStack]);
+      disarmKnife();
+  }, [setActiveToolKey, activationStack, disarmKnife]);
+
+  // Split annotation `id` at display time `t` — shared by K (at the playhead)
+  // and the Knife (at the click). If it was selected or bound, the right-hand
+  // piece takes over, so pressing K repeatedly during playback keeps chopping
+  // the piece the playhead is in; a bound selection shrinks to match.
+  const splitAnnotationAt = useCallback((id: string, t: number) => {
+      const r = splitAnnotation(annotations, id, timeline.toSource(t));
+      if (!r) return;
+      handleAnnotationsCommit(r.annotations);
+      if (selectedAnnotationId === id) setSelectedAnnotationId(r.right.id);
+      if (boundAnnotationId === id) {
+          setBoundAnnotationId(r.right.id);
+          const sel = selectionRef.current;
+          if (sel) handleSelectionChange({ start: t, end: sel.end });
+      }
+  }, [annotations, timeline, handleAnnotationsCommit, selectedAnnotationId, boundAnnotationId, selectionRef, handleSelectionChange]);
+  // K — split the selected annotation at the playhead. No-op when nothing is
+  // selected or the playhead isn't inside it.
+  const splitSelectedAnnotationAtPlayhead = () => {
+      const id = selectedAnnotationId ?? boundAnnotationId;
+      if (id) splitAnnotationAt(id, currentTimeRef.current);
+  };
 
   return {
     readyTool, selectMode, handleToolActivate,
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
     resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
+    knifeArmed, toggleKnife, disarmKnife, splitAnnotationAt, splitSelectedAnnotationAtPlayhead,
   };
 }

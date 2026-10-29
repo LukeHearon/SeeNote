@@ -4,7 +4,7 @@ import FileTree from './components/FileTree';
 import ProjectSettingsModal from './components/ProjectSettingsModal';
 import { HelpHighlightHost } from './components/HelpHighlightHost';
 import { Annotation, LoadedAnnotations, SpectrogramSettings, Project, ProjectSettings, ProjectPreferences, Selection, VideoMode } from './types';
-import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode, nextAvailableHotkey } from './constants';
+import { DEFAULT_ZOOM_SEC, DEFAULT_SPECTROGRAM_SETTINGS, DEFAULT_UI_SETTINGS, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_FIND_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, SIDEBAR_SECTION_FILES, SIDEBAR_SECTION_LABELS, SIDEBAR_SECTION_NEURONS, sidebarSectionsFromUiSettings, isSupportedMediaFile, isVideoFile, migrateVideoMode } from './constants';
 import { stripExt, shuffleArray, basename } from './utils/helpers';
 import { useTrackWallClock } from './hooks/useTrackWallClock';
 import { invalidateProjectLabelIndex } from './utils/annotationRename';
@@ -31,6 +31,7 @@ import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useSubsetTimeline } from './hooks/useSubsetTimeline';
 import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
 import { annotationToSource, projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
+import { applySlotDrop } from './utils/hotkeySlotDrag';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement } from './hooks/useSyncManagement';
 import { useAnnotationTools } from './hooks/useAnnotationTools';
@@ -107,7 +108,9 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // Add-tool entry in the Labels palette: when the typed name matches no tool,
   // this holds it and opens the create modal, pre-targeted at the next free
   // hotkey. null = modal closed.
-  const [panelCreatingToolText, setPanelCreatingToolText] = useState<string | null>(null);
+  // Create-tool modal opened from an empty slot in the Labels palette: the typed
+  // name and that slot's key. null = closed.
+  const [panelCreatingTool, setPanelCreatingTool] = useState<{ text: string; key: string } | null>(null);
   // Pending-save timer for the annotation autosave. Declared here (rather than
   // alongside useSyncManagement below) so handleOpenTrack and the other
   // track-switch resets, which run earlier, can flush it before wiping
@@ -1201,11 +1204,12 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
     resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
+    knifeArmed, toggleKnife, disarmKnife, splitAnnotationAt, splitSelectedAnnotationAtPlayhead,
   } = useAnnotationCommands({
     annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
     activeToolKey, setActiveToolKey, selection, selectionRef,
     boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId,
-    activationStack, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
+    activationStack, filterToolActive, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
     currentTimeRef, trackPathRef, seek, handleSelectionChange, spectrogramRef,
     handleBindHotkey, handleCreateTool,
   });
@@ -1258,6 +1262,10 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       // buzzdetect directory — otherwise there's no panel to toggle.
       { key: 'b', handler: () => { if (project.buzzdetectDirectoryAbs !== null) buzzdetect.setBuzzdetectEnabled(v => !v); } },
       { key: 'Enter', handler: deselectAnnotation },
+      // `K`: split the selected annotation at the playhead. `Shift+K`: arm /
+      // disarm the Knife — click any annotation to split it there.
+      { key: 'k', handler: splitSelectedAnnotationAtPlayhead },
+      { key: 'k', mods: ['shift'], handler: toggleKnife },
       { key: 'e', handler: () => {
           if (activeToolKey === null) return;
           const tool = annotationTools.find(t => t.key === activeToolKey);
@@ -1270,6 +1278,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         selection: () => { handleSelectionChange(null); setBoundAnnotationId(null); },
         filterTool: () => setFilterToolActive(false),
         filterBand: () => setBandPassFilter(null),
+        knifeTool: disarmKnife,
       }),
       { key: 'Delete', handler: deleteSelectedAnnotation, preventDefault: false },
       { key: 'Backspace', handler: deleteSelectedAnnotation, preventDefault: false },
@@ -1518,13 +1527,11 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                   onEditTool={setPanelEditingToolIndex}
                   onRequestDeleteTool={setPanelDeletingToolIndex}
                   onUnassignTool={(toolIndex) => handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key: null } : t))}
-                  onAssignToolHotkey={(toolIndex) => {
-                    const key = nextAvailableHotkey(annotationTools);
-                    if (!key) return;
-                    handleReorderTools(annotationTools.map((t, i) => i === toolIndex ? { ...t, key } : t));
+                  onAssignToolHotkey={(toolIndex, key) => {
+                    handleReorderTools(applySlotDrop(annotationTools, toolIndex, { type: 'slot', key }));
                     readyTool(key);
                   }}
-                  onCreateToolForHotkey={(text) => setPanelCreatingToolText(text)}
+                  onCreateToolForHotkey={(text, key) => setPanelCreatingTool({ text, key })}
                   onReorderTools={handleReorderTools}
                   playingExampleToolId={examplePlayer.playingToolId}
                   onPlayExample={examplePlayer.toggle}
@@ -1662,6 +1669,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 onBoundAnnotationChange={setBoundAnnotationId}
                 onZoomChange={setZoomSec}
                 filterToolActive={filterToolActive}
+                knifeArmed={knifeArmed}
+                onKnifeSplit={splitAnnotationAt}
                 bandPassFilter={bandPassFilter}
                 onBandPassFilterChange={setBandPassFilter}
                 onBandPassFilterDrawn={handleBandPassFilterDrawn}
@@ -1764,8 +1773,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         addLog={addLog}
         showToolSettings={showToolSettings}
         onCloseToolSettings={() => setShowToolSettings(false)}
-        creatingToolText={panelCreatingToolText}
-        onCloseCreate={() => setPanelCreatingToolText(null)}
+        creatingTool={panelCreatingTool}
+        onCloseCreate={() => setPanelCreatingTool(null)}
         readyTool={readyTool}
       />
       <TooltipLayer />
