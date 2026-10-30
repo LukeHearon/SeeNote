@@ -278,11 +278,15 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // over elements that show their own cursor (handles, buttons), decided when
   // the pointer enters an element rather than on every move.
   const toolCursorRef = useRef<HTMLDivElement>(null);
+  // Knife guide: a full-height dotted line at the pointer's x, so the cut
+  // position reads against the whole spectrogram. Moves with the tool cursor.
+  const knifeLineRef = useRef<HTMLDivElement>(null);
   const toolCursorStateRef = useRef({ inside: false, suppressed: false });
   const applyToolCursorVisibility = () => {
-    const el = toolCursorRef.current;
     const st = toolCursorStateRef.current;
-    if (el) el.style.display = st.inside && !st.suppressed ? 'block' : 'none';
+    const display = st.inside && !st.suppressed ? 'block' : 'none';
+    if (toolCursorRef.current) toolCursorRef.current.style.display = display;
+    if (knifeLineRef.current) knifeLineRef.current.style.display = display;
   };
   const moveToolCursor = (e: React.MouseEvent) => {
     const el = toolCursorRef.current;
@@ -290,6 +294,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     if (!el || !rect) return;
     el.style.left = `${e.clientX - rect.left}px`;
     el.style.top = `${e.clientY - rect.top}px`;
+    if (knifeLineRef.current) knifeLineRef.current.style.left = `${e.clientX - rect.left}px`;
     toolCursorStateRef.current.inside = true;
     applyToolCursorVisibility();
   };
@@ -1213,6 +1218,24 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
         className="absolute top-0 left-0 w-full h-full pointer-events-none"
         style={{ zIndex: 30 }}
       />
+
+      {/* Knife guide — z-40, a thin dotted line spanning the full height at
+          the pointer's x. Its left/display are written by moveToolCursor /
+          applyToolCursorVisibility, like the ToolCursor below. */}
+      {knifeArmed && (
+        <div
+          ref={knifeLineRef}
+          className="absolute top-0 bottom-0 pointer-events-none"
+          style={{
+            display: toolCursorStateRef.current.inside && !toolCursorStateRef.current.suppressed ? 'block' : 'none',
+            zIndex: 40,
+            width: 0,
+            borderLeft: '1px dotted rgba(255,255,255,0.85)',
+            filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.9))',
+            left: toolCursorRef.current?.style.left,
+          }}
+        />
+      )}
 
       {/* ToolCursor — z-40, above overlay canvas. A single bar whose
           orientation reflects the topmost tool: vertical for Select /
