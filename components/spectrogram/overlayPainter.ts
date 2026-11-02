@@ -12,25 +12,32 @@ import { timeToX } from '../../utils/viewportTransform';
 import type { Timeline } from '../../utils/subsetTimeline';
 
 /**
- * Darken everything outside a selection, and run a thin dotted spine down its
- * middle — the only thing a span still being swept out has to show for itself.
- * With a band-pass band up the spine runs down the middle of the band instead,
- * so the two read as the one region the audio is taken from.
+ * Darken everything outside the given spans (one selection, or the Shift-selected
+ * annotations), and run a thin dotted spine down the middle of each — the only
+ * thing a span still being swept out has to show for itself. With a band-pass
+ * band up the spines run down the middle of the band instead, so the two read
+ * as the one region the audio is taken from.
  */
 export function paintSelectionShade(
   ctx: CanvasRenderingContext2D,
-  startX: number,
-  endX: number,
+  spans: readonly { startX: number; endX: number }[],
   width: number,
   height: number,
   band: { yTop: number; yBottom: number } | null,
 ): void {
-  const x0 = Math.max(0, startX);
-  const x1 = Math.min(width, endX);
+  const sorted = spans
+    .map(s => ({ x0: Math.max(0, s.startX), x1: Math.min(width, s.endX) }))
+    .filter(s => s.x1 > s.x0)
+    .sort((p, q) => p.x0 - q.x0);
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-  if (x0 > 0) ctx.fillRect(0, 0, x0, height);
-  if (x1 < width) ctx.fillRect(x1, 0, width - x1, height);
-  paintSelectionSpine(ctx, startX, endX, width, height, band);
+  // Fill the gaps between spans, however they overlap, and either side of them.
+  let cursor = 0;
+  for (const s of sorted) {
+    if (s.x0 > cursor) ctx.fillRect(cursor, 0, s.x0 - cursor, height);
+    cursor = Math.max(cursor, s.x1);
+  }
+  if (cursor < width) ctx.fillRect(cursor, 0, width - cursor, height);
+  for (const s of sorted) paintSelectionSpine(ctx, s.x0, s.x1, width, height, band);
 }
 
 /**

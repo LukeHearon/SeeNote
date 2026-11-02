@@ -23,7 +23,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { paintGutter, paintFrequencyTicks, paintSubsetJoins } from './spectrogram/canvasPainters';
-import { paintSelectionShade, paintSelectionSpine, paintMarquee, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
+import { paintSelectionShade, paintMarquee, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
@@ -712,13 +712,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     const band = bandPassFilter
       ? bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale)
       : null;
-    if (activeSelection) {
-      paintSelectionShade(ctx, toX(activeSelection.start), toX(activeSelection.end), width, height, band);
-    }
-    // Shift-selected annotations: a dotted spine through each, no shading — the
-    // gaps between them are not "outside" anything.
-    for (const span of multiSpansRef.current) {
-      paintSelectionSpine(ctx, toX(span.start), toX(span.end), width, height, band);
+    // The live selection and any Shift-selected annotations are lit; the rest dims.
+    const litSpans = activeSelection ? [activeSelection, ...multiSpansRef.current] : multiSpansRef.current;
+    if (litSpans.length > 0) {
+      paintSelectionShade(ctx, litSpans.map(sp => ({ startX: toX(sp.start), endX: toX(sp.end) })), width, height, band);
     }
     if (marquee) paintMarquee(ctx, toX(marquee.t0), marquee.y0, toX(marquee.t1), marquee.y1);
 
