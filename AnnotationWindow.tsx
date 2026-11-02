@@ -1225,23 +1225,27 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // so does moving to another track.
   useEffect(() => { if (selection) setMultiIdsRaw(m => (m.length ? [] : m)); }, [selection]);
   useEffect(() => { setMultiIdsRaw([]); }, [annotationsLoadedTrack]);
-  // Shift-click on an annotation toggles it in the set. The first one is just
-  // the ordinary single selection; from two up the set takes over.
-  const handleShiftSelectAnnotation = useCallback((id: string) => {
-    const base = multiSelectedIds.length ? multiSelectedIds : selectedAnnotationId ? [selectedAnnotationId] : [];
-    const next = toggleId(base, id);
-    if (next.length >= 2) {
-      setMultiIdsRaw(next);
+  // Make exactly `ids` the selection: from two up the set takes over, one is
+  // the ordinary single selection, none clears. Shift-click and the right-drag
+  // box both end here.
+  const selectAnnotations = useCallback((ids: string[]) => {
+    if (ids.length >= 2) {
+      setMultiIdsRaw(ids);
       setSelectedAnnotationIdRaw(null);
       setBoundAnnotationId(null);
       handleSelectionChange(null);
       return;
     }
-    const only = next.length === 1 ? displayAnnotations.find(a => a.id === next[0]) : undefined;
+    const only = ids.length === 1 ? displayAnnotations.find(a => a.id === ids[0]) : undefined;
     setSelectedAnnotationId(only?.id ?? null);
     setBoundAnnotationId(only?.id ?? null);
     handleSelectionChange(only ? { start: only.start, end: only.end } : null);
-  }, [multiSelectedIds, selectedAnnotationId, displayAnnotations, setSelectedAnnotationId, handleSelectionChange]);
+  }, [displayAnnotations, setSelectedAnnotationId, handleSelectionChange]);
+  // Shift-click toggles an annotation in the current selection.
+  const handleShiftSelectAnnotation = useCallback((id: string) => {
+    const base = multiSelectedIds.length ? multiSelectedIds : selectedAnnotationId ? [selectedAnnotationId] : [];
+    selectAnnotations(toggleId(base, id));
+  }, [multiSelectedIds, selectedAnnotationId, selectAnnotations]);
 
   // Everything that creates, edits or deletes annotations from the keyboard,
   // the palette or the toolbar. See hooks/useAnnotationCommands.ts.
@@ -1712,6 +1716,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 selectedAnnotationId={selectedAnnotationId}
                 multiSelectedIds={multiSelectedIds}
                 onShiftSelectAnnotation={handleShiftSelectAnnotation}
+                onMarqueeSelect={selectAnnotations}
                 activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
                 annotationTools={annotationTools}
                 selection={selection}

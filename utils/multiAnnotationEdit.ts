@@ -10,7 +10,8 @@
 // All times are in whatever axis the caller works in (display time in the
 // pointer hook); the functions never convert.
 
-import type { Annotation } from '../types';
+import type { Annotation, AnnotationWithLayer } from '../types';
+import { annotationBoxTop, ANNOTATION_BOX_HEIGHT } from './helpers';
 
 /** The shortest an annotation may be resized to. */
 export const MIN_ANNOTATION_SEC = 0.05;
@@ -23,6 +24,23 @@ export interface SpanLimits { lo: number; hi: number }
 
 /** The range of deltas one annotation can take. */
 export interface DeltaRange { min: number; max: number }
+
+/** A right-drag selection box: time on x, container-local pixels on y, in either corner order. */
+export interface MarqueeBox { t0: number; y0: number; t1: number; y1: number }
+
+/** Ids of the annotations whose boxes the marquee touches, in the order given. */
+export function annotationsInBox(annotations: readonly AnnotationWithLayer[], box: MarqueeBox): string[] {
+  const t0 = Math.min(box.t0, box.t1);
+  const t1 = Math.max(box.t0, box.t1);
+  const y0 = Math.min(box.y0, box.y1);
+  const y1 = Math.max(box.y0, box.y1);
+  return annotations
+    .filter(a => {
+      const top = annotationBoxTop(a.layerIndex);
+      return a.start <= t1 && a.end >= t0 && top <= y1 && top + ANNOTATION_BOX_HEIGHT >= y0;
+    })
+    .map(a => a.id);
+}
 
 /** `id` added to `ids`, or removed if already there. */
 export function toggleId(ids: readonly string[], id: string): string[] {

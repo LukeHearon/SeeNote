@@ -5,6 +5,8 @@ import { makeAnnotationFromTool, clamp, updateAnnotation } from '../utils/helper
 import { xToTime, maxScroll as computeMaxScroll } from '../utils/viewportTransform';
 import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import type { Timeline } from '../utils/subsetTimeline';
+import { annotationsInBox, type MarqueeBox } from '../utils/multiAnnotationEdit';
+import type { AnnotationWithLayer } from '../types';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { addWindowListener, forEachWindow } from '../utils/windowRegistry';
 import { MIN_ANNOTATION_SEC, deltaRange, clampSharedDelta, shiftAnnotations } from '../utils/multiAnnotationEdit';
@@ -54,6 +56,8 @@ export interface SpectrogramInteractionParams {
   timelineRef: React.MutableRefObject<Timeline>;
   // Props / callbacks the interaction needs.
   annotations: Annotation[];
+  /** The same annotations with their stacking layer — where each box sits vertically, for the marquee. */
+  layeredAnnotationsRef: React.MutableRefObject<AnnotationWithLayer[]>;
   selection: Selection | null;
   boundAnnotationId: string | null;
   /** Annotations Shift-selected together (two or more, else empty). Dragging or
@@ -73,15 +77,15 @@ export interface SpectrogramInteractionParams {
   onSelectAnnotation: (id: string | null) => void;
   onSelectionChange: (region: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
+  /** A right-drag box closed over these annotations (none, one, or several). */
+  onMarqueeSelect: (ids: string[]) => void;
   /** Open (and focus) an annotation's inline label editor. */
   onEditAnnotationText: (id: string) => void;
   onBandPassFilterChange: (f: BandPassFilter | null) => void;
   onBandPassFilterDrawn: (f: BandPassFilter) => void;
-  // Right-drag pan timestamp (shared with wheel handling).
-  lastManualScrollRef: React.MutableRefObject<number>;
-  // Fires on a right-click that didn't turn into a pan drag (movement stayed
+  // Fires on a right-click that didn't turn into a marquee drag (movement stayed
   // under CONTEXT_MENU_MOVE_THRESHOLD_PX between mousedown and mouseup) — the
-  // signal to open a context menu. Right-click always starts a pan drag (see
+  // signal to open a context menu. Right-click always arms a marquee (see
   // handleMouseDown), so this is how a plain right-click is told apart from one.
   onContextMenu?: (clientX: number, clientY: number) => void;
   // Live Alt state, read at annotation-commit time so toggling Alt mid-drag (after
@@ -96,6 +100,8 @@ export interface SpectrogramInteractionApi {
   commitSpan: (anchor: number, edge: number, quiet?: boolean) => void;
   creatingSelection: { start: number; current: number; quiet?: boolean } | null;
   creatingFilter: { y0: number; y1: number } | null;
+  /** The right-drag selection box, in time and container-local y, or null. */
+  marquee: MarqueeBox | null;
   // Refs shared with AnnotationOverlay (prop contract).
   pendingAnnotationsRef: React.MutableRefObject<Annotation[]>;
   clickDownRef: React.MutableRefObject<{ x: number; y: number; annotationId: string; pointerTime: number } | null>;
@@ -141,6 +147,7 @@ export function useSpectrogramInteraction({
   setScroll,
   timelineRef,
   annotations,
+  layeredAnnotationsRef,
   selection,
   boundAnnotationId,
   multiSelectedIds,
@@ -157,18 +164,21 @@ export function useSpectrogramInteraction({
   onSelectAnnotation,
   onSelectionChange,
   onBoundAnnotationChange,
+  onMarqueeSelect,
   onEditAnnotationText,
   onBandPassFilterChange,
   onBandPassFilterDrawn,
-  lastManualScrollRef,
   isAltHeldRef,
   onContextMenu,
 }: SpectrogramInteractionParams): SpectrogramInteractionApi {
-  const [dragStart, setDragStart] = useState<{ x: number; scroll: number } | null>(null);
-  // Screen position at a right-button mousedown, so mouseup can tell a plain
-  // right-click (context menu) apart from a right-drag pan (see onContextMenu).
-  const rightClickStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Right-button mousedown: screen position (so mouseup can tell a plain
+  // right-click, which opens the context menu, from a drag) and where in the
+  // track and container the box is anchored.
+  const rightDownRef = useRef<{ x: number; y: number; t: number; localY: number } | null>(null);
   const CONTEXT_MENU_MOVE_THRESHOLD_PX = 4;
+  // The right-drag selection box: time on x (so it holds still under auto-pan
+  // and wheel scroll), container-local pixels on y.
+  const [marquee, setMarquee] = useState<MarqueeBox | null>(null);
 
   // Interaction State (annotations — only when activeAnnotationTool !== null)
   const [creatingAnnotation, setCreatingAnnotation] = useState<{ start: number; current: number } | null>(null);
@@ -203,6 +213,7 @@ export function useSpectrogramInteraction({
   const resizingAnnotationRef = useRef(resizingAnnotation);
   const draggedAnnotationRef = useRef(draggedAnnotation);
   const resizingSelectionHandleRef = useRef(resizingSelectionHandle);
+  const marqueeRef = useRef(marquee);
   const annotationsRef = useRef(annotations);
   const boundAnnotationIdRef = useRef(boundAnnotationId);
   const multiSelectedIdsRef = useRef(multiSelectedIds);
@@ -227,6 +238,7 @@ export function useSpectrogramInteraction({
   resizingAnnotationRef.current = resizingAnnotation;
   draggedAnnotationRef.current = draggedAnnotation;
   resizingSelectionHandleRef.current = resizingSelectionHandle;
+  marqueeRef.current = marquee;
   annotationsRef.current = annotations;
   boundAnnotationIdRef.current = boundAnnotationId;
   multiSelectedIdsRef.current = multiSelectedIds;
@@ -393,6 +405,13 @@ export function useSpectrogramInteraction({
     );
     const held = (anchor: number) => holdInSpan(anchor, rawT);
 
+    const mq = marqueeRef.current;
+    if (mq) {
+      const y = (mousePosRef.current?.clientY ?? rect.top) - rect.top;
+      setMarquee({ ...mq, t1: rawT, y1: clamp(y, 0, rect.height) });
+      return;
+    }
+
     const ca = creatingAnnotationRef.current;
     if (ca) { setCreatingAnnotation({ ...ca, current: held(ca.start) }); return; }
 
@@ -455,7 +474,7 @@ export function useSpectrogramInteraction({
   const isAnyDragActive =
     creatingSelection !== null || creatingAnnotation !== null ||
     resizingAnnotation !== null || draggedAnnotation !== null ||
-    resizingSelectionHandle !== null;
+    resizingSelectionHandle !== null || marquee !== null;
 
   // Keep a ref so window handlers can check without a stale closure
   const isAnyDragActiveRef = useRef(isAnyDragActive);
@@ -615,8 +634,10 @@ export function useSpectrogramInteraction({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
       e.preventDefault();
-      setDragStart({ x: e.clientX, scroll: scrollLeftRef.current });
-      rightClickStartRef.current = { x: e.clientX, y: e.clientY };
+      const rect = containerRef.current?.getBoundingClientRect();
+      rightDownRef.current = {
+        x: e.clientX, y: e.clientY, t: getPointerTime(e), localY: rect ? e.clientY - rect.top : 0,
+      };
       return;
     }
 
@@ -684,12 +705,13 @@ export function useSpectrogramInteraction({
   const handleMouseMove = (e: React.MouseEvent) => {
     mousePosRef.current = { clientX: e.clientX, clientY: e.clientY };
 
-    if (dragStart) {
-      const delta = dragStart.x - e.clientX;
-      const containerWidth = containerRef.current?.clientWidth || 0;
-      const maxScroll = computeMaxScroll(durationRef.current, pixelsPerSecondRef.current, containerWidth);
-      lastManualScrollRef.current = Date.now();
-      setScroll(clamp(dragStart.scroll + delta, 0, maxScroll), 'rightDragPan');
+    // Right button held: until the pointer has travelled past the click
+    // threshold this is still a right-click; past it, a box begins.
+    const down = rightDownRef.current;
+    if (down && !marqueeRef.current) {
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) >= CONTEXT_MENU_MOVE_THRESHOLD_PX) {
+        setMarquee({ t0: down.t, y0: down.localY, t1: getPointerTime(e), y1: clamp(e.clientY - (containerRef.current?.getBoundingClientRect().top ?? 0), 0, containerRef.current?.clientHeight ?? 0) });
+      }
       return;
     }
 
@@ -758,13 +780,14 @@ export function useSpectrogramInteraction({
   };
 
   const handleMouseUp = (e?: React.MouseEvent) => {
-    if (dragStart) {
-      setDragStart(null);
-      const start = rightClickStartRef.current;
-      rightClickStartRef.current = null;
-      if (start && e) {
-        const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
-        if (moved < CONTEXT_MENU_MOVE_THRESHOLD_PX) onContextMenu?.(e.clientX, e.clientY);
+    if (rightDownRef.current) {
+      const down = rightDownRef.current;
+      rightDownRef.current = null;
+      if (marquee) {
+        onMarqueeSelect(annotationsInBox(layeredAnnotationsRef.current, marquee));
+        setMarquee(null);
+      } else if (e && Math.hypot(e.clientX - down.x, e.clientY - down.y) < CONTEXT_MENU_MOVE_THRESHOLD_PX) {
+        onContextMenu?.(e.clientX, e.clientY);
       }
     }
 
@@ -862,6 +885,7 @@ export function useSpectrogramInteraction({
     commitSpan,
     creatingSelection,
     creatingFilter,
+    marquee,
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,

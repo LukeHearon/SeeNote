@@ -600,6 +600,7 @@ function SingleFileWindowBody({ filePath, onClose, loadRememberedBuzzdetectFile,
                 zoomSec={zoomSec}
                 annotations={[]}
                 selectedAnnotationId={null}
+                onMarqueeSelect={() => {}}
                 activeAnnotationTool={null}
                 annotationTools={[]}
                 selection={selection}

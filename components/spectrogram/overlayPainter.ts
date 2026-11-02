@@ -61,6 +61,21 @@ export function paintSelectionSpine(
   ctx.restore();
 }
 
+/** The right-drag selection box: a faint fill with a thin outline. Corners in either order. */
+export function paintMarquee(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+  ctx.restore();
+}
+
 /**
  * The annotation box a span will become: same geometry and colours as the
  * committed box (AnnotationOverlay), in vertical layer `layerIndex`, with the

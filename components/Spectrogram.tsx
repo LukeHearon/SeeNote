@@ -23,7 +23,7 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { paintGutter, paintFrequencyTicks, paintSubsetJoins } from './spectrogram/canvasPainters';
-import { paintSelectionShade, paintSelectionSpine, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
+import { paintSelectionShade, paintSelectionSpine, paintMarquee, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
@@ -77,6 +77,8 @@ interface SpectrogramProps {
   multiSelectedIds?: readonly string[];
   /** Shift-click on an annotation: add it to / drop it from the multi-selection. */
   onShiftSelectAnnotation?: (id: string) => void;
+  /** A right-drag box closed over these annotations (none, one or several): they become the selection. */
+  onMarqueeSelect: (ids: string[]) => void;
   // null = Selection Mode (no annotation tool active)
   activeAnnotationTool: AnnotationTool | null;
   annotationTools: AnnotationTool[];
@@ -192,6 +194,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   selectedAnnotationId,
   multiSelectedIds = NO_IDS,
   onShiftSelectAnnotation,
+  onMarqueeSelect,
   activeAnnotationTool,
   annotationTools,
   selection,
@@ -506,6 +509,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     creatingAnnotation,
     creatingSelection,
     creatingFilter,
+    marquee,
     pendingAnnotationsRef,
     clickDownRef,
     playheadFollowsAnnotationStartRef,
@@ -526,6 +530,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     setScroll,
     timelineRef,
     annotations,
+    layeredAnnotationsRef,
     selection,
     boundAnnotationId,
     multiSelectedIds,
@@ -542,10 +547,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     onSelectAnnotation,
     onSelectionChange,
     onBoundAnnotationChange,
+    onMarqueeSelect,
     onEditAnnotationText: focusAnnotationInput,
     onBandPassFilterChange,
     onBandPassFilterDrawn,
-    lastManualScrollRef,
     isAltHeldRef: altHeldRef,
     onContextMenu: (clientX, clientY) => setContextMenuPos({ x: clientX, y: clientY }),
   });
@@ -715,6 +720,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     for (const span of multiSpansRef.current) {
       paintSelectionSpine(ctx, toX(span.start), toX(span.end), width, height, band);
     }
+    if (marquee) paintMarquee(ctx, toX(marquee.t0), marquee.y0, toX(marquee.t1), marquee.y1);
 
     // 1a-ii. Preview of the annotation box this span will become — mouse-drag,
     // keyboard sweep, and a settled Shift+Arrow selection all reach here the
@@ -755,7 +761,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, multiSpans, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, multiSpans, marquee, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation

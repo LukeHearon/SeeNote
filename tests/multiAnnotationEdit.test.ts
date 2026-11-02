@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Annotation } from '../types';
 import {
-  toggleId, commonDuration, deltaRange, clampSharedDelta, shiftAnnotations, withDuration, MIN_ANNOTATION_SEC,
+  toggleId, commonDuration, annotationsInBox, deltaRange, clampSharedDelta, shiftAnnotations, withDuration, MIN_ANNOTATION_SEC,
 } from '../utils/multiAnnotationEdit';
 
 const ann = (id: string, start: number, end: number): Annotation =>
@@ -11,6 +11,24 @@ describe('toggleId', () => {
   it('adds a missing id and removes a present one', () => {
     expect(toggleId(['a'], 'b')).toEqual(['a', 'b']);
     expect(toggleId(['a', 'b'], 'a')).toEqual(['b']);
+  });
+});
+
+describe('annotationsInBox', () => {
+  const layered = [
+    { ...ann('a', 0, 2), layerIndex: 0 },
+    { ...ann('b', 1, 3), layerIndex: 1 },
+    { ...ann('c', 10, 12), layerIndex: 0 },
+  ] as any[];
+  it('takes what the box touches in both time and height', () => {
+    expect(annotationsInBox(layered, { t0: 1.5, y0: 0, t1: 2.5, y1: 400 })).toEqual(['a', 'b']);
+    expect(annotationsInBox(layered, { t0: 1.5, y0: 30, t1: 2.5, y1: 40 })).toEqual(['a']); // layer 0 only
+  });
+  it('accepts either corner order', () => {
+    expect(annotationsInBox(layered, { t0: 11, y0: 400, t1: 9, y1: 0 })).toEqual(['c']);
+  });
+  it('is empty when nothing is touched', () => {
+    expect(annotationsInBox(layered, { t0: 4, y0: 0, t1: 5, y1: 400 })).toEqual([]);
   });
 });
 
