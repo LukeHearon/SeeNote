@@ -87,8 +87,10 @@ export function useAnnotationCommands({
   // previously-entered text. Cleared when the bound annotation is deselected.
   const reassignBufferRef = useRef<Record<string, string>>({});
 
-  // Clear the reassign buffer whenever the bound annotation changes (released or switched to another)
-  useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId]);
+  // Clear the reassign buffer whenever the bound annotation or the group changes (released or switched to another).
+  // Keyed on the ids, not the array: it is rebuilt whenever annotations are, including by a relabel.
+  const multiKey = multiSelectedIds.join(',');
+  useEffect(() => { reassignBufferRef.current = {}; }, [boundAnnotationId, multiKey]);
 
   // If the bound annotation was deleted by an external path (e.g. empty-text
   // auto-delete on blur), clean up the tool state so handleToolActivate doesn't
@@ -139,35 +141,36 @@ export function useAnnotationCommands({
       const tool = annotationTools.find(t => t.key === key);
       if (!tool) return;
       const isCustom = tool.key === '0';
-      if (boundAnnotationId !== null) {
-          const currentAnnotation = annotations.find(a => a.id === boundAnnotationId);
-          if (currentAnnotation) {
-              // The annotation's current owner is whichever defined tool shares
-              // its label; if none, it's a Custom label (bucket '0'). Stash its
-              // text under that owner so toggling back restores what was typed.
-              const currentOwner = annotationTools.find(t => t.key !== '0' && t.text === currentAnnotation.text);
-              reassignBufferRef.current = {
-                  ...reassignBufferRef.current,
-                  [currentOwner?.key ?? '0']: currentAnnotation.text,
-              };
-              const savedText = reassignBufferRef.current[tool.key ?? ''];
+      // What a tool key relabels: the Shift-selected group, else the bound annotation.
+      const targetIds = multiSelectedIds.length > 0 ? multiSelectedIds : boundAnnotationId !== null ? [boundAnnotationId] : [];
+      const lead = annotations.find(a => a.id === targetIds[0]);
+      if (lead) {
+          // The lead's current owner is whichever defined tool shares its
+          // label; if none, it's a Custom label (bucket '0'). Stash its text
+          // under that owner so toggling back restores what was typed.
+          const currentOwner = annotationTools.find(t => t.key !== '0' && t.text === lead.text);
+          reassignBufferRef.current = {
+              ...reassignBufferRef.current,
+              [currentOwner?.key ?? '0']: lead.text,
+          };
+          const savedText = reassignBufferRef.current[tool.key ?? ''];
+          const targets = new Set(targetIds);
+          const updated = annotations.map(a => {
+              if (!targets.has(a.id)) return a;
               // Custom has no canonical text to reassign to, so with nothing
-              // buffered yet, keep the annotation's current text — pressing 0
-              // should hand the existing label to Custom for editing, not blank it.
-              const newText = savedText !== undefined ? savedText : (isCustom ? currentAnnotation.text : tool.text);
+              // buffered yet, each keeps its current text — pressing 0 hands
+              // the existing label to Custom for editing, not blanks it.
+              const newText = savedText !== undefined ? savedText : (isCustom ? a.text : tool.text);
               // A restored Custom text can coincidentally match a defined tool's
               // label; resolveLabelColor adopts that tool's color instead of the
               // generic Custom color (falls back to `tool.color` either way).
-              const updated = annotations.map(a => a.id === boundAnnotationId
-                  ? { ...a, text: newText, color: resolveLabelColor(newText, annotationTools, tool.color) }
-                  : a
-              );
-              handleAnnotationsCommit(updated);
-              setActiveToolKey(key);
-              enterAnnotationToolLayer();
-              if (isCustom) {
-                  setTimeout(() => spectrogramRef.current?.focusAnnotationInput(boundAnnotationId), 0);
-              }
+              return { ...a, text: newText, color: resolveLabelColor(newText, annotationTools, tool.color) };
+          });
+          handleAnnotationsCommit(updated);
+          setActiveToolKey(key);
+          enterAnnotationToolLayer();
+          if (isCustom && targetIds.length === 1) {
+              setTimeout(() => spectrogramRef.current?.focusAnnotationInput(targetIds[0]), 0);
           }
       } else if (activeToolKey === null && selection !== null) {
           addToolAnnotation(tool, selection);
@@ -179,7 +182,7 @@ export function useAnnotationCommands({
       } else {
           readyTool(key);
       }
-  }, [annotationTools, boundAnnotationId, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, addToolAnnotation, enterAnnotationToolLayer, readyTool]);
+  }, [annotationTools, boundAnnotationId, multiSelectedIds, annotations, activeToolKey, selection, handleAnnotationsCommit, reassignBufferRef, activationStack, addToolAnnotation, enterAnnotationToolLayer, readyTool]);
 
   // Hotkey handlers. useHotkeys reads its bindings from a ref refreshed each
   // render, so these close over the latest state without a dep list.
