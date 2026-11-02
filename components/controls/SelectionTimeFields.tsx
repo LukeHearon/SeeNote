@@ -28,11 +28,20 @@ export interface SelectionTimeFieldsProps {
   timeline?: Timeline;
   /** Apply an edited selection. Called only with a non-empty region. */
   onApply: (selection: Selection) => void;
+  /**
+   * Set while several annotations are Shift-selected together. from / to go
+   * blank (there is no one region), and dur shows `duration` — the length they
+   * all share, or null (blank) when they differ. Typing a dur then goes to
+   * `onApplyMultiDuration` instead of `onApply`. A length, so axis-independent.
+   */
+  multiSelection?: { duration: number | null } | null;
+  onApplyMultiDuration?: (duration: number) => void;
 }
 
 /**
  * The from / to / dur trio beside the running time. Always visible, blank when
- * no selection is active; when paused with no selection, typing into a field
+ * no selection is active (or, with several annotations selected, from / to are
+ * blank and dur is editable only); when paused with no selection, typing into a field
  * creates one anchored at the playhead.
  *
  * Shared by the toolbar and the help guide's live copy of it.
@@ -47,6 +56,8 @@ export function SelectionTimeFields({
   dateTimeFormat = 'iso',
   timeline,
   onApply,
+  multiSelection = null,
+  onApplyMultiDuration,
 }: SelectionTimeFieldsProps) {
   // Memoised in the identity case so it isn't a fresh object per render.
   const fallbackTimeline = useMemo(() => identityTimeline(duration), [duration]);
@@ -55,9 +66,11 @@ export function SelectionTimeFields({
   // Shown in source time; the duration is axis-independent (nothing is
   // stretched, only cut), so it needs no conversion.
   const region = (selection ? sourceIntervalOf(tl, selection.start, selection.end) : null) ?? { start: 0, end: 0 };
+  const multi = multiSelection !== null;
   const has = !!selection;
   // Allow editing when paused and no selection, to create one from the playhead.
-  const canCreate = !has && !isPlaying;
+  // Never with several annotations selected — there is no one region to anchor.
+  const canCreate = !has && !isPlaying && !multi;
 
   const datetimeMode = unit === 'datetime' && trackStartDate !== null;
 
@@ -97,7 +110,9 @@ export function SelectionTimeFields({
     if (editing === 'selDur') {
       const trimmed = raw.trim();
       const dur = parseHMS(trimmed) ?? parseFloat(trimmed);
-      if (!isNaN(dur)) {
+      if (multi) {
+        if (!isNaN(dur) && dur > 0) onApplyMultiDuration?.(dur);
+      } else if (!isNaN(dur)) {
         const anchor = selection ? selection.start : (!isPlaying ? currentTimeStore.get() : null);
         // Same span clamp a drag gets, so a typed length can't run past the
         // end of its segment.
@@ -127,30 +142,37 @@ export function SelectionTimeFields({
     />
   );
 
-  const renderField = (field: Field, display: string, label: string) => (
+  const renderField = (field: Field, display: string, label: string) => {
+    // With several annotations selected only dur is live: it shows their shared
+    // length (blank if they differ) and sets every one of them.
+    const multiDur = multi && field === 'selDur';
+    const editable = multiDur || (!multi && has);
+    const shown = multiDur ? (multiSelection!.duration === null ? '' : display) : (has ? display : '');
+    return (
     <div key={field} className="flex items-center gap-1.5">
       {draft.editing === field ? input : (
         <button
           style={{ width: fieldWidth }}
-          className={`text-xs font-mono px-1.5 h-5 bg-slate-700/50 rounded text-center whitespace-nowrap transition-colors ${has ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
+          className={`text-xs font-mono px-1.5 h-5 bg-slate-700/50 rounded text-center whitespace-nowrap transition-colors ${editable ? 'text-slate-300 hover:text-white hover:bg-slate-700 cursor-pointer' : canCreate ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70 cursor-pointer' : 'text-slate-600 cursor-default'}`}
           onClick={() => {
-            if (has) draft.begin(field, display);
+            if (editable) draft.begin(field, shown);
             else if (canCreate) draft.begin(field, '');
           }}
-          data-tooltip={has ? tooltips.editSelection(label) : canCreate ? tooltips.setSelection(label) : undefined}
+          data-tooltip={multiDur ? tooltips.setAllDurations : editable ? tooltips.editSelection(label) : canCreate ? tooltips.setSelection(label) : undefined}
         >
-          {has ? display : ''}
+          {shown}
         </button>
       )}
       <span className="text-[10px] text-slate-500 select-none w-6">{label}</span>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="flex flex-col justify-center gap-0.5" data-help-target="selection-time">
       {renderField('selStart', formatBound(region.start), 'from')}
       {renderField('selEnd', formatBound(region.end), 'to')}
-      {renderField('selDur', formatDur(region.end - region.start), 'dur')}
+      {renderField('selDur', formatDur(multiSelection?.duration ?? region.end - region.start), 'dur')}
     </div>
   );
 }

@@ -31,6 +31,7 @@ import { useBuzzdetect } from './hooks/useBuzzdetect';
 import { useSubsetTimeline } from './hooks/useSubsetTimeline';
 import { useSubsetChunkCache, useTimelineSwap, useSourceFrameTime } from './hooks/useSubsetSync';
 import { annotationToSource, projectAnnotations, reconcileAnnotations } from './utils/annotationProjection';
+import { toggleId, commonDuration } from './utils/multiAnnotationEdit';
 import { applySlotDrop } from './utils/hotkeySlotDrag';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSyncManagement } from './hooks/useSyncManagement';
@@ -72,6 +73,9 @@ export interface AnnotationWindowProps {
   updateProjectSettings: (id: string, settings: ProjectSettings) => Promise<Project | undefined>;
   updateProjectPreferences: UpdateProjectPreferences;
 }
+
+/** Stable empty multi-selection, so memoised children see no change. */
+const NO_IDS: string[] = [];
 
 export default function AnnotationWindow({ project, onClose, updateProjectSettings, updateProjectPreferences }: AnnotationWindowProps) {
   // Ref that stays in sync with project prop — avoids stale-closure bugs in
@@ -170,7 +174,15 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     historyIndexRef,
     handleAnnotationsCommit,
   } = useAnnotationHistory(setAnnotations);
-  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationIdRaw] = useState<string | null>(null);
+  // Annotations Shift-selected together. While two or more are held the single
+  // selection, the bound annotation and the audio selection are all empty — the
+  // set stands in for them. Any single selection (or none) drops the set.
+  const [multiIdsRaw, setMultiIdsRaw] = useState<string[]>([]);
+  const setSelectedAnnotationId = useCallback((id: string | null) => {
+    setMultiIdsRaw(m => (m.length ? [] : m));
+    setSelectedAnnotationIdRaw(id);
+  }, []);
   // null = Selection Mode (no annotation tool active); string key of the active tool otherwise.
   const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
 
@@ -1197,18 +1209,52 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     }
   }, [allTracks, getAnnotationPath, annotationDirectory, currentDirectory]);
 
+  // The multi-selection as it stands: ids still on screen, and only if two or
+  // more remain (one left over is just the ordinary single selection's job).
+  const multiSelectedIds = useMemo(() => {
+    const live = new Set(displayAnnotations.map(a => a.id));
+    const kept = multiIdsRaw.filter(id => live.has(id));
+    return kept.length >= 2 ? kept : NO_IDS;
+  }, [multiIdsRaw, displayAnnotations]);
+  // Their shared length, for the toolbar's dur field (null when they differ).
+  const multiSelection = useMemo(
+    () => multiSelectedIds.length ? { duration: commonDuration(displayAnnotations, multiSelectedIds) } : null,
+    [multiSelectedIds, displayAnnotations],
+  );
+  // A real selection region supersedes the set (a drag, a click, Shift+arrows);
+  // so does moving to another track.
+  useEffect(() => { if (selection) setMultiIdsRaw(m => (m.length ? [] : m)); }, [selection]);
+  useEffect(() => { setMultiIdsRaw([]); }, [annotationsLoadedTrack]);
+  // Shift-click on an annotation toggles it in the set. The first one is just
+  // the ordinary single selection; from two up the set takes over.
+  const handleShiftSelectAnnotation = useCallback((id: string) => {
+    const base = multiSelectedIds.length ? multiSelectedIds : selectedAnnotationId ? [selectedAnnotationId] : [];
+    const next = toggleId(base, id);
+    if (next.length >= 2) {
+      setMultiIdsRaw(next);
+      setSelectedAnnotationIdRaw(null);
+      setBoundAnnotationId(null);
+      handleSelectionChange(null);
+      return;
+    }
+    const only = next.length === 1 ? displayAnnotations.find(a => a.id === next[0]) : undefined;
+    setSelectedAnnotationId(only?.id ?? null);
+    setBoundAnnotationId(only?.id ?? null);
+    handleSelectionChange(only ? { start: only.start, end: only.end } : null);
+  }, [multiSelectedIds, selectedAnnotationId, displayAnnotations, setSelectedAnnotationId, handleSelectionChange]);
+
   // Everything that creates, edits or deletes annotations from the keyboard,
   // the palette or the toolbar. See hooks/useAnnotationCommands.ts.
   const {
     readyTool, selectMode, handleToolActivate,
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
-    resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
+    resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange, handleToolbarMultiDuration,
     knifeArmed, toggleKnife, disarmKnife, knifeSplitAt, splitSelectedAnnotationAtPlayhead,
   } = useAnnotationCommands({
     annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
     activeToolKey, setActiveToolKey, selection, selectionRef,
-    boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId,
+    boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId, multiSelectedIds,
     activationStack, filterToolActive, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
     currentTimeRef, trackPathRef, seek, handleSelectionChange, spectrogramRef,
     handleBindHotkey, handleCreateTool,
@@ -1354,6 +1400,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
         anyExpanded: fileTreeAnyExpanded,
         expandAction: fileTreeExpandAction,
       },
+      multiSelection,
       toolPalette: {
         tools: annotationTools,
         activeToolKey,
@@ -1374,6 +1421,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
       requestDeleteTool: setPanelDeletingToolIndex,
       playExample: handleListenExample,
       showExamples: handleShowExamples,
+      setMultiDuration: handleToolbarMultiDuration,
     },
   });
 
@@ -1631,6 +1679,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                spectrogramRef={spectrogramRef}
                onSelectionChange={handleSelectionChange}
                onAnnotationBoundsChange={handleToolbarAnnotationBoundsChange}
+               multiSelection={multiSelection}
+               onMultiDurationChange={handleToolbarMultiDuration}
                onBoundAnnotationChange={setBoundAnnotationId}
                showSettings={showSettings}
                onToggleSettings={() => setShowSettings(s => !s)}
@@ -1660,6 +1710,8 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
                 annotations={displayAnnotations}
                 annotationToSource={displayAnnotationToSource}
                 selectedAnnotationId={selectedAnnotationId}
+                multiSelectedIds={multiSelectedIds}
+                onShiftSelectAnnotation={handleShiftSelectAnnotation}
                 activeAnnotationTool={activeToolKey !== null ? (annotationTools.find(t => t.key === activeToolKey) ?? null) : null}
                 annotationTools={annotationTools}
                 selection={selection}

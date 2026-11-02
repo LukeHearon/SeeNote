@@ -39,6 +39,9 @@ export interface ToolbarProps {
   onSelectionChange: (s: Selection | null) => void;
   onBoundAnnotationChange: (id: string | null) => void;
   onAnnotationBoundsChange?: (start: number, end: number) => void;
+  /** Several annotations are Shift-selected: from / to blank, dur shows their shared length. */
+  multiSelection?: { duration: number | null } | null;
+  onMultiDurationChange?: (duration: number) => void;
   showSettings?: boolean;
   onToggleSettings?: () => void;
   playbackSpeed: number;
@@ -107,6 +110,8 @@ function Toolbar({
   onSelectionChange,
   onBoundAnnotationChange,
   onAnnotationBoundsChange,
+  multiSelection,
+  onMultiDurationChange,
   showSettings,
   onToggleSettings,
   playbackSpeed,
@@ -291,6 +296,8 @@ function Toolbar({
               dateTimeFormat={dateTimeFormat}
               timeline={timeline}
               onApply={s => { onSelectionChange(s); onAnnotationBoundsChange?.(s.start, s.end); }}
+              multiSelection={multiSelection}
+              onApplyMultiDuration={onMultiDurationChange}
             />
           </>
         )}

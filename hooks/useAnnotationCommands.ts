@@ -7,6 +7,7 @@ import { resolveLabelColor } from '../utils/annotationTools';
 import { bindAnnotationToHotkey, annotationMatchingTool } from '../utils/bindAnnotationHotkey';
 import type { Timeline } from '../utils/subsetTimeline';
 import { splitAnnotation } from '../utils/annotationSplit';
+import { withDuration } from '../utils/multiAnnotationEdit';
 
 interface AnnotationCommandsParams {
   annotations: Annotation[];
@@ -20,7 +21,10 @@ interface AnnotationCommandsParams {
   boundAnnotationId: string | null;
   setBoundAnnotationId: (id: string | null) => void;
   selectedAnnotationId: string | null;
+  /** Setting a single selection (or null) also drops the multi-selection. */
   setSelectedAnnotationId: (id: string | null) => void;
+  /** Annotations Shift-selected together (two or more, else empty). */
+  multiSelectedIds: readonly string[];
   activationStack: ActivationStackApi;
   filterToolActive: boolean;
   setFilterToolActive: (active: boolean) => void;
@@ -47,7 +51,7 @@ interface AnnotationCommandsParams {
 export function useAnnotationCommands({
   annotations, setAnnotations, handleAnnotationsCommit, annotationTools,
   activeToolKey, setActiveToolKey, selection, selectionRef,
-  boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId,
+  boundAnnotationId, setBoundAnnotationId, selectedAnnotationId, setSelectedAnnotationId, multiSelectedIds,
   activationStack, filterToolActive, setFilterToolActive, selectionToSource, selectAllSpanAt, timeline, displayDuration,
   currentTimeRef, trackPathRef, seek, handleSelectionChange, spectrogramRef,
   handleBindHotkey, handleCreateTool,
@@ -195,12 +199,18 @@ export function useAnnotationCommands({
   // Enter — deselect the current annotation, dropping the audio selection
   // region that selecting it created. No-op when nothing is selected.
   const deselectAnnotation = () => {
-      if (selectedAnnotationId === null) return;
+      if (selectedAnnotationId === null && multiSelectedIds.length === 0) return;
       setSelectedAnnotationId(null);
       setBoundAnnotationId(null);
       handleSelectionChange(null);
   };
   const deleteSelectedAnnotation = () => {
+      if (multiSelectedIds.length > 0) {
+          const doomed = new Set(multiSelectedIds);
+          handleAnnotationsCommit(annotations.filter(a => !doomed.has(a.id)));
+          setSelectedAnnotationId(null);
+          return;
+      }
       if (!selectedAnnotationId) return;
       handleAnnotationsCommit(annotations.filter(a => a.id !== selectedAnnotationId));
       const wasBound = selectedAnnotationId === boundAnnotationId;
@@ -314,6 +324,18 @@ export function useAnnotationCommands({
   }, [boundAnnotationId, annotations, seek, timeline, resizeBoundAnnotationTo, commitBoundAnnotationResize]);
 
 
+  // The toolbar's dur field while several annotations are selected: every one
+  // takes the typed length, anchored on its start (it grows or shrinks at its
+  // end), held inside its own span like a drag is.
+  const handleToolbarMultiDuration = useCallback((dur: number) => {
+    if (multiSelectedIds.length === 0 || !(dur > 0)) return;
+    handleAnnotationsCommit(withDuration(annotations, new Set(multiSelectedIds), dur, a => {
+      const ds = timeline.toDisplay(a.start);
+      const de = Math.min(timeline.clampToSpanOfDisplay(ds, ds + dur), displayDuration);
+      return selectionToSource({ start: ds, end: Math.max(ds, de) }).end;
+    }));
+  }, [multiSelectedIds, annotations, timeline, displayDuration, selectionToSource, handleAnnotationsCommit]);
+
   // `S`: select mode (no annotation tool readied). Stack-equivalent to removing
   // the `annotationTool` entry — doesn't touch the selection, filter tool, or band.
   // Also puts the Knife away — S means "back to plain selecting".
@@ -356,7 +378,7 @@ export function useAnnotationCommands({
     readyTool, selectMode, handleToolActivate,
     selectAllOrAnnotateFullTrack, deselectAnnotation, deleteSelectedAnnotation,
     copyActiveAnnotation, pasteAnnotationAtPlayhead, bindSelectedAnnotationToHotkey,
-    resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange,
+    resizeBoundAnnotationTo, handleExtendSettled, handleToolbarAnnotationBoundsChange, handleToolbarMultiDuration,
     knifeArmed, toggleKnife, disarmKnife, splitSelectedAnnotationAtPlayhead,
     // The Knife's click: keeps the left-hand piece selected / bound.
     knifeSplitAt: (id: string, t: number) => splitAnnotationAt(id, t, 'left'),

@@ -43,6 +43,8 @@ export interface LiveSnapshot {
   speedMax: number;
   /** In source time, like every other time here. */
   selection: Selection | null;
+  /** Several annotations Shift-selected (from / to blank): their shared length, or null when they differ. Null when not multi-selecting. */
+  multiSelection: { duration: number | null } | null;
   /** The unit actually in force — already resolved through effectiveTimeUnit. */
   timeDisplayUnit: TimeDisplayUnit;
   /** The unit the user picked, which may be 'datetime' on a startless track. */
@@ -120,6 +122,8 @@ export interface LiveHandlers {
   setTimeDisplayUnit(unit: TimeDisplayUnit): void;
   /** In source time; the host projects it back onto the display axis. */
   setSelection(selection: Selection): void;
+  /** Give every multi-selected annotation this length, anchored on its start. */
+  setMultiDuration(duration: number): void;
   toggleFilterTool(): void;
   setFilterStrength(strength: number): void;
   enableFilter(strength: number): void;

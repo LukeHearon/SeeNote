@@ -82,6 +82,7 @@ function useDemoState(): { snapshot: LiveSnapshot; set: (patch: Partial<LiveSnap
     speedMin: SPEED_MIN,
     speedMax: SPEED_MAX,
     selection: { start: 30, end: 46.25 },
+    multiSelection: null,
     timeDisplayUnit: 'seconds',
     selectedTimeDisplayUnit: 'seconds',
     // The demo track stands in for one whose filename carries a timestamp, so
@@ -244,6 +245,8 @@ export function LiveControl({ id, client }: { id: LiveControlId; client: LiveCli
             trackStartDate={s.trackStartMs === null ? null : new Date(s.trackStartMs)}
             dateTimeFormat={s.dateTimeFormat}
             onApply={(sel: Selection) => act(() => client.call('setSelection', sel), () => demo.set({ selection: sel }))}
+            multiSelection={s.multiSelection}
+            onApplyMultiDuration={(d: number) => act(() => client.call('setMultiDuration', d), () => {})}
           />
         );
       case 'speed':

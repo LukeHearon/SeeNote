@@ -14,6 +14,7 @@ export const tooltips = {
   get timeUnitDatetimeUnavailable() { return getOverride('tooltips.timeUnitDatetimeUnavailable') ?? "This filename carries no timestamp SeeNote can read — set a Filename Timestamp format in settings"; },
   editSelection: (label: string) => `Edit selection ${label}`,
   setSelection: (label: string) => `Set selection ${label}`,
+  setAllDurations: 'Set the duration of every selected annotation (each keeps its start)',
   get filterDisabledByMode() { return getOverride('tooltips.filterDisabledByMode') ?? "Audio filters not available in Fast mode"; },
   get filterTool() { return getOverride('tooltips.filterTool') ?? "Ready filter tool (Shift+F)"; },
   get resetSpeed() { return getOverride('tooltips.resetSpeed') ?? "Return to 1.0× (R)"; },

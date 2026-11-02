@@ -30,6 +30,24 @@ export function paintSelectionShade(
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
   if (x0 > 0) ctx.fillRect(0, 0, x0, height);
   if (x1 < width) ctx.fillRect(x1, 0, width - x1, height);
+  paintSelectionSpine(ctx, startX, endX, width, height, band);
+}
+
+/**
+ * The thin dotted line through the middle of a span (the middle of the
+ * band-pass band when there is one). A selection's, and each Shift-selected
+ * annotation's.
+ */
+export function paintSelectionSpine(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  endX: number,
+  width: number,
+  height: number,
+  band: { yTop: number; yBottom: number } | null,
+): void {
+  const x0 = Math.max(0, startX);
+  const x1 = Math.min(width, endX);
   if (x1 <= x0) return;
   const midY = band ? (band.yTop + band.yBottom) / 2 : height / 2;
   ctx.save();

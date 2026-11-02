@@ -23,13 +23,16 @@ import FilterHandles from './spectrogram/FilterHandles';
 import AnnotationOverlay from './spectrogram/AnnotationOverlay';
 import FrequencyAxisInputs from './spectrogram/FrequencyAxisInputs';
 import { paintGutter, paintFrequencyTicks, paintSubsetJoins } from './spectrogram/canvasPainters';
-import { paintSelectionShade, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
+import { paintSelectionShade, paintSelectionSpine, paintAnnotationPreview, paintPlayhead, paintTimeRuler, paintIdent, paintFilterBand } from './spectrogram/overlayPainter';
 import { createScrollSyncHub } from '../utils/scrollSyncHub';
 import { useChunkRenderer } from '../hooks/useChunkRenderer';
 import { useSpectrogramInteraction } from '../hooks/useSpectrogramInteraction';
 import { useAnnotationJumps } from '../hooks/useAnnotationJumps';
 import { useSpectrogramZoomPan } from '../hooks/useSpectrogramZoomPan';
 import { DIAG_SCROLL, diag } from '../utils/scrollDiag';
+
+const NO_IDS: readonly string[] = [];
+const NO_SPANS: Selection[] = [];
 import { useAltHeld } from '../hooks/useAltHeld';
 import { spectrogramView } from '../copy/ui';
 import ContextMenu from './ContextMenu';
@@ -67,6 +70,13 @@ interface SpectrogramProps {
    */
   annotationToSource?: (annotation: Annotation) => Annotation;
   selectedAnnotationId: string | null;
+  /**
+   * Annotations Shift-selected together (two or more, else empty). Each draws
+   * its own edge lines and dotted spine; dragging or resizing one moves the set.
+   */
+  multiSelectedIds?: readonly string[];
+  /** Shift-click on an annotation: add it to / drop it from the multi-selection. */
+  onShiftSelectAnnotation?: (id: string) => void;
   // null = Selection Mode (no annotation tool active)
   activeAnnotationTool: AnnotationTool | null;
   annotationTools: AnnotationTool[];
@@ -180,6 +190,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   annotations,
   annotationToSource,
   selectedAnnotationId,
+  multiSelectedIds = NO_IDS,
+  onShiftSelectAnnotation,
   activeAnnotationTool,
   annotationTools,
   selection,
@@ -349,6 +361,14 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // The annotations' layer assignment as of the last render, for the overlay's
   // annotation-box preview.
   const layeredAnnotationsRef = useRef<AnnotationWithLayer[]>([]);
+  // The spans of the Shift-selected annotations: each gets edge lines and a spine.
+  const multiSpans = useMemo<Selection[]>(() => {
+    if (multiSelectedIds.length === 0) return NO_SPANS;
+    const ids = new Set(multiSelectedIds);
+    return annotations.filter(a => ids.has(a.id)).map(a => ({ start: a.start, end: a.end }));
+  }, [annotations, multiSelectedIds]);
+  const multiSpansRef = useRef(multiSpans);
+  multiSpansRef.current = multiSpans;
   const drawRef = useRef<() => void>(() => {});
   const drawYAxisRef = useRef<() => void>(() => {});
   // The frequency gutter is a function of the frequency settings and the
@@ -508,6 +528,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     annotations,
     selection,
     boundAnnotationId,
+    multiSelectedIds,
     activeAnnotationTool,
     isPlaying,
     settings,
@@ -683,11 +704,16 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     // rendering — draw its label on top of the shading below.
     const previewingAnnotationLabel = activeSelection !== null && activeAnnotationTool !== null && boundAnnotationId === null;
 
+    const band = bandPassFilter
+      ? bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale)
+      : null;
     if (activeSelection) {
-      const band = bandPassFilter
-        ? bandExtentY(bandPassFilter, height, settings.minFreq, settings.maxFreq, settings.frequencyScale)
-        : null;
       paintSelectionShade(ctx, toX(activeSelection.start), toX(activeSelection.end), width, height, band);
+    }
+    // Shift-selected annotations: a dotted spine through each, no shading — the
+    // gaps between them are not "outside" anything.
+    for (const span of multiSpansRef.current) {
+      paintSelectionSpine(ctx, toX(span.start), toX(span.end), width, height, band);
     }
 
     // 1a-ii. Preview of the annotation box this span will become — mouse-drag,
@@ -729,7 +755,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     ctx.restore();
   // activeTimeline is read through its ref at draw time, but it's a dep as well
   // so a timeline swap repaints the ruler (whose labels come from it).
-  }, [pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
+  }, [pixelsPerSecond, zoomSec, currentTimeStore, ident, selection, creatingSelection, creatingAnnotation, boundAnnotationId, annotations, sweepStart, duration, subsetJoins, minSegmentSec, activeTimeline, trackStartDate, timeDisplayUnit, dateTimeFormat, activeAnnotationTool, bandPassFilter, multiSpans, settings.minFreq, settings.maxFreq, settings.frequencyScale]);
 
   // Band-pass filter darkening canvas: renders BELOW the annotation HTML divs
   // (unlike the overlay canvas above) so filter darkening never dims annotation
@@ -1142,6 +1168,8 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
            annotations={annotations}
            annotationToSource={annotationToSource}
            selectedAnnotationId={selectedAnnotationId}
+           multiSelectedIds={multiSelectedIds}
+           onShiftSelectAnnotation={onShiftSelectAnnotation}
            boundAnnotationId={boundAnnotationId}
            hoveredAnnotationId={hoveredAnnotationId}
            editingInputId={editingInputId}
@@ -1180,6 +1208,7 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
          {/* Selection region handles */}
          <SelectionHandles
            selection={selection}
+           extraSpans={multiSpans}
            creatingSelection={creatingSelection}
            scrollLeftRef={scrollLeftRef}
            scrollSync={scrollSyncRef.current}

@@ -7,6 +7,7 @@ import { shouldPromoteDragIntent } from '../utils/dragIntent';
 import type { Timeline } from '../utils/subsetTimeline';
 import type { CurrentTimeStore } from '../utils/currentTimeStore';
 import { addWindowListener, forEachWindow } from '../utils/windowRegistry';
+import { MIN_ANNOTATION_SEC, deltaRange, clampSharedDelta, shiftAnnotations } from '../utils/multiAnnotationEdit';
 
 // Lowest cutoff the band-pass filter graph will honour (see BandPassFilterGraph).
 const FILTER_FLOOR_HZ = 20;
@@ -55,6 +56,9 @@ export interface SpectrogramInteractionParams {
   annotations: Annotation[];
   selection: Selection | null;
   boundAnnotationId: string | null;
+  /** Annotations Shift-selected together (two or more, else empty). Dragging or
+   *  resizing any one of them moves the whole set. */
+  multiSelectedIds: readonly string[];
   activeAnnotationTool: AnnotationTool | null;
   isPlaying: boolean;
   settings: SpectrogramSettings;
@@ -139,6 +143,7 @@ export function useSpectrogramInteraction({
   annotations,
   selection,
   boundAnnotationId,
+  multiSelectedIds,
   activeAnnotationTool,
   isPlaying,
   settings,
@@ -200,6 +205,7 @@ export function useSpectrogramInteraction({
   const resizingSelectionHandleRef = useRef(resizingSelectionHandle);
   const annotationsRef = useRef(annotations);
   const boundAnnotationIdRef = useRef(boundAnnotationId);
+  const multiSelectedIdsRef = useRef(multiSelectedIds);
   const selectionRef = useRef(selection);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onAnnotationsChangeRef = useRef(onAnnotationsChange);
@@ -223,6 +229,7 @@ export function useSpectrogramInteraction({
   resizingSelectionHandleRef.current = resizingSelectionHandle;
   annotationsRef.current = annotations;
   boundAnnotationIdRef.current = boundAnnotationId;
+  multiSelectedIdsRef.current = multiSelectedIds;
   selectionRef.current = selection;
   onSelectionChangeRef.current = onSelectionChange;
   onAnnotationsChangeRef.current = onAnnotationsChange;
@@ -312,38 +319,64 @@ export function useSpectrogramInteraction({
     [],
   );
 
-  // Move the dragged annotation. `startFor` proposes the new start for it; the
-  // result is held inside the span the annotation is already in — both edges, so
-  // a move can't carry it across a subset cut into audio it was never over — and
-  // inside `viewport` when one is given (the pointer-driven path: auto-pan owns
-  // scrolling past the edge). The one place a drag move is applied, shared by
-  // the pointer path and the auto-pan loop so neither can skip a clamp.
+  // The annotations a gesture on `id` applies to: the whole Shift-selected set
+  // if `id` is in it, else just `id`.
+  const gestureGroup = (id: string): Set<string> =>
+    multiSelectedIdsRef.current.includes(id) ? new Set(multiSelectedIdsRef.current) : new Set([id]);
+
+  // The span an annotation must stay inside: the subset span it is in, within
+  // the track. Both edges, so a gesture can't carry it across a cut.
+  const spanOf = (a: Annotation) => {
+    const tl = timelineRef.current;
+    return {
+      lo: Math.max(0, tl.clampToSpanOfDisplay(a.start, 0)),
+      hi: Math.min(durationRef.current, tl.clampToSpanOfDisplay(a.start, durationRef.current)),
+    };
+  };
+
+  // Shift one edge (or both) of the gesture's annotations by whatever moves the
+  // lead one to `want`, held to the most restrictive member so the set keeps its
+  // shape. `viewport` (pointer-driven moves; auto-pan owns scrolling past the
+  // edge) confines the lead alone — a member that is already off-screen mustn't
+  // drag the set back into view. The one place a drag is applied, shared by the
+  // move, the resize and the auto-pan loop so none can skip a clamp.
+  // Returns the updated list and the lead annotation in it.
+  const shiftGroup = (
+    id: string,
+    side: 'start' | 'end' | 'both',
+    wantFor: (lead: Annotation) => number,
+    viewport?: { left: number; right: number },
+  ) => {
+    const list = annotationsRef.current;
+    const lead = list.find(a => a.id === id);
+    if (!lead) return null;
+    const group = gestureGroup(id);
+    const ranges = list.filter(a => group.has(a.id)).map(a => {
+      const span = spanOf(a);
+      if (a.id === id && viewport) {
+        span.lo = Math.max(span.lo, viewport.left);
+        span.hi = Math.min(span.hi, viewport.right);
+      }
+      return deltaRange(a, side, span);
+    });
+    const delta = clampSharedDelta(wantFor(lead), ranges);
+    const updated = shiftAnnotations(list, group, side, delta);
+    pendingAnnotationsRef.current = updated;
+    onAnnotationsChangeRef.current(updated);
+    return { updated, lead: updated.find(a => a.id === id)! };
+  };
+
+  // Move the dragged annotation (and any it is selected with). `startFor`
+  // proposes the new start for it.
   const placeDraggedAnnotation = (
     id: string,
     startFor: (a: Annotation, dur: number) => number,
     viewport?: { left: number; right: number },
   ) => {
-    const updated = updateAnnotation(annotationsRef.current, id, a => {
-      const dur = a.end - a.start;
-      const tl = timelineRef.current;
-      const spanStart = tl.clampToSpanOfDisplay(a.start, 0);
-      const spanEnd = tl.clampToSpanOfDisplay(a.start, durationRef.current);
-      const lo = Math.max(0, spanStart, viewport ? viewport.left : 0);
-      const hi = Math.min(
-        durationRef.current - dur,
-        spanEnd - dur,
-        viewport ? viewport.right - dur : Infinity,
-      );
-      const newStart = Math.max(lo, Math.min(startFor(a, dur), Math.max(lo, hi)));
-      return { ...a, start: newStart, end: newStart + dur };
-    });
-    pendingAnnotationsRef.current = updated;
-    onAnnotationsChangeRef.current(updated);
-    const moved = updated.find(a => a.id === id);
-    if (moved) {
-      if (id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: moved.start, end: moved.end });
-      if (playheadFollowsAnnotationStartRef.current) onSeekRef.current(moved.start);
-    }
+    const r = shiftGroup(id, 'both', lead => startFor(lead, lead.end - lead.start) - lead.start, viewport);
+    if (!r) return;
+    if (id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: r.lead.start, end: r.lead.end });
+    if (playheadFollowsAnnotationStartRef.current) onSeekRef.current(r.lead.start);
   };
 
   // The one implementation of every horizontal drag, driven by the container's
@@ -375,17 +408,13 @@ export function useSpectrogramInteraction({
 
     const ra = resizingAnnotationRef.current;
     if (ra) {
-      const updated = updateAnnotation(annotationsRef.current, ra.id, a => {
-        // Anchored on the edge that isn't moving.
-        if (ra.side === 'start') return { ...a, start: Math.min(held(a.end), a.end - 0.05) };
-        return { ...a, end: Math.max(held(a.start), a.start + 0.05) };
-      });
-      pendingAnnotationsRef.current = updated;
-      onAnnotationsChangeRef.current(updated);
-      const resized = updated.find(a => a.id === ra.id);
-      if (resized) {
-        if (ra.id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: resized.start, end: resized.end });
-        if (playheadFollowsAnnotationStartRef.current && ra.side === 'start') onSeekRef.current(resized.start);
+      // Anchored on the edge that isn't moving.
+      const r = shiftGroup(ra.id, ra.side, lead => ra.side === 'start'
+        ? Math.min(held(lead.end), lead.end - MIN_ANNOTATION_SEC) - lead.start
+        : Math.max(held(lead.start), lead.start + MIN_ANNOTATION_SEC) - lead.end);
+      if (r) {
+        if (ra.id === boundAnnotationIdRef.current) onSelectionChangeRef.current({ start: r.lead.start, end: r.lead.end });
+        if (playheadFollowsAnnotationStartRef.current && ra.side === 'start') onSeekRef.current(r.lead.start);
       }
       return;
     }

@@ -407,6 +407,7 @@ function SingleFileWindowBody({ filePath, onClose, loadRememberedBuzzdetectFile,
       // those fall back to their demos rather than to dead buttons.
       filePanel: null,
       toolPalette: null,
+      multiSelection: null,
     },
     handlers: NO_PROJECT_LIVE_HANDLERS,
   });

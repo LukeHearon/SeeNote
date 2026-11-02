@@ -6,6 +6,9 @@ import BoundaryLine from './BoundaryLine';
 
 interface SelectionHandlesProps {
   selection: Selection | null;
+  // Spans that only draw their edge lines (the Shift-selected annotations): no
+  // hit area, since their own boxes carry the resize handles.
+  extraSpans?: readonly Selection[];
   creatingSelection: { start: number; current: number } | null;
   // Live scroll (pixels) — read once for the first paint; per-frame movement
   // comes from the hub, so the handles track the canvas selection exactly.
@@ -27,6 +30,7 @@ interface SelectionHandlesProps {
 // `0 <= x <= containerWidth` test was itself a scroll dependency.
 const SelectionHandles: React.FC<SelectionHandlesProps> = ({
   selection,
+  extraSpans = [],
   creatingSelection,
   scrollLeftRef,
   scrollSync,
@@ -46,11 +50,14 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
   // whether or not anything was selected, which is most of the time. The hub
   // registration copes: `sync` no-ops while the ref is null, and the layer's
   // effect (no dep array) re-registers and re-syncs the frame it comes back.
-  if (!activeSelection) return null;
+  if (!activeSelection && extraSpans.length === 0) return null;
 
   return (
     <div ref={layer.ref} className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ ...layer.style, zIndex: 15 }}>
-      {[
+      {extraSpans.flatMap((span, i) => [span.start, span.end].map((t, j) => (
+        <BoundaryLine key={`extra-${i}-${j}`} x={t * pixelsPerSecond - layer.anchor} />
+      )))}
+      {activeSelection && [
         { side: 'start' as const, x: activeSelection.start * pixelsPerSecond - layer.anchor },
         { side: 'end' as const, x: activeSelection.end * pixelsPerSecond - layer.anchor },
       ].map(({ side, x }) => (

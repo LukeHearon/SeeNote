@@ -413,6 +413,7 @@ export const GUIDE: Part[] = [
             help.editing.li1,
             help.editing.li2,
             help.editing.li3,
+            help.editing.li_multi,
             help.editing.li_split,
             help.editing.li4,
             help.editing.li5,

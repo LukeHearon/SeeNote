@@ -13,12 +13,12 @@ import type { SubsetTimelineApi } from './useSubsetTimeline';
 
 type WindowSnapshot = Pick<LiveSnapshot,
   'isBuffering' | 'timeDisplayUnit' | 'selectedTimeDisplayUnit' | 'trackStartMs' | 'dateTimeFormat'
-  | 'canGoPrevAnnotation' | 'canGoNextAnnotation' | 'buzzdetectAvailable' | 'filePanel' | 'toolPalette'>;
+  | 'canGoPrevAnnotation' | 'canGoNextAnnotation' | 'buzzdetectAvailable' | 'filePanel' | 'toolPalette' | 'multiSelection'>;
 
 type WindowHandlers = Pick<LiveHandlers,
   'toggleFileExpandCollapse' | 'toggleFileFilter' | 'toggleBuzzdetectFilter'
   | 'activateTool' | 'activateSelectMode' | 'openToolSettings' | 'openFindLabel' | 'toggleKnife'
-  | 'editTool' | 'requestDeleteTool' | 'playExample' | 'showExamples'>;
+  | 'editTool' | 'requestDeleteTool' | 'playExample' | 'showExamples' | 'setMultiDuration'>;
 
 /** File-panel and tool-palette handlers for a window that has neither. */
 export const NO_PROJECT_LIVE_HANDLERS: WindowHandlers = {
@@ -34,6 +34,7 @@ export const NO_PROJECT_LIVE_HANDLERS: WindowHandlers = {
   requestDeleteTool: () => {},
   playExample: () => {},
   showExamples: () => {},
+  setMultiDuration: () => {},
 };
 
 interface Params {

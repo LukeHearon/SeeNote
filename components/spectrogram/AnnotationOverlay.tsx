@@ -20,6 +20,11 @@ interface AnnotationOverlayProps {
   // annotation" reports file time, never the subset's display time.
   annotationToSource?: (annotation: Annotation) => Annotation;
   selectedAnnotationId: string | null;
+  // Shift-selected together (two or more, else empty): drawn selected, and a
+  // press on one keeps the set so the whole of it can be dragged or resized.
+  multiSelectedIds: readonly string[];
+  // Shift-click: add the annotation to / drop it from the multi-selection.
+  onShiftSelectAnnotation?: (id: string) => void;
   boundAnnotationId: string | null;
   hoveredAnnotationId: string | null;
   editingInputId: string | null;
@@ -183,6 +188,8 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   annotations,
   annotationToSource,
   selectedAnnotationId,
+  multiSelectedIds,
+  onShiftSelectAnnotation,
   boundAnnotationId,
   hoveredAnnotationId,
   editingInputId,
@@ -217,6 +224,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   onKnifeSplit,
 }) => {
   const [contextMenu, setContextMenu] = useState<AnnotationContextMenuState | null>(null);
+  const multiSet = useMemo(() => new Set(multiSelectedIds), [multiSelectedIds]);
 
   const overlayWidth = containerWidth || 1000;
   const containerWidthRef = useRef(overlayWidth);
@@ -408,13 +416,16 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
         const left = v.startX - layer.anchor;
         const { width } = v;
         const isSelected = selectedAnnotationId === annotation.id;
-        const isBound = boundAnnotationId === annotation.id;
+        const isMulti = multiSet.has(annotation.id);
+        // A member of the multi-selection looks exactly like the one bound
+        // annotation does, each of them.
+        const isBound = boundAnnotationId === annotation.id || isMulti;
 
         const top = annotationBoxTop(annotation.layerIndex);
 
         const baseColor = annotation.color || "#ffffff";
         const isCustomAnnotation = baseColor.toLowerCase() === "#ffffff" || baseColor.toLowerCase() === "#fff";
-        const styleVars = annotationColorStyle(baseColor, isSelected);
+        const styleVars = annotationColorStyle(baseColor, isSelected || isMulti);
 
         if (width < MIN_INTERACTIVE_WIDTH && !isSelected && !isBound && editingInputId !== annotation.id) {
           // Inert: clicks fall through to the bare spectrogram, where a sliver
@@ -468,7 +479,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                    border: `${isBound ? '2px' : '1px'} solid ${isBound ? 'white' : styleVars.borderColor}`,
                    backgroundColor: styleVars.bgColor,
                    boxShadow: isBound ? '0 0 0 2px rgba(255,255,255,0.4)' : '0 2px 4px rgba(0,0,0,0.5)',
-                   zIndex: isSelected ? 20 : 10,
+                   zIndex: isSelected || isMulti ? 20 : 10,
                    opacity: hideLabels ? 0.2 : 1,
                    transition: 'opacity 80ms ease-out',
                }}
@@ -477,7 +488,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                onContextMenu={(e) => {
                    e.preventDefault();
                    e.stopPropagation();
-                   onSelectAnnotation(annotation.id);
+                   if (!isMulti) onSelectAnnotation(annotation.id);
                    setContextMenu({ annotationId: annotation.id, x: e.clientX, y: e.clientY });
                }}
                onMouseDown={(e) => {
@@ -496,7 +507,13 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        onKnifeSplit?.(annotation.id, getPointerTime(e));
                        return;
                    }
-                   onSelectAnnotation(annotation.id);
+                   // Shift-click builds the multi-selection; it never starts a drag.
+                   if (e.shiftKey) {
+                       onShiftSelectAnnotation?.(annotation.id);
+                       return;
+                   }
+                   // A press on a member keeps the set, so dragging moves all of it.
+                   if (!isMulti) onSelectAnnotation(annotation.id);
                    // Track for click vs drag detection
                    clickDownRef.current = { x: e.clientX, y: e.clientY, annotationId: annotation.id, pointerTime: getPointerTime(e) };
                }}
@@ -505,7 +522,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                <div
                    className={`absolute left-0 top-0 bottom-0 w-2 z-10 flex items-center justify-center ${knifeArmed ? '' : 'cursor-ew-resize hover:bg-white/20'}`}
                    onMouseDown={(e) => {
-                       if (knifeArmed) return; // bubble to the box: the Knife cuts here too
+                       if (knifeArmed || e.shiftKey) return; // bubble to the box: the Knife cuts here too, Shift selects
                        e.stopPropagation();
                        if (e.button === 1) {
                            e.preventDefault();
@@ -513,7 +530,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            return;
                        }
                        clickDownRef.current = null;
-                       onSelectAnnotation(annotation.id);
+                       if (!isMulti) onSelectAnnotation(annotation.id);
                        setResizingAnnotation({ id: annotation.id, side: 'start', originalTime: annotation.start });
                        playheadFollowsAnnotationStartRef.current =
                          Math.abs(currentTimeStore.get() - annotation.start) <= 0.5;
@@ -525,7 +542,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                <div
                    className={`absolute right-0 top-0 bottom-0 w-2 z-10 flex items-center justify-center ${knifeArmed ? '' : 'cursor-ew-resize hover:bg-white/20'}`}
                    onMouseDown={(e) => {
-                       if (knifeArmed) return; // bubble to the box: the Knife cuts here too
+                       if (knifeArmed || e.shiftKey) return; // bubble to the box: the Knife cuts here too, Shift selects
                        e.stopPropagation();
                        if (e.button === 1) {
                            e.preventDefault();
@@ -533,7 +550,7 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                            return;
                        }
                        clickDownRef.current = null;
-                       onSelectAnnotation(annotation.id);
+                       if (!isMulti) onSelectAnnotation(annotation.id);
                        setResizingAnnotation({ id: annotation.id, side: 'end', originalTime: annotation.end });
                    }}
                >
