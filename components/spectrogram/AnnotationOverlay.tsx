@@ -602,6 +602,11 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                        </span>
                    ) : null}
 
+               {/* Hover highlight: a very light wash over the box. */}
+               {isHovered && (
+                 <div className="absolute inset-0 rounded pointer-events-none bg-white/10" />
+               )}
+
                {/* Pencil icon — appears on hover for Custom annotations only, click to focus text input */}
                {isHovered && isCustomAnnotation && (
                  width > 60 ? (
@@ -656,6 +661,25 @@ const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
                </button>
             </div>
         );
+      })}
+      {/* Hover guides: faint, semitransparent dotted lines dropped from the
+          hovered annotation's start and end across the full height, like the
+          Knife's guide. Siblings of the boxes (the layer is full-height). */}
+      {visible.filter(v => v.ann.id === hoveredAnnotationId).flatMap(v => {
+        const x0 = v.startX - layer.anchor;
+        return [x0, x0 + Math.max(2, v.width)].map((x, i) => (
+          <div
+            key={`hover-guide-${v.ann.id}-${i}`}
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{
+              left: `${x}px`,
+              width: 0,
+              zIndex: 9,
+              borderLeft: '1px dotted rgba(255,255,255,0.35)',
+              filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.4))',
+            }}
+          />
+        ));
       })}
       </div>
       {contextMenu && (
