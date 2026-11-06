@@ -105,6 +105,7 @@ Quick reference for agents. One phrase per file.
 - `utils/subsetTimeline.ts` — piecewise display-time <-> source-time map used by subset mode; identity when no subset is active
 - `utils/buzzdetectSubset.ts` — derives the subset timeline from buzzdetect activations, and re-expresses the activations on it
 - `utils/buzzdetectStats.ts` — what a subset came to (kept seconds, regions, frames), for the palette's readout
+- `utils/buzzdetectRates.ts` — detection-rate Y-axis extents: each neuron's file-wide peak rate at a bin width, and a round axis ceiling
 - `utils/buzzdetectManifest.ts` — reads suggested thresholds from a results folder's `buzzdetect_manifest.json` and prefills unset Detection at values
 - `utils/binIndex.ts` — index lookups over buzzdetect frame starts; frame extent (`frameLength`) and frame spacing (`frameHop`) are separate and never interchangeable
 - `utils/multiAnnotationEdit.ts` — Shift-multi-select math: one shared delta clamped against every member (move / edge resize) and the common-duration / set-duration helpers
