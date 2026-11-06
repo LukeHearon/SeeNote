@@ -225,12 +225,6 @@ export default function BuzzdetectPanel({
   // Per-neuron multiplier the draw applied (rescaling divides by each peak,
   // which depends on the draw-time bin width), for the same hit-testing.
   const scaleOfRef = useRef<(n: number) => number>(() => 1);
-  // Each neuron's file-wide peak detection rate at one bin width, kept until
-  // what it was computed from changes. Built in the draw, which is the only
-  // place the bin width is known; a pan never recomputes it.
-  const rateMaxesRef = useRef<{
-    prefix: Float64Array[]; timeline: Timeline; binWidth: number; maxes: number[];
-  } | null>(null);
   // Last detection-rate auto range reported up, so a redraw that lands on the
   // same range doesn't set state with a fresh object.
   const reportedRateRangeRef = useRef<{ min: number; max: number } | null>(null);
@@ -522,6 +516,8 @@ export default function BuzzdetectPanel({
     dpr: 0,
     pixelsPerSecond: 0,
     binWidthSec: 0,
+    // The in-view peak rates the strip was scaled to (detection-rate mode).
+    rateKey: '',
   });
 
   // The series is a function of the data and the time window on screen, and
@@ -621,25 +617,21 @@ export default function BuzzdetectPanel({
     // limits (meant for a continuous scale) don't apply.
     const binaryDetection = seriesMode === 'detectionRate' && drawDots;
 
-    // Detection-rate extents: each neuron's file-wide peak at this bin width,
-    // which sets the auto axis ceiling (over the plotted neurons) and, while
-    // rescaling, each line's divisor. Cached on what it's computed from, so
-    // only a bin-width, threshold or subset change pays for the scan.
+    // Detection-rate extents: each plotted neuron's peak among the units IN
+    // VIEW at this bin width, which sets the auto axis ceiling and, while
+    // rescaling, each line's divisor — so what's on screen is what fills the
+    // axis. Measured from the viewport, not the strip, every draw (a few
+    // hundred prefix-sum lookups); when a pan changes it, the strip rebuilds
+    // (see rateKey below).
     const ratesApply = seriesMode === 'detectionRate' && !binaryDetection && !!detectionPrefix;
-    let rateMaxes: number[] | null = null;
-    if (ratesApply && detectionPrefix) {
-      const c = rateMaxesRef.current;
-      if (c && c.prefix === detectionPrefix && c.timeline === activeTimeline && c.binWidth === effectiveBinWidthSec) {
-        rateMaxes = c.maxes;
-      } else {
-        rateMaxes = maxUnitRates(activeTimeline, data, effectiveBinWidthSec, detectionPrefix, validCountPrefix);
-        rateMaxesRef.current = { prefix: detectionPrefix, timeline: activeTimeline, binWidth: effectiveBinWidthSec, maxes: rateMaxes };
-      }
-    }
+    const rateMaxes = ratesApply && detectionPrefix
+      ? maxUnitRates(activeTimeline, data, effectiveBinWidthSec, startTime, endTime, enabled, detectionPrefix, validCountPrefix)
+      : null;
     const rescaling = ratesApply && rateRescaled;
     let peak = 0;
     if (rateMaxes) for (const n of enabled) peak = Math.max(peak, rateMaxes[n]);
     const rateCeiling = niceRateCeiling(peak);
+    const rateKey = rateMaxes ? rateMaxes.join(',') : '';
     const scaleOf = rescaling && rateMaxes
       ? (n: number) => (rateMaxes![n] > 0 ? 1 / rateMaxes![n] : 1)
       : () => 1;
@@ -686,6 +678,7 @@ export default function BuzzdetectPanel({
       st.widthCss !== stripWidthCss ||
       st.heightCss !== h ||
       st.binWidthSec !== effectiveBinWidthSec ||
+      st.rateKey !== rateKey ||
       scrollLeft < st.originScroll ||
       scrollLeft + width > st.originScroll + st.widthCss;
     if (stale) {
@@ -698,6 +691,7 @@ export default function BuzzdetectPanel({
       st.dpr = dpr;
       st.pixelsPerSecond = pixelsPerSecond;
       st.binWidthSec = effectiveBinWidthSec;
+      st.rateKey = rateKey;
     }
 
     // Blit at exactly the offset the current scroll asks for — deliberately NOT

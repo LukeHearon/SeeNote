@@ -1,27 +1,34 @@
 // Detection-rate extents for the buzzdetect panel's Y axis: how high each
-// neuron's rate gets across the whole file at a given bin width, and a tidy
-// axis ceiling over the plotted ones.
+// neuron's rate gets in a span at a given bin width, and a tidy axis ceiling
+// over the plotted ones.
 
 import type { Timeline } from './subsetTimeline';
 import { forEachUnitInSpan, type FrameGrid } from './binIndex';
 import { rangeMean } from './prefixSums';
 
 /**
- * Each neuron's highest detection rate over every unit of `unitWidth` on the
- * timeline — the same units the panel draws (bins cut at subset seams, or
- * single frames when ungrouped). File-wide rather than in-view, so the axis
- * holds still while panning. A neuron with no valid frame gets 0.
+ * Each neuron's highest detection rate over the units of `unitWidth` touching
+ * the display span [t0, t1) — the same units the panel draws (bins cut at
+ * subset seams, or single frames when ungrouped). Only the neurons in
+ * `neurons` are measured; every other entry, and any neuron with no valid
+ * frame in the span, is 0.
  */
 export function maxUnitRates(
   timeline: Timeline,
   grid: FrameGrid,
   unitWidth: number,
+  t0: number,
+  t1: number,
+  neurons: readonly number[],
   detectionPrefix: readonly Float64Array[],
   validCountPrefix: readonly Float64Array[] | null,
 ): number[] {
   const out = detectionPrefix.map(() => 0);
-  forEachUnitInSpan(timeline, grid, unitWidth, 0, timeline.duration, u => {
-    for (let n = 0; n < detectionPrefix.length; n++) {
+  forEachUnitInSpan(timeline, grid, unitWidth, t0, t1, u => {
+    // The walk pads a bucket either side of the span; only units actually
+    // reaching into it count.
+    if (u.tEnd <= t0 || u.tStart >= t1) return;
+    for (const n of neurons) {
       const r = rangeMean(detectionPrefix[n], u.start, u.end, validCountPrefix?.[n]);
       if (r > out[n]) out[n] = r;
     }
