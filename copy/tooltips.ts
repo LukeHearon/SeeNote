@@ -86,6 +86,7 @@ export const tooltips = {
   get syncUnpulled() { return getOverride('tooltips.syncUnpulled') ?? "New annotations are available to download"; },
   get syncWithMessage() { return getOverride('tooltips.syncWithMessage') ?? "Sync with a commit message…"; },
   get buzzdetectYAxisReset() { return getOverride('tooltips.buzzdetectYAxisReset') ?? "Reset to auto-calculated range"; },
+  get buzzdetectYAxisRescale() { return getOverride('tooltips.buzzdetectYAxisRescale') ?? "Divide each neuron's detection rate by its own highest rate, so neurons with very different rates all fill the graph"; },
   get buzzdetectBinWidthReset() { return getOverride('tooltips.buzzdetectBinWidthReset') ?? "Reset to auto-calculated bin width"; },
   get buzzdetectNeuronColor() { return getOverride('tooltips.buzzdetectNeuronColor') ?? "Change this neuron's color"; },
   get buzzdetectNeuronColorRelink() { return getOverride('tooltips.buzzdetectNeuronColorRelink') ?? "Link back to the annotation tool's color"; },

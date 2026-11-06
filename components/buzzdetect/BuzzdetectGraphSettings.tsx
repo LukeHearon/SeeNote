@@ -16,6 +16,8 @@ export interface BuzzdetectGraphSettingsProps {
   autoBinWidth: number;
   autoYRange: { min: number; max: number } | null;
   yAxisOverride: { min: number; max: number } | null;
+  /** Detection rates divided by each neuron's own peak (detection-rate mode only). */
+  rateRescaled: boolean;
   minDetectionRate: number;
   /** Every neuron with a Subset at value, and the ones of those this file has a column for. */
   subsetNeurons: string[];
@@ -28,6 +30,7 @@ export interface BuzzdetectGraphSettingsProps {
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
   onYAxisOverrideChange: (range: { min: number; max: number } | null) => void;
+  onRateRescaledChange: (rescaled: boolean) => void;
   onMinDetectionRateChange: (rate: number) => void;
   onSubsetThresholdChange: (neuron: string, value: number | null) => void;
   onSubsetBufferChange: (seconds: number) => void;
@@ -39,11 +42,12 @@ export interface BuzzdetectGraphSettingsProps {
  * out — in the popout beside the graph it configures.
  */
 export default function BuzzdetectGraphSettings({
-  data, seriesMode, binWidthOverride, autoBinWidth, autoYRange, yAxisOverride, minDetectionRate,
+  data, seriesMode, binWidthOverride, autoBinWidth, autoYRange, yAxisOverride, rateRescaled, minDetectionRate,
   subsetNeurons, cuttingNeurons, subsetBuffer, subsetStats, className,
-  onSeriesModeChange, onBinWidthOverrideChange, onYAxisOverrideChange, onMinDetectionRateChange,
+  onSeriesModeChange, onBinWidthOverrideChange, onYAxisOverrideChange, onRateRescaledChange, onMinDetectionRateChange,
   onSubsetThresholdChange, onSubsetBufferChange,
 }: BuzzdetectGraphSettingsProps) {
+  const rescaled = rateRescaled && seriesMode === 'detectionRate';
   const fieldLabel = (text: string, reset?: { onReset: () => void; tooltip: string }) => (
     <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500">
       <span>{text}</span>
@@ -86,9 +90,12 @@ export default function BuzzdetectGraphSettings({
 
       {autoYRange && (
         <div className="space-y-1">
-          {fieldLabel(copy.yAxisHeader, yAxisOverride
+          {fieldLabel(copy.yAxisHeader, yAxisOverride && !rescaled
             ? { onReset: () => onYAxisOverrideChange(null), tooltip: tooltips.buzzdetectYAxisReset }
             : undefined)}
+          {/* Rescaled, each line is a fraction of its own peak — there's no
+              one rate range to pin, so the fields step aside. */}
+          {!rescaled && (
           <div className="flex items-center gap-1">
             <DraftNumberInput
               value={yAxisOverride?.min ?? autoYRange.min}
@@ -102,6 +109,21 @@ export default function BuzzdetectGraphSettings({
               className={FIELD_CLASS}
             />
           </div>
+          )}
+          {seriesMode === 'detectionRate' && (
+            <label
+              className="flex items-center gap-1.5 text-[10px] text-slate-300 cursor-pointer select-none"
+              data-tooltip={tooltips.buzzdetectYAxisRescale}
+            >
+              <input
+                type="checkbox"
+                checked={rateRescaled}
+                onChange={e => onRateRescaledChange(e.target.checked)}
+                className="accent-[#e65161]"
+              />
+              {copy.yAxisRescale}
+            </label>
+          )}
         </div>
       )}
 

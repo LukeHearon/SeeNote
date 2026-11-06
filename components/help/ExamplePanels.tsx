@@ -267,6 +267,7 @@ export function ExampleBuzzdetectPanel() {
         yAxisOverride={null}
         baselineAdjusted={baselineAdjusted}
         onBaselineAdjustedChange={setBaselineAdjusted}
+        rateRescaled={false}
         reportAutoValues={false}
         height={height}
         onAutoBinWidthChange={() => {}}

@@ -57,6 +57,7 @@ interface NeuronPaletteProps {
   autoBinWidth: number;
   autoYRange: { min: number; max: number } | null;
   yAxisOverride: { min: number; max: number } | null;
+  rateRescaled: boolean;
   minDetectionRate: number;
   /** Master subset toggle — "subset by everything the boxes name" vs "by nothing". */
   subsetEnabled: boolean;
@@ -75,6 +76,7 @@ interface NeuronPaletteProps {
   onSeriesModeChange: (mode: BuzzdetectSeriesMode) => void;
   onBinWidthOverrideChange: (binWidth: number | null) => void;
   onYAxisOverrideChange: (range: { min: number; max: number } | null) => void;
+  onRateRescaledChange: (rescaled: boolean) => void;
   onMinDetectionRateChange: (rate: number) => void;
   onSubsetBufferChange: (seconds: number) => void;
 }
@@ -141,6 +143,7 @@ function NeuronPalette({
   autoBinWidth,
   autoYRange,
   yAxisOverride,
+  rateRescaled,
   minDetectionRate,
   subsetEnabled,
   onToggleSubset,
@@ -154,6 +157,7 @@ function NeuronPalette({
   onSeriesModeChange,
   onBinWidthOverrideChange,
   onYAxisOverrideChange,
+  onRateRescaledChange,
   onMinDetectionRateChange,
   onSubsetBufferChange,
 }: NeuronPaletteProps) {
@@ -385,6 +389,7 @@ function NeuronPalette({
       autoBinWidth={autoBinWidth}
       autoYRange={autoYRange}
       yAxisOverride={yAxisOverride}
+      rateRescaled={rateRescaled}
       minDetectionRate={minDetectionRate}
       subsetNeurons={subsetNeurons}
       cuttingNeurons={cuttingNeurons}
@@ -394,6 +399,7 @@ function NeuronPalette({
       onSeriesModeChange={onSeriesModeChange}
       onBinWidthOverrideChange={onBinWidthOverrideChange}
       onYAxisOverrideChange={onYAxisOverrideChange}
+      onRateRescaledChange={onRateRescaledChange}
       onMinDetectionRateChange={onMinDetectionRateChange}
       onSubsetThresholdChange={onSubsetThresholdChange}
       onSubsetBufferChange={onSubsetBufferChange}

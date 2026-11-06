@@ -57,6 +57,7 @@ export function BuzzdetectNeuronPalette({ buzzdetect: b, subset, toolColors, col
       autoBinWidth={b.buzzdetectAutoBinWidth}
       autoYRange={b.buzzdetectAutoYRange}
       yAxisOverride={b.buzzdetectYAxisOverride}
+      rateRescaled={b.buzzdetectRateRescaled}
       minDetectionRate={b.buzzdetectMinDetectionRate}
       subsetEnabled={subset.subsetActive}
       onToggleSubset={b.toggleBuzzdetectSubset}
@@ -70,6 +71,7 @@ export function BuzzdetectNeuronPalette({ buzzdetect: b, subset, toolColors, col
       onSeriesModeChange={b.setBuzzdetectSeriesMode}
       onBinWidthOverrideChange={b.setBuzzdetectBinWidthOverride}
       onYAxisOverrideChange={b.setBuzzdetectYAxisOverride}
+      onRateRescaledChange={b.setBuzzdetectRateRescaled}
       onMinDetectionRateChange={b.setBuzzdetectMinDetectionRate}
       onSubsetBufferChange={b.setBuzzdetectSubsetBuffer}
     />
@@ -88,6 +90,7 @@ export function BuzzdetectSettingsBlock({ buzzdetect: b, subset }: { buzzdetect:
       autoBinWidth={b.buzzdetectAutoBinWidth}
       autoYRange={b.buzzdetectAutoYRange}
       yAxisOverride={b.buzzdetectYAxisOverride}
+      rateRescaled={b.buzzdetectRateRescaled}
       minDetectionRate={b.buzzdetectMinDetectionRate}
       subsetNeurons={b.buzzdetectSubsetNeurons}
       cuttingNeurons={pickedNeuronsIn(b.buzzdetectSubsetThresholds, data.neurons)}
@@ -97,6 +100,7 @@ export function BuzzdetectSettingsBlock({ buzzdetect: b, subset }: { buzzdetect:
       onSeriesModeChange={b.setBuzzdetectSeriesMode}
       onBinWidthOverrideChange={b.setBuzzdetectBinWidthOverride}
       onYAxisOverrideChange={b.setBuzzdetectYAxisOverride}
+      onRateRescaledChange={b.setBuzzdetectRateRescaled}
       onMinDetectionRateChange={b.setBuzzdetectMinDetectionRate}
       onSubsetThresholdChange={b.handleBuzzdetectSubsetThresholdChange}
       onSubsetBufferChange={b.setBuzzdetectSubsetBuffer}
@@ -148,6 +152,7 @@ export function BuzzdetectTrackPanel({
       yAxisOverride={b.buzzdetectYAxisOverride}
       baselineAdjusted={b.buzzdetectBaselineAdjusted}
       onBaselineAdjustedChange={b.setBuzzdetectBaselineAdjusted}
+      rateRescaled={b.buzzdetectRateRescaled}
       reportAutoValues={b.buzzdetectSettingsOpen}
       height={b.buzzdetectPanelHeight}
       fill={fill}

@@ -37,6 +37,7 @@ import {
   rangeMean,
 } from '../utils/prefixSums';
 import { baselineOffset, detectionThreshold } from '../utils/buzzdetectThresholds';
+import { formatRatePercent, maxUnitRates, niceRateCeiling } from '../utils/buzzdetectRates';
 import { buzzdetectPanel as buzzdetectCopy } from '../copy/ui';
 import { tooltips } from '../copy/tooltips';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
@@ -64,9 +65,6 @@ const NEURON_HOVER_PX = 10;
 // Most decimal places the hover/selection readout ever shows a time to. Times
 // carrying less precision than this are shown to less (see decimalsForTimes).
 const READOUT_MAX_DECIMALS = 2;
-// Auto Y-range for detection-rate mode: it's a fraction of the frames in a bin
-// clearing the threshold, so always 0..1 — no data scan needed.
-const DETECTION_RATE_Y_RANGE = { min: 0, max: 1 };
 
 interface BuzzdetectPanelProps {
   data: BuzzdetectData | null;
@@ -138,6 +136,12 @@ interface BuzzdetectPanelProps {
   baselineAdjusted: boolean;
   onBaselineAdjustedChange: (adjusted: boolean) => void;
   /**
+   * Divide each neuron's detection rate by its own file-wide peak, so lines
+   * whose rates differ by orders of magnitude all fill the graph. Detection-rate
+   * mode only; the axis reads 0..Max while it's on.
+   */
+  rateRescaled: boolean;
+  /**
    * While true, the auto bin width and auto Y-range are reported upward at draw
    * time (they change with zoom). The palette sets it only while its settings
    * block is open, so a closed block costs no renders.
@@ -177,6 +181,7 @@ export default function BuzzdetectPanel({
   yAxisOverride,
   baselineAdjusted,
   onBaselineAdjustedChange,
+  rateRescaled,
   reportAutoValues,
   height,
   fill = false,
@@ -217,6 +222,18 @@ export default function BuzzdetectPanel({
   // decided during the draw (auto range, threshold widening, headroom), so
   // there's nowhere else it could come from without computing it twice.
   const yOfRef = useRef<((v: number) => number) | null>(null);
+  // Per-neuron multiplier the draw applied (rescaling divides by each peak,
+  // which depends on the draw-time bin width), for the same hit-testing.
+  const scaleOfRef = useRef<(n: number) => number>(() => 1);
+  // Each neuron's file-wide peak detection rate at one bin width, kept until
+  // what it was computed from changes. Built in the draw, which is the only
+  // place the bin width is known; a pan never recomputes it.
+  const rateMaxesRef = useRef<{
+    prefix: Float64Array[]; timeline: Timeline; binWidth: number; maxes: number[];
+  } | null>(null);
+  // Last detection-rate auto range reported up, so a redraw that lands on the
+  // same range doesn't set state with a fresh object.
+  const reportedRateRangeRef = useRef<{ min: number; max: number } | null>(null);
 
   // Drag-to-select across hit units. `dragging` gates the window listeners; the
   // anchor unit lives in a ref so the listener effect attaches once per drag
@@ -382,18 +399,19 @@ export default function BuzzdetectPanel({
     return { min: lo, max: hi };
   }, [data, enabled, neuronRanges, offsetOf]);
 
-  const fileWideDetectionRateRange = data ? DETECTION_RATE_Y_RANGE : null;
+  // The base (pre override, pre-threshold-widening) auto Y-range in activation
+  // mode. Detection-rate mode's depends on the bin width, so the draw works it
+  // out (see rateCeiling there).
+  const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : null;
 
-  // Whichever range applies to the current series mode — the base (pre
-  // override, pre-threshold-widening) auto Y-range.
-  const activeAutoYRange = seriesMode === 'activation' ? fileWideRange : fileWideDetectionRateRange;
-
-  // Mirror the auto range up to useBuzzdetect, so the palette's Y-axis fields
-  // can show what the graph is actually using. Effect rather than draw-time, so
-  // it only fires when the memoised range genuinely changes.
+  // Mirror the activation auto range up to useBuzzdetect, so the palette's
+  // Y-axis fields can show what the graph is actually using. Effect rather than
+  // draw-time, so it only fires when the memoised range genuinely changes.
+  // Detection-rate mode reports from the draw instead.
   useEffect(() => {
-    if (reportAutoValues) onAutoYRangeChange(activeAutoYRange);
-  }, [reportAutoValues, activeAutoYRange, onAutoYRangeChange]);
+    if (reportAutoValues && seriesMode === 'activation') onAutoYRangeChange(activeAutoYRange);
+  }, [reportAutoValues, seriesMode, activeAutoYRange, onAutoYRangeChange]);
+  useEffect(() => { reportedRateRangeRef.current = null; }, [reportAutoValues, seriesMode]);
 
   // The current selection as a unit, for the persistent selection readout
   // below: the frames it covers (half-open on the right, so selecting exactly
@@ -465,7 +483,7 @@ export default function BuzzdetectPanel({
     let best: string | null = null;
     let bestDist = NEURON_HOVER_PX;
     for (const i of enabled) {
-      const d = Math.abs(yOf(unitValueOf(i, unit) - offsetOf(i)) - y);
+      const d = Math.abs(yOf((unitValueOf(i, unit) - offsetOf(i)) * scaleOfRef.current(i)) - y);
       if (d < bestDist) { bestDist = d; best = data.neurons[i]; }
     }
     return best;
@@ -603,6 +621,39 @@ export default function BuzzdetectPanel({
     // limits (meant for a continuous scale) don't apply.
     const binaryDetection = seriesMode === 'detectionRate' && drawDots;
 
+    // Detection-rate extents: each neuron's file-wide peak at this bin width,
+    // which sets the auto axis ceiling (over the plotted neurons) and, while
+    // rescaling, each line's divisor. Cached on what it's computed from, so
+    // only a bin-width, threshold or subset change pays for the scan.
+    const ratesApply = seriesMode === 'detectionRate' && !binaryDetection && !!detectionPrefix;
+    let rateMaxes: number[] | null = null;
+    if (ratesApply && detectionPrefix) {
+      const c = rateMaxesRef.current;
+      if (c && c.prefix === detectionPrefix && c.timeline === activeTimeline && c.binWidth === effectiveBinWidthSec) {
+        rateMaxes = c.maxes;
+      } else {
+        rateMaxes = maxUnitRates(activeTimeline, data, effectiveBinWidthSec, detectionPrefix, validCountPrefix);
+        rateMaxesRef.current = { prefix: detectionPrefix, timeline: activeTimeline, binWidth: effectiveBinWidthSec, maxes: rateMaxes };
+      }
+    }
+    const rescaling = ratesApply && rateRescaled;
+    let peak = 0;
+    if (rateMaxes) for (const n of enabled) peak = Math.max(peak, rateMaxes[n]);
+    const rateCeiling = niceRateCeiling(peak);
+    const scaleOf = rescaling && rateMaxes
+      ? (n: number) => (rateMaxes![n] > 0 ? 1 / rateMaxes![n] : 1)
+      : () => 1;
+    scaleOfRef.current = scaleOf;
+    if (reportAutoValues && seriesMode === 'detectionRate') {
+      const max = ratesApply && !rescaling ? rateCeiling : 1;
+      const prev = reportedRateRangeRef.current;
+      if (!prev || prev.min !== 0 || prev.max !== max) {
+        const range = { min: 0, max };
+        reportedRateRangeRef.current = range;
+        onAutoYRangeChange(range);
+      }
+    }
+
     // Renders the whole series into the strip, in world coordinates offset by
     // `originScroll` rather than the live scroll. `ctx`, `width`, `startTime`,
     // `endTime` and the bin range are shadowed on purpose so the drawing code
@@ -611,7 +662,7 @@ export default function BuzzdetectPanel({
     const stripParams: StripParams = {
       stripCanvasRef, yAxisCanvasRef, yOfRef, dpr, h, pixelsPerSecond, data, seriesMode,
       yAxisOverride, activeAutoYRange, enabled, thresholdOf, offsetOf, adjusting,
-      binaryDetection, drawDots, grouped, hopPx, unitPx, effectiveBinWidthSec,
+      rateCeiling, rescaling, scaleOf, binaryDetection, drawDots, grouped, hopPx, unitPx, effectiveBinWidthSec,
       activeTimeline, subsetActive, subsetJoins, minSegmentSec,
       activationPrefix, validCountPrefix, detectionPrefix, anyDetectedPrefix,
       neuronColors, isolatedNeurons,
@@ -659,7 +710,7 @@ export default function BuzzdetectPanel({
     if (!strip) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(strip, (st.originScroll - scrollLeft) * dpr, 0);
-  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, offsetOf, adjusting, isolatedNeurons, areaSize]);
+  }, [data, activeAutoYRange, yAxisOverride, binWidthOverride, seriesMode, subsetActive, subsetJoins, minSegmentSec, activeTimeline, reportAutoValues, onAutoBinWidthChange, viewportStore, enabled, activationPrefix, detectionPrefix, validCountPrefix, anyDetectedPrefix, neuronColors, thresholdOf, offsetOf, adjusting, rateRescaled, onAutoYRangeChange, isolatedNeurons, areaSize]);
 
   // Overlay canvas: the playhead line and the hover band, aligned to the same
   // time→pixel transform as the main canvas. Kept separate so playback ticks
@@ -986,7 +1037,7 @@ export default function BuzzdetectPanel({
                   ? value.toFixed(2)
                   : isSingle
                     ? (value >= 1 ? buzzdetectCopy.detection : buzzdetectCopy.noDetection)
-                    : `${(value * 100).toFixed(0)}%`;
+                    : formatRatePercent(value);
               const isolated = isolatedNeurons.length > 0 && isolatedNeurons.includes(n);
               return (
                 <span

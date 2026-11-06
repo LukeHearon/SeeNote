@@ -355,7 +355,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
   // views take the whole hook.
   const {
     buzzdetectEnabled, buzzdetectThresholds, buzzdetectSubsetThresholds, buzzdetectHiddenNeurons,
-    buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverride, buzzdetectSubsetEnabled,
+    buzzdetectNeuronColors, buzzdetectSeriesMode, buzzdetectBinWidthOverrides, buzzdetectSubsetEnabled,
     buzzdetectMinDetectionRate, buzzdetectSubsetBuffer, buzzdetectPinnedNeurons,
     toggleBuzzdetectSubset,
   } = buzzdetect;
@@ -928,7 +928,7 @@ export default function AnnotationWindow({ project, onClose, updateProjectSettin
     buzzdetectHiddenNeurons,
     buzzdetectNeuronColors,
     buzzdetectSeriesMode,
-    buzzdetectBinWidthOverride,
+    buzzdetectBinWidthOverrides,
     buzzdetectSubsetEnabled,
     buzzdetectMinDetectionRate,
     buzzdetectSubsetBuffer,

@@ -178,7 +178,14 @@ export interface ProjectUiSettings {
   buzzdetectHiddenNeurons?: string[];      // neuron labels deselected via checkboxes
   buzzdetectNeuronColors?: Record<string, string>; // per-neuron color override, keyed by neuron label
   buzzdetectSeriesMode?: BuzzdetectSeriesMode; // which series the panel plots
-  buzzdetectBinWidthOverride?: number | null; // user-pinned bin width (seconds); null/absent = auto-calculated
+  /**
+   * User-pinned bin width (seconds) per series mode; an absent mode is
+   * auto-calculated. Per mode because the two series' natural widths aren't
+   * comparable, so one pinned for detection rate shouldn't carry to activation.
+   */
+  buzzdetectBinWidthOverrides?: Partial<Record<BuzzdetectSeriesMode, number>>;
+  /** Legacy: a single pinned bin width, for the saved series mode. Read once on load. */
+  buzzdetectBinWidthOverride?: number | null;
   // Subset mode (see utils/subsetTimeline.ts): show only the time where the
   // chosen neurons fired, with the rest removed from the time axis.
   buzzdetectSubsetEnabled?: boolean;       // master toggle; the neuron picks survive turning it off

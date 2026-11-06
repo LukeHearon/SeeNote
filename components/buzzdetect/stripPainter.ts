@@ -11,6 +11,7 @@ import { timeToX, xToTime } from '../../utils/viewportTransform';
 import { forEachUnitInSpan, frameRangeForTimeSpan, visibleBinRange } from '../../utils/binIndex';
 import { rangeMean, rangeSum } from '../../utils/prefixSums';
 import { buzzdetectPanel as buzzdetectCopy } from '../../copy/ui';
+import { formatRatePercent } from '../../utils/buzzdetectRates';
 import { paintGutter, paintSubsetJoins } from '../spectrogram/canvasPainters';
 
 const PAD_TOP = 12;
@@ -42,6 +43,19 @@ export interface StripParams {
   thresholdOf: (neuron: string) => number;
   offsetOf: (n: number) => number;
   adjusting: boolean;
+  /**
+   * Detection-rate mode's auto axis ceiling — a round value just above the
+   * highest rate among the plotted neurons (see niceRateCeiling).
+   */
+  rateCeiling: number;
+  /**
+   * Each neuron's line is divided by its own peak rate, so every line spans
+   * 0..1 of the axis. Detection-rate mode only; the axis then reads 0..max and
+   * a pinned Y-range doesn't apply.
+   */
+  rescaling: boolean;
+  /** Multiplier applied to neuron `n`'s plotted values; 1 unless rescaling. */
+  scaleOf: (n: number) => number;
   binaryDetection: boolean;
   drawDots: boolean;
   grouped: boolean;
@@ -68,8 +82,8 @@ export interface StripParams {
 export function renderStrip(p: StripParams, originScroll: number, stripWidthCss: number): boolean {
   const {
     stripCanvasRef, yAxisCanvasRef, yOfRef, dpr, h, pixelsPerSecond, data, seriesMode,
-    yAxisOverride, activeAutoYRange, enabled, thresholdOf, offsetOf, adjusting,
-    binaryDetection, drawDots, grouped, hopPx, unitPx, effectiveBinWidthSec,
+    yAxisOverride: pinnedYRange, activeAutoYRange, enabled, thresholdOf, offsetOf, adjusting,
+    rateCeiling, rescaling, scaleOf, binaryDetection, drawDots, grouped, hopPx, unitPx, effectiveBinWidthSec,
     activeTimeline, subsetActive, subsetJoins, minSegmentSec,
     activationPrefix, validCountPrefix, detectionPrefix, anyDetectedPrefix,
     neuronColors, isolatedNeurons,
@@ -107,6 +121,9 @@ export function renderStrip(p: StripParams, originScroll: number, stripWidthCss:
   // touching data, so fold them in at draw time instead — and only in
   // activation mode, where they're a value on this axis; a detection rate
   // isn't measured in the same units as the logit threshold that produces it.
+  // Rescaled lines are fractions of their own peaks, not rates, so a range
+  // pinned in rate units doesn't frame them.
+  const yAxisOverride = rescaling ? null : pinnedYRange;
   let yMin = yAxisOverride ? yAxisOverride.min : (activeAutoYRange ? activeAutoYRange.min : Infinity);
   let yMax = yAxisOverride ? yAxisOverride.max : (activeAutoYRange ? activeAutoYRange.max : -Infinity);
   // A manual override is meant to be respected exactly — as typed — so skip
@@ -139,8 +156,10 @@ export function renderStrip(p: StripParams, originScroll: number, stripWidthCss:
     } else {
       // Detection rate is a fraction — 0%/100% are real, meaningful bounds,
       // not values needing headroom to avoid clipping (unlike arbitrary
-      // activation values), so the axis shouldn't read past them.
-      yMin = 0; yMax = 1;
+      // activation values), so the axis shouldn't read below 0 — and its top
+      // fits the plotted neurons' peak rather than always reaching 100%, so a
+      // neuron peaking at 8% isn't a flat line along the floor.
+      yMin = 0; yMax = rescaling ? 1 : rateCeiling;
     }
   }
 
@@ -286,19 +305,20 @@ export function renderStrip(p: StripParams, originScroll: number, stripWidthCss:
     ctx.globalAlpha = alphaOf(n);
     const th = thresholdOf(neurons[n]);
     const off = offsetOf(n);
+    const sc = scaleOf(n);
     // NaN for a missing frame in EITHER mode — not just when its own raw
     // value is read directly — so a frame with no value never renders as
     // a fake "undetected" point in detection-rate mode either.
     const perFrameValue = (i: number) => {
       const raw = values[n][i];
       if (Number.isNaN(raw)) return NaN;
-      return seriesMode === 'activation' ? raw - off : (raw >= th ? 1 : 0);
+      return seriesMode === 'activation' ? raw - off : (raw >= th ? sc : 0);
     };
     // Bucket aggregate, hoisted: the grouped polyline and the grouped dots
     // (drawn under a subset, where there is no polyline) both need it.
     const prefix = seriesMode === 'activation' ? activationPrefix?.[n] : detectionPrefix?.[n];
     const unitMean = (u: { start: number; end: number }) =>
-      (prefix ? rangeMean(prefix, u.start, u.end, validCountPrefix?.[n]) : 0) - off;
+      ((prefix ? rangeMean(prefix, u.start, u.end, validCountPrefix?.[n]) : 0) - off) * sc;
 
     // Under a subset the x-axis has cuts in it: consecutive points can be
     // minutes apart in the file even though they abut on screen, and a line
@@ -419,6 +439,13 @@ export function renderStrip(p: StripParams, originScroll: number, stripWidthCss:
       if (binaryDetection) {
         const yTop = yOf(1);
         if (yTop >= 8 && yTop <= h - 6) yctx.fillText(buzzdetectCopy.detection, Y_AXIS_WIDTH - 6, yTop, Y_AXIS_WIDTH - 8);
+      } else if (rescaling) {
+        // Every line is scaled by its own peak, so no rate is true of a
+        // height — only the floor and each line's own maximum are.
+        const yTop = yOf(1);
+        const yBottom = yOf(0);
+        if (yTop >= 8 && yTop <= h - 6) yctx.fillText(buzzdetectCopy.rescaledMax, Y_AXIS_WIDTH - 6, yTop, Y_AXIS_WIDTH - 8);
+        if (yBottom >= 8 && yBottom <= h - 6) yctx.fillText('0', Y_AXIS_WIDTH - 6, yBottom);
       } else if (!adjusting) {
         // Adjusted, every line is shifted by its own amount, so no one
         // number would be true of a height — the axis goes unlabelled.
@@ -427,7 +454,7 @@ export function renderStrip(p: StripParams, originScroll: number, stripWidthCss:
           const v = yMin + (k / TICKS) * (yMax - yMin);
           const y = yOf(v);
           if (y < 8 || y > h - 6) continue;
-          yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : `${(v * 100).toFixed(0)}%`, Y_AXIS_WIDTH - 6, y);
+          yctx.fillText(seriesMode === 'activation' ? v.toFixed(1) : formatRatePercent(v), Y_AXIS_WIDTH - 6, y);
         }
       }
     });

@@ -25,6 +25,17 @@ function migrateSubsetThresholds(ui: ProjectUiSettings | undefined): Record<stri
   return subset;
 }
 
+/**
+ * Pinned bin widths used to be one value, wiped on every series-mode flip; they
+ * are now kept per mode. An older project's single value belongs to the mode it
+ * was saved in.
+ */
+function migrateBinWidthOverrides(ui: ProjectUiSettings | undefined): Partial<Record<BuzzdetectSeriesMode, number>> {
+  if (ui?.buzzdetectBinWidthOverrides) return { ...ui.buzzdetectBinWidthOverrides };
+  const legacy = ui?.buzzdetectBinWidthOverride;
+  return legacy != null ? { [ui?.buzzdetectSeriesMode ?? 'activation']: legacy } : {};
+}
+
 export interface BuzzdetectApi {
   buzzdetectEnabled: boolean;
   setBuzzdetectEnabled: React.Dispatch<React.SetStateAction<boolean>>;
@@ -44,8 +55,12 @@ export interface BuzzdetectApi {
   setBuzzdetectNeuronColors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   buzzdetectSeriesMode: BuzzdetectSeriesMode;
   setBuzzdetectSeriesMode: React.Dispatch<React.SetStateAction<BuzzdetectSeriesMode>>;
+  /** The current series mode's pinned bin width; null = auto. */
   buzzdetectBinWidthOverride: number | null;
-  setBuzzdetectBinWidthOverride: React.Dispatch<React.SetStateAction<number | null>>;
+  /** Pins (or with null, unpins) the current series mode's bin width. */
+  setBuzzdetectBinWidthOverride: (binWidth: number | null) => void;
+  /** Every mode's pinned bin width — what's persisted to the project. */
+  buzzdetectBinWidthOverrides: Partial<Record<BuzzdetectSeriesMode, number>>;
   buzzdetectSubsetEnabled: boolean;
   setBuzzdetectSubsetEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   /** Neuron labels the subset is keyed to — the keys of buzzdetectSubsetThresholds. */
@@ -78,6 +93,12 @@ export interface BuzzdetectApi {
    */
   buzzdetectBaselineAdjusted: boolean;
   setBuzzdetectBaselineAdjusted: React.Dispatch<React.SetStateAction<boolean>>;
+  /**
+   * Whether detection rates are rescaled to each neuron's own peak (see
+   * BuzzdetectPanel). Transient, like the baseline adjustment.
+   */
+  buzzdetectRateRescaled: boolean;
+  setBuzzdetectRateRescaled: React.Dispatch<React.SetStateAction<boolean>>;
   /**
    * The auto values the graph is currently drawing with, reported back up by
    * BuzzdetectPanel at draw time so the palette's fields can show them as
@@ -173,7 +194,18 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
   const [buzzdetectHiddenNeurons, setBuzzdetectHiddenNeurons] = useState<string[]>(initialUi?.buzzdetectHiddenNeurons ?? []);
   const [buzzdetectNeuronColors, setBuzzdetectNeuronColors] = useState<Record<string, string>>(initialUi?.buzzdetectNeuronColors ?? {});
   const [buzzdetectSeriesMode, setBuzzdetectSeriesMode] = useState<BuzzdetectSeriesMode>(initialUi?.buzzdetectSeriesMode ?? 'activation');
-  const [buzzdetectBinWidthOverride, setBuzzdetectBinWidthOverride] = useState<number | null>(initialUi?.buzzdetectBinWidthOverride ?? null);
+  const [buzzdetectBinWidthOverrides, setBuzzdetectBinWidthOverrides] = useState<Partial<Record<BuzzdetectSeriesMode, number>>>(
+    () => migrateBinWidthOverrides(initialUi),
+  );
+  const buzzdetectBinWidthOverride = buzzdetectBinWidthOverrides[buzzdetectSeriesMode] ?? null;
+  const setBuzzdetectBinWidthOverride = useCallback((binWidth: number | null) => {
+    setBuzzdetectBinWidthOverrides(prev => {
+      const next = { ...prev };
+      if (binWidth === null) delete next[buzzdetectSeriesMode];
+      else next[buzzdetectSeriesMode] = binWidth;
+      return next;
+    });
+  }, [buzzdetectSeriesMode]);
   // Subset mode's master toggle — "subset by everything" vs "subset by
   // nothing". Kept apart from the picks (the subset thresholds above) so
   // flipping the subset off and on again doesn't cost the user their selection.
@@ -189,6 +221,7 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
   const [buzzdetectSettingsOpen, setBuzzdetectSettingsOpen] = useState(false);
   const [buzzdetectYAxisOverride, setBuzzdetectYAxisOverride] = useState<{ min: number; max: number } | null>(null);
   const [buzzdetectBaselineAdjusted, setBuzzdetectBaselineAdjusted] = useState(false);
+  const [buzzdetectRateRescaled, setBuzzdetectRateRescaled] = useState(false);
   const [buzzdetectAutoBinWidth, setBuzzdetectAutoBinWidth] = useState(0);
   const [buzzdetectAutoYRange, setBuzzdetectAutoYRange] = useState<{ min: number; max: number } | null>(null);
 
@@ -196,20 +229,11 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
   // override typed against a different file's activations.
   useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectData]);
 
-  // A series-mode flip resets both overrides: an activation and a detection
-  // rate aren't in comparable units, so neither a pinned Y-range nor a pinned
-  // bin width carries over meaningfully. Skipped on mount, so loading a project
-  // with a persisted bin width doesn't immediately wipe it.
-  const seriesModeMountedRef = useRef(false);
-  useEffect(() => {
-    if (!seriesModeMountedRef.current) { seriesModeMountedRef.current = true; return; }
-    setBuzzdetectYAxisOverride(null);
-    setBuzzdetectBinWidthOverride(null);
-  }, [buzzdetectSeriesMode]);
-
-  // Adjusting to baseline shifts every line, so a Y-range pinned against the
-  // unshifted values no longer frames them.
-  useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectBaselineAdjusted]);
+  // A series-mode flip resets the pinned Y-range: an activation and a detection
+  // rate aren't in comparable units. (Pinned bin widths are kept per mode
+  // instead, so each mode comes back to its own.) Adjusting to baseline or
+  // rescaling likewise moves every line off the values a range was pinned to.
+  useEffect(() => { setBuzzdetectYAxisOverride(null); }, [buzzdetectSeriesMode, buzzdetectBaselineAdjusted, buzzdetectRateRescaled]);
 
   // Load buzzdetect activations from the source, located by ident under the
   // results directory or read straight from the picked file. `cancelled` guards
@@ -364,6 +388,7 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
     setBuzzdetectSeriesMode,
     buzzdetectBinWidthOverride,
     setBuzzdetectBinWidthOverride,
+    buzzdetectBinWidthOverrides,
     buzzdetectSubsetEnabled,
     setBuzzdetectSubsetEnabled,
     buzzdetectSubsetNeurons,
@@ -383,6 +408,8 @@ export function useBuzzdetect({ initialUi, dir, ident, file, frameLength, trimAc
     setBuzzdetectYAxisOverride,
     buzzdetectBaselineAdjusted,
     setBuzzdetectBaselineAdjusted,
+    buzzdetectRateRescaled,
+    setBuzzdetectRateRescaled,
     buzzdetectAutoBinWidth,
     setBuzzdetectAutoBinWidth,
     buzzdetectAutoYRange,
