@@ -290,18 +290,26 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
   // Custom cursor position (relative to the spectrogram container)
   // The tool cursor follows the pointer by direct style writes, not React state:
   // a state update per mousemove re-rendered the whole spectrogram. It hides
-  // over elements that show their own cursor (handles, buttons), decided when
-  // the pointer enters an element rather than on every move.
+  // over elements that show their own cursor (handles, buttons). That check
+  // runs on every move, not only when the pointer enters an element: an
+  // element's cursor can change under the pointer (the Knife strips the edge
+  // handles' resize cursor), and a stale "suppressed" then hides both the
+  // system cursor (container is cursor-none) and this one.
   const toolCursorRef = useRef<HTMLDivElement>(null);
   // Knife guide: a full-height dotted line at the pointer's x, so the cut
   // position reads against the whole spectrogram. Moves with the tool cursor.
   const knifeLineRef = useRef<HTMLDivElement>(null);
-  const toolCursorStateRef = useRef({ inside: false, suppressed: false });
+  const toolCursorStateRef = useRef<{ inside: boolean; suppressed: boolean; target: Element | null }>({ inside: false, suppressed: false, target: null });
   const applyToolCursorVisibility = () => {
     const st = toolCursorStateRef.current;
     const display = st.inside && !st.suppressed ? 'block' : 'none';
     if (toolCursorRef.current) toolCursorRef.current.style.display = display;
     if (knifeLineRef.current) knifeLineRef.current.style.display = display;
+  };
+  // Reads the hit element's own cursor (e.target, so no elementFromPoint hit-test).
+  const updateToolCursorSuppression = () => {
+    const st = toolCursorStateRef.current;
+    st.suppressed = !!st.target && st.target.isConnected && window.getComputedStyle(st.target).cursor !== 'none';
   };
   const moveToolCursor = (e: React.MouseEvent) => {
     const el = toolCursorRef.current;
@@ -311,8 +319,17 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
     el.style.top = `${e.clientY - rect.top}px`;
     if (knifeLineRef.current) knifeLineRef.current.style.left = `${e.clientX - rect.left}px`;
     toolCursorStateRef.current.inside = true;
+    toolCursorStateRef.current.target = e.target as Element;
+    updateToolCursorSuppression();
     applyToolCursorVisibility();
   };
+  // Arming/disarming the Knife changes the edge handles' cursor with no pointer
+  // move; re-check the element under a still pointer so neither cursor is lost.
+  useEffect(() => {
+    if (!toolCursorStateRef.current.inside) return;
+    updateToolCursorSuppression();
+    applyToolCursorVisibility();
+  }, [knifeArmed]);
 
   // Hovered annotation id for hover effects (delete button, pencil icon)
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
@@ -1093,13 +1110,10 @@ const Spectrogram = forwardRef<SpectrogramHandle, SpectrogramProps>(({
           className="relative flex-1 h-full overflow-hidden cursor-none"
           onMouseDown={handleMouseDown}
           onMouseMove={e => { moveToolCursor(e); handleMouseMove(e); }}
-          onMouseOver={e => {
-            toolCursorStateRef.current.suppressed = window.getComputedStyle(e.target as Element).cursor !== 'none';
-            applyToolCursorVisibility();
-          }}
           onMouseUp={handleMouseUp}
           onMouseLeave={() => {
             toolCursorStateRef.current.inside = false;
+            toolCursorStateRef.current.target = null;
             applyToolCursorVisibility();
             // Don't terminate the drag — window mouseup handler cleans up when the button is released.
             // Only end non-drag interactions (e.g. right-click pan) on leave.
